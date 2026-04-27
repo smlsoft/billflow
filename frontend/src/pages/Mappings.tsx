@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react'
-import toast from 'react-hot-toast'
+import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'

@@ -11,27 +11,11 @@ import {
 import { KeyboardShortcut } from '@/components/common/KeyboardShortcut'
 import { useCrumbs } from '@/lib/breadcrumbs'
 
-// Phase 4 will mount the actual Command palette and open it from this button.
-// For now this is a non-functional placeholder so the sidebar can ship.
-function PaletteTrigger() {
-  return (
-    <button
-      type="button"
-      className="hidden h-8 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted md:flex"
-      aria-label="เปิดค้นหา"
-      disabled
-      title="กำลังเปิดให้ใช้ใน Phase 4"
-    >
-      <Search className="h-3.5 w-3.5" />
-      <span>ค้นหา…</span>
-      <span className="ml-4">
-        <KeyboardShortcut keys="mod+k" />
-      </span>
-    </button>
-  )
+interface TopbarProps {
+  onOpenPalette?: () => void
 }
 
-export default function Topbar() {
+export default function Topbar({ onOpenPalette }: TopbarProps) {
   const crumbs = useCrumbs()
 
   return (
@@ -60,7 +44,18 @@ export default function Topbar() {
         </Breadcrumb>
       )}
       <div className="ml-auto flex items-center gap-2">
-        <PaletteTrigger />
+        <button
+          type="button"
+          className="hidden h-8 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
+          onClick={onOpenPalette}
+          aria-label="เปิดค้นหา"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span>ค้นหา…</span>
+          <span className="ml-4">
+            <KeyboardShortcut keys="mod+k" />
+          </span>
+        </button>
       </div>
     </header>
   )
