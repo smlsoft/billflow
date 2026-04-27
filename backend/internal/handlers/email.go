@@ -89,7 +89,7 @@ func (h *EmailHandler) SetCatalogServices(
 
 // ProcessAttachment is called once per qualifying email attachment.
 // It satisfies emailservice.AttachmentProcessor signature.
-func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messageID string) error {
+func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messageID, subject, fromAddr string) error {
 	// Use message-id as trace_id so all events for the same email are correlated.
 	traceID := messageID
 	if traceID == "" {
@@ -142,7 +142,7 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 		return fmt.Errorf("no items extracted from %s", filename)
 	}
 
-	return h.handleExtracted(extracted, filename, messageID, traceID, attachStart)
+	return h.handleExtracted(extracted, filename, messageID, subject, fromAddr, traceID, attachStart)
 }
 
 // handleExtracted resolves item codes via F1 (exact mappings) → catalog
@@ -157,7 +157,7 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 // unrelated products. The 3000-item embedded catalog is the reliable
 // matcher; the F1 mapping table is reserved for explicit user-confirmed
 // (raw_name → item_code) memory.
-func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, messageID, traceID string, startTime time.Time) error {
+func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, messageID, subject, fromAddr, traceID string, startTime time.Time) error {
 	const topK = 5
 	const highConfThreshold = 0.85
 
@@ -234,9 +234,14 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, me
 		MaxQtys:   maxQtys,
 	})
 
-	// Save bill
+	// Save bill — keep raw_data shape consistent with the Shopee email flows
+	// (subject, from, flow, doc_date, etc.) so the BillDetail JSON viewer
+	// shows the same context regardless of source.
 	conf := extracted.Confidence
 	rawDataBytes, _ := json.Marshal(map[string]interface{}{
+		"flow":             "email_pdf",
+		"subject":          subject,
+		"from":             fromAddr,
 		"customer_name":    extracted.CustomerName,
 		"customer_phone":   extracted.CustomerPhone,
 		"note":             extracted.Note,
@@ -457,6 +462,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID
 
 	// Build raw_data payload
 	rawDataMap := map[string]interface{}{
+		"flow":             "shopee_email_order",
 		"subject":          subject,
 		"from":             from,
 		"email_message_id": messageID,

@@ -336,10 +336,11 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 
 		aiConf := 1.0
 		rawData, _ := json.Marshal(map[string]interface{}{
-			"order_id":     order.OrderID,
-			"doc_date":     order.DocDate,
-			"status":       order.Status,
-			"shopee_excel": true,
+			"flow":            "shopee_excel",
+			"shopee_order_id": order.OrderID,
+			"order_id":        order.OrderID,
+			"doc_date":        order.DocDate,
+			"status":          order.Status,
 		})
 		bill := &models.Bill{
 			BillType:     "sale",

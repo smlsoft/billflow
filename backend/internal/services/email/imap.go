@@ -18,7 +18,9 @@ import (
 
 // AttachmentProcessor is called once per qualifying attachment found in email.
 // messageID is the RFC 2822 Message-ID header, used for deduplication.
-type AttachmentProcessor func(data []byte, mimeType, filename, messageID string) error
+// subject and fromAddr come from the envelope so the handler can persist
+// the email context in bills.raw_data for audit.
+type AttachmentProcessor func(data []byte, mimeType, filename, messageID, subject, fromAddr string) error
 
 // ShopeeBodyProcessor is called when an email from a Shopee domain is detected.
 // subject, from = raw envelope values; bodyText = best available text from the email body.
@@ -275,7 +277,7 @@ func (s *IMAPService) Poll() error {
 			}
 		}
 
-		if err := s.parseAndProcess(bodyBytes, messageID); err == nil && msgUID != 0 {
+		if err := s.parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr); err == nil && msgUID != 0 {
 			processedUIDs.AddNum(msgUID)
 			processedCount++
 		} else if err != nil {
@@ -336,8 +338,10 @@ func (s *IMAPService) matchesSubject(subject string) bool {
 	return false
 }
 
-// parseAndProcess extracts attachments from raw email bytes and calls s.processor
-func (s *IMAPService) parseAndProcess(rawMsg []byte, messageID string) error {
+// parseAndProcess extracts attachments from raw email bytes and calls s.processor.
+// subject and fromAddr come from the envelope and are forwarded so the
+// processor can persist email context for audit.
+func (s *IMAPService) parseAndProcess(rawMsg []byte, messageID, subject, fromAddr string) error {
 	mr, err := gomail.CreateReader(bytes.NewReader(rawMsg))
 	if err != nil {
 		return fmt.Errorf("parse email: %w", err)
@@ -385,7 +389,7 @@ func (s *IMAPService) parseAndProcess(rawMsg []byte, messageID string) error {
 		}
 
 		if s.processor != nil {
-			if err := s.processor(data, mimeType, filename, messageID); err == nil {
+			if err := s.processor(data, mimeType, filename, messageID, subject, fromAddr); err == nil {
 				processed = true
 			}
 		}

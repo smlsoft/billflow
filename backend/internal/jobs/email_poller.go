@@ -12,7 +12,7 @@ import (
 
 // AttachmentProcessor matches emailservice.AttachmentProcessor to avoid circular imports
 type AttachmentProcessor interface {
-	ProcessAttachment(data []byte, mimeType, filename, messageID string) error
+	ProcessAttachment(data []byte, mimeType, filename, messageID, subject, fromAddr string) error
 }
 
 type EmailPoller struct {
