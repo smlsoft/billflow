@@ -48,6 +48,95 @@ function JsonSection({ label, data }: { label: string; data: unknown }) {
   )
 }
 
+// ─── Raw data card: human-readable view of bill.raw_data ─────────────────────
+//
+// Why a card and not raw JSON? raw_data is the audit trail "where this bill
+// came from" and gets opened by non-engineers. Each ingestion flow writes
+// the same standardized fields (flow tag, subject, from, customer_*,
+// doc_date, etc.) so we can render labeled rows with an icon and colour-
+// coded flow badge. Falls back to the raw JSON in a collapsed <details>
+// so engineers can still see the full payload.
+function RawDataCard({ data }: { data: Record<string, unknown> | null | undefined }) {
+  if (!data) return null
+
+  const flow = (data.flow as string | undefined) ?? ''
+  const FLOW_META: Record<string, { label: string; icon: string; bg: string; fg: string }> = {
+    email_pdf:           { label: 'Email + PDF',         icon: '📎', bg: '#dbeafe', fg: '#1e40af' },
+    shopee_email_order:  { label: 'Shopee Email (Order)',icon: '🛒', bg: '#ffedd5', fg: '#9a3412' },
+    shopee_shipped:      { label: 'Shopee จัดส่งแล้ว (PO)',  icon: '📦', bg: '#fef3c7', fg: '#92400e' },
+    shopee_excel:        { label: 'Shopee Excel',        icon: '📊', bg: '#dcfce7', fg: '#166534' },
+  }
+  const meta = FLOW_META[flow]
+
+  const get = (k: string) => {
+    const v = data[k]
+    if (v == null) return ''
+    return String(v)
+  }
+
+  const subject  = get('subject')
+  const from     = get('from')
+  const customer = get('customer_name')
+  const phone    = get('customer_phone')
+  const docDate  = get('doc_date')
+  const note     = get('note')
+  const file     = get('email_file')
+  const msgID    = get('email_message_id')
+  const orderID  = get('shopee_order_id') || get('order_id')
+  const status   = get('status')
+
+  const fieldRow = (icon: string, label: string, value: string, mono = false) => {
+    if (!value) return null
+    return (
+      <div style={{ display: 'flex', gap: 12, padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: '0.9rem' }}>
+        <div style={{ width: 30, fontSize: '1rem' }}>{icon}</div>
+        <div style={{ minWidth: 130, color: '#64748b', fontSize: '0.85rem' }}>{label}</div>
+        <div style={{
+          flex: 1, color: '#0f172a',
+          fontFamily: mono ? 'monospace' : undefined,
+          fontSize: mono ? '0.82rem' : undefined,
+          wordBreak: 'break-word',
+        }}>{value}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{
+      background: 'white', border: '1px solid #e2e8f0', borderRadius: 8,
+      padding: 16, marginBottom: 16,
+    }}>
+      {meta && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          padding: '4px 10px', borderRadius: 12,
+          background: meta.bg, color: meta.fg,
+          fontSize: '0.8rem', fontWeight: 600, marginBottom: 12,
+        }}>
+          <span>{meta.icon}</span>
+          <span>{meta.label}</span>
+        </div>
+      )}
+      {fieldRow('📧', 'หัวข้ออีเมล', subject)}
+      {fieldRow('📨', 'ผู้ส่ง', from, true)}
+      {fieldRow('🛒', 'หมายเลขคำสั่งซื้อ', orderID, true)}
+      {fieldRow('📅', 'วันที่เอกสาร', docDate)}
+      {fieldRow('👤', 'ลูกค้า', customer)}
+      {fieldRow('📞', 'เบอร์โทร', phone)}
+      {fieldRow('📝', 'หมายเหตุ', note)}
+      {fieldRow('📎', 'ไฟล์แนบ', file, true)}
+      {fieldRow('🏷️', 'สถานะ Shopee', status)}
+      {fieldRow('🆔', 'Message ID', msgID, true)}
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ cursor: 'pointer', fontSize: '0.8rem', color: '#64748b' }}>
+          ดู JSON ดิบ
+        </summary>
+        <pre className="json-pre" style={{ marginTop: 8 }}>{JSON.stringify(data, null, 2)}</pre>
+      </details>
+    </div>
+  )
+}
+
 // ─── Map item modal: search catalog + create new product ────────────────────
 function MapItemModal({
   rawName,
@@ -919,11 +1008,16 @@ export default function BillDetail() {
         />
       )}
 
-      {/* JSON sections */}
-      {(bill.raw_data || bill.sml_payload || bill.sml_response) && (
+      {/* Source metadata + SML request/response */}
+      {bill.raw_data && (
         <>
-          <h3 className="bill-detail-section-title">ข้อมูล Request / Response</h3>
-          <JsonSection label="raw_data (ข้อมูลดิบที่รับมา)" data={bill.raw_data} />
+          <h3 className="bill-detail-section-title">ข้อมูลที่รับมา</h3>
+          <RawDataCard data={bill.raw_data as Record<string, unknown>} />
+        </>
+      )}
+      {(bill.sml_payload || bill.sml_response) && (
+        <>
+          <h3 className="bill-detail-section-title">SML Request / Response</h3>
           <JsonSection label="sml_payload (ข้อมูลที่ส่งไป SML)" data={bill.sml_payload} />
           <JsonSection label="sml_response (ผลตอบกลับจาก SML)" data={bill.sml_response} />
         </>

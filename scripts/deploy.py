@@ -19,10 +19,7 @@ if not PASS:
 
 # Files to sync (matches the commit)
 FILES = [
-    "backend/internal/handlers/email.go",
-    "backend/internal/handlers/shopee_import.go",
-    "backend/internal/jobs/email_poller.go",
-    "backend/internal/services/email/imap.go",
+    "frontend/src/pages/BillDetail.tsx",
 ]
 
 
