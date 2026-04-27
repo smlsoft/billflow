@@ -18,9 +18,10 @@ if not PASS:
     sys.exit(1)
 
 # Files to sync (matches the commit)
-# Phase 3a-d release: sync the entire frontend/src tree + config to wipe
-# legacy CSS files cleanly. Easier than hand-listing every file.
-FILES = ["frontend"]
+# Sync the entire frontend + backend trees (excludes node_modules / dist /
+# .git via tar_filter below). Triggers Docker rebuild for whichever side
+# changed since the last build.
+FILES = ["frontend", "backend"]
 
 
 def run(client, cmd, label=None, timeout=900):
