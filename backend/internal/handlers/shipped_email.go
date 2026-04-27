@@ -109,6 +109,10 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, me
 		})
 	}
 
+	// doc_date: prefer the actual ship date from the email body.
+	// Falls back to today at retry time if the regex didn't match.
+	docDate := extractDocDate(plainText)
+
 	rawDataMap := map[string]interface{}{
 		"subject":          subject,
 		"from":             from,
@@ -118,6 +122,7 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, me
 		"customer_phone":   extracted.CustomerPhone,
 		"note":             extracted.Note,
 		"flow":             "shopee_shipped",
+		"doc_date":         docDate,
 	}
 	rawDataBytes, _ := json.Marshal(rawDataMap)
 

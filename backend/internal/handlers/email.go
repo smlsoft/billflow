@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +20,13 @@ import (
 	"billflow/internal/services/mistral"
 	"billflow/internal/services/sml"
 )
+
+// Date extraction patterns for Shopee email bodies. Priority order matches
+// what's most semantic for SML's doc_date field.
+var docDatePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`ถูกจัดส่งแล้วเมื่อวันที่[\s:	]*(\d{1,2})/(\d{1,2})/(\d{4})`),
+	regexp.MustCompile(`วันที่สั่งซื้อ[\s:	]*(\d{1,2})/(\d{1,2})/(\d{4})`),
+}
 
 // EmailHandler processes email attachments through the AI pipeline
 // It is NOT an HTTP handler — it implements emailservice.AttachmentProcessor
@@ -386,6 +394,11 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID
 		})
 	}
 
+	// doc_date: prefer the order date parsed from the email body
+	// (e.g. "วันที่สั่งซื้อ 04/04/2026"); otherwise the retry handler
+	// falls back to today.
+	docDate := extractDocDate(plainText)
+
 	// Build raw_data payload
 	rawDataMap := map[string]interface{}{
 		"subject":          subject,
@@ -395,6 +408,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID
 		"customer_name":    extracted.CustomerName,
 		"customer_phone":   extracted.CustomerPhone,
 		"note":             extracted.Note,
+		"doc_date":         docDate,
 	}
 	rawDataBytes, _ := json.Marshal(rawDataMap)
 
@@ -505,6 +519,26 @@ func htmlToText(html string) string {
 
 // extractShopeeOrderID tries to find the order number from the email subject
 // Shopee subjects are like "คำสั่งซื้อ #250123456789012" or "Order #250123456789012 shipped"
+// extractDocDate scans free-form Thai email body text for a Shopee-style date
+// and returns it as "YYYY-MM-DD". Returns empty string if no date is found;
+// callers should fall back to time.Now().
+func extractDocDate(body string) string {
+	for _, re := range docDatePatterns {
+		m := re.FindStringSubmatch(body)
+		if len(m) == 4 {
+			day, mo, year := m[1], m[2], m[3]
+			if len(day) == 1 {
+				day = "0" + day
+			}
+			if len(mo) == 1 {
+				mo = "0" + mo
+			}
+			return year + "-" + mo + "-" + day
+		}
+	}
+	return ""
+}
+
 func extractShopeeOrderID(subject string) string {
 	// Look for "#" followed by alphanumeric characters (Shopee uses both
 	// pure-digit and alphanumeric IDs, e.g. "260404V08VQU10").

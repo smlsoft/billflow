@@ -240,6 +240,8 @@ func main() {
 		api.GET("/bills/:id", billH.Get)
 		api.POST("/bills/:id/retry", billH.Retry)
 		api.PUT("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.UpdateItem)
+		api.POST("/bills/:id/items", middleware.RequireRole("admin", "staff"), billH.AddItem)
+		api.DELETE("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.DeleteItemRow)
 
 		// Mappings
 		api.GET("/mappings", mappingH.List)

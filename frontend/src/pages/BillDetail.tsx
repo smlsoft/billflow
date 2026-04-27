@@ -301,17 +301,136 @@ function MapItemModal({
   )
 }
 
+// ─── Add item form (collapsible) ──────────────────────────────────────────────
+function AddItemForm({
+  billId,
+  onAdded,
+}: {
+  billId: string
+  onAdded: (item: BillItem) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState({ raw_name: '', item_code: '', unit_code: '', qty: '1', price: '0' })
+
+  const reset = () => setDraft({ raw_name: '', item_code: '', unit_code: '', qty: '1', price: '0' })
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!draft.raw_name.trim() || Number(draft.qty) <= 0) return
+    setAdding(true)
+    try {
+      const payload: Record<string, unknown> = {
+        raw_name: draft.raw_name.trim(),
+        qty: Number(draft.qty),
+      }
+      if (draft.item_code.trim()) payload.item_code = draft.item_code.trim()
+      if (draft.unit_code.trim()) payload.unit_code = draft.unit_code.trim()
+      if (Number(draft.price) > 0) payload.price = Number(draft.price)
+
+      const res = await api.post<BillItem>(`/api/bills/${billId}/items`, payload)
+      onAdded(res.data)
+      reset()
+      setOpen(false)
+    } catch (err) {
+      console.error('add item failed', err)
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <div style={{ marginTop: 12, textAlign: 'left' }}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(true)}>
+          + เพิ่มรายการสินค้า
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      style={{
+        marginTop: 12, padding: 16, border: '1px dashed #cbd5e1',
+        borderRadius: 8, background: '#f8fafc',
+      }}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+        <input
+          className="form-input"
+          placeholder="ชื่อสินค้า (raw)"
+          value={draft.raw_name}
+          onChange={(e) => setDraft((d) => ({ ...d, raw_name: e.target.value }))}
+          autoFocus
+          required
+        />
+        <input
+          className="form-input"
+          placeholder="Item Code (option)"
+          value={draft.item_code}
+          onChange={(e) => setDraft((d) => ({ ...d, item_code: e.target.value }))}
+          style={{ fontFamily: 'monospace' }}
+        />
+        <input
+          className="form-input"
+          placeholder="หน่วย"
+          value={draft.unit_code}
+          onChange={(e) => setDraft((d) => ({ ...d, unit_code: e.target.value }))}
+        />
+        <input
+          className="form-input"
+          type="number"
+          step="any"
+          min="0"
+          placeholder="ราคา/หน่วย"
+          value={draft.price}
+          onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+        />
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <label style={{ fontSize: '0.85rem', color: '#475569' }}>
+          จำนวน:
+          <input
+            className="form-input"
+            type="number"
+            step="any"
+            min="0"
+            value={draft.qty}
+            onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+            style={{ width: 80, marginLeft: 8, display: 'inline-block' }}
+          />
+        </label>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={adding}>
+          {adding ? 'กำลังเพิ่ม...' : 'เพิ่มรายการ'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => { reset(); setOpen(false) }}
+          disabled={adding}
+        >
+          ยกเลิก
+        </button>
+      </div>
+    </form>
+  )
+}
+
 // ─── Editable item row ───────────────────────────────────────────────────────
 function ItemRow({
   item,
   billId,
   editable,
   onUpdated,
+  onDeleted,
 }: {
   item: BillItem
   billId: string
   editable: boolean
   onUpdated: (updated: BillItem) => void
+  onDeleted: (itemId: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -358,6 +477,16 @@ function ItemRow({
     }
   }
 
+  const handleDelete = async () => {
+    if (!window.confirm(`ลบรายการ "${item.raw_name.slice(0, 40)}..." ?`)) return
+    try {
+      await api.delete(`/api/bills/${billId}/items/${item.id}`)
+      onDeleted(item.id)
+    } catch (err) {
+      console.error('delete item failed', err)
+    }
+  }
+
   if (!editing) {
     return (
       <tr>
@@ -379,9 +508,19 @@ function ItemRow({
           </span>
         </td>
         {editable && (
-          <td className="text-center">
+          <td className="text-center" style={{ whiteSpace: 'nowrap' }}>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => { reset(); setEditing(true) }}>
               แก้ไข
+            </button>
+            {' '}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={handleDelete}
+              title="ลบรายการ"
+              style={{ color: '#ef4444' }}
+            >
+              ลบ
             </button>
           </td>
         )}
@@ -776,11 +915,29 @@ export default function BillDetail() {
                     }
                   })
                 }}
+                onDeleted={(id) => {
+                  setBill((prev) => {
+                    if (!prev) return prev
+                    return { ...prev, items: (prev.items ?? []).filter((it) => it.id !== id) }
+                  })
+                }}
               />
             ))}
           </tbody>
         </table>
       </div>
+
+      {canEdit && (
+        <AddItemForm
+          billId={bill.id}
+          onAdded={(newItem) => {
+            setBill((prev) => {
+              if (!prev) return prev
+              return { ...prev, items: [...(prev.items ?? []), newItem] }
+            })
+          }}
+        />
+      )}
 
       {/* JSON sections */}
       {(bill.raw_data || bill.sml_payload || bill.sml_response) && (

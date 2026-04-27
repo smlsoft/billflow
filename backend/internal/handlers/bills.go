@@ -244,7 +244,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 		}
 	}
 
-	docDate := time.Now().Format("2006-01-02")
+	docDate := docDateFromBill(bill)
 	payload := sml.BuildInvoicePayload("", docDate, items, cfg, productCache)
 	reqJSON, _ := json.Marshal(payload)
 
@@ -303,7 +303,7 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
 	}
 
 	cfg := h.shopeePurchaseConfig()
-	docDate := time.Now().Format("2006-01-02")
+	docDate := docDateFromBill(bill)
 	// SML purchaseorder requires a non-null doc_no (unlike saleinvoice which
 	// auto-generates one). Build a stable BF-prefixed code derived from the
 	// bill's UUID prefix. Format: "BF-PO-YYYYMMDD-XXXXXXXX" (20 chars).
@@ -339,6 +339,22 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccess(c, id, bill.Source, reqJSON, respJSON, docNo, start)
 	c.JSON(http.StatusOK, gin.H{"message": "bill sent to SML (purchaseorder)", "doc_no": docNo})
+}
+
+// docDateFromBill returns "YYYY-MM-DD" — the email-extracted doc_date stored
+// in raw_data["doc_date"] when present, else today's date.
+// Used by saleinvoice + purchaseorder retry paths so SML records reflect the
+// real order/ship date rather than the moment the user clicked "ส่ง".
+func docDateFromBill(bill *models.Bill) string {
+	if bill != nil && bill.RawData != nil {
+		var rd map[string]interface{}
+		if err := json.Unmarshal(bill.RawData, &rd); err == nil {
+			if v, ok := rd["doc_date"].(string); ok && v != "" {
+				return v
+			}
+		}
+	}
+	return time.Now().Format("2006-01-02")
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -440,6 +456,104 @@ func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, reqJSON, 
 }
 
 // ─── Item edit ───────────────────────────────────────────────────────────────
+
+// POST /api/bills/:id/items — add a new line item to a not-yet-sent bill.
+type addItemRequest struct {
+	RawName  string  `json:"raw_name" binding:"required"`
+	ItemCode *string `json:"item_code"`
+	UnitCode *string `json:"unit_code"`
+	Qty      float64 `json:"qty" binding:"required"`
+	Price    *float64 `json:"price"`
+}
+
+func (h *BillHandler) AddItem(c *gin.Context) {
+	billID := c.Param("id")
+
+	bill, err := h.billRepo.FindByID(billID)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if bill.Status == "sent" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot add items to a bill already sent to SML"})
+		return
+	}
+
+	var req addItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	mapped := req.ItemCode != nil && *req.ItemCode != ""
+	item := &models.BillItem{
+		BillID:   billID,
+		RawName:  req.RawName,
+		ItemCode: req.ItemCode,
+		UnitCode: req.UnitCode,
+		Qty:      req.Qty,
+		Price:    req.Price,
+		Mapped:   mapped,
+	}
+	if err := h.billRepo.InsertItem(item); err != nil {
+		h.log.Error("AddItem", zap.String("bill", billID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "insert failed"})
+		return
+	}
+
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "bill_item_added",
+			TargetID: &billID,
+			Source:   bill.Source,
+			Level:    "info",
+			Detail: map[string]interface{}{
+				"item_id":   item.ID,
+				"raw_name":  req.RawName,
+				"item_code": req.ItemCode,
+				"qty":       req.Qty,
+			},
+		})
+	}
+
+	c.JSON(http.StatusCreated, item)
+}
+
+// DELETE /api/bills/:id/items/:item_id — remove a line item from a not-yet-sent bill.
+func (h *BillHandler) DeleteItemRow(c *gin.Context) {
+	billID := c.Param("id")
+	itemID := c.Param("item_id")
+
+	bill, err := h.billRepo.FindByID(billID)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if bill.Status == "sent" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot delete items from a bill already sent to SML"})
+		return
+	}
+
+	if err := h.billRepo.DeleteItem(billID, itemID); err != nil {
+		h.log.Error("DeleteItem", zap.String("bill", billID), zap.String("item", itemID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete failed"})
+		return
+	}
+
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "bill_item_deleted",
+			TargetID: &billID,
+			Source:   bill.Source,
+			Level:    "info",
+			Detail: map[string]interface{}{
+				"item_id": itemID,
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "item deleted"})
+}
 
 // PUT /api/bills/:id/items/:item_id — edit item code/unit/qty/price before sending.
 type updateItemRequest struct {

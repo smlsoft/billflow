@@ -208,6 +208,16 @@ func (r *BillRepo) InsertItem(item *models.BillItem) error {
 	).Scan(&item.ID)
 }
 
+// DeleteItem removes a single bill_item row, scoped to the bill_id to prevent
+// deleting items from a different bill via crafted item IDs.
+func (r *BillRepo) DeleteItem(billID, itemID string) error {
+	_, err := r.db.Exec(
+		`DELETE FROM bill_items WHERE id = $1 AND bill_id = $2`,
+		itemID, billID,
+	)
+	return err
+}
+
 // UpdateBillItem updates item_code, unit_code, mapping_id, and mapped flag for a bill item
 func (r *BillRepo) UpdateBillItem(itemID, itemCode, unitCode, mappingID string, mapped bool) error {
 	_, err := r.db.Exec(
