@@ -93,40 +93,87 @@ billflow-postgres  → 5438
 │  Webhook Routes:                                            │
 │    POST /webhook/line              ← LINE OA events         │
 │                                                             │
-│  API Routes (JWT protected):                                │
-│    POST /api/import/upload         ← Lazada file            │
-│    GET  /api/settings/shopee-config ← Shopee SML defaults   │
-│    POST /api/import/shopee/preview  ← parse Excel, dedup   │
-│    POST /api/import/shopee/confirm  ← send to SML 224       │
-│    GET  /api/bills                 ← รายการบิลทั้งหมด       │
-│    GET  /api/bills/:id             ← รายละเอียดบิล          │
-│    POST /api/bills/:id/retry       ← retry ที่ fail/pending │
-│    GET  /api/mappings              ← item mapping list      │
-│    POST /api/mappings              ← เพิ่ม mapping ใหม่     │
-│    PUT  /api/mappings/:id          ← แก้ไข mapping          │
-│    POST /api/mappings/feedback     ← F1 human correct       │
+│  API Routes (JWT protected unless noted):                   │
+│    POST /api/auth/login            ← login (no auth)        │
+│    GET  /api/auth/me               ← current user           │
+│                                                             │
+│    Bills (manual-confirm flow):                             │
+│    GET  /api/bills                 ← list (status/source/   │
+│                                       bill_type filter)     │
+│    GET  /api/bills/:id             ← detail + items         │
+│    POST /api/bills/:id/retry       ← 3-way SML send         │
+│                                       (sale_reserve /       │
+│                                        saleinvoice /        │
+│                                        purchaseorder)       │
+│    PUT  /api/bills/:id/items/:iid  ← edit qty/price/code    │
+│                                       (also fires F1 hook)  │
+│    POST /api/bills/:id/items       ← add row                │
+│    DEL  /api/bills/:id/items/:iid  ← delete row             │
+│                                                             │
+│    Mappings + F1:                                           │
+│    GET  /api/mappings              ← list (manual + ai_*)   │
+│    POST /api/mappings              ← add                    │
+│    PUT  /api/mappings/:id          ← edit (3-field)         │
+│    DEL  /api/mappings/:id          ← delete                 │
+│    POST /api/mappings/feedback     ← legacy F1 endpoint     │
 │    GET  /api/mappings/stats        ← F1 accuracy stats      │
-│    GET  /api/dashboard/stats       ← สถิติ dashboard        │
-│    GET  /api/dashboard/insights    ← F4 AI insights         │
-│    POST /api/dashboard/insights/generate ← F4 generate     │
-│    GET  /api/logs                  ← Activity Log           │
-│    POST /api/auth/login            ← login                  │
+│                                                             │
+│    Catalog (SML 248 product catalog + embeddings):          │
+│    GET  /api/catalog               ← paginated list         │
+│    GET  /api/catalog/stats         ← embed progress         │
+│    GET  /api/catalog/search?q=     ← embedding similarity   │
+│    GET  /api/catalog/:code         ← item detail            │
+│    POST /api/catalog/products      ← create new SML product │
+│                                       + sync + embed        │
+│    POST /api/catalog/sync          ← bulk sync from SML 248 │
+│    POST /api/catalog/import-csv    ← bulk CSV upload        │
+│    POST /api/catalog/embed-all     ← background batch embed │
+│    POST /api/catalog/reload-index  ← rebuild memory index   │
+│    POST /api/catalog/:code/embed   ← embed single           │
+│    POST /api/bills/:id/items/:iid/confirm-match  ← legacy   │
+│                                                             │
+│    Imports:                                                 │
+│    POST /api/import/upload         ← generic Lazada (WIP)   │
+│    POST /api/import/confirm        ← generic Lazada confirm │
+│    GET  /api/settings/shopee-config← Shopee SML defaults    │
+│    POST /api/import/shopee/preview ← parse Excel + dedup    │
+│    POST /api/import/shopee/confirm ← send to SML 248        │
+│                                                             │
+│    Dashboard / Logs / Settings:                             │
+│    GET  /api/dashboard/stats                                │
+│    GET  /api/dashboard/insights                             │
+│    POST /api/dashboard/insights/generate (admin)            │
+│    GET  /api/logs                                           │
+│    GET  /api/settings/status                                │
+│    GET  /api/settings/column-mappings/:platform             │
+│    PUT  /api/settings/column-mappings/:platform (admin)     │
+│                                                             │
+│    Webhook:                                                 │
+│    POST /webhook/line              ← LINE OA events         │
 │                                                             │
 │  Background Jobs:                                           │
-│    IMAP Poller     → poll email ทุก 5 นาที                 │
-│    Cron 08:00      → F4 daily insight + LINE notify        │
-│    Cron 00:00      → pg_dump backup                        │
-│    Cron weekly     → LINE token expiry check               │
-│    Cron daily      → disk usage monitor                    │
+│    IMAP Poller   → poll email every 5 min                  │
+│                    routes by Shopee domain + subject:       │
+│                    "ถูกจัดส่งแล้ว" → shipped (PO flow)      │
+│                    other Shopee  → order (saleinvoice)      │
+│                    else          → attachment AI pipeline   │
+│    Cron 08:00    → F4 daily insight + LINE notify          │
+│    Cron 00:00    → pg_dump backup (in-container, gzip)     │
+│    Cron Mon 09   → LINE token expiry reminder              │
+│    Cron daily 07 → disk usage monitor (root fs > 90%)      │
 │                                                             │
 │  Services:                                                  │
 │    AIService       → OpenRouter (text/image/PDF/audio)     │
-│    MapperService   → fuzzy match + F1 learning loop        │
-│    AnomalyService  → F2 bill anomaly detection             │
-│    SMLService      → JSON-RPC + retry + admin notify       │
-│    LineService     → reply / flex message / push notify    │
-│    EmailService    → IMAP poll + parse attachment          │
+│    MapperService   → F1 fuzzy match + auto-learn loop      │
+│    AnomalyService  → F2 anomaly (incl. new_customer warn)  │
+│    SML Client      → JSON-RPC sale_reserve (213)           │
+│    SML Invoice     → REST saleinvoice (248)                │
+│    SML PurchaseOrd → REST purchaseorder (248) NEW          │
+│    SML Product     → REST product create/lookup (248) NEW  │
+│    LineService     → reply / flex / push notify            │
+│    EmailService    → IMAP poll + 3-way routing             │
 │    InsightService  → F4 daily AI summary                   │
+│    Catalog         → embed (1536-dim) + cosine index       │
 │    WorkerPool      → semaphore rate limiting               │
 └──────┬──────────────────────────────┬───────────────────────┘
        │                              │
@@ -557,6 +604,38 @@ var AnomalyRules = []AnomalyRule{
 // Retry: max 3 ครั้ง
 // Config จริง: guid=smlx / SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
 // SKU จริงใน SML 248: CON-xxxxx (ถุง), STEEL-xxxxx (เส้น), PLUMB-xxxxx (ท่อน)
+
+// 3. Create purchaseorder  ← CONFIRMED WORKING (2026-04-27)
+// POST /SMLJavaRESTService/v3/api/purchaseorder
+// Same payload shape as saleinvoice, except:
+//   - field "buy_type" instead of "sale_type"
+//   - cust_code semantically = supplier
+//   - ⚠️ doc_no MUST be non-empty (unlike saleinvoice). The v3 endpoint
+//     does NOT auto-generate. Sending null/empty triggers ic_trans NOT NULL.
+// Client: backend/internal/services/sml/purchaseorder_client.go
+// doc_no convention: "BF-PO-YYYYMMDD-{8-char bill UUID prefix}" generated
+// in bills.go retryPurchaseOrder. SML response data.doc_no often empty;
+// fall back to the request doc_no in that case.
+// Used by: shopee_shipped emails (handlers/shipped_email.go).
+
+// 4. Create product  ← CONFIRMED WORKING (2026-04-27)
+// POST /SMLJavaRESTService/v3/api/product
+// {
+//   "code": "TEST-001",            ← user-supplied
+//   "name": "ทดสอบ",
+//   "tax_type": 0, "item_type": 0, "unit_type": 1,
+//   "unit_cost": "ชิ้น", "unit_standard": "ชิ้น",
+//   "purchase_point": 0,
+//   "units": [{"unit_code":"ชิ้น","unit_name":"ชิ้น","stand_value":1,"divide_value":1}],
+//   "price_formulas": [{"unit_code":"ชิ้น","sale_type":0,"price_0":"99.5",
+//                       "tax_type":0,"price_currency":0}]
+// }
+// Response: {"success":true,"data":{"code":"..."}} (SML may return
+// a different code than requested — use response code as canonical).
+// Client: backend/internal/services/sml/product_client.go
+// Wired to BillFlow: POST /api/catalog/products handler upserts into
+// sml_catalog with status='pending' + triggers background embedding.
+// Used by: BillDetail's MapItemModal "+ สร้างสินค้าใหม่" form.
 ```
 
 ---
@@ -809,6 +888,18 @@ SHOPEE_SML_UNIT_CODE=           ← หน่วย (fallback)
 SHOPEE_SML_VAT_TYPE=0           ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
 SHOPEE_SML_VAT_RATE=7
 SHOPEE_SML_DOC_TIME=09:00
+
+# Shopee shipped → SML purchaseorder (reuses all SHOPEE_SML_* above)
+# Only doc_format and cust_code differ. cust_code falls back to SHOPEE_SML_CUST_CODE if blank.
+# ⚠️ For shipped emails to flow through IMAP, IMAP_FILTER_SUBJECT must include "ถูกจัดส่งแล้ว"
+SHIPPED_SML_DOC_FORMAT=PO
+SHIPPED_SML_CUST_CODE=
+
+# Mistral OCR — required for PDF extraction (model: mistral-ocr-2512)
+MISTRAL_API_KEY=
+
+# Shopee email auto-detection (comma-separated domain suffixes)
+SHOPEE_EMAIL_DOMAINS=shopee.co.th,mail.shopee.co.th,noreply.shopee.co.th
 
 # Auto-confirm
 AUTO_CONFIRM_THRESHOLD=0.85
@@ -1101,32 +1192,36 @@ Phase 5 — Email IMAP
   [x] 5.2 Go: attachment download + parse ✅
   [x] 5.2b Go: PDF extraction ใช้ Mistral OCR (mistral-ocr-2512) แทน OpenRouter/Bedrock ✅
   [x] 5.2c Go: dedup by Message-ID (email) ✅
-  [ ] 5.3 ✅ ทดสอบ email → บิล loop ← กำลัง test
+  [x] 5.3 ✅ ทดสอบ email → บิล loop (3 sent on 2026-04-24)
+  [x] 5.4 Shopee shipped email → purchaseorder (separate handler)
+  [x] 5.5 doc_date extracted from email body (not time.Now())
 
 Phase 6 — Web UI Complete
   [x] 6.1 React: Dashboard (stats + charts + loading skeleton) ✅
-  [x] 6.2 React: Bills list + filter + search + pagination ✅
-  [x] 6.3 React: BillDetail — grid layout + JsonSection + retry ✅
-  [x] 6.4 React: Mappings + feedback + learning stats ✅
-  [x] 6.5 React: Settings — section cards + status dots + column mapping editor ✅
+  [x] 6.2 React: Bills list + filter (status / source / bill_type) + search ✅
+  [x] 6.3 React: BillDetail — grid + JsonSection + retry + edit + add/delete ✅
+  [x] 6.4 React: Mappings + feedback + learning stats (3-field edit) ✅
+  [x] 6.5 React: Settings — section cards + status dots + column mapping ✅
   [x] 6.6 React: Logs — timeline design + filter bar ✅
-  [x] 6.7 React: Import + ShopeeImport — new design tokens ✅
+  [x] 6.7 React: Import (Lazada banner) + ShopeeImport (collapsible config) ✅
   [x] 6.8 React: Login — branded page ✅
   [x] 6.9 React: Layout — sidebar redesign ✅
   [x] 6.10 React: index.css — design tokens + typography scale ✅
   [x] 6.11 React: StatsCard / BillStatusBadge / BillTable / InsightCard / LearningProgress ✅
+  [x] 6.12 MapItemModal (search + create new SML product) ✅
+  [x] 6.13 UX cleanup pass — 13 issues across bugs/flow/polish ✅
 
 Phase 7 — Background Jobs
   [x] 7.1 Cron 08:00 daily insight + LINE notify (F4) ✅
-  [x] 7.2 Cron 00:00 pg_dump | gzip backup (.sql.gz) ✅
+  [x] 7.2 Cron 00:00 pg_dump | gzip backup (.sql.gz) ✅ (verified 20 MB output)
   [x] 7.3 Cron weekly LINE token expiry check ✅
   [x] 7.4 Cron daily disk monitor → notify > 90% ✅
 
 Phase 8 — Production Ready
-  [ ] 8.1 Cloudflare Tunnel + systemd
+  [ ] 8.1 Cloudflare Tunnel + systemd (cloudflared installed, not configured)
   [ ] 8.2 docker-compose production build
-  [ ] 8.3 Structured logging (zap)
-  [ ] 8.4 Health check endpoints
+  [x] 8.3 Structured logging (zap) — used everywhere
+  [x] 8.4 Health check endpoint (/health, used by deploy.py probe)
   [ ] 8.5 ✅ Demo ลูกค้า
 ```
 
@@ -1187,79 +1282,106 @@ Report disk usage before and after, then ask before Phase 1.
 
 ---
 
-## 26. Current Status (2026-04-27)
+## 26. Current Status (2026-04-27 — session 5)
 
 ```
 Deployed & Running on 192.168.2.109:
-  backend  → billflow-backend  :8090  ✅ (Up 2 days)
+  backend  → billflow-backend  :8090  ✅
   frontend → billflow-frontend :3010  ✅
-  postgres → billflow-postgres :5438  ✅ (Up 4 days, healthy)
-  Disk:    87/109 GB used (85% — close to DiskMonitor threshold 90%)
+  postgres → billflow-postgres :5438  ✅
+  Disk:    51/109 GB used (49% — cleaned up 36 GB this session)
   health:  {"database":"ok","env":"production","status":"ok"}
-
-DB state:
-  bills: 4 rows (3 email sent + 1 shopee failed)
-  mappings: 2 (manual)
-  sml_catalog: 3000 items, all embedded ✅
-  Last sent: BS20260424045830-FE5J (email, 2026-04-24)
 
 AI Models (OpenRouter):
   primary  → google/gemini-2.5-flash
-  fallback → google/gemini-flash-1.5  (server .env has anthropic/claude-3-5-haiku — diverged)
+  fallback → google/gemini-flash-1.5
   audio    → openai/whisper-1
   embed    → openai/text-embedding-3-small  (1536-dim, in-memory cosine index)
+  PDF      → Mistral OCR (mistral-ocr-2512) → markdown → ExtractText
 
-PDF Extraction:
-  Mistral OCR (mistral-ocr-2512) → markdown → OpenRouter ExtractText()
-  เหตุผล: OpenRouter route Gemini ผ่าน Amazon Bedrock ไม่รองรับ PDF MIME type
+SML servers (both confirmed working):
+  SML #1 (LINE/Email JSON-RPC) — http://192.168.2.213:3248
+    POST /api/sale_reserve   (sale_reserve via SaleReserve client)
+  SML #2 (Shopee REST)        — http://192.168.2.248:8080
+    POST /SMLJavaRESTService/restapi/saleinvoice    (Shopee Excel + Shopee email order)
+    POST /SMLJavaRESTService/v3/api/purchaseorder   (Shopee shipped email — NEW)
+    POST /SMLJavaRESTService/v3/api/product         (create new product — NEW)
+    GET  /SMLJavaRESTService/v3/api/product/{sku}   (product lookup)
+  Config (SML #2): guid=smlx / SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
+                   cust_code=AR00004, wh=WH-01, shelf=SH-01
 
-IMAP: Gmail App Password, IMAP_POLL_INTERVAL=5m (ห้ามน้อยกว่า)
+Big behavioural change this session: NO MORE AUTO-SEND
+  Every email-sourced bill (PDF/Lazada/Shopee email/Shopee shipped) now stays
+  in `pending` or `needs_review` until the user confirms in BillDetail UI.
+  The "Retry" button is reused as "ยืนยันและส่งไปยัง SML" + ⚠️ for failed.
 
-SML #2 — Shopee (192.168.2.248:8080) — CONFIRMED WORKING:
-  Config: guid=smlx / provider=SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
-  cust_code=AR00004, wh=WH-01, shelf=SH-01, doc_format=INV
-  ⚠️ doc_no fix (2026-04-27): ปล่อย SML gen เอง — เพราะ ic_trans_pk ใช้
-     UNIQUE (doc_no, trans_flag) — Shopee order_id ที่ส่งซ้ำจะ violate
-     แก้แล้วใน shopee_import.go: BuildInvoicePayload("", ...)
-     order_id ยังเก็บไว้ที่ bills.sml_order_id + raw_data สำหรับ tracking
+Bill flow → SML routing (in bills.go Retry handler):
+  source                   bill_type   client          endpoint
+  ──────────────────────   ─────────   ─────────────   ──────────────────────
+  line / email / lazada    sale        smlClient       sale_reserve (213)
+  shopee / shopee_email    sale        invoiceClient   saleinvoice (248)
+  shopee_shipped           purchase    poClient        purchaseorder (248) NEW
+  ──────────────────────────────────────────────────────────────────────────
+  PO doc_no: client-generated as "BF-PO-YYYYMMDD-{8-char UUID}" because
+  v3/api/purchaseorder doesn't auto-gen on null doc_no (ic_trans NOT NULL).
+
+doc_date now extracted from email body (not time.Now()):
+  - Shopee shipped: "ถูกจัดส่งแล้วเมื่อวันที่ DD/MM/YYYY"
+  - Shopee order:   "วันที่สั่งซื้อ DD/MM/YYYY"
+  Stored in raw_data["doc_date"] at bill creation; retry handler reads
+  it back via docDateFromBill helper. Falls back to today if missing.
+
+F1 mapping feedback loop — wired live:
+  Whenever a user changes item_code on a row in BillDetail, the backend
+  upserts an `ai_learned` mapping and the frontend toasts:
+  "✓ จดจำการจับคู่นี้แล้ว — ครั้งถัดไประบบจะ map ให้อัตโนมัติ"
+  Future bills with the same raw_name auto-resolve via mapper.Match.
+
+Catalog (sml_catalog table — 3000 items, embedded):
+  /settings/catalog page (admin only) — sync, embed-all, reload-index, etc.
+  GET /api/catalog/search → embedding similarity (or text fallback)
+  POST /api/catalog/products → creates product in SML + syncs local catalog
+                               + embeds in background. NEW endpoint.
+
+BillDetail editing capabilities (status: pending/needs_review/failed):
+  - Edit qty / price / unit_code / item_code per row (PUT /api/bills/:id/items/:item_id)
+  - "เลือกสินค้า" button per row → MapItemModal (full catalog search +
+    "+ สร้างสินค้าใหม่" form)
+  - + เพิ่มรายการสินค้า (POST /api/bills/:id/items)
+  - Delete row (DELETE /api/bills/:id/items/:item_id)
+  - "ยืนยันและส่งไปยัง SML" → POST /api/bills/:id/retry (3-way routed)
+
+Migrations applied (5 files):
+  001_init.sql
+  002_audit_logging.sql            (audit_logs structured columns)
+  002_sml_catalog.sql              (sml_catalog + bills.sml_order_id + candidates +
+                                     extended source/status CHECK incl. shopee_shipped)
+  003_channel_customer_defaults.sql
+  004_shopee_shipped.sql           (extends bills.source — shopee_shipped)
 
 Phases:
   Phase 0–5  ✅
-  Phase 6    ✅ (Web UI ครบ + CatalogSettings ใหม่)
-  Phase 7    ⚠️ (cron register ครบ — backup_cron แก้ใหม่ 2026-04-27 ใช้ pg_dump
-                 ใน-container แทน docker exec จากใน container)
-  Phase 8    ⏳ (cloudflared installed แต่ยังไม่ config + systemd)
+  Phase 6    ✅ Web UI complete + UX cleanup pass (13 issues fixed)
+  Phase 7    ✅ All crons register; backup verified (20 MB pg_dump on 2026-04-27)
+  Phase 8    ⏳ cloudflared installed not yet configured + systemd
 
-Catalog feature (deploy แล้ว แต่ doc เก่าไม่ครอบคลุม):
-  ✅ sml_catalog table 3000 items + embeddings เสร็จหมด
-  ✅ /settings/catalog page (frontend) — sync, embed-all, reload-index
-  ✅ /api/catalog/* endpoints (10 routes)
-  ✅ Smart matching ใน Shopee email pipeline + needs_review flow
-  ✅ POST /api/bills/:id/items/:item_id/confirm-match (manual review)
+Pending (carry-over):
+  ⏳ Phase 3 — test รูป/PDF/voice ใน LINE OA (code deployed, never tested in LINE)
+  ⏳ Phase 4b — Lazada Excel import (waiting customer files)
+  ⏳ Phase 8 — cloudflared named tunnel + systemd (need domain decision)
 
-Fixes ที่เพิ่งลง (2026-04-27):
-  ✅ A.1 .env.example อัปเดต — เพิ่ม MISTRAL_API_KEY, SHOPEE_EMAIL_DOMAINS,
-        SHOPEE_SML_BRANCH_CODE, แก้ model defaults + Shopee SML config
-  ✅ A.2 002_post_init.sql — schema additions (sml_catalog,
-        channel_customer_defaults, sml_order_id, candidates, audit_log columns,
-        extended source/status CHECK)
-  ✅ A.3 anomaly: new_customer warn rule (BillRepo.HasSeenCustomer + wired)
-  ✅ B.5 backup_cron rewrite — ใช้ pg_dump ใน container (Dockerfile +
-        postgresql16-client + compose volume ./backups:/app/backups)
-  ✅ C.7 Shopee doc_no — ตัด order_id ออกจาก SML payload, เก็บใน sml_order_id
-
-ค้างอยู่:
-  ⏳ Phase 3 — test รูป/PDF/voice ใน LINE
-  ⏳ Phase 4a — end-to-end test Shopee import (หลัง doc_no fix + rebuild)
-  ⏳ Phase 4b — Lazada Import (รอไฟล์จากลูกค้า)
-  ⏳ Phase 8 — cloudflared config + systemd (ต้องรู้ domain ก่อน)
-  ⏳ Disk cleanup — Docker build cache 23 GB + dangling images ~20 GB
-                   (จาก bossboard build) — ต้อง user confirm ก่อนรัน prune
+Recent commits this session:
+  f86fd88 ui: 13-issue UX cleanup pass
+  434633a feat: add/delete bill items + use email date as SML doc_date
+  84bab34 fix: /mappings page UI + SML PO doc_no handling
+  e88c842 feat: create-product modal + catalog search + F1 feedback hook
+  2d4d50c feat: Shopee shipped email → SML purchaseorder + manual-confirm flow
+  56c0c38 fix: backup cron, Shopee doc_no, new_customer anomaly, env+migration drift
 ```
 
 ---
 
-*Last updated: 2026-04-27 (session 4)*
+*Last updated: 2026-04-27 (session 5)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*

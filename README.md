@@ -91,20 +91,30 @@ Cloudflare Tunnel
 Go Backend (Gin) :8090
   ├── POST /webhook/line                    ← LINE OA events
   ├── POST /api/auth/login
-  ├── GET  /api/bills                       ← รายการบิล
+  ├── GET  /api/bills                       ← list (filter: status/source/bill_type)
   ├── GET  /api/bills/:id
-  ├── POST /api/bills/:id/retry             ← retry pending + failed
+  ├── POST /api/bills/:id/retry             ← 3-way SML send (manual confirm)
+  ├── PUT  /api/bills/:id/items/:item_id    ← edit item + F1 auto-learn
+  ├── POST /api/bills/:id/items             ← add new line item
+  ├── DEL  /api/bills/:id/items/:item_id    ← delete line item
   ├── GET  /api/mappings
   ├── POST /api/mappings
-  ├── PUT  /api/mappings/:id
-  ├── POST /api/mappings/feedback           ← F1 human feedback
+  ├── PUT  /api/mappings/:id                ← edit raw_name + item_code + unit_code
+  ├── DEL  /api/mappings/:id
+  ├── POST /api/mappings/feedback           ← F1 (legacy; UpdateItem auto-saves now)
   ├── GET  /api/mappings/stats
+  ├── GET  /api/catalog                     ← SML product catalog list
+  ├── GET  /api/catalog/search              ← embedding similarity search
+  ├── POST /api/catalog/products            ← create new SML product (+ embed bg)
+  ├── POST /api/catalog/sync                ← bulk sync from SML 248
+  ├── POST /api/catalog/embed-all           ← background embed
+  ├── POST /api/catalog/reload-index        ← rebuild memory index
   ├── GET  /api/dashboard/stats
   ├── GET  /api/dashboard/insights
   ├── POST /api/dashboard/insights/generate
   ├── GET  /api/logs                        ← Activity Log
-  ├── POST /api/import/upload               ← Lazada Excel
-  ├── GET  /api/settings/shopee-config      ← Shopee SML defaults
+  ├── POST /api/import/upload               ← Lazada Excel (Phase 4b WIP)
+  ├── GET  /api/settings/shopee-config
   ├── POST /api/import/shopee/preview       ← parse + dedup check
   ├── POST /api/import/shopee/confirm       ← ส่ง SML 248
   ├── GET  /api/settings/column-mappings/:platform
@@ -112,7 +122,8 @@ Go Backend (Gin) :8090
          │
     ┌────┴────┐
 PostgreSQL   External APIs
-  :5438        OpenRouter, SML :3248, LINE API, IMAP
+  :5438        OpenRouter, SML 213 (sale_reserve), SML 248 (saleinvoice/PO/product),
+               LINE API, Mistral OCR, IMAP
 ```
 
 ---
@@ -280,9 +291,12 @@ Migrations (run in order, all idempotent):
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/bills` | JWT | List bills (filter: status, source, date) |
+| GET | `/api/bills` | JWT | List bills (filter: status, source, bill_type, date) |
 | GET | `/api/bills/:id` | JWT | Bill detail with items |
-| POST | `/api/bills/:id/retry` | admin/staff | Retry failed bill |
+| POST | `/api/bills/:id/retry` | JWT | Manual confirm/send → SML (3-way routed by source/bill_type) |
+| PUT | `/api/bills/:id/items/:item_id` | admin/staff | Edit qty/price/item_code (F1 auto-learn on item_code change) |
+| POST | `/api/bills/:id/items` | admin/staff | Add a new line item |
+| DELETE | `/api/bills/:id/items/:item_id` | admin/staff | Remove a line item |
 
 ### Mappings
 
@@ -542,24 +556,45 @@ Response (flat — ไม่มี nested):
 ⚠️ ถ้า data=null → ใช้ fallback SHOPEE_SML_UNIT_CODE / WH_CODE / SHELF_CODE จาก .env
 ⚠️ ต้องตั้ง SHOPEE_SML_UNIT_CODE ไว้เสมอ (เช่น "ถุง") เพราะ SML reject unit_code=""
 
-2. Create saleinvoice  ← ✅ CONFIRMED WORKING
+2. Create saleinvoice  ← ✅ CONFIRMED WORKING (Shopee Excel + Shopee email order)
 POST /SMLJavaRESTService/restapi/saleinvoice
 {
-  "doc_no": "<shopee_order_id>",   ← ใช้ order_id เป็น doc_no
+  "doc_no": "",                    ← empty → SML auto-generates BS...
   "doc_format_code": "INV",
-  "doc_date": "2026-04-24",
+  "doc_date": "2026-04-24",        ← extracted from email body if available
   "cust_code": "AR00004",
-  "is_permium": 0,        ← int, typo intentional (matches SML)
-  "vat_type": 0,          ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
-  "details": [{           ← key ต้องเป็น "details" ไม่ใช่ "items"
-    "item_code": "...",
-    "unit_code": "ถุง",
-    "wh_code": "WH-01",
-    "shelf_code": "SH-01",
-    "price_exclude_vat": ...,
-    "sum_amount_exclude_vat": ...
+  "is_permium": 0,                 ← int, typo intentional (matches SML)
+  "vat_type": 0,                   ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
+  "details": [{                    ← key ต้องเป็น "details" ไม่ใช่ "items"
+    "item_code": "...", "unit_code": "ถุง",
+    "wh_code": "WH-01", "shelf_code": "SH-01",
+    "price_exclude_vat": ..., "sum_amount_exclude_vat": ...
   }]
 }
+
+3. Create purchaseorder  ← ✅ CONFIRMED WORKING (Shopee shipped emails)
+POST /SMLJavaRESTService/v3/api/purchaseorder
+Same payload shape as saleinvoice, except:
+  - doc_no MUST be non-empty (v3 endpoint does NOT auto-generate; null
+    triggers ic_trans NOT NULL constraint). BillFlow generates
+    "BF-PO-YYYYMMDD-{8-char bill UUID}" client-side.
+  - cust_code is semantically the supplier code
+  - "buy_type" instead of "sale_type"
+Client: backend/internal/services/sml/purchaseorder_client.go
+
+4. Create product  ← ✅ CONFIRMED WORKING (used by MapItemModal)
+POST /SMLJavaRESTService/v3/api/product
+{
+  "code": "TEST-001", "name": "ทดสอบ",
+  "tax_type": 0, "item_type": 0, "unit_type": 1,
+  "unit_cost": "ชิ้น", "unit_standard": "ชิ้น", "purchase_point": 0,
+  "units": [{"unit_code":"ชิ้น","unit_name":"ชิ้น","stand_value":1,"divide_value":1}],
+  "price_formulas": [{"unit_code":"ชิ้น","sale_type":0,"price_0":"99.5",
+                      "tax_type":0,"price_currency":0}]
+}
+Response: {"success":true,"data":{"code":"..."}} (use response code as canonical)
+Wired via POST /api/catalog/products → upserts sml_catalog + bg embed.
+Client: backend/internal/services/sml/product_client.go
 ```
 
 **SML 248 config ที่ใช้งานจริง (confirmed 2026-04-24):**
@@ -702,54 +737,69 @@ sudo systemctl start cloudflared
 
 | Phase | Description | Status |
 |---|---|---|
-| 0 | Server prep (Go install, disk cleanup, cloudflared) | ✅ Done |
+| 0 | Server prep (Go install, disk cleanup, cloudflared install) | ✅ Done |
 | 1 | Foundation: Docker, DB migrations, JWT auth, Login UI | ✅ Done |
 | 2 | Core AI pipeline: OpenRouter, MapperService (F1), AnomalyService (F2), SML client, WorkerPool | ✅ Done |
-| 3 | LINE integration: chatbot text ✅, cart edit ✅, image/PDF/voice (deployed untested) | ✅ Partial |
-| 4a | Shopee import: saleinvoice_client, shopee_import handler, ShopeeImport.tsx, routes wired | ✅ Deployed |
+| 3 | LINE integration: chatbot text ✅, cart edit ✅, image/PDF/voice (deployed, untested in LINE) | ✅ Partial |
+| 4a | Shopee import: Excel → SML 248 saleinvoice (verified end-to-end) | ✅ Done |
 | 4b | Lazada import: Excel parser + Web UI | ⏳ รอไฟล์จากลูกค้า |
-| 4 | File import: Lazada/Shopee Excel, column mapping editor | ⏳ Pending (รอไฟล์จากลูกค้า) |
-| 5 | Email IMAP polling + attachment pipeline (Mistral OCR + retry handler) | ✅ Done |
-| 6 | Web UI: Dashboard, Bills, BillDetail, Import, Mappings, Settings | ⏳ Not started |
-| 7 | Background jobs: insight cron, backup cron, token checker, disk monitor | ⏳ Not started |
-| 8 | Production: Cloudflare Tunnel, structured logging, health check | ⏳ Not started |
+| 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped → PO) | ✅ Done |
+| 5+ | Manual-confirm flow — auto-send removed; user confirms in BillDetail UI | ✅ Done |
+| 6 | Web UI: Dashboard, Bills, BillDetail (edit/add/delete items, MapItemModal), Mappings, Settings, Catalog, Logs | ✅ Done + UX cleanup pass (13 issues) |
+| 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
+| 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
-### Latest Test Results (2026-04-24)
+### Latest Test Results (2026-04-27)
 
 ```
-LINE OA text flow (chatbot น้องบิล):
+LINE OA text flow (chatbot น้องบิล) — last verified 2026-04-23:
 ✅ ค้นหาสินค้า → เลือก → ใส่จำนวน → checkout → SML
 ✅ bill created: BS20260423101501-UELM (4,603.19 บาท)
 ✅ SML fail → LINE admin notify
 ✅ retry handler: re-map + re-send SML
 
-Email IMAP pipeline:
+Email IMAP pipeline (2026-04-24):
 ✅ SASL PLAIN auth (Gmail App Password)
 ✅ Poll ทันทีตอน start + ทุก 5 นาที
 ✅ Inline PDF attachment detected (Mistral OCR)
-✅ AI extract → mapper → anomaly → DB → SML
-✅ Bill sent: BS20260423152412-6YRU
-✅ Unmapped items → pending review + LINE notify
+✅ AI extract → mapper → anomaly → DB → manual confirm
+✅ Bill sent: BS20260424045830-FE5J + 2 others
+✅ Unmapped items → needs_review + LINE notify
 ✅ เพิ่ม mapping ใหม่ + retry → SML สำเร็จ
 
-Shopee Import (Phase 4a) — SML 248 ที่ 192.168.2.248:
-✅ SML 248 REST API confirmed working (saleinvoice + product lookup)
-✅ Product lookup: GET /SMLJavaRESTService/v3/api/product/{sku} (flat response)
-✅ Create invoice: POST /SMLJavaRESTService/restapi/saleinvoice (key=details)
-✅ Config: guid=smlx / SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
-✅ cust_code=AR00004, wh=WH-01, shelf=SH-01, doc_format=INV
-⚠️ test file ใช้ SKU=REST-00002 ซึ่งไม่มีในSML 248
-   → ต้องแก้ไฟล์ทดสอบให้ใช้ SKU จริง (CON-xxxxx / STEEL-xxxxx ฯลฯ)
-⚠️ SHOPEE_SML_UNIT_CODE ต้องไม่ว่าง (ตั้งเป็น "ถุง" เป็น fallback)
-⬜ end-to-end test กับ SKU จริง — ยังไม่เสร็จ
+Shopee email shipped → SML purchaseorder (2026-04-27):
+✅ Subject "ถูกจัดส่งแล้ว" routes to ProcessShopeeShippedEmailBody
+✅ AI extracts items + customer from HTML body
+✅ doc_date extracted from "ถูกจัดส่งแล้วเมื่อวันที่ DD/MM/YYYY"
+✅ Bill created: bill_type=purchase, source=shopee_shipped, status=needs_review
+✅ Manual confirm → POST /SMLJavaRESTService/v3/api/purchaseorder
+   doc_no="BF-PO-20260427-3e3a609a", HTTP 200, status=sent
+✅ extractShopeeOrderID handles alphanumeric IDs (e.g. 26040408YSU4VR)
 
-DB (2026-04-24): cleared สำหรับ clean test
-Last successful bill: BS20260423101501-UELM (LINE OA, 4,603.19 บาท)
+Create new SML product flow (2026-04-27):
+✅ POST /api/catalog/products → POST /SMLJavaRESTService/v3/api/product
+✅ Test code TEST-CREATE-1777266192 created in SML
+✅ sml_catalog upsert + background embedding (status=done in <5s)
+✅ /api/catalog/search returns it as top embedding match
+
+F1 mapping feedback (2026-04-27):
+✅ User changes item_code on a row in BillDetail
+✅ ai_learned mapping created automatically
+✅ Toast: "✓ จดจำการจับคู่นี้แล้ว — ครั้งถัดไประบบจะ map ให้อัตโนมัติ"
+
+Add/Delete bill items (2026-04-27):
+✅ POST /api/bills/:id/items + audit bill_item_added
+✅ DELETE /api/bills/:id/items/:item_id + audit bill_item_deleted
+
+Backup cron (2026-04-27):
+✅ pg_dump from inside backend container (postgresql-client added to Dockerfile)
+✅ 20 MB .sql.gz file produced + accessible on host volume mount
 
 ยังไม่ test:
-⬜ LINE: รูป/PDF/voice
-⬜ Shopee import end-to-end (ต้องใช้ SKU จริงในไฟล์ Excel)
-⬜ Lazada Excel import
+⬜ LINE OA: รูป / PDF / voice (code deployed, never sent through LINE)
+⬜ Lazada Excel import (Phase 4b — รอไฟล์ลูกค้า)
+⬜ Shopee Excel end-to-end with real SKUs (most paths deploy-verified
+   via the email flow, which uses the same SML 248 saleinvoice client)
 ```
 
 ---
