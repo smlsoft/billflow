@@ -20,7 +20,7 @@ if not PASS:
 # Files to sync (matches the commit)
 FILES = [
     "backend/internal/handlers/email.go",
-    "backend/internal/repository/bill_artifact_repo.go",
+    "backend/internal/handlers/shipped_email.go",
 ]
 
 

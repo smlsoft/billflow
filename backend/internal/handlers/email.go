@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,34 @@ import (
 var docDatePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`ถูกจัดส่งแล้วเมื่อวันที่[\s:	]*(\d{1,2})/(\d{1,2})/(\d{4})`),
 	regexp.MustCompile(`วันที่สั่งซื้อ[\s:	]*(\d{1,2})/(\d{1,2})/(\d{4})`),
+}
+
+// shopeePricePattern matches "ราคา: ฿NUMBER" (per-item line in Shopee emails).
+// We use this as a fallback when the AI extract returns nil prices —
+// observed when Gemini sees the ฿ glyph and outputs the price as a string
+// instead of a number, then drops it.
+//
+// Carefully NOT matching "รวม*ราคา" / "ยอด*" so we don't slurp the order
+// total or shipping fee. The (?:...) limits it to the line-level "ราคา"
+// label that appears right after qty in each item block.
+var shopeePricePattern = regexp.MustCompile(`(?:^|\s)ราคา\s*[:：]\s*฿\s*([\d,]+(?:\.\d+)?)`)
+
+// extractShopeePrices returns the per-item prices from a Shopee email body
+// in the order they appear in the email. Used as a fallback when the AI
+// extract drops a Price field.
+func extractShopeePrices(body string) []float64 {
+	matches := shopeePricePattern.FindAllStringSubmatch(body, -1)
+	out := make([]float64, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		clean := strings.ReplaceAll(m[1], ",", "")
+		if v, err := strconv.ParseFloat(clean, 64); err == nil {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // EmailHandler processes email attachments through the AI pipeline
@@ -461,7 +490,11 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID
 	const topK = 5
 	const highConfThreshold = 0.85
 
-	for _, extItem := range extracted.Items {
+	// Fallback per-item prices in case the AI returned nil for some lines
+	// (Gemini occasionally drops Price fields when it sees the ฿ glyph).
+	fallbackPrices := extractShopeePrices(plainText)
+
+	for i, extItem := range extracted.Items {
 		var matches []models.CatalogMatch
 
 		// Try embedding search first
@@ -489,6 +522,10 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID
 		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
+		} else if i < len(fallbackPrices) {
+			p := fallbackPrices[i]
+			item.Price = &p
+			price = p
 		}
 
 		var topMatch *models.CatalogMatch

@@ -73,7 +73,10 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, me
 	const topK = 5
 	const highConfThreshold = 0.85
 
-	for _, extItem := range extracted.Items {
+	// Per-item prices parsed from the email body — fallback for AI nulls.
+	fallbackPrices := extractShopeePrices(plainText)
+
+	for i, extItem := range extracted.Items {
 		var matches []models.CatalogMatch
 
 		if h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
@@ -93,6 +96,9 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, me
 		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
+		} else if i < len(fallbackPrices) {
+			p := fallbackPrices[i]
+			item.Price = &p
 		}
 
 		if len(matches) > 0 && matches[0].Score >= highConfThreshold {
