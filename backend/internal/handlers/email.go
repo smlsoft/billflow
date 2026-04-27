@@ -105,6 +105,21 @@ func (h *EmailHandler) saveEmailArtifacts(
 	if h.artifactSvc == nil || billID == "" {
 		return
 	}
+	// Inline-attached PDFs from Gmail often arrive with no MIME filename.
+	// Fall back to a sensible default per content-type so the download
+	// button has a meaningful name.
+	if filename == "" {
+		switch {
+		case contentType == "application/pdf":
+			filename = "attachment.pdf"
+		case strings.HasPrefix(contentType, "image/"):
+			filename = "attachment." + strings.TrimPrefix(contentType, "image/")
+		case strings.HasPrefix(contentType, "text/html"):
+			filename = "body.html"
+		default:
+			filename = "attachment.bin"
+		}
+	}
 	envelope := map[string]interface{}{
 		"subject":    subject,
 		"from":       fromAddr,

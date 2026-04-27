@@ -16,13 +16,20 @@ func NewBillArtifactRepo(db *sql.DB) *BillArtifactRepo {
 }
 
 func (r *BillArtifactRepo) Insert(a *models.BillArtifact) error {
+	// pq sends []byte(nil) as the empty bytea string "", which a JSONB
+	// column rejects with "invalid input syntax for type json". Pass an
+	// untyped nil interface so the driver emits SQL NULL instead.
+	var metaArg interface{}
+	if len(a.SourceMeta) > 0 {
+		metaArg = []byte(a.SourceMeta)
+	}
 	return r.db.QueryRow(
 		`INSERT INTO bill_artifacts
 		   (bill_id, kind, filename, content_type, size_bytes, sha256, storage_path, source_meta)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		 RETURNING id, created_at`,
 		a.BillID, a.Kind, a.Filename, a.ContentType,
-		a.SizeBytes, a.SHA256, a.StoragePath, a.SourceMeta,
+		a.SizeBytes, a.SHA256, a.StoragePath, metaArg,
 	).Scan(&a.ID, &a.CreatedAt)
 }
 
