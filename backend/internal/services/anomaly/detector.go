@@ -9,11 +9,24 @@ type DuplicateChecker interface {
 	ExistsDuplicateToday(source, customerName string, itemCodes []string) (bool, error)
 }
 
+// CustomerLookup is implemented by the bill repository to check whether a customer
+// has been seen before in any prior bill.
+type CustomerLookup interface {
+	HasSeenCustomer(customerName string) (bool, error)
+}
+
 type Service struct {
-	dupChecker DuplicateChecker
+	dupChecker  DuplicateChecker
+	custLookup  CustomerLookup
 }
 
 func New(dc DuplicateChecker) *Service { return &Service{dupChecker: dc} }
+
+// WithCustomerLookup adds the optional new-customer detection lookup.
+func (s *Service) WithCustomerLookup(cl CustomerLookup) *Service {
+	s.custLookup = cl
+	return s
+}
 
 type CheckInput struct {
 	Items        []models.BillItem
@@ -46,6 +59,18 @@ func (s *Service) Check(input CheckInput) []models.Anomaly {
 				Message:  "บิลซ้ำ — พบบิลลูกค้าเดียวกันสินค้าเดียวกันในวันนี้แล้ว",
 			})
 			hasBlock++
+		}
+	}
+
+	// warn: new customer — ลูกค้าที่ไม่เคยมีบิลใน DB มาก่อน
+	if s.custLookup != nil && input.CustomerName != "" {
+		if seen, err := s.custLookup.HasSeenCustomer(input.CustomerName); err == nil && !seen {
+			anomalies = append(anomalies, models.Anomaly{
+				Code:     "new_customer",
+				Severity: "warn",
+				Message:  "ลูกค้าใหม่ — ยังไม่เคยมีบิลในระบบ",
+			})
+			hasWarn++
 		}
 	}
 

@@ -282,8 +282,13 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		}
 
 		// Build saleinvoice payload
+		// Pass empty doc_no — let SML generate it (omitempty). The Shopee order_id
+		// is preserved in bills.sml_order_id and raw_data for BillFlow-side tracking.
+		// Why: SML's ic_trans table has UNIQUE (doc_no, trans_flag); reusing the
+		// Shopee order_id as doc_no triggers a duplicate-key violation if SML had
+		// previously imported a row with the same string.
 		payload := sml.BuildInvoicePayload(
-			order.OrderID,
+			"",
 			order.DocDate,
 			order.Items,
 			invoiceCfg,
@@ -304,6 +309,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			Status:       "pending",
 			AIConfidence: &aiConf,
 			RawData:      rawData,
+			SMLOrderID:   order.OrderID,
 		}
 		if userID != nil {
 			bill.CreatedBy = userID

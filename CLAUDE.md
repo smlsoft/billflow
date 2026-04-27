@@ -273,7 +273,53 @@ CREATE TABLE platform_column_mappings (
   updated_at   TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(platform, field_name)
 );
+
+-- Chat Sessions (LINE conversation state — persistent across restart)
+CREATE TABLE chat_sessions (
+  line_user_id   TEXT PRIMARY KEY,
+  history        JSONB NOT NULL DEFAULT '[]',  -- last ~20 messages
+  pending_order  JSONB,                        -- cart state
+  last_active    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- SML Catalog (smart matching — Shopee email + manual review)
+-- ทำงานเป็น in-memory cosine-similarity index (1536-dim vectors)
+CREATE TABLE sml_catalog (
+  item_code        TEXT PRIMARY KEY,
+  item_name        TEXT NOT NULL,
+  item_name2       TEXT NOT NULL DEFAULT '',
+  unit_code        TEXT NOT NULL DEFAULT '',
+  wh_code          TEXT NOT NULL DEFAULT '',
+  shelf_code       TEXT NOT NULL DEFAULT '',
+  price            NUMERIC(14,4),
+  group_code       TEXT NOT NULL DEFAULT '',
+  balance_qty      NUMERIC(14,4),
+  embedding_status TEXT NOT NULL DEFAULT 'pending'
+                   CHECK (embedding_status IN ('pending','done','error')),
+  embedded_at      TIMESTAMPTZ,
+  embedding        JSONB,           -- text-embedding-3-small (OpenRouter)
+  embedding_model  TEXT,
+  synced_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Channel Customer Defaults (default cust_code per channel)
+CREATE TABLE channel_customer_defaults (
+  channel     TEXT PRIMARY KEY
+              CHECK (channel IN ('line','email','shopee','lazada')),
+  cust_code   TEXT NOT NULL,
+  cust_name   TEXT NOT NULL,
+  cust_phone  TEXT NOT NULL DEFAULT '',
+  updated_by  UUID,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ```
+
+> **Migration files** (run in order, all idempotent):
+> - [001_init.sql](backend/internal/database/migrations/001_init.sql) — initial schema (users, bills, bill_items, mappings, mapping_feedback, item_price_history, daily_insights, platform_column_mappings, audit_logs, chat_sessions)
+> - [002_audit_logging.sql](backend/internal/database/migrations/002_audit_logging.sql) — audit_logs structured columns (source, level, duration_ms, trace_id) + indexes
+> - [002_sml_catalog.sql](backend/internal/database/migrations/002_sml_catalog.sql) — sml_catalog table + bills.sml_order_id + bill_items.candidates + extended source/status CHECK
+> - [003_channel_customer_defaults.sql](backend/internal/database/migrations/003_channel_customer_defaults.sql) — channel_customer_defaults table
 
 ---
 
@@ -925,15 +971,15 @@ github.com/robfig/cron/v3             ← cron jobs
 ### Frontend (React + Vite)
 ```
 react-router-dom         ← routing
-zustand                  ← state management
-axios                    ← HTTP client
-@tanstack/react-query    ← server state + caching
+zustand                  ← state management (with persist middleware)
+axios                    ← HTTP client (shared client.ts with 401 interceptor)
 recharts                 ← charts
-react-dropzone           ← file upload
+react-dropzone           ← file upload (Lazada Import เท่านั้น)
 react-hot-toast          ← notifications
-tailwindcss              ← styling
-@headlessui/react        ← accessible components
+dayjs                    ← date formatting
 ```
+> ⚠️ **Styling:** ใช้ custom CSS design tokens (`--color-*`, `--space-*`) + Inter font จาก Google Fonts
+> **ไม่ได้ใช้** Tailwind, @headlessui, @tanstack/react-query — ทุก data fetching ใช้ manual `useState`/`useEffect`
 
 ---
 
@@ -1141,91 +1187,79 @@ Report disk usage before and after, then ask before Phase 1.
 
 ---
 
-## 26. Current Status (2026-04-24)
+## 26. Current Status (2026-04-27)
 
 ```
-Deployed & Running:
-  backend  → billflow-backend  :8090  ✅
+Deployed & Running on 192.168.2.109:
+  backend  → billflow-backend  :8090  ✅ (Up 2 days)
   frontend → billflow-frontend :3010  ✅
-  postgres → billflow-postgres :5438  ✅
+  postgres → billflow-postgres :5438  ✅ (Up 4 days, healthy)
+  Disk:    87/109 GB used (85% — close to DiskMonitor threshold 90%)
   health:  {"database":"ok","env":"production","status":"ok"}
 
+DB state:
+  bills: 4 rows (3 email sent + 1 shopee failed)
+  mappings: 2 (manual)
+  sml_catalog: 3000 items, all embedded ✅
+  Last sent: BS20260424045830-FE5J (email, 2026-04-24)
+
 AI Models (OpenRouter):
-  primary  → google/gemini-2.5-flash   (all tasks)
-  fallback → google/gemini-flash-1.5   (retry only)
+  primary  → google/gemini-2.5-flash
+  fallback → google/gemini-flash-1.5  (server .env has anthropic/claude-3-5-haiku — diverged)
   audio    → openai/whisper-1
+  embed    → openai/text-embedding-3-small  (1536-dim, in-memory cosine index)
 
 PDF Extraction:
   Mistral OCR (mistral-ocr-2512) → markdown → OpenRouter ExtractText()
   เหตุผล: OpenRouter route Gemini ผ่าน Amazon Bedrock ไม่รองรับ PDF MIME type
 
-IMAP:
-  Gmail: imap.gmail.com:993, App Password (ewbjcfytcnnapwbj)
-  IMAP_POLL_INTERVAL=5m  ← ต้องไม่น้อยกว่านี้
-  bug เดิม: IMAP_POLL_INTERVAL=1m → Gmail rate limit → unexpected EOF → แก้แล้ว
+IMAP: Gmail App Password, IMAP_POLL_INTERVAL=5m (ห้ามน้อยกว่า)
 
-SML #2 — Shopee (192.168.2.248:8080) — CONFIRMED WORKING (2026-04-24):
-  ✅ Product lookup: GET /SMLJavaRESTService/v3/api/product/{sku}  (flat response)
-     data=null หมายถึงไม่พบสินค้า → ใช้ fallback จาก .env
-  ✅ Create invoice: POST /SMLJavaRESTService/restapi/saleinvoice  (key="details")
-  ✅ Config ที่ใช้: guid=smlx / provider=SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
-  ✅ cust_code=AR00004, wh=WH-01, shelf=SH-01, doc_format=INV
-  ✅ DB on .248: PostgreSQL, db=sml1_2026, table=ic_inventory (products)
-  ⚠️ SHOPEE_SML_UNIT_CODE ต้องไม่ว่าง → SML reject unit_code=""
-     ตั้ง fallback = "ถุง" (หรือหน่วยที่เหมาะสม)
-  ⚠️ ไฟล์ test (ไฟล์ตัวอย่างorder shoppe.xlsx) ใช้ SKU=REST-00002
-     ซึ่งไม่มีใน SML 248 → ต้องแก้ไฟล์ให้ใช้ SKU จริง เช่น CON-01000, STEEL-01001
-  SKU จริงใน SML 248: CON-xxxxx (ถุง), STEEL-xxxxx (เส้น), PLUMB-xxxxx (ท่อน), ROOF-xxxxx (แผ่น)
+SML #2 — Shopee (192.168.2.248:8080) — CONFIRMED WORKING:
+  Config: guid=smlx / provider=SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
+  cust_code=AR00004, wh=WH-01, shelf=SH-01, doc_format=INV
+  ⚠️ doc_no fix (2026-04-27): ปล่อย SML gen เอง — เพราะ ic_trans_pk ใช้
+     UNIQUE (doc_no, trans_flag) — Shopee order_id ที่ส่งซ้ำจะ violate
+     แก้แล้วใน shopee_import.go: BuildInvoicePayload("", ...)
+     order_id ยังเก็บไว้ที่ bills.sml_order_id + raw_data สำหรับ tracking
 
-Server .env ที่ใช้งาน (192.168.2.109 ~/billflow/.env):
-  SHOPEE_SML_URL=http://192.168.2.248:8080
-  SHOPEE_SML_GUID=smlx
-  SHOPEE_SML_PROVIDER=SMLGOH
-  SHOPEE_SML_CONFIG_FILE=SMLConfigSMLGOH.xml
-  SHOPEE_SML_DATABASE=SML1_2026
-  SHOPEE_SML_BRANCH_CODE=001
-  SHOPEE_SML_DOC_FORMAT=INV
-  SHOPEE_SML_CUST_CODE=AR00004
-  SHOPEE_SML_WH_CODE=WH-01
-  SHOPEE_SML_SHELF_CODE=SH-01
-  SHOPEE_SML_UNIT_CODE=   ← ต้องเพิ่ม fallback เช่น "ถุง"
+Phases:
+  Phase 0–5  ✅
+  Phase 6    ✅ (Web UI ครบ + CatalogSettings ใหม่)
+  Phase 7    ⚠️ (cron register ครบ — backup_cron แก้ใหม่ 2026-04-27 ใช้ pg_dump
+                 ใน-container แทน docker exec จากใน container)
+  Phase 8    ⏳ (cloudflared installed แต่ยังไม่ config + systemd)
 
-Phase ที่ผ่านแล้ว:
-  Phase 0 ✅  Phase 1 ✅  Phase 2 ✅  Phase 3 ✅ (text+cart edit)
-  Phase 4a ✅ (Shopee import deployed + SML 248 API confirmed working)
-  Phase 5 ✅ (IMAP + Mistral OCR deployed + tested)
+Catalog feature (deploy แล้ว แต่ doc เก่าไม่ครอบคลุม):
+  ✅ sml_catalog table 3000 items + embeddings เสร็จหมด
+  ✅ /settings/catalog page (frontend) — sync, embed-all, reload-index
+  ✅ /api/catalog/* endpoints (10 routes)
+  ✅ Smart matching ใน Shopee email pipeline + needs_review flow
+  ✅ POST /api/bills/:id/items/:item_id/confirm-match (manual review)
+
+Fixes ที่เพิ่งลง (2026-04-27):
+  ✅ A.1 .env.example อัปเดต — เพิ่ม MISTRAL_API_KEY, SHOPEE_EMAIL_DOMAINS,
+        SHOPEE_SML_BRANCH_CODE, แก้ model defaults + Shopee SML config
+  ✅ A.2 002_post_init.sql — schema additions (sml_catalog,
+        channel_customer_defaults, sml_order_id, candidates, audit_log columns,
+        extended source/status CHECK)
+  ✅ A.3 anomaly: new_customer warn rule (BillRepo.HasSeenCustomer + wired)
+  ✅ B.5 backup_cron rewrite — ใช้ pg_dump ใน container (Dockerfile +
+        postgresql16-client + compose volume ./backups:/app/backups)
+  ✅ C.7 Shopee doc_no — ตัด order_id ออกจาก SML payload, เก็บใน sml_order_id
 
 ค้างอยู่:
-  Phase 3 — test รูป/PDF/voice ใน LINE
-  Phase 4a — end-to-end test กับ SKU จริง (ต้องแก้ไฟล์ Excel + ตั้ง UNIT_CODE fallback)
-  Phase 4b — Lazada Import (รอไฟล์จากลูกค้า)
-  Phase 6 — Web UI complete
-  Phase 7 — Background Jobs
-  Phase 8 — Production Ready
-
-Features เพิ่มเติมที่ deploy แล้ว:
-  ✅ Cart edit (LINE): ลบรายการที่ N / แก้จำนวนรายการที่ N เป็น Y
-  ✅ Email dedup by Message-ID
-  ✅ Audit Log backend (audit_logs table + repo + handler)
-  ✅ Activity Log frontend page (/logs)
-  ✅ BillDetail: expandable JSON sections (raw_data, sml_payload, sml_response)
-  ✅ Bill retry: รองรับทั้ง pending และ failed
-  ✅ Shopee import: Preview + Confirm + Config dialog (/import/shopee)
-  ✅ README.md: ทุก SML 224 → SML 248 แก้ครบแล้ว
-
-Bills ใน DB: 0 (cleared สำหรับ clean Shopee test)
-Last successful bill: BS20260423101501-UELM (LINE OA, 4,603.19 บาท)
-
-Next steps สำหรับ Phase 4a:
-  1. เพิ่ม SHOPEE_SML_UNIT_CODE=ถุง ใน /home/bosscatdog/billflow/.env
-  2. docker compose up -d backend (ไม่ต้อง build)
-  3. แก้ไฟล์ Excel ให้ใช้ SKU จริง (CON-01000 ฯลฯ) หรือใช้ไฟล์จริงจากลูกค้า
-  4. ทดสอบที่ http://192.168.2.109:3010/import/shopee
+  ⏳ Phase 3 — test รูป/PDF/voice ใน LINE
+  ⏳ Phase 4a — end-to-end test Shopee import (หลัง doc_no fix + rebuild)
+  ⏳ Phase 4b — Lazada Import (รอไฟล์จากลูกค้า)
+  ⏳ Phase 8 — cloudflared config + systemd (ต้องรู้ domain ก่อน)
+  ⏳ Disk cleanup — Docker build cache 23 GB + dangling images ~20 GB
+                   (จาก bossboard build) — ต้อง user confirm ก่อนรัน prune
 ```
 
 ---
 
-*Last updated: 2026-04-24 (session 3)*
+*Last updated: 2026-04-27 (session 4)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*

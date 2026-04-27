@@ -391,6 +391,20 @@ func (r *BillRepo) ExistsDuplicateToday(source, customerName string, itemCodes [
 	return count > 0, err
 }
 
+// HasSeenCustomer returns true if any prior bill has this customer_name
+// (case-insensitive). Used by anomaly.CustomerLookup for the "new_customer" warn rule.
+func (r *BillRepo) HasSeenCustomer(customerName string) (bool, error) {
+	if customerName == "" {
+		return false, nil
+	}
+	var count int
+	err := r.db.QueryRow(
+		`SELECT COUNT(*) FROM bills WHERE raw_data->>'customer_name' ILIKE $1`,
+		customerName,
+	).Scan(&count)
+	return count > 0, err
+}
+
 // UpdatePriceHistory updates rolling avg/min/max price statistics for each item
 func (r *BillRepo) UpdatePriceHistory(items []models.BillItem) error {
 	for _, item := range items {

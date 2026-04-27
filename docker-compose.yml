@@ -29,6 +29,9 @@ services:
       DATABASE_URL: "postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/billflow?sslmode=disable"
       GIN_MODE: release
       ENV: production
+    volumes:
+      # pg_dump backups land here (cron 00:00, kept 30 days)
+      - ./backups:/app/backups
     depends_on:
       postgres:
         condition: service_healthy

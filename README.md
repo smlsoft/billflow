@@ -245,18 +245,25 @@ VITE_API_URL=http://localhost:8090
 ## 7. Database Schema
 
 ```sql
-users                  -- auth + roles
-bills                  -- บิลทุกใบ (status: pending/confirmed/sent/failed/skipped)
-bill_items             -- รายการสินค้าในบิล
-mappings               -- raw_name → item_code/unit_code mapping
-mapping_feedback       -- F1: human corrections
-item_price_history     -- F2: avg/min/max price per item_code
-daily_insights         -- F4: AI-generated daily summaries
-platform_column_mappings -- Lazada/Shopee column name config (admin-configurable)
-audit_logs             -- action log
+users                       -- auth + roles
+bills                       -- บิลทุกใบ (status + needs_review, sml_order_id)
+bill_items                  -- รายการ + candidates JSONB (catalog matches)
+mappings                    -- raw_name → item_code/unit_code (F1)
+mapping_feedback            -- F1: human corrections
+item_price_history          -- F2: avg/min/max price per item_code
+daily_insights              -- F4: AI-generated daily summaries
+platform_column_mappings    -- Lazada/Shopee column name config
+audit_logs                  -- structured log (source, level, duration_ms, trace_id)
+chat_sessions               -- LINE conversation state (persistent)
+sml_catalog                 -- SML product catalog + 1536-dim embeddings
+channel_customer_defaults   -- default cust_code per channel
 ```
 
-Migration file: [backend/internal/database/migrations/001_init.sql](backend/internal/database/migrations/001_init.sql)
+Migrations (run in order, all idempotent):
+- [001_init.sql](backend/internal/database/migrations/001_init.sql) — initial schema
+- [002_audit_logging.sql](backend/internal/database/migrations/002_audit_logging.sql) — audit_logs structured columns
+- [002_sml_catalog.sql](backend/internal/database/migrations/002_sml_catalog.sql) — sml_catalog + sml_order_id + candidates + extended source/status CHECK
+- [003_channel_customer_defaults.sql](backend/internal/database/migrations/003_channel_customer_defaults.sql) — channel_customer_defaults
 
 ---
 
@@ -318,6 +325,21 @@ Migration file: [backend/internal/database/migrations/001_init.sql](backend/inte
 | GET | `/api/dashboard/stats` | JWT | Stats overview |
 | GET | `/api/dashboard/insights` | JWT | F4 AI insights list |
 | POST | `/api/dashboard/insights/generate` | admin | Generate insight on-demand |
+
+### Catalog (SML product catalog + smart matching)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/catalog` | JWT | Paginated catalog list (filter: status, q) |
+| GET | `/api/catalog/stats` | JWT | Total, embedded, pending, error counts |
+| GET | `/api/catalog/search` | JWT | Cosine-similarity search (fallback to Levenshtein) |
+| GET | `/api/catalog/:code` | JWT | Catalog item detail |
+| POST | `/api/catalog/sync` | admin | Sync from SML 248 product API |
+| POST | `/api/catalog/import-csv` | admin | Bulk CSV upload |
+| POST | `/api/catalog/embed-all` | admin | Background batch embedding |
+| POST | `/api/catalog/reload-index` | admin | Rebuild in-memory index |
+| POST | `/api/catalog/:code/embed` | admin | Embed single item |
+| POST | `/api/bills/:id/items/:item_id/confirm-match` | admin/staff | Confirm catalog match (needs_review) |
 
 ### Webhook
 

@@ -72,7 +72,7 @@ func main() {
 	// Services
 	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel)
 	mapperSvc := mapper.New(mappingRepo)
-	anomalySvc := anomaly.New(billRepo)
+	anomalySvc := anomaly.New(billRepo).WithCustomerLookup(billRepo)
 	smlClient := sml.New(sml.Config{
 		BaseURL: cfg.SMLBaseURL,
 	})
@@ -244,7 +244,14 @@ func main() {
 	insightCron := jobs.NewInsightCron(insightSvc, billRepo, insightRepo, lineSvc, cfg.InsightLineNotify, logger)
 	insightCron.Register(c, cfg.InsightCronHour)
 
-	backupCron := jobs.NewBackupCron(cfg.DBUser, "billflow", "/app/backups", logger)
+	// Backup cron runs pg_dump from inside the backend container against the
+	// postgres service on the Docker network. Output goes to /app/backups
+	// (mounted to ~/billflow/backups on the host via docker-compose.yml).
+	backupCron := jobs.NewBackupCron(
+		"postgres", "5432",
+		cfg.DBUser, "billflow", cfg.DBPassword,
+		"/app/backups", logger,
+	)
 	backupCron.Register(c, cfg.BackupCronHour)
 
 	diskMon := jobs.NewDiskMonitor(cfg.DiskWarnPercent, lineSvc, logger)
