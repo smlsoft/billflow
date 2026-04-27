@@ -1,0 +1,26 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Go
+backend/vendor/
+backend/tmp/
+*.exe
+*.test
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Backups
+backups/*.sql
+
+# Docker
+*.pid
+
+# IDE
+.DS_Store
+.vscode/settings.json
+*.swp

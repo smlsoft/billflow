@@ -1,0 +1,210 @@
+.settings-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0 0 24px;
+  letter-spacing: -0.02em;
+}
+
+.settings-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: 20px;
+  max-width: 640px;
+}
+
+.settings-card--wide {
+  max-width: 720px;
+}
+
+.settings-card-header {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-alt);
+}
+
+.settings-card-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.settings-card-body {
+  padding: 20px;
+}
+
+/* ── User info ── */
+.settings-info-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border-light);
+  font-size: var(--text-sm);
+}
+
+.settings-info-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.settings-info-label {
+  width: 80px;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.settings-info-value {
+  color: var(--color-text);
+}
+
+/* ── Status badges ── */
+.settings-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--color-border-light);
+  font-size: var(--text-sm);
+}
+
+.settings-status-row:last-of-type {
+  border-bottom: none;
+}
+
+.settings-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.settings-status-dot--ok { background: var(--color-success); }
+.settings-status-dot--err { background: var(--color-danger); }
+
+.settings-status-label {
+  flex: 1;
+  color: var(--color-text-sub);
+}
+
+.settings-status-tag {
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.settings-status-tag--ok { color: var(--color-success); }
+.settings-status-tag--err { color: var(--color-danger); }
+
+.settings-threshold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+  color: var(--color-text-sub);
+}
+
+.settings-threshold-value {
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+/* ── Stats grid ── */
+.settings-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 24px;
+}
+
+.settings-stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  padding: 4px 0;
+}
+
+.settings-stat-label { color: var(--color-text-muted); }
+.settings-stat-value { font-weight: 600; color: var(--color-text); font-variant-numeric: tabular-nums; }
+
+/* ── Column mapping ── */
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.settings-col-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+.settings-col-table thead th {
+  padding: 8px 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: left;
+  background: var(--color-bg-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings-col-table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border-light);
+  vertical-align: middle;
+  font-size: var(--text-sm);
+}
+
+.settings-col-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.settings-col-field-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-sub);
+}
+
+.settings-col-field-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.settings-save-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-save-ok {
+  font-size: var(--text-sm);
+  color: var(--color-success);
+}
+
+.settings-save-err {
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+}
+
+.settings-version {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.settings-col-desc {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: 0 0 14px;
+}

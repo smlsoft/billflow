@@ -1,0 +1,457 @@
+package catalog
+
+import (
+	"bytes"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"go.uber.org/zap"
+
+	"billflow/internal/models"
+	"billflow/internal/repository"
+)
+
+// -------------------------------------------------------------------
+// SMLCatalogService — sync + embed + search
+// -------------------------------------------------------------------
+
+type SMLCatalogService struct {
+	repo       *repository.SMLCatalogRepo
+	smlBaseURL string
+	smlHeaders map[string]string
+	httpClient *http.Client
+	logger     *zap.Logger
+	// Background embed state
+	embedRunning atomic.Int32
+}
+
+func NewSMLCatalogService(
+	repo *repository.SMLCatalogRepo,
+	smlBaseURL string,
+	smlHeaders map[string]string,
+	logger *zap.Logger,
+) *SMLCatalogService {
+	return &SMLCatalogService{
+		repo:       repo,
+		smlBaseURL: smlBaseURL,
+		smlHeaders: smlHeaders,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		logger:     logger,
+	}
+}
+
+// -------------------------------------------------------------------
+// Sync from SML REST API (/product/v4)
+// -------------------------------------------------------------------
+
+// smlProductV4Response — best-effort struct; handles both page-based and array responses
+type smlProductV4Response struct {
+	// Some SML versions return top-level array "data"
+	Data  json.RawMessage `json:"data"`
+	Items json.RawMessage `json:"items"`
+	// Pagination hints (may be absent)
+	Total   *int  `json:"total"`
+	HasMore *bool `json:"has_more"`
+}
+
+type smlBarcodeItem struct {
+	Price  float64 `json:"price"`
+	Price0 string  `json:"price_0"`
+}
+
+type smlPriceFormula struct {
+	Price0 string `json:"price_0"`
+}
+
+type smlProductItem struct {
+	Code                  string            `json:"code"`
+	Name                  string            `json:"name_1"`
+	Name2                 string            `json:"name_2"`
+	Unit                  string            `json:"unit_standard"`
+	GroupCode             string            `json:"group_main"`
+	BalanceQty            float64           `json:"balance_qty"`
+	InventoryBarcode      []smlBarcodeItem  `json:"inventory_barcode"`
+	InventoryPriceFormula []smlPriceFormula `json:"inventory_price_formula"`
+}
+
+// SyncFromAPI syncs catalog from SML /product/v4 endpoint.
+// Returns (inserted+updated, error).
+func (s *SMLCatalogService) SyncFromAPI() (int, error) {
+	url := fmt.Sprintf("%s/SMLJavaRESTService/product/v4", s.smlBaseURL)
+	total := 0
+	page := 0
+
+	for {
+		pageURL := fmt.Sprintf("%s?page=%d", url, page)
+		req, err := http.NewRequest("GET", pageURL, nil)
+		if err != nil {
+			return total, fmt.Errorf("build request: %w", err)
+		}
+		for k, v := range s.smlHeaders {
+			req.Header.Set(k, v)
+		}
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return total, fmt.Errorf("GET %s: %w", pageURL, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return total, fmt.Errorf("SML API %d: %s", resp.StatusCode, string(body))
+		}
+
+		items, _, maxPage, err := parseProductV4Response(body)
+		if err != nil {
+			return total, fmt.Errorf("parse page %d: %w", page, err)
+		}
+
+		for _, it := range items {
+			unit := it.Unit
+			// Extract price: prefer inventory_price_formula[0].price_0, fallback to inventory_barcode[0].price
+			var price float64
+			if len(it.InventoryPriceFormula) > 0 && it.InventoryPriceFormula[0].Price0 != "" {
+				fmt.Sscanf(it.InventoryPriceFormula[0].Price0, "%f", &price)
+			} else if len(it.InventoryBarcode) > 0 {
+				price = it.InventoryBarcode[0].Price
+			}
+			ci := models.CatalogItem{
+				ItemCode:  it.Code,
+				ItemName:  it.Name,
+				ItemName2: it.Name2,
+				UnitCode:  unit,
+				Price:     &price,
+				GroupCode: it.GroupCode,
+			}
+			qty := it.BalanceQty
+			ci.BalanceQty = &qty
+			if err := s.repo.Upsert(ci); err != nil {
+				s.logger.Warn("catalog: upsert failed",
+					zap.String("code", it.Code), zap.Error(err))
+			} else {
+				total++
+			}
+		}
+
+		if len(items) == 0 || page >= maxPage {
+			break
+		}
+		page++
+	}
+
+	s.logger.Info("catalog: sync from API complete", zap.Int("count", total))
+	return total, nil
+}
+
+// parseProductV4Response handles several possible SML API response shapes
+func parseProductV4Response(body []byte) (items []smlProductItem, currentPage, maxPage int, err error) {
+	// Try array directly first
+	var asArray []smlProductItem
+	if jsonErr := json.Unmarshal(body, &asArray); jsonErr == nil {
+		return asArray, 0, 0, nil
+	}
+
+	// Try wrapped response with SML pages object
+	var wrapped struct {
+		Data  []smlProductItem `json:"data"`
+		Items []smlProductItem `json:"items"`
+		Pages *struct {
+			Page    int `json:"page"`
+			MaxPage int `json:"max_page"`
+		} `json:"pages"`
+	}
+	if jsonErr := json.Unmarshal(body, &wrapped); jsonErr != nil {
+		return nil, 0, 0, fmt.Errorf("parse response: %w", jsonErr)
+	}
+	items = wrapped.Data
+	if len(items) == 0 {
+		items = wrapped.Items
+	}
+	if wrapped.Pages != nil {
+		currentPage = wrapped.Pages.Page
+		maxPage = wrapped.Pages.MaxPage
+	}
+	return items, currentPage, maxPage, nil
+}
+
+// -------------------------------------------------------------------
+// Sync from CSV upload
+// -------------------------------------------------------------------
+
+// SyncFromCSV parses a CSV file (UTF-8) and upserts all rows.
+// Expected header (case-insensitive, flexible):
+//
+//	item_code, item_name, [item_name2], [unit_code], [wh_code], [shelf_code], [price], [group_code]
+func (s *SMLCatalogService) SyncFromCSV(data []byte) (int, error) {
+	// Strip BOM if present (Excel CSV often has BOM)
+	content := data
+	if len(content) >= 3 && content[0] == 0xEF && content[1] == 0xBB && content[2] == 0xBF {
+		content = content[3:]
+	}
+
+	r := csv.NewReader(bytes.NewReader(content))
+	r.LazyQuotes = true
+	r.TrimLeadingSpace = true
+
+	records, err := r.ReadAll()
+	if err != nil {
+		return 0, fmt.Errorf("parse CSV: %w", err)
+	}
+	if len(records) < 2 {
+		return 0, fmt.Errorf("CSV must have header + at least one row")
+	}
+
+	// Parse header to build column index map
+	colIdx := map[string]int{}
+	for i, h := range records[0] {
+		colIdx[normalizeHeader(h)] = i
+	}
+
+	required := []string{"item_code", "item_name"}
+	for _, req := range required {
+		if _, ok := colIdx[req]; !ok {
+			return 0, fmt.Errorf("missing required column: %s (found: %v)", req, records[0])
+		}
+	}
+
+	count := 0
+	for rowNum, row := range records[1:] {
+		get := func(key string) string {
+			idx, ok := colIdx[key]
+			if !ok || idx >= len(row) {
+				return ""
+			}
+			return strings.TrimSpace(row[idx])
+		}
+
+		code := get("item_code")
+		name := get("item_name")
+		if code == "" || name == "" {
+			s.logger.Debug("catalog: skip empty row", zap.Int("row", rowNum+2))
+			continue
+		}
+
+		ci := models.CatalogItem{
+			ItemCode:  code,
+			ItemName:  name,
+			ItemName2: get("item_name2"),
+			UnitCode:  get("unit_code"),
+			WHCode:    get("wh_code"),
+			ShelfCode: get("shelf_code"),
+			GroupCode: get("group_code"),
+		}
+		if priceStr := get("price"); priceStr != "" {
+			if p, err := strconv.ParseFloat(priceStr, 64); err == nil {
+				ci.Price = &p
+			}
+		}
+		if qtyStr := get("balance_qty"); qtyStr != "" {
+			if q, err := strconv.ParseFloat(qtyStr, 64); err == nil {
+				ci.BalanceQty = &q
+			}
+		}
+
+		if err := s.repo.Upsert(ci); err != nil {
+			s.logger.Warn("catalog: CSV upsert failed",
+				zap.String("code", code), zap.Error(err))
+		} else {
+			count++
+		}
+	}
+
+	s.logger.Info("catalog: CSV import complete", zap.Int("count", count))
+	return count, nil
+}
+
+func normalizeHeader(h string) string {
+	// lowercase + replace spaces/hyphens with underscore
+	h = strings.ToLower(strings.TrimSpace(h))
+	h = strings.ReplaceAll(h, " ", "_")
+	h = strings.ReplaceAll(h, "-", "_")
+	// Map common aliases
+	switch h {
+	case "code", "sku", "รหัสสินค้า":
+		return "item_code"
+	case "name", "product_name", "ชื่อสินค้า":
+		return "item_name"
+	case "name2", "ชื่อสินค้า2":
+		return "item_name2"
+	case "unit", "หน่วย":
+		return "unit_code"
+	case "wh", "warehouse", "คลัง":
+		return "wh_code"
+	case "shelf", "ชั้น":
+		return "shelf_code"
+	case "ราคา":
+		return "price"
+	}
+	return h
+}
+
+// -------------------------------------------------------------------
+// Embed operations
+// -------------------------------------------------------------------
+
+// EmbedProduct generates and stores embedding for a single item
+func (s *SMLCatalogService) EmbedProduct(embSvc *EmbeddingService, itemCode string) error {
+	item, err := s.repo.GetOne(itemCode)
+	if err != nil || item == nil {
+		return fmt.Errorf("item not found: %s", itemCode)
+	}
+
+	text := item.ItemName
+	if item.ItemName2 != "" {
+		text += " " + item.ItemName2
+	}
+
+	emb, err := embSvc.EmbedText(text)
+	if err != nil {
+		_ = s.repo.SetEmbeddingError(itemCode)
+		return fmt.Errorf("embed %s: %w", itemCode, err)
+	}
+
+	return s.repo.SetEmbedding(itemCode, emb, EmbeddingModel)
+}
+
+// EmbedAllPending runs background embedding for all pending items.
+// Returns (done, errors).
+func (s *SMLCatalogService) EmbedAllPending(embSvc *EmbeddingService) (int, int, error) {
+	if !s.embedRunning.CompareAndSwap(0, 1) {
+		return 0, 0, fmt.Errorf("embedding already running")
+	}
+	defer s.embedRunning.Store(0)
+
+	done, errs := 0, 0
+	for {
+		batch, err := s.repo.GetPendingBatch(50)
+		if err != nil {
+			return done, errs, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, item := range batch {
+			if err := s.EmbedProduct(embSvc, item.ItemCode); err != nil {
+				s.logger.Warn("catalog: embed error", zap.String("code", item.ItemCode), zap.Error(err))
+				errs++
+			} else {
+				done++
+			}
+			time.Sleep(50 * time.Millisecond) // small pause to avoid bursting OpenRouter
+		}
+	}
+	s.logger.Info("catalog: embed all complete", zap.Int("done", done), zap.Int("errors", errs))
+	return done, errs, nil
+}
+
+// IsEmbedRunning returns true if background embedding is in progress
+func (s *SMLCatalogService) IsEmbedRunning() bool {
+	return s.embedRunning.Load() == 1
+}
+
+// -------------------------------------------------------------------
+// Similarity Search (text-based Levenshtein fallback if no embedding)
+// -------------------------------------------------------------------
+
+// SearchByText does fuzzy text search using Levenshtein distance
+// (used as fallback when embedding is unavailable or catalog is not embedded)
+func (s *SMLCatalogService) SearchByText(query string, topK int) ([]models.CatalogMatch, error) {
+	allItems, err := s.repo.ListAllNames()
+	if err != nil {
+		return nil, err
+	}
+
+	queryLower := strings.ToLower(query)
+	type scored struct {
+		item  models.CatalogItem
+		score float64
+	}
+	results := make([]scored, 0, len(allItems))
+	for _, it := range allItems {
+		score := textSimilarity(queryLower, strings.ToLower(it.ItemName+" "+it.ItemName2))
+		results = append(results, scored{it, score})
+	}
+
+	// Sort descending
+	for i := 1; i < len(results); i++ {
+		for j := i; j > 0 && results[j].score > results[j-1].score; j-- {
+			results[j], results[j-1] = results[j-1], results[j]
+		}
+	}
+
+	n := topK
+	if n > len(results) {
+		n = len(results)
+	}
+	matches := make([]models.CatalogMatch, 0, n)
+	for i := 0; i < n; i++ {
+		it := results[i].item
+		price := 0.0
+		if it.Price != nil {
+			price = *it.Price
+		}
+		matches = append(matches, models.CatalogMatch{
+			ItemCode:  it.ItemCode,
+			ItemName:  it.ItemName,
+			ItemName2: it.ItemName2,
+			UnitCode:  it.UnitCode,
+			WHCode:    it.WHCode,
+			ShelfCode: it.ShelfCode,
+			Price:     price,
+			Score:     results[i].score,
+		})
+	}
+	return matches, nil
+}
+
+// textSimilarity returns a 0–1 score using token overlap + substring check
+func textSimilarity(a, b string) float64 {
+	if a == b {
+		return 1.0
+	}
+	if strings.Contains(b, a) {
+		return 0.9
+	}
+	if strings.Contains(a, b) {
+		return 0.85
+	}
+	// Token-level Jaccard
+	aTok := tokenize(a)
+	bTok := tokenize(b)
+	if len(aTok) == 0 || len(bTok) == 0 {
+		return 0
+	}
+	inter := 0
+	for _, t := range aTok {
+		for _, s := range bTok {
+			if t == s {
+				inter++
+				break
+			}
+		}
+	}
+	union := len(aTok) + len(bTok) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+func tokenize(s string) []string {
+	var tokens []string
+	for _, t := range strings.Fields(s) {
+		t = strings.Trim(t, ".,;:!?")
+		if len(t) >= 2 {
+			tokens = append(tokens, t)
+		}
+	}
+	return tokens
+}

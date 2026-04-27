@@ -1,0 +1,1231 @@
+# CLAUDE.md — BillFlow
+## Blueprint สำหรับ Claude Code ใน VSCode
+
+> อ่านไฟล์นี้ให้ครบก่อนเริ่ม code ทุกครั้ง
+> ห้าม assume สิ่งที่ไม่ได้ระบุ — ถามก่อนทำเสมอ
+> **project folder: `~/billflow`**
+
+---
+
+## 1. Project Overview
+
+**BillFlow** — ระบบช่วยพนักงานลดเวลาคีย์บิลจาก **วันละ 100+ บิล** ลงเหลือ **เกือบ 0**
+โดยใช้ AI extract ข้อมูลจากหลาย channel แล้วส่งเข้า ERP (SML) โดยอัตโนมัติ
+
+### Input Channels
+| Channel | รายละเอียด | ประเภทบิล | Phase | สถานะ |
+|---------|-----------|----------|-------|-------|
+| LINE OA | รูปภาพ, PDF, text, voice | บิลขาย (sale) | Phase 3 | text ✅ / รูป+PDF+voice deployed แต่ยังไม่ test |
+| Email (IMAP) | attachment PDF/Excel/รูป | บิลขาย (sale) | Phase 5 | deployed, กำลัง test |
+| Shopee Excel | Export จาก Shopee Seller Center | บิลขาย (sale) | Phase 4a | ✅ deployed (รอ SML 224 เปิด) |
+| Lazada Excel | Export จาก Lazada | บิลขาย + บิลซื้อ | Phase 4b | รอไฟล์จริงจากลูกค้า |
+
+> ⚠️ ใช้ IMAP แทน Gmail API สำหรับ demo — ง่ายกว่า ไม่ต้องผ่าน Google OAuth2 consent
+> Gmail API อาจเพิ่มใน Phase ถัดไปหลัง demo ลูกค้าแล้ว
+
+### Output
+- สร้างบิลใน SML ERP ผ่าน JSON-RPC API
+- บันทึก log ทุก transaction ลง PostgreSQL
+- แจ้ง admin ผ่าน LINE ทุกครั้งที่เกิด error
+
+---
+
+## 2. Tech Stack
+
+```
+Backend:   Go 1.22+  (framework: Gin)
+Frontend:  React + Vite + TypeScript
+Database:  PostgreSQL 16
+AI:        OpenRouter API (google/gemini-flash-1.5 default)
+LINE:      line-bot-sdk-go (official)
+Email:     IMAP polling — ไม่ใช้ Gmail API สำหรับ demo
+Deploy:    Docker Compose + Cloudflare Tunnel
+```
+
+---
+
+## 3. Server Info (Ubuntu 24.04 — 192.168.2.109)
+
+```
+OS:      Ubuntu 24.04.4 LTS (kernel 6.17.0)
+CPU:     4 cores
+RAM:     7.6GB total / ~4GB available
+Disk:    109GB (เคลียร์แล้ว < 70%)
+Docker:  29.3.0
+Node:    v22.22.1 ✅
+Go:      1.24.0 ✅
+cloudflared: ✅ installed & configured
+SML #1 (LINE/Email): http://192.168.2.213:3248  ✅ JSON-RPC, /api/sale_reserve
+SML #2 (Shopee):     http://192.168.2.224:8080  ⚠️ REST API — ยังไม่ได้เปิด machine
+```
+
+### Projects ที่รันอยู่บน Server — ห้ามกระทบ
+
+| Project | Ports |
+|---------|-------|
+| openclaw-admin | 3000, 5432 |
+| tcc | 8080, 5433, 9092, 8123, 9000, 6382 |
+| ledgioai | 3004, 5436, 6381 |
+| centrix | 3002, 5001, 5434, 6380 |
+
+### Ports ที่ BillFlow ใช้ (ไม่ชนกับใคร)
+
+```
+billflow-backend   → 8090
+billflow-frontend  → 3010
+billflow-postgres  → 5438
+```
+
+---
+
+## 4. Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Cloudflare Tunnel                        │
+│   api.your-domain.com → :8090  (backend)                   │
+│   app.your-domain.com → :3010  (frontend)                  │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+┌────────────────────────▼────────────────────────────────────┐
+│                  Go Backend (Gin)  :8090                    │
+│                                                             │
+│  Webhook Routes:                                            │
+│    POST /webhook/line              ← LINE OA events         │
+│                                                             │
+│  API Routes (JWT protected):                                │
+│    POST /api/import/upload         ← Lazada file            │
+│    GET  /api/settings/shopee-config ← Shopee SML defaults   │
+│    POST /api/import/shopee/preview  ← parse Excel, dedup   │
+│    POST /api/import/shopee/confirm  ← send to SML 224       │
+│    GET  /api/bills                 ← รายการบิลทั้งหมด       │
+│    GET  /api/bills/:id             ← รายละเอียดบิล          │
+│    POST /api/bills/:id/retry       ← retry ที่ fail/pending │
+│    GET  /api/mappings              ← item mapping list      │
+│    POST /api/mappings              ← เพิ่ม mapping ใหม่     │
+│    PUT  /api/mappings/:id          ← แก้ไข mapping          │
+│    POST /api/mappings/feedback     ← F1 human correct       │
+│    GET  /api/mappings/stats        ← F1 accuracy stats      │
+│    GET  /api/dashboard/stats       ← สถิติ dashboard        │
+│    GET  /api/dashboard/insights    ← F4 AI insights         │
+│    POST /api/dashboard/insights/generate ← F4 generate     │
+│    GET  /api/logs                  ← Activity Log           │
+│    POST /api/auth/login            ← login                  │
+│                                                             │
+│  Background Jobs:                                           │
+│    IMAP Poller     → poll email ทุก 5 นาที                 │
+│    Cron 08:00      → F4 daily insight + LINE notify        │
+│    Cron 00:00      → pg_dump backup                        │
+│    Cron weekly     → LINE token expiry check               │
+│    Cron daily      → disk usage monitor                    │
+│                                                             │
+│  Services:                                                  │
+│    AIService       → OpenRouter (text/image/PDF/audio)     │
+│    MapperService   → fuzzy match + F1 learning loop        │
+│    AnomalyService  → F2 bill anomaly detection             │
+│    SMLService      → JSON-RPC + retry + admin notify       │
+│    LineService     → reply / flex message / push notify    │
+│    EmailService    → IMAP poll + parse attachment          │
+│    InsightService  → F4 daily AI summary                   │
+│    WorkerPool      → semaphore rate limiting               │
+└──────┬──────────────────────────────┬───────────────────────┘
+       │                              │
+┌──────▼──────┐              ┌────────▼────────┐
+│ PostgreSQL  │              │  External APIs  │
+│   :5438     │              │                 │
+│             │              │ OpenRouter API  │
+│ tables:     │              │ SML :3248       │
+│  bills      │              │ LINE API        │
+│  bill_items │              │ IMAP server     │
+│  mappings   │              └─────────────────┘
+│  mapping_   │
+│  feedback   │
+│  users      │
+│  audit_logs │
+│  daily_     │
+│  insights   │
+│  item_price_│
+│  history    │
+└─────────────┘
+       ▲
+┌──────┴──────────────────────────────────────────────────────┐
+│             React + Vite Frontend  :3010                    │
+│                                                             │
+│  /login        ← หน้า login                                │
+│  /dashboard    ← stats + charts + F4 AI Insights           │
+│  /bills        ← รายการบิล + filter + anomaly badge        │
+│  /bills/:id    ← รายละเอียด + status + retry               │
+│  /import       ← upload Lazada/Shopee                      │
+│  /mappings     ← จัดการ mapping + F1 learning stats        │
+│  /settings     ← LINE, IMAP, SML, threshold, columns       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Database Schema (PostgreSQL)
+
+```sql
+-- Users & Auth
+CREATE TABLE users (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         TEXT UNIQUE NOT NULL,
+  name          TEXT NOT NULL,
+  role          TEXT NOT NULL CHECK (role IN ('admin','staff','viewer')),
+  password_hash TEXT NOT NULL,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Item Mapping
+CREATE TABLE mappings (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  raw_name      TEXT NOT NULL,
+  item_code     TEXT NOT NULL,
+  unit_code     TEXT NOT NULL,
+  confidence    FLOAT DEFAULT 1.0,
+  source        TEXT DEFAULT 'manual' CHECK (source IN ('manual','ai_learned')),
+  usage_count   INT DEFAULT 0,
+  last_used_at  TIMESTAMPTZ,
+  learned_from_bill_id UUID,
+  created_by    UUID REFERENCES users(id),
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(raw_name)
+);
+
+-- F1: Mapping Feedback
+CREATE TABLE mapping_feedback (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bill_item_id   UUID REFERENCES bill_items(id),
+  original_match TEXT,
+  corrected_to   TEXT,
+  corrected_by   UUID REFERENCES users(id),
+  created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Bills
+CREATE TABLE bills (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bill_type     TEXT NOT NULL CHECK (bill_type IN ('sale','purchase')),
+  source        TEXT NOT NULL CHECK (source IN ('line','email','lazada','shopee','manual')),
+  status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','confirmed','sent','failed','skipped')),
+  raw_data      JSONB,
+  sml_doc_no    TEXT,
+  sml_payload   JSONB,
+  sml_response  JSONB,
+  ai_confidence FLOAT,
+  anomalies     JSONB DEFAULT '[]',
+  error_msg     TEXT,
+  created_by    UUID REFERENCES users(id),
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  sent_at       TIMESTAMPTZ
+);
+
+-- Bill Items
+CREATE TABLE bill_items (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bill_id    UUID REFERENCES bills(id) ON DELETE CASCADE,
+  raw_name   TEXT NOT NULL,
+  item_code  TEXT,
+  qty        NUMERIC NOT NULL,
+  unit_code  TEXT,
+  price      NUMERIC,
+  mapped     BOOLEAN DEFAULT FALSE,
+  mapping_id UUID REFERENCES mappings(id)
+);
+
+-- Audit Log
+CREATE TABLE audit_logs (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID REFERENCES users(id),
+  action     TEXT NOT NULL,
+  target_id  UUID,
+  detail     JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- F2: Item Price History
+CREATE TABLE item_price_history (
+  item_code    TEXT PRIMARY KEY,
+  avg_price    NUMERIC,
+  min_price    NUMERIC,
+  max_price    NUMERIC,
+  sample_count INT DEFAULT 0,
+  last_updated TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- F4: Daily AI Insights
+CREATE TABLE daily_insights (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  date       DATE UNIQUE NOT NULL,
+  stats_json JSONB,
+  insight    TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Platform Column Mapping (Lazada/Shopee — admin config)
+CREATE TABLE platform_column_mappings (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  platform     TEXT NOT NULL CHECK (platform IN ('lazada','shopee')),
+  field_name   TEXT NOT NULL,   -- 'order_id', 'buyer_name', 'item_name', etc.
+  column_name  TEXT NOT NULL,   -- ชื่อ column จริงในไฟล์ Excel
+  updated_by   UUID REFERENCES users(id),
+  updated_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(platform, field_name)
+);
+```
+
+---
+
+## 6. Use Cases (ละเอียด)
+
+### UC1 — LINE OA รับ PO
+
+> ✅ DEPLOYED — ทดสอบ text flow ผ่านแล้ว (2026-04-23)
+> ⚠️ image/PDF/voice มี code แต่ยังไม่ได้ test
+
+```
+Mode 1 — Conversational Sales (น้องบิล chatbot) ← IMPLEMENTED & TESTED
+──────────────────────────────────────────────────────────
+1. ลูกค้าพูดคุย เช่น "มีปูนขายไหม" "มีเหล็กขายด้วยไหม"
+2. LINE ส่ง webhook POST /webhook/line
+3. verify X-Line-Signature (HMAC-SHA256)
+4. respond HTTP 200 ทันที → process async
+5. AI (ChatSalesV2) วิเคราะห์ intent:
+   - inquiry  → smartSearch SML catalog → แสดง 1-5 รายการให้เลือก
+   - ลูกค้าเลือก "รายการที่ 2" → ถามจำนวน
+   - ลูกค้าพิมพ์จำนวน (รับ "3", "10 ถุง", "สิบถุง" ผ่าน AI ParseQty)
+   - view_cart → แสดงตะกร้า
+   - checkout  → ขอชื่อ+เบอร์ → สรุป → รอ ยืนยัน
+   - ยืนยัน    → ส่ง SML → bill created → แจ้ง LINE
+
+Mode 2 — ส่งรูป/PDF PO โดยตรง ← code มีแต่ยังไม่ test
+──────────────────────────────────────────────────────────
+1. ลูกค้าส่งรูปภาพ/PDF ใบสั่งซื้อ
+2. download จาก LINE Content API
+3. AIService (ExtractImage/ExtractPDF) → JSON
+4. สร้าง bill → SML
+
+Mode 3 — Voice message (F3) ← code มีแต่ยังไม่ test
+──────────────────────────────────────────────────────────
+1. ลูกค้าส่ง voice message
+2. download ทันที (มี expiry)
+3. TranscribeAudio → text → ส่งต่อเหมือน Mode 1
+4. confidence ลดลง 0.1
+
+Error Cases:
+- SML fail → failed + แจ้ง LINE admin ทันที
+- ไม่พบสินค้า → "ขอโทษค่ะ ไม่พบสินค้า \"X\" ในระบบค่ะ"
+- voice > 60 วินาที → แจ้งให้ส่งสั้นกว่านี้
+
+Open items:
+- [ ] ลบรายการออกจาก cart (ยังไม่มี — ต้องพิมพ์ยกเลิกแล้วเริ่มใหม่)
+- [ ] แก้ไขจำนวนใน cart
+- [ ] test รูปภาพ PO
+- [ ] test PDF attachment
+- [ ] test voice message
+```
+
+### UC2 — Email IMAP
+
+```
+Flow:
+1. Background goroutine poll IMAP ทุก 5 นาที
+2. filter email ตาม config (from / subject)
+3. download attachment + ส่ง AI pipeline เหมือน UC1
+4. mark_read หลัง process กัน process ซ้ำ
+5. error → LINE admin notify
+```
+
+### UC3 — Import Lazada/Shopee (บิลขาย)
+
+```
+Flow:
+1. พนักงาน login → /import → upload Excel
+2. Backend ดึง column mapping จาก DB (ไม่ hardcode)
+3. parse + แสดง preview + anomaly warning
+4. พนักงาน confirm → loop สร้างบิล → SML
+5. สรุปผล: สำเร็จ X / ล้มเหลว Y + download error report
+
+⚠️ รอไฟล์จริงจากลูกค้าก่อน Phase 4
+   admin config column mapping ได้จาก /settings
+```
+
+### UC4 — Import Lazada/Shopee (บิลซื้อ)
+
+```
+เหมือน UC3 แต่ bill_type = 'purchase'
+SML endpoint อาจต่างกัน — รอ confirm จาก SML doc
+```
+
+---
+
+## 7. AI Extraction — System Prompt
+
+```go
+// backend/internal/ai/prompts.go
+
+const ExtractPrompt = `
+คุณเป็น AI ที่ช่วย extract ข้อมูลจากใบสั่งซื้อ (Purchase Order)
+ตอบเป็น JSON เท่านั้น ห้ามมีข้อความอื่น ห้ามมี markdown
+
+output format:
+{
+  "doc_type": "sale" | "purchase",
+  "customer_name": string,
+  "customer_phone": string | null,
+  "items": [
+    {
+      "raw_name": string,
+      "qty": number,
+      "unit": string,
+      "price": number | null
+    }
+  ],
+  "total_amount": number | null,
+  "note": string | null,
+  "confidence": number
+}
+
+ถ้าข้อมูลไม่ชัดเจน ให้ confidence ต่ำ (< 0.5)
+ถ้าข้อมูลมาจาก voice transcription ให้ confidence ลดลง 0.1
+`
+```
+
+---
+
+## 8. F1 — AI Learning Loop
+
+```go
+func (s *MapperService) Match(rawName string) MatchResult {
+  // 1. Exact match → confidence 1.0
+  // 2. Fuzzy match (levenshtein)
+  //    boost score ถ้า usage_count สูง
+  //    score >= 0.85 → auto map
+  //    score 0.60-0.84 → needs_review
+  //    score < 0.60 → unmapped
+}
+
+func (s *MapperService) LearnFromFeedback(f MappingFeedback) error {
+  // human confirm → INSERT หรือ UPDATE
+  // source='ai_learned', confidence=1.0
+  // increment usage_count + update last_used_at
+}
+
+// อัปเดต item_price_history ทุกครั้ง status='sent'
+func (s *MapperService) UpdatePriceHistory(items []BillItem) error {}
+```
+
+---
+
+## 9. F2 — Anomaly Detection
+
+```go
+var AnomalyRules = []AnomalyRule{
+  // block — บังคับ manual confirm
+  {"price_zero",      "block"},  // ราคา = 0
+  {"qty_zero",        "block"},  // qty = 0
+  {"duplicate_bill",  "block"},  // same customer+items วันเดียวกัน
+
+  // warn — แสดง badge แต่ไม่ block อัตโนมัติ
+  {"price_too_high",  "warn"},   // > avg * 1.5
+  {"price_too_low",   "warn"},   // < avg * 0.5
+  {"qty_suspicious",  "warn"},   // > max_ever * 2
+  {"new_customer",    "warn"},   // ลูกค้าใหม่
+  {"new_item",        "warn"},   // สินค้าใหม่
+}
+
+// Auto-confirm ผ่านเมื่อ:
+// final_confidence >= threshold
+// AND ไม่มี block
+// AND warn ไม่เกิน 1 รายการ
+```
+
+---
+
+## 10. SML API Integration
+
+### SML #1 — JSON-RPC (LINE OA + Email)
+```go
+// POST http://192.168.2.213:3248/api/sale_reserve
+// Headers: Content-Type: application/json
+//          mcp-access-mode: sales
+
+// Request
+{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": {
+    "name": "create_sale_reserve",
+    "arguments": {
+      "contact_name": string,
+      "contact_phone": string,
+      "items": [{ "item_code": string, "qty": number,
+                  "unit_code": string, "price": number }]
+    }
+  }
+}
+
+// ⚠️ response text เป็น JSON string ซ้อนกัน ต้อง parse 2 ชั้น
+// Success: {"success":true,"doc_no":"BS20260422XXXX","message":"create success"}
+
+// Retry: max 3 ครั้ง, backoff 1s/3s/5s
+// หลัง fail 3 ครั้ง → status='failed' + LINE admin push notify
+```
+
+### SML #2 — REST API (Shopee)
+```go
+// Base URL: http://192.168.2.248:8080
+// Auth headers (ทุก request):
+//   guid, provider, configFileName, databaseName
+
+// 1. Product lookup  ← CONFIRMED WORKING (2026-04-24)
+// GET /SMLJavaRESTService/v3/api/product/{sku}
+// Response (flat — ไม่มี nested):
+//   {"success":true,"data":{"code":"...","unit_standard":"ถุง",
+//                           "start_sale_unit":"ถุง","start_sale_wh":"WH-01",
+//                           "start_sale_shelf":"SH-01"}}
+//   {"success":true,"data":null}  ← ถ้าไม่พบ SKU ใน SML
+// ⚠️ ต้องตั้ง SHOPEE_SML_UNIT_CODE เป็น fallback (เช่น "ถุง") เมื่อ data=null
+
+// 2. Create saleinvoice  ← CONFIRMED WORKING (2026-04-24)
+// POST /SMLJavaRESTService/restapi/saleinvoice
+// {
+//   "doc_format_code": "INV",
+//   "doc_date": "2026-04-24",
+//   "cust_code": "AR00004",
+//   "is_permium": 0,         ← int (ไม่ใช่ bool), typo intentional
+//   "vat_type": 0,           // 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
+//   "details": [             ← key ต้องเป็น "details" ไม่ใช่ "items"
+//     {
+//       "item_code": string,
+//       "unit_code": string,
+//       "wh_code": "WH-01",
+//       "shelf_code": "SH-01",
+//       "price_exclude_vat": number,
+//       "sum_amount_exclude_vat": number
+//     }
+//   ]
+// }
+
+// Client: backend/internal/services/sml/saleinvoice_client.go
+// Retry: max 3 ครั้ง
+// Config จริง: guid=smlx / SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
+// SKU จริงใน SML 248: CON-xxxxx (ถุง), STEEL-xxxxx (เส้น), PLUMB-xxxxx (ท่อน)
+```
+
+---
+
+## 11. Worker Pool
+
+```go
+// backend/internal/worker/pool.go
+// จำกัด concurrent requests ป้องกัน spike
+
+type WorkerPool struct {
+  openrouterSem chan struct{}  // max 5 concurrent
+  smlSem        chan struct{}  // max 3 concurrent
+}
+// LINE webhook respond 200 ก่อนเสมอ → job เข้า pool
+```
+
+---
+
+## 12. LINE Admin Notifications
+
+```go
+// push message (ไม่ใช่ reply) ไปหา LINE_ADMIN_USER_ID
+// กรณีที่แจ้ง:
+// - SML fail หลัง retry 3 ครั้ง
+// - bill anomaly block ถูก reject
+// - IMAP connection fail
+// - disk usage > 90%
+// - LINE token จะหมดอายุใน 7 วัน
+// - F4 daily insight สร้างเสร็จ (08:00)
+```
+
+---
+
+## 13. F3 — Voice Input
+
+```go
+// handlers/line.go
+case linebot.MessageTypeAudio:
+  audioData, _ := s.lineService.DownloadContent(msg.ID)
+  text, _ := s.aiService.TranscribeAudio(audioData)
+  // ส่ง text ต่อไป extract pipeline
+
+// ⚠️ audio มี expiry → download ทันที
+// voice > 60 วินาที → แจ้ง user
+// confidence ลดลง 0.1 สำหรับ voice
+```
+
+---
+
+## 14. F4 — Daily AI Insights
+
+```go
+// Cron 08:00 ทุกวัน
+const InsightPrompt = `
+คุณเป็น business analyst สรุปข้อมูลธุรกิจเป็นภาษาไทย
+กระชับ 3-5 ประโยค ใช้ emoji นำหน้าแต่ละประเด็น
+ข้อมูลวันนี้ vs สัปดาห์ที่แล้ว: %s
+สรุป: trend / สินค้าขายดี-แย่ / บิลมีปัญหา / คำแนะนำ
+`
+// ตัวอย่าง output:
+// 📈 ยอดบิลสัปดาห์นี้สูงกว่าปกติ 23%
+// 🏆 ปูนซีเมนต์ยังคงเป็นสินค้าขายดีอันดับ 1
+// ⚠️ พบบิลราคาผิดปกติ 3 รายการรอ review
+// 💡 ควรเพิ่ม stock CEM001 — ใช้ไปแล้ว 78%
+```
+
+---
+
+## 15. Backup Strategy
+
+```bash
+# Cron 00:00 ทุกวัน
+docker exec billflow-postgres \
+  pg_dump -U billflow billflow \
+  > ~/billflow/backups/$(date +%Y%m%d).sql
+
+# เก็บ 30 วัน
+find ~/billflow/backups -mtime +30 -delete
+
+# สร้าง folder ก่อน
+mkdir -p ~/billflow/backups
+```
+
+---
+
+## 16. Project Structure
+
+```
+~/billflow/
+│
+├── backend/
+│   ├── cmd/server/main.go
+│   ├── internal/
+│   │   ├── config/config.go
+│   │   ├── database/
+│   │   │   ├── postgres.go
+│   │   │   └── migrations/001_init.sql
+│   │   ├── handlers/
+│   │   │   ├── line.go            ← LINE webhook + chatbot + cart edit
+│   │   │   ├── email.go           ← IMAP handler + dedup by Message-ID
+│   │   │   ├── import.go          ← Lazada import
+│   │   │   ├── shopee_import.go   ← Shopee Excel → SML 224 saleinvoice ✨NEW
+│   │   │   ├── bills.go           ← bill CRUD + retry (pending+failed)
+│   │   │   ├── mappings.go
+│   │   │   ├── dashboard.go
+│   │   │   ├── log_handler.go     ← GET /api/logs ✨NEW
+│   │   │   └── auth.go
+│   │   ├── middleware/
+│   │   │   ├── auth.go
+│   │   │   └── logger.go
+│   │   ├── models/
+│   │   │   ├── bill.go
+│   │   │   ├── mapping.go
+│   │   │   └── user.go
+│   │   ├── services/
+│   │   │   ├── ai/
+│   │   │   │   ├── openrouter.go
+│   │   │   │   └── prompts.go
+│   │   │   ├── mapper/mapper.go      ← F1
+│   │   │   ├── anomaly/detector.go   ← F2
+│   │   │   ├── sml/
+│   │   │   │   ├── client.go              ← SML #1 JSON-RPC
+│   │   │   │   └── saleinvoice_client.go  ← SML #2 REST ✨NEW
+│   │   │   ├── line/service.go       ← reply + push notify
+│   │   │   ├── email/imap.go
+│   │   │   └── insight/service.go    ← F4
+│   │   ├── worker/pool.go
+│   │   ├── jobs/
+│   │   │   ├── insight_cron.go
+│   │   │   ├── backup_cron.go
+│   │   │   ├── email_poller.go
+│   │   │   ├── token_checker.go
+│   │   │   └── disk_monitor.go
+│   │   └── repository/
+│   │       ├── bill_repo.go           ← added DB() accessor
+│   │       ├── mapping_repo.go
+│   │       ├── user_repo.go
+│   │       └── audit_log_repo.go      ← Log(), List() ✨NEW
+│   │   ├── models/
+│   │   │   ├── bill.go
+│   │   │   ├── mapping.go
+│   │   │   ├── user.go
+│   │   │   └── audit_log.go           ← AuditLog model ✨NEW
+│   ├── go.mod
+│   ├── Dockerfile
+│   └── .air.toml
+│
+├── frontend/
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Login.tsx
+│   │   │   ├── Dashboard.tsx         ← stats + F4 insights + F1 progress
+│   │   │   ├── Bills.tsx             ← list + filter + anomaly badge
+│   │   │   ├── BillDetail.tsx        ← detail + expandable JSON + retry ✨UPDATED
+│   │   │   ├── Import.tsx            ← upload + preview (Lazada)
+│   │   │   ├── ShopeeImport.tsx      ← Shopee Excel → SML 224 ✨NEW
+│   │   │   ├── Logs.tsx              ← Activity Log ✨NEW
+│   │   │   ├── Mappings.tsx          ← manage + F1 stats
+│   │   │   └── Settings.tsx          ← LINE, IMAP, SML, columns
+│   │   ├── components/
+│   │   │   ├── BillTable.tsx
+│   │   │   ├── BillStatusBadge.tsx
+│   │   │   ├── AnomalyBadge.tsx      ← F2
+│   │   │   ├── InsightCard.tsx       ← F4
+│   │   │   ├── LearningProgress.tsx  ← F1
+│   │   │   ├── FileUploader.tsx
+│   │   │   └── StatsCard.tsx
+│   │   ├── hooks/
+│   │   │   ├── useAuth.ts
+│   │   │   └── useBills.ts
+│   │   ├── api/client.ts
+│   │   ├── store/auth.ts
+│   │   └── types/index.ts
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── Dockerfile
+│
+├── backups/
+├── docker-compose.yml
+├── docker-compose.dev.yml
+├── .env.example
+├── .gitignore
+└── CLAUDE.md
+```
+
+---
+
+## 17. Environment Variables
+
+```bash
+# .env.example
+
+PROJECT_NAME=billflow
+
+# Server
+PORT=8090
+ENV=development
+
+# Database
+DATABASE_URL=postgres://billflow:password@localhost:5438/billflow
+DB_USER=billflow
+DB_PASSWORD=changeme_strong_password
+
+# JWT
+JWT_SECRET=your-secret-key-min-32-chars
+JWT_EXPIRE_HOURS=24
+
+# LINE OA
+# ⚠️ credentials ด้านล่างนี้ถูก expose แล้ว — REISSUE ก่อนใช้
+# LINE Developer Console → Messaging API → Reissue token/secret
+LINE_CHANNEL_SECRET=
+LINE_CHANNEL_ACCESS_TOKEN=
+LINE_ADMIN_USER_ID=    ← User ID ของ admin สำหรับ push notify
+
+# Email IMAP
+# Gmail: IMAP_HOST=imap.gmail.com, IMAP_PORT=993, IMAP_PASSWORD=<App Password 16 หลัก>
+# Outlook: IMAP_HOST=imap-mail.outlook.com, IMAP_PORT=993
+# ⚠️ IMAP_POLL_INTERVAL ต้องไม่น้อยกว่า 5m (Gmail rate limit → unexpected EOF)
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+IMAP_USER=billing@company.com
+IMAP_PASSWORD=
+IMAP_FILTER_FROM=vendor@company.com
+IMAP_FILTER_SUBJECT=PO,Purchase Order,ใบสั่งซื้อ
+IMAP_POLL_INTERVAL=5m
+
+# OpenRouter
+OPENROUTER_API_KEY=sk-or-xxx
+OPENROUTER_MODEL=google/gemini-2.5-flash
+OPENROUTER_FALLBACK_MODEL=google/gemini-flash-1.5   ← ไม่ใช้ Claude Haiku แล้ว (ราคาแพงกว่า Gemini)
+OPENROUTER_AUDIO_MODEL=openai/whisper-1
+
+# SML ERP #1 (LINE/Email — JSON-RPC)
+SML_BASE_URL=http://192.168.2.213:3248
+SML_ACCESS_MODE=sales
+
+# SML ERP #2 (Shopee — REST saleinvoice)
+SHOPEE_SML_URL=http://192.168.2.224:8080
+SHOPEE_SML_GUID=SMLX
+SHOPEE_SML_PROVIDER=SML1
+SHOPEE_SML_CONFIG_FILE=SMLConfigSML1.xml
+SHOPEE_SML_DATABASE=SMLPLOY
+SHOPEE_SML_DOC_FORMAT=IV
+SHOPEE_SML_CUST_CODE=           ← รหัสลูกค้า Shopee ใน SML
+SHOPEE_SML_SALE_CODE=           ← รหัสพนักงานขาย
+SHOPEE_SML_WH_CODE=             ← รหัสคลัง (fallback)
+SHOPEE_SML_SHELF_CODE=          ← รหัสชั้นวาง (fallback)
+SHOPEE_SML_UNIT_CODE=           ← หน่วย (fallback)
+SHOPEE_SML_VAT_TYPE=0           ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
+SHOPEE_SML_VAT_RATE=7
+SHOPEE_SML_DOC_TIME=09:00
+
+# Auto-confirm
+AUTO_CONFIRM_THRESHOLD=0.85
+
+# Cron
+INSIGHT_CRON_HOUR=8
+BACKUP_CRON_HOUR=0
+INSIGHT_LINE_NOTIFY=true
+DISK_WARN_PERCENT=90
+
+# Frontend
+VITE_API_URL=http://localhost:8090
+```
+
+---
+
+## 18. Docker Compose
+
+```yaml
+# docker-compose.yml
+# ⚠️ ทุก container ชื่อ billflow-* ไม่กระทบ project อื่น
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: billflow-postgres
+    volumes:
+      - billflow_pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: billflow
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5438:5432"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: billflow-backend
+    ports:
+      - "8090:8090"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: billflow-frontend
+    ports:
+      - "3010:80"
+    depends_on:
+      - backend
+    mem_limit: 256m
+    restart: unless-stopped
+
+volumes:
+  billflow_pgdata:
+```
+
+```yaml
+# docker-compose.dev.yml
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+    command: air
+  frontend:
+    volumes:
+      - ./frontend:/app
+    command: npm run dev
+    ports:
+      - "5173:5173"
+```
+
+---
+
+## 19. Cloudflare Tunnel
+
+```bash
+# cloudflared มีอยู่แล้วใน ~/cloudflared
+
+# 1. install binary
+sudo cp ~/cloudflared/cloudflared /usr/local/bin/
+sudo chmod +x /usr/local/bin/cloudflared
+cloudflared --version
+
+# 2. login + สร้าง tunnel
+cloudflared tunnel login
+cloudflared tunnel create billflow
+
+# 3. ~/.cloudflared/config.yml
+tunnel: <TUNNEL_ID>
+credentials-file: /home/bosscatdog/.cloudflared/<TUNNEL_ID>.json
+ingress:
+  - hostname: api.your-domain.com
+    service: http://localhost:8090
+  - hostname: app.your-domain.com
+    service: http://localhost:3010
+  - service: http_status:404
+
+# 4. install systemd service
+cloudflared service install
+sudo systemctl enable cloudflared
+sudo systemctl start cloudflared
+
+# LINE webhook URL:
+# https://api.your-domain.com/webhook/line
+```
+
+---
+
+## 20. Role & Permissions
+
+```
+admin:
+  - ดู/แก้ไข bills ทั้งหมด + retry
+  - จัดการ mappings + ดู F1 learning stats
+  - จัดการ users
+  - settings (LINE, IMAP, SML, threshold, column mapping)
+  - generate F4 insight on-demand
+  - ดู audit log
+
+staff:
+  - ดู bills ทั้งหมด
+  - confirm pending bills
+  - import files
+  - เพิ่ม/แก้ไข mappings
+
+viewer:
+  - ดู bills (read-only)
+  - ดู dashboard + insights
+```
+
+---
+
+## 21. Libraries
+
+### Backend (Go)
+```
+github.com/gin-gonic/gin              ← HTTP framework
+github.com/golang-jwt/jwt/v5          ← JWT
+github.com/lib/pq                     ← PostgreSQL driver
+github.com/line/line-bot-sdk-go/v8    ← LINE official SDK
+github.com/emersion/go-imap/v2        ← IMAP client
+github.com/xuri/excelize/v2           ← Excel parser
+github.com/lithammer/fuzzysearch      ← fuzzy matching
+github.com/joho/godotenv              ← .env loader
+go.uber.org/zap                       ← structured logging
+github.com/robfig/cron/v3             ← cron jobs
+```
+
+### Frontend (React + Vite)
+```
+react-router-dom         ← routing
+zustand                  ← state management
+axios                    ← HTTP client
+@tanstack/react-query    ← server state + caching
+recharts                 ← charts
+react-dropzone           ← file upload
+react-hot-toast          ← notifications
+tailwindcss              ← styling
+@headlessui/react        ← accessible components
+```
+
+---
+
+## 22. ข้อควรระวัง
+
+```
+1. LINE Webhook
+   - verify X-Line-Signature ทุก request
+   - respond HTTP 200 ใน 1 วินาที → processing async เสมอ
+   - ⚠️ credentials ที่แชร์ใน chat ถูก expose → REISSUE ก่อน
+
+2. SML API
+   - 192.168.2.213 อยู่ใน internal network เท่านั้น
+   - response text เป็น JSON ซ้อนกัน → parse 2 ชั้น
+   - retry max 3 → failed + LINE admin notify
+
+3. OpenRouter
+   - image → base64 หรือ URL
+   - PDF → plugins: file-parser
+   - ไม่ใช่ JSON → retry ด้วย fallback model
+
+4. IMAP
+   - mark_read หลัง process กัน process ซ้ำ
+   - connection fail → LINE admin notify
+   - Gmail ต้องใช้ App Password (ไม่ใช่ password จริง)
+     → myaccount.google.com → Security → App passwords → Create
+   - Gmail rate limit: ห้าม poll ถี่กว่า 5m → unexpected EOF
+   - ลูกค้าใช้ Gmail ต้องเปิด 2-Step Verification ก่อน แล้วค่อยสร้าง App Password
+   - ดู README.md Section 22 สำหรับ step-by-step
+
+5. Disk & Memory
+   - เคลียร์ disk ก่อน Phase 1 (เป้าหมาย < 70%)
+   - mem_limit ใน docker-compose กัน OOM
+   - cron ตรวจ disk ทุกวัน → แจ้งถ้า > 90%
+
+6. LINE Token
+   - rotate ทุก 90 วัน
+   - cron check รายสัปดาห์ → แจ้งล่วงหน้า 7 วัน
+
+7. Shopee Column Mapping (hardcoded — ไฟล์จาก Shopee Seller Center คงที่)
+   - หมายเลขคำสั่งซื้อ, สถานะการสั่งซื้อ, วันที่ทำการสั่งซื้อ
+   - ชื่อสินค้า, เลขอ้างอิง SKU (SKU Reference No.), ราคาขาย, จำนวน
+   - exclude: "ที่ต้องจัดส่ง", "ยกเลิกแล้ว"
+   - dedup: ตรวจ bills WHERE source='shopee' AND raw_data->>'order_id' = ?
+
+8. Lazada Column Mapping
+   - ❌ ห้าม hardcode column names
+   - ✅ เก็บใน DB → admin แก้ได้จาก /settings
+   - รอไฟล์จริงจากลูกค้าก่อน Phase 4b
+
+9. SML 248 Machine (Shopee)
+   - เครื่อง 192.168.2.248 — ✅ CONFIRMED WORKING (2026-04-24)
+   - Product lookup: curl "http://192.168.2.248:8080/SMLJavaRESTService/v3/api/product/CON-01000"
+     -H "guid: smlx" -H "provider: SMLGOH" -H "configFileName: SMLConfigSMLGOH.xml" -H "databaseName: SML1_2026"
+   - ⚠️ SKU ในไฟล์ test ต้องมีอยู่ใน ic_inventory ของ SML 248
+     REST-00002 ไม่มีใน DB → ต้องใช้ CON-xxxxx / STEEL-xxxxx ฯลฯ
+   - ⚠️ SHOPEE_SML_UNIT_CODE ต้องไม่ว่าง (ตั้ง "ถุง" เป็น fallback)
+   - DB check: docker run --rm postgres:16-alpine psql
+     'postgresql://postgres:sml@192.168.2.248:5432/sml1_2026'
+     -c "SELECT code, unit_standard FROM ic_inventory LIMIT 10"
+```
+
+---
+
+## 23. Build Phases
+
+```
+Phase 0 — Server Prep (ทำบน server ก่อน code บรรทัดแรก)
+  [x] 0.1 เคลียร์ disk ✅
+  [x] 0.2 ติดตั้ง Go 1.24.0 ✅
+  [x] 0.3 Setup cloudflared ✅
+  [x] 0.4 Reissue LINE credentials ✅
+  [x] 0.5 mkdir -p ~/billflow/backups ✅
+  [x] 0.6 verify: curl http://192.168.2.213:3248 ✅
+
+Phase 1 — Foundation
+  [x] 1.1 สร้าง ~/billflow/ structure + .gitignore ✅
+  [x] 1.2 docker-compose.yml (ports 8090/3010/5438 + mem_limit) ✅
+  [x] 1.3 Go: config + database + migrations ✅
+  [x] 1.4 Go: JWT auth endpoint ✅
+  [x] 1.5 React: Vite + React Router + Zustand ✅
+  [x] 1.6 React: Login page + auth flow ✅
+  [x] 1.7 ✅ ทดสอบ: docker compose up → login สำเร็จ
+
+Phase 2 — Core AI Pipeline
+  [x] 2.1 Go: OpenRouter client (text + image + PDF + audio) ✅
+  [x] 2.2 Go: MapperService (exact + fuzzy + F1 learning) ✅
+  [x] 2.3 Go: AnomalyService (F2 rules) ✅
+  [x] 2.4 Go: SML client (JSON-RPC + retry + admin notify) ✅
+  [x] 2.5 Go: WorkerPool (semaphore) ✅
+  [ ] 2.6 Unit tests: extract + mapper + anomaly
+  [x] 2.7 ✅ ทดสอบ: text → chatbot → SML (bill created BS20260423101501-UELM)
+
+Phase 3 — LINE Integration
+  [x] 3.1 Go: LINE webhook (verify + async) ✅
+  [x] 3.2 Go: image + PDF download ✅ (code deployed, untested)
+  [x] 3.3 Go: voice → Whisper (F3) ✅ (code deployed, untested)
+  [x] 3.4 Go: Sales chatbot "น้องบิล" (inquiry/select/qty/cart/checkout) ✅ TESTED
+  [x] 3.5 Go: LINE admin push notify ✅
+  [x] 3.6b Go: Cart edit — ลบรายการที่ N, แก้จำนวนรายการที่ N เป็น Y ✅
+  [ ] 3.7 ทดสอบ LINE loop: รูป / PDF / voice ← ยังไม่ test
+
+Phase 4a — Shopee Import ← ✅ DEPLOYED (SML 248 API confirmed working)
+  [x] 4a.1 Go: saleinvoice_client.go (SML 248 REST) ✅
+  [x] 4a.2 Go: shopee_import.go (Preview + Confirm + GetConfig) ✅
+  [x] 4a.3 React: ShopeeImport.tsx (config dialog + preview + confirm) ✅
+  [x] 4a.4 Routes wired in main.go ✅
+  [ ] 4a.5 ทดสอบ end-to-end กับ SKU จริง ← ต้องแก้ไฟล์ Excel + ตั้ง UNIT_CODE
+  [ ] 4a.6 เพิ่ม SHOPEE_SML_UNIT_CODE=ถุง ใน server .env
+
+Phase 4b — Lazada Import (รอไฟล์จริงจากลูกค้า)
+  [ ] 4b.1 Go: Excel parser (column mapping จาก DB)
+  [ ] 4b.2 React: Import page + preview + anomaly badge
+  [ ] 4b.3 React: Settings → column mapping editor
+  [ ] 4b.4 ✅ ทดสอบ bulk import + error report
+
+Phase 5 — Email IMAP
+  [x] 5.1 Go: IMAP poller (5 นาที) ✅
+  [x] 5.2 Go: attachment download + parse ✅
+  [x] 5.2b Go: PDF extraction ใช้ Mistral OCR (mistral-ocr-2512) แทน OpenRouter/Bedrock ✅
+  [x] 5.2c Go: dedup by Message-ID (email) ✅
+  [ ] 5.3 ✅ ทดสอบ email → บิล loop ← กำลัง test
+
+Phase 6 — Web UI Complete
+  [x] 6.1 React: Dashboard (stats + charts + loading skeleton) ✅
+  [x] 6.2 React: Bills list + filter + search + pagination ✅
+  [x] 6.3 React: BillDetail — grid layout + JsonSection + retry ✅
+  [x] 6.4 React: Mappings + feedback + learning stats ✅
+  [x] 6.5 React: Settings — section cards + status dots + column mapping editor ✅
+  [x] 6.6 React: Logs — timeline design + filter bar ✅
+  [x] 6.7 React: Import + ShopeeImport — new design tokens ✅
+  [x] 6.8 React: Login — branded page ✅
+  [x] 6.9 React: Layout — sidebar redesign ✅
+  [x] 6.10 React: index.css — design tokens + typography scale ✅
+  [x] 6.11 React: StatsCard / BillStatusBadge / BillTable / InsightCard / LearningProgress ✅
+
+Phase 7 — Background Jobs
+  [x] 7.1 Cron 08:00 daily insight + LINE notify (F4) ✅
+  [x] 7.2 Cron 00:00 pg_dump | gzip backup (.sql.gz) ✅
+  [x] 7.3 Cron weekly LINE token expiry check ✅
+  [x] 7.4 Cron daily disk monitor → notify > 90% ✅
+
+Phase 8 — Production Ready
+  [ ] 8.1 Cloudflare Tunnel + systemd
+  [ ] 8.2 docker-compose production build
+  [ ] 8.3 Structured logging (zap)
+  [ ] 8.4 Health check endpoints
+  [ ] 8.5 ✅ Demo ลูกค้า
+```
+
+---
+
+## 24. Demo Checklist
+
+```
+Core Flow — LINE OA Text (Chatbot):
+[x] ค้นหาสินค้าจาก catalog SML ผ่าน LINE ✅
+[x] เลือกสินค้า + ใส่จำนวน (รับ "3", "10 ถุง", "สิบถุง") ✅
+[x] ราคา/หน่วยถูกต้อง (ถุง, เส้น, บาท) ✅
+[x] ตะกร้าสะสมหลายรายการ ✅
+[x] Checkout → ส่ง SML → bill created ✅ (BS20260423101501-UELM)
+[x] SML fail → LINE แจ้ง admin ทันที ✅
+
+Core Flow — ยังไม่ test:
+[ ] ส่งรูป PO ใน LINE → บิลสร้างอัตโนมัติ
+[ ] ส่ง PDF ใน LINE → extract ถูกต้อง
+[ ] ส่ง voice message ใน LINE → สร้างบิล (F3)
+[x] ลบรายการที่ N จาก cart ✅
+[x] แก้จำนวนรายการที่ N เป็น Y ✅
+[ ] Email มี PO attachment → บิลสร้างอัตโนมัติ ← Phase 5 กำลัง test
+[ ] Upload Shopee Excel → bulk import สำเร็จ ← Phase 4a (รอ SML 224 เปิด)
+[ ] Upload Lazada Excel → bulk import สำเร็จ ← Phase 4b
+
+AI Features:
+[ ] item map ไม่ได้ → confirm → ระบบเรียนรู้ (F1)
+[ ] Learning Progress แสดง accuracy เพิ่มขึ้น (F1)
+[ ] บิลราคาผิดปกติ → anomaly warning (F2)
+[ ] บิลซ้ำ → block อัตโนมัติ (F2)
+[ ] Dashboard แสดง AI Insights ภาษาไทย (F4)
+
+System:
+[x] SML retry 3 ครั้ง + LINE admin notify ✅
+[x] Web UI แสดง bill list + detail + status ✅
+[ ] SML fail → Web UI retry ได้
+[ ] Login แต่ละ role → permission ถูกต้อง
+[ ] pg_dump backup ทำงานได้
+[ ] disk monitor แจ้ง admin ถ้า > 90%
+```
+
+---
+
+## 25. คำสั่งแรกสำหรับ Claude Code ใน VSCode
+
+```
+Read CLAUDE.md completely.
+Then execute Phase 0 on server 192.168.2.109:
+1. Clear docker disk space (target < 70%)
+2. Install Go 1.22
+3. Setup cloudflared from ~/billflow
+4. Verify SML API health
+Report disk usage before and after, then ask before Phase 1.
+```
+
+---
+
+---
+
+## 26. Current Status (2026-04-24)
+
+```
+Deployed & Running:
+  backend  → billflow-backend  :8090  ✅
+  frontend → billflow-frontend :3010  ✅
+  postgres → billflow-postgres :5438  ✅
+  health:  {"database":"ok","env":"production","status":"ok"}
+
+AI Models (OpenRouter):
+  primary  → google/gemini-2.5-flash   (all tasks)
+  fallback → google/gemini-flash-1.5   (retry only)
+  audio    → openai/whisper-1
+
+PDF Extraction:
+  Mistral OCR (mistral-ocr-2512) → markdown → OpenRouter ExtractText()
+  เหตุผล: OpenRouter route Gemini ผ่าน Amazon Bedrock ไม่รองรับ PDF MIME type
+
+IMAP:
+  Gmail: imap.gmail.com:993, App Password (ewbjcfytcnnapwbj)
+  IMAP_POLL_INTERVAL=5m  ← ต้องไม่น้อยกว่านี้
+  bug เดิม: IMAP_POLL_INTERVAL=1m → Gmail rate limit → unexpected EOF → แก้แล้ว
+
+SML #2 — Shopee (192.168.2.248:8080) — CONFIRMED WORKING (2026-04-24):
+  ✅ Product lookup: GET /SMLJavaRESTService/v3/api/product/{sku}  (flat response)
+     data=null หมายถึงไม่พบสินค้า → ใช้ fallback จาก .env
+  ✅ Create invoice: POST /SMLJavaRESTService/restapi/saleinvoice  (key="details")
+  ✅ Config ที่ใช้: guid=smlx / provider=SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
+  ✅ cust_code=AR00004, wh=WH-01, shelf=SH-01, doc_format=INV
+  ✅ DB on .248: PostgreSQL, db=sml1_2026, table=ic_inventory (products)
+  ⚠️ SHOPEE_SML_UNIT_CODE ต้องไม่ว่าง → SML reject unit_code=""
+     ตั้ง fallback = "ถุง" (หรือหน่วยที่เหมาะสม)
+  ⚠️ ไฟล์ test (ไฟล์ตัวอย่างorder shoppe.xlsx) ใช้ SKU=REST-00002
+     ซึ่งไม่มีใน SML 248 → ต้องแก้ไฟล์ให้ใช้ SKU จริง เช่น CON-01000, STEEL-01001
+  SKU จริงใน SML 248: CON-xxxxx (ถุง), STEEL-xxxxx (เส้น), PLUMB-xxxxx (ท่อน), ROOF-xxxxx (แผ่น)
+
+Server .env ที่ใช้งาน (192.168.2.109 ~/billflow/.env):
+  SHOPEE_SML_URL=http://192.168.2.248:8080
+  SHOPEE_SML_GUID=smlx
+  SHOPEE_SML_PROVIDER=SMLGOH
+  SHOPEE_SML_CONFIG_FILE=SMLConfigSMLGOH.xml
+  SHOPEE_SML_DATABASE=SML1_2026
+  SHOPEE_SML_BRANCH_CODE=001
+  SHOPEE_SML_DOC_FORMAT=INV
+  SHOPEE_SML_CUST_CODE=AR00004
+  SHOPEE_SML_WH_CODE=WH-01
+  SHOPEE_SML_SHELF_CODE=SH-01
+  SHOPEE_SML_UNIT_CODE=   ← ต้องเพิ่ม fallback เช่น "ถุง"
+
+Phase ที่ผ่านแล้ว:
+  Phase 0 ✅  Phase 1 ✅  Phase 2 ✅  Phase 3 ✅ (text+cart edit)
+  Phase 4a ✅ (Shopee import deployed + SML 248 API confirmed working)
+  Phase 5 ✅ (IMAP + Mistral OCR deployed + tested)
+
+ค้างอยู่:
+  Phase 3 — test รูป/PDF/voice ใน LINE
+  Phase 4a — end-to-end test กับ SKU จริง (ต้องแก้ไฟล์ Excel + ตั้ง UNIT_CODE fallback)
+  Phase 4b — Lazada Import (รอไฟล์จากลูกค้า)
+  Phase 6 — Web UI complete
+  Phase 7 — Background Jobs
+  Phase 8 — Production Ready
+
+Features เพิ่มเติมที่ deploy แล้ว:
+  ✅ Cart edit (LINE): ลบรายการที่ N / แก้จำนวนรายการที่ N เป็น Y
+  ✅ Email dedup by Message-ID
+  ✅ Audit Log backend (audit_logs table + repo + handler)
+  ✅ Activity Log frontend page (/logs)
+  ✅ BillDetail: expandable JSON sections (raw_data, sml_payload, sml_response)
+  ✅ Bill retry: รองรับทั้ง pending และ failed
+  ✅ Shopee import: Preview + Confirm + Config dialog (/import/shopee)
+  ✅ README.md: ทุก SML 224 → SML 248 แก้ครบแล้ว
+
+Bills ใน DB: 0 (cleared สำหรับ clean Shopee test)
+Last successful bill: BS20260423101501-UELM (LINE OA, 4,603.19 บาท)
+
+Next steps สำหรับ Phase 4a:
+  1. เพิ่ม SHOPEE_SML_UNIT_CODE=ถุง ใน /home/bosscatdog/billflow/.env
+  2. docker compose up -d backend (ไม่ต้อง build)
+  3. แก้ไฟล์ Excel ให้ใช้ SKU จริง (CON-01000 ฯลฯ) หรือใช้ไฟล์จริงจากลูกค้า
+  4. ทดสอบที่ http://192.168.2.109:3010/import/shopee
+```
+
+---
+
+*Last updated: 2026-04-24 (session 3)*
+*Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
+*Ports: backend:8090 / frontend:3010 / postgres:5438*
+*⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*

@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: billflow-postgres
+    volumes:
+      - billflow_pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: billflow
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5438:5432"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: billflow-backend
+    ports:
+      - "8090:8090"
+    env_file: .env
+    environment:
+      # Override DATABASE_URL to use internal Docker service name
+      DATABASE_URL: "postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/billflow?sslmode=disable"
+      GIN_MODE: release
+      ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: billflow-frontend
+    ports:
+      - "3010:80"
+    depends_on:
+      - backend
+    mem_limit: 256m
+    restart: unless-stopped
+
+volumes:
+  billflow_pgdata:

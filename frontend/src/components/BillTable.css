@@ -1,0 +1,99 @@
+.bill-table-wrap {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.bill-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.bill-table thead th {
+  padding: 10px 16px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: left;
+  background: var(--color-bg-alt);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.bill-table thead th.text-right {
+  text-align: right;
+}
+
+.bill-table thead th.text-center {
+  text-align: center;
+}
+
+.bill-table tbody tr {
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background var(--transition-sm);
+}
+
+.bill-table tbody tr:first-child {
+  border-top: none;
+}
+
+.bill-table tbody tr:hover {
+  background: var(--color-bg-hover);
+}
+
+.bill-table td {
+  padding: 11px 16px;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  vertical-align: middle;
+}
+
+.bill-table td.text-right {
+  text-align: right;
+}
+
+.bill-table td.text-center {
+  text-align: center;
+}
+
+.bill-table-doc-no {
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+.bill-table-doc-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.bill-table-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.bill-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--color-bg-alt);
+  color: var(--color-text-sub);
+  border: 1px solid var(--color-border);
+}
+
+.bill-table-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
