@@ -145,32 +145,83 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 	return h.handleExtracted(extracted, filename, messageID, traceID, attachStart)
 }
 
-// handleExtracted runs mapper → anomaly, then leaves the bill pending for user confirmation.
-// SML send happens later via the Retry handler when the user clicks "ส่ง SML" in the UI.
+// handleExtracted resolves item codes via F1 (exact mappings) → catalog
+// embedding search → text fallback, in that priority order. Each item
+// stores its top-5 catalog candidates so the user can review/override
+// in MapItemModal. The bill stays pending; SML send happens later via
+// the Retry handler.
+//
+// Why not fuzzy mapper.Match? With a small mappings table (often a
+// single user-added entry), Levenshtein on UTF-8 byte distances of
+// Thai text creates spurious 0.6–0.8 matches between completely
+// unrelated products. The 3000-item embedded catalog is the reliable
+// matcher; the F1 mapping table is reserved for explicit user-confirmed
+// (raw_name → item_code) memory.
 func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, messageID, traceID string, startTime time.Time) error {
-	var billItems []models.BillItem
+	const topK = 5
+	const highConfThreshold = 0.85
+
+	type itemWithCandidates struct {
+		item       models.BillItem
+		candidates []models.CatalogMatch
+	}
+	var enriched []itemWithCandidates
 	var itemCodes []string
 
 	for _, extItem := range extracted.Items {
+		// 1. F1 exact match — only exact (Score=1.0). Skip fuzzy entirely.
 		match := h.mapperSvc.Match(extItem.RawName)
+		exactMapping := match.Mapping != nil && !match.NeedsReview && match.Score >= 1.0
+
+		// 2. Catalog embedding search (always run, regardless of F1 hit)
+		var matches []models.CatalogMatch
+		if h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
+			if queryEmb, err := h.embSvc.EmbedText(extItem.RawName); err == nil {
+				matches = h.catalogIdx.Search(queryEmb, topK)
+			}
+		}
+		if len(matches) == 0 && h.catalogSvc != nil {
+			matches, _ = h.catalogSvc.SearchByText(extItem.RawName, topK)
+		}
 
 		item := models.BillItem{
 			RawName: extItem.RawName,
 			Qty:     extItem.Qty,
-			Mapped:  match.Mapping != nil && !match.NeedsReview,
 		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
 		}
 
-		if match.Mapping != nil {
+		// 3. Decide what to pre-fill, in priority order:
+		//    (a) F1 exact mapping → user-confirmed memory wins
+		//    (b) Catalog top with score ≥ 0.85 → auto-pick
+		//    (c) Catalog top with low score → pre-fill but mapped=false
+		//    (d) Nothing → leave blank, user must search/create
+		switch {
+		case exactMapping:
 			item.ItemCode = &match.Mapping.ItemCode
 			item.UnitCode = &match.Mapping.UnitCode
 			item.MappingID = &match.Mapping.ID
+			item.Mapped = true
 			itemCodes = append(itemCodes, match.Mapping.ItemCode)
+		case len(matches) > 0 && matches[0].Score >= highConfThreshold:
+			item.ItemCode = &matches[0].ItemCode
+			item.UnitCode = &matches[0].UnitCode
+			item.Mapped = true
+			itemCodes = append(itemCodes, matches[0].ItemCode)
+		case len(matches) > 0:
+			// Pre-fill best guess; user reviews via MapItemModal.
+			item.ItemCode = &matches[0].ItemCode
+			item.UnitCode = &matches[0].UnitCode
+			item.Mapped = false
 		}
 
-		billItems = append(billItems, item)
+		enriched = append(enriched, itemWithCandidates{item: item, candidates: matches})
+	}
+
+	billItems := make([]models.BillItem, 0, len(enriched))
+	for _, e := range enriched {
+		billItems = append(billItems, e.item)
 	}
 
 	// F2 Anomaly detection
@@ -227,9 +278,14 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, me
 	if len(anomalies) > 0 {
 		_ = h.billRepo.UpdateAnomalies(bill.ID, anomalies)
 	}
-	for i := range billItems {
-		billItems[i].BillID = bill.ID
-		_ = h.billRepo.InsertItem(&billItems[i])
+	for i := range enriched {
+		enriched[i].item.BillID = bill.ID
+		candidatesJSON, _ := json.Marshal(enriched[i].candidates)
+		_ = h.billRepo.InsertItemWithCandidates(&enriched[i].item, candidatesJSON)
+	}
+	// Refresh billItems IDs for any later use (anomaly status calc uses Mapped flag only)
+	for i := range enriched {
+		billItems[i] = enriched[i].item
 	}
 
 	// Manual-confirm flow: every email-sourced bill stays pending (or

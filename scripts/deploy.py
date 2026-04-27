@@ -19,8 +19,7 @@ if not PASS:
 
 # Files to sync (matches the commit)
 FILES = [
-    "backend/internal/handlers/bills.go",
-    "backend/internal/handlers/shopee_import.go",
+    "backend/internal/handlers/email.go",
 ]
 
 
