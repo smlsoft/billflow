@@ -82,12 +82,13 @@ export interface BillListResponse {
 export interface Mapping {
   id: string
   raw_name: string
-  mapped_name: string
-  unit: string
+  item_code: string
+  unit_code: string
   confidence: number
+  source: 'manual' | 'ai_learned'
   usage_count: number
+  last_used_at?: string | null
   created_at: string
-  updated_at: string
 }
 
 export interface MappingStats {

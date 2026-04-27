@@ -32,19 +32,21 @@ const XIcon = () => (
   </svg>
 )
 
-interface NewMapping {
+interface MappingDraft {
   raw_name: string
   item_code: string
   unit_code: string
 }
+
+const emptyDraft: MappingDraft = { raw_name: '', item_code: '', unit_code: '' }
 
 export default function Mappings() {
   const [mappings, setMappings] = useState<Mapping[]>([])
   const [stats, setStats] = useState<MappingStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [editId, setEditId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-  const [newMapping, setNewMapping] = useState<NewMapping>({ raw_name: '', item_code: '', unit_code: '' })
+  const [editDraft, setEditDraft] = useState<MappingDraft>(emptyDraft)
+  const [newMapping, setNewMapping] = useState<MappingDraft>(emptyDraft)
   const [adding, setAdding] = useState(false)
 
   const fetchAll = async () => {
@@ -65,9 +67,18 @@ export default function Mappings() {
 
   useEffect(() => { fetchAll() }, [])
 
+  const startEdit = (m: Mapping) => {
+    setEditId(m.id)
+    setEditDraft({ raw_name: m.raw_name, item_code: m.item_code, unit_code: m.unit_code })
+  }
+
   const handleSave = async (id: string) => {
+    if (!editDraft.raw_name.trim() || !editDraft.item_code.trim() || !editDraft.unit_code.trim()) {
+      toast.error('กรอกครบทั้ง 3 field ก่อนบันทึก')
+      return
+    }
     try {
-      await client.put(`/api/mappings/${id}`, { mapped_name: editName })
+      await client.put(`/api/mappings/${id}`, editDraft)
       setEditId(null)
       fetchAll()
       toast.success('บันทึกสำเร็จ')
@@ -89,11 +100,11 @@ export default function Mappings() {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMapping.raw_name || !newMapping.item_code) return
+    if (!newMapping.raw_name || !newMapping.item_code || !newMapping.unit_code) return
     setAdding(true)
     try {
       await client.post('/api/mappings', newMapping)
-      setNewMapping({ raw_name: '', item_code: '', unit_code: '' })
+      setNewMapping(emptyDraft)
       fetchAll()
       toast.success('เพิ่ม mapping สำเร็จ')
     } catch {
@@ -129,58 +140,88 @@ export default function Mappings() {
                     <th>ชื่อดิบ (Raw Name)</th>
                     <th>Item Code</th>
                     <th>หน่วย</th>
+                    <th className="text-center">แหล่ง</th>
                     <th className="text-center">ใช้งาน</th>
                     <th className="text-center">จัดการ</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {mappings.map((m) => (
-                    <tr key={m.id}>
-                      <td><span className="mappings-raw-name">{m.raw_name}</span></td>
-                      <td>
-                        {editId === m.id ? (
-                          <input
-                            className="form-input"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            autoFocus
-                          />
-                        ) : (
-                          <span className="mappings-mapped-name">{m.mapped_name}</span>
-                        )}
-                      </td>
-                      <td>{m.unit || '—'}</td>
-                      <td className="text-center">
-                        <span className="mappings-usage">{m.usage_count}</span>
-                      </td>
-                      <td className="text-center">
-                        <div className="mappings-actions">
-                          {editId === m.id ? (
-                            <>
-                              <button type="button" className="btn btn-primary btn-sm btn-icon" onClick={() => handleSave(m.id)} title="บันทึก">
-                                <CheckIcon />
-                              </button>
-                              <button type="button" className="btn btn-secondary btn-sm btn-icon" onClick={() => setEditId(null)} title="ยกเลิก">
-                                <XIcon />
-                              </button>
-                            </>
+                  {mappings.map((m) => {
+                    const isEditing = editId === m.id
+                    return (
+                      <tr key={m.id}>
+                        <td>
+                          {isEditing ? (
+                            <input
+                              className="form-input"
+                              value={editDraft.raw_name}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, raw_name: e.target.value }))}
+                            />
                           ) : (
-                            <>
-                              <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => { setEditId(m.id); setEditName(m.mapped_name) }} title="แก้ไข">
-                                <EditIcon />
-                              </button>
-                              <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => handleDelete(m.id)} title="ลบ">
-                                <TrashIcon />
-                              </button>
-                            </>
+                            <span className="mappings-raw-name">{m.raw_name}</span>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td>
+                          {isEditing ? (
+                            <input
+                              className="form-input"
+                              value={editDraft.item_code}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, item_code: e.target.value }))}
+                              autoFocus
+                            />
+                          ) : (
+                            <span className="mappings-mapped-name">{m.item_code}</span>
+                          )}
+                        </td>
+                        <td>
+                          {isEditing ? (
+                            <input
+                              className="form-input"
+                              value={editDraft.unit_code}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, unit_code: e.target.value }))}
+                              style={{ width: 80 }}
+                            />
+                          ) : (
+                            <span>{m.unit_code || '—'}</span>
+                          )}
+                        </td>
+                        <td className="text-center">
+                          <span className={`badge ${m.source === 'ai_learned' ? 'badge-success' : 'badge-warning'}`}>
+                            {m.source === 'ai_learned' ? 'AI เรียนรู้' : 'manual'}
+                          </span>
+                        </td>
+                        <td className="text-center">
+                          <span className="mappings-usage">{m.usage_count}</span>
+                        </td>
+                        <td className="text-center">
+                          <div className="mappings-actions">
+                            {isEditing ? (
+                              <>
+                                <button type="button" className="btn btn-primary btn-sm btn-icon" onClick={() => handleSave(m.id)} title="บันทึก">
+                                  <CheckIcon />
+                                </button>
+                                <button type="button" className="btn btn-secondary btn-sm btn-icon" onClick={() => setEditId(null)} title="ยกเลิก">
+                                  <XIcon />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => startEdit(m)} title="แก้ไข">
+                                  <EditIcon />
+                                </button>
+                                <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => handleDelete(m.id)} title="ลบ">
+                                  <TrashIcon />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                   {mappings.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="mappings-table-empty">ยังไม่มี mapping</td>
+                      <td colSpan={6} className="mappings-table-empty">ยังไม่มี mapping</td>
                     </tr>
                   )}
                 </tbody>
@@ -222,6 +263,7 @@ export default function Mappings() {
                   placeholder="เช่น ถุง, เส้น"
                   value={newMapping.unit_code}
                   onChange={(e) => setNewMapping((p) => ({ ...p, unit_code: e.target.value }))}
+                  required
                 />
               </div>
               <button type="submit" className="btn btn-primary" disabled={adding}>

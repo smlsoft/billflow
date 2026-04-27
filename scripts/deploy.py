@@ -19,12 +19,7 @@ if not PASS:
 
 # Files to sync (matches the commit)
 FILES = [
-    "backend/cmd/server/main.go",
-    "backend/internal/database/migrations/002_sml_catalog.sql",
     "backend/internal/handlers/bills.go",
-    "backend/internal/handlers/catalog.go",
-    "backend/internal/services/sml/product_client.go",
-    "frontend/src/pages/BillDetail.tsx",
 ]
 
 
@@ -72,14 +67,22 @@ def main():
         label="extract")
     run(c, f"mkdir -p {REMOTE}/backups", label="ensure backups dir")
 
-    # Rebuild backend + frontend
-    rc = run(c, f"cd {REMOTE} && docker compose build backend frontend",
-             timeout=900, label="build backend + frontend")
+    # Rebuild only what's needed based on file paths
+    has_backend_change = any(f.startswith("backend/") for f in FILES)
+    has_frontend_change = any(f.startswith("frontend/") for f in FILES)
+    services = []
+    if has_backend_change: services.append("backend")
+    if has_frontend_change: services.append("frontend")
+    if not services:
+        services = ["backend", "frontend"]
+
+    rc = run(c, f"cd {REMOTE} && docker compose build {' '.join(services)}",
+             timeout=900, label=f"build {' '.join(services)}")
     if rc != 0:
         print(f"❌ build failed (exit {rc})")
         c.close(); sys.exit(1)
 
-    run(c, f"cd {REMOTE} && docker compose up -d backend frontend", label="restart")
+    run(c, f"cd {REMOTE} && docker compose up -d {' '.join(services)}", label="restart")
 
     print("\n... waiting 8s ...")
     time.sleep(8)

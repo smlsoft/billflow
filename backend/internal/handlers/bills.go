@@ -304,7 +304,11 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
 
 	cfg := h.shopeePurchaseConfig()
 	docDate := time.Now().Format("2006-01-02")
-	payload := sml.BuildPurchaseOrderPayload("", docDate, items, cfg)
+	// SML purchaseorder requires a non-null doc_no (unlike saleinvoice which
+	// auto-generates one). Build a stable BF-prefixed code derived from the
+	// bill's UUID prefix. Format: "BF-PO-YYYYMMDD-XXXXXXXX" (20 chars).
+	reqDocNo := fmt.Sprintf("BF-PO-%s-%s", time.Now().Format("20060102"), bill.ID[:8])
+	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, items, cfg)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -324,7 +328,13 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
 	}
 
 	respJSON, _ := json.Marshal(resp)
+	// SML purchaseorder returns success but with an empty doc_no field —
+	// fall back to the doc_no we generated client-side so the bill is
+	// still trackable in the UI.
 	docNo := resp.GetDocNo()
+	if docNo == "" {
+		docNo = reqDocNo
+	}
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccess(c, id, bill.Source, reqJSON, respJSON, docNo, start)
