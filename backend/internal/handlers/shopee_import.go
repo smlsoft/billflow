@@ -15,24 +15,45 @@ import (
 	"billflow/internal/config"
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/catalog"
 	"billflow/internal/services/sml"
 )
 
-// ShopeeImportHandler handles Shopee Excel import via saleinvoice REST API (SML 224).
+// ShopeeImportHandler handles Shopee Excel import.
+//
+// Behavior change (2026-04-27): Confirm no longer pushes to SML inline.
+// Bills are created with catalog-matched items and saved as pending /
+// needs_review; the user reviews them in BillDetail and clicks "ส่ง SML",
+// which routes through bills.go retrySaleInvoice (same path as Shopee
+// email orders). This unifies all manual-confirm flows.
 type ShopeeImportHandler struct {
-	billRepo  *repository.BillRepo
-	auditRepo *repository.AuditLogRepo
-	cfg       *config.Config
-	logger    *zap.Logger
+	billRepo    *repository.BillRepo
+	auditRepo   *repository.AuditLogRepo
+	cfg         *config.Config
+	catalogSvc  *catalog.SMLCatalogService
+	embSvc      *catalog.EmbeddingService
+	catalogIdx  *catalog.CatalogIndex
+	logger      *zap.Logger
 }
 
 func NewShopeeImportHandler(
 	billRepo *repository.BillRepo,
 	auditRepo *repository.AuditLogRepo,
 	cfg *config.Config,
+	catalogSvc *catalog.SMLCatalogService,
+	embSvc *catalog.EmbeddingService,
+	catalogIdx *catalog.CatalogIndex,
 	logger *zap.Logger,
 ) *ShopeeImportHandler {
-	return &ShopeeImportHandler{billRepo: billRepo, auditRepo: auditRepo, cfg: cfg, logger: logger}
+	return &ShopeeImportHandler{
+		billRepo:   billRepo,
+		auditRepo:  auditRepo,
+		cfg:        cfg,
+		catalogSvc: catalogSvc,
+		embSvc:     embSvc,
+		catalogIdx: catalogIdx,
+		logger:     logger,
+	}
 }
 
 // ─── Shopee column name candidates ───────────────────────────────────────────
@@ -212,33 +233,15 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		return
 	}
 
-	// Build set of selected order IDs
 	selectedSet := make(map[string]bool, len(req.OrderIDs))
 	for _, id := range req.OrderIDs {
 		selectedSet[id] = true
 	}
 
-	// Build SML invoice client from request config
-	invoiceCfg := sml.InvoiceConfig{
-		BaseURL:    req.Config.ServerURL,
-		GUID:       req.Config.GUID,
-		Provider:   req.Config.Provider,
-		ConfigFile: req.Config.ConfigFile,
-		Database:   req.Config.Database,
-		DocFormat:  req.Config.DocFormat,
-		CustCode:   req.Config.CustCode,
-		SaleCode:   req.Config.SaleCode,
-		BranchCode: req.Config.BranchCode,
-		WHCode:     req.Config.WHCode,
-		ShelfCode:  req.Config.ShelfCode,
-		UnitCode:   req.Config.UnitCode,
-		VATType:    req.Config.VATType,
-		VATRate:    req.Config.VATRate,
-		DocTime:    req.Config.DocTime,
-	}
-	invoiceClient := sml.NewInvoiceClient(invoiceCfg, h.logger)
+	// Default unit code from the request config; used as a fallback when
+	// catalog matching doesn't pick a specific unit.
+	defaultUnit := req.Config.UnitCode
 
-	// Get user from JWT for audit
 	var userID *string
 	if uid := c.GetString("user_id"); uid != "" {
 		userID = &uid
@@ -246,23 +249,8 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 	traceID := c.GetString("trace_id")
 	confirmStart := time.Now()
 
-	// Pre-fetch product info for all unique SKUs (product cache)
-	productCache := map[string]*sml.ProductInfo{}
-	for _, order := range req.Orders {
-		if !selectedSet[order.OrderID] {
-			continue
-		}
-		for _, item := range order.Items {
-			if _, seen := productCache[item.SKU]; !seen {
-				prod, err := invoiceClient.GetProduct(item.SKU)
-				if err != nil {
-					h.logger.Warn("GetProduct failed", zap.String("sku", item.SKU), zap.Error(err))
-					prod = nil
-				}
-				productCache[item.SKU] = prod // nil is ok — will use config fallbacks
-			}
-		}
-	}
+	const topK = 5
+	const highConfThreshold = 0.85
 
 	results := []ConfirmResult{}
 
@@ -270,8 +258,6 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		if !selectedSet[order.OrderID] {
 			continue
 		}
-
-		// Skip duplicates
 		if exists, _ := h.existsShopeeOrder(order.OrderID); exists {
 			results = append(results, ConfirmResult{
 				OrderID: order.OrderID,
@@ -281,18 +267,84 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			continue
 		}
 
-		// Save bill as pending first so we have a stable bill.ID to base
-		// the SML doc_no on.
+		// Catalog match each item BEFORE creating the bill so we know the
+		// final status (pending vs needs_review).
+		type itemEnriched struct {
+			item       models.BillItem
+			candidates []models.CatalogMatch
+		}
+		var enriched []itemEnriched
+		allHigh := true
+
+		for _, it := range order.Items {
+			var matches []models.CatalogMatch
+			if h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
+				if emb, err := h.embSvc.EmbedText(it.ProductName); err == nil {
+					matches = h.catalogIdx.Search(emb, topK)
+				}
+			}
+			if len(matches) == 0 && h.catalogSvc != nil {
+				matches, _ = h.catalogSvc.SearchByText(it.ProductName, topK)
+			}
+
+			price := it.Price
+			bi := models.BillItem{
+				RawName: it.ProductName,
+				Qty:     it.Qty,
+				Price:   &price,
+			}
+
+			// Priority: catalog top score ≥ 0.85 wins; else use Excel SKU
+			// as best guess (mapped=false), keeps existing behaviour for
+			// sellers whose Shopee SKUs already equal their SML codes.
+			switch {
+			case len(matches) > 0 && matches[0].Score >= highConfThreshold:
+				bi.ItemCode = &matches[0].ItemCode
+				unit := matches[0].UnitCode
+				if unit == "" {
+					unit = defaultUnit
+				}
+				bi.UnitCode = &unit
+				bi.Mapped = true
+			case it.SKU != "":
+				sku := it.SKU
+				bi.ItemCode = &sku
+				unit := defaultUnit
+				bi.UnitCode = &unit
+				bi.Mapped = false
+				allHigh = false
+			default:
+				if len(matches) > 0 {
+					bi.ItemCode = &matches[0].ItemCode
+					unit := matches[0].UnitCode
+					if unit == "" {
+						unit = defaultUnit
+					}
+					bi.UnitCode = &unit
+				}
+				bi.Mapped = false
+				allHigh = false
+			}
+
+			enriched = append(enriched, itemEnriched{item: bi, candidates: matches})
+		}
+
+		status := "pending"
+		if !allHigh {
+			status = "needs_review"
+		}
+
 		aiConf := 1.0
 		rawData, _ := json.Marshal(map[string]interface{}{
-			"order_id": order.OrderID,
-			"doc_date": order.DocDate,
-			"status":   order.Status,
+			"order_id":     order.OrderID,
+			"doc_date":     order.DocDate,
+			"status":       order.Status,
+			"shopee_excel": true,
 		})
 		bill := &models.Bill{
 			BillType:     "sale",
 			Source:       "shopee",
-			Status:       "pending",
+			Status:       status,
 			AIConfidence: &aiConf,
 			RawData:      rawData,
 			SMLOrderID:   order.OrderID,
@@ -310,113 +362,18 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			continue
 		}
 
-		// Insert bill items
-		for _, item := range order.Items {
-			bi := &models.BillItem{
-				BillID:   bill.ID,
-				RawName:  item.ProductName,
-				ItemCode: strPtr(item.SKU),
-				Qty:      item.Qty,
-				UnitCode: strPtr(invoiceCfg.UnitCode),
-				Price:    &item.Price,
-				Mapped:   true,
-			}
-			_ = h.billRepo.InsertItem(bi)
+		for i := range enriched {
+			enriched[i].item.BillID = bill.ID
+			candidatesJSON, _ := json.Marshal(enriched[i].candidates)
+			_ = h.billRepo.InsertItemWithCandidates(&enriched[i].item, candidatesJSON)
 		}
 
-		// Build saleinvoice payload with a BF-prefixed doc_no derived from
-		// the bill UUID. The SML saleinvoice endpoint requires a non-empty
-		// doc_no ("JSONObject[\"doc_no\"] not found." otherwise) and using
-		// the bill ID guarantees uniqueness across retries on the same bill.
-		reqDocNo := fmt.Sprintf("BF-INV-%s-%s", time.Now().Format("20060102"), bill.ID[:8])
-		payload := sml.BuildInvoicePayload(
-			reqDocNo,
-			order.DocDate,
-			order.Items,
-			invoiceCfg,
-			productCache,
-		)
-		payloadJSON, _ := json.Marshal(payload)
-
-		// Store SML payload
-		_ = h.billRepo.UpdateSMLPayload(bill.ID, payloadJSON)
-
-		// Call SML saleinvoice
-		var lastErr error
-		var smlResp *sml.InvoiceResponse
-		var statusCode int
-
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				waitSecs := []int{1, 3, 5}[attempt-1]
-				time.Sleep(time.Duration(waitSecs) * time.Second)
-			}
-			statusCode, smlResp, lastErr = invoiceClient.CreateInvoice(payload)
-			if lastErr == nil && smlResp != nil && smlResp.IsSuccess() {
-				break
-			}
-		}
-
-		smlRespJSON, _ := json.Marshal(smlResp)
-
-		if lastErr != nil || smlResp == nil || !smlResp.IsSuccess() {
-			errMsg := "SML ไม่ตอบสนอง"
-			if lastErr != nil {
-				errMsg = lastErr.Error()
-			} else if smlResp != nil {
-				errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, smlResp.Message)
-			}
-			_ = h.billRepo.UpdateStatus(bill.ID, "failed", nil, smlRespJSON, &errMsg)
-			results = append(results, ConfirmResult{
-				OrderID: order.OrderID,
-				Success: false,
-				Message: errMsg,
-				BillID:  bill.ID,
-			})
-			h.logger.Error("saleinvoice failed",
-				zap.String("order_id", order.OrderID),
-				zap.String("bill_id", bill.ID),
-				zap.String("error", errMsg),
-			)
-			if h.auditRepo != nil {
-				billIDStr := bill.ID
-				durMs := int(time.Since(confirmStart).Milliseconds())
-				_ = h.auditRepo.Log(models.AuditEntry{
-					Action:     "sml_failed",
-					TargetID:   &billIDStr,
-					UserID:     userID,
-					Source:     "shopee_excel",
-					Level:      "error",
-					TraceID:    traceID,
-					DurationMs: &durMs,
-					Detail: map[string]interface{}{
-						"order_id":     order.OrderID,
-						"error":        errMsg,
-						"sml_payload":  json.RawMessage(payloadJSON),
-						"sml_response": json.RawMessage(smlRespJSON),
-					},
-				})
-			}
-			continue
-		}
-
-		// Success — fall back to the client-generated doc_no if SML doesn't echo one back.
-		docNo := smlResp.GetDocNo()
-		if docNo == "" {
-			docNo = reqDocNo
-		}
-		_ = h.billRepo.UpdateStatus(bill.ID, "sent", &docNo, smlRespJSON, nil)
-		// Update price history for this bill's items
-		fullBill, err := h.billRepo.FindByID(bill.ID)
-		if err == nil && fullBill != nil {
-			_ = h.billRepo.UpdatePriceHistory(fullBill.Items)
-		}
-
+		// Audit log — bill created (no SML call, that happens later via Retry)
 		if h.auditRepo != nil {
 			billIDStr := bill.ID
 			durMs := int(time.Since(confirmStart).Milliseconds())
 			_ = h.auditRepo.Log(models.AuditEntry{
-				Action:     "sml_sent",
+				Action:     "bill_created",
 				TargetID:   &billIDStr,
 				UserID:     userID,
 				Source:     "shopee_excel",
@@ -424,10 +381,10 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 				TraceID:    traceID,
 				DurationMs: &durMs,
 				Detail: map[string]interface{}{
-					"order_id":     order.OrderID,
-					"doc_no":       docNo,
-					"sml_payload":  json.RawMessage(payloadJSON),
-					"sml_response": json.RawMessage(smlRespJSON),
+					"order_id":      order.OrderID,
+					"items_count":   len(enriched),
+					"all_high_conf": allHigh,
+					"status":        status,
 				},
 			})
 		}
@@ -435,13 +392,13 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		results = append(results, ConfirmResult{
 			OrderID: order.OrderID,
 			Success: true,
-			DocNo:   docNo,
-			Message: smlResp.Message,
 			BillID:  bill.ID,
+			Message: fmt.Sprintf("สร้างบิลแล้ว (status=%s) — รอตรวจสอบใน /bills", status),
 		})
-		h.logger.Info("saleinvoice sent",
+		h.logger.Info("shopee_excel: bill created",
 			zap.String("order_id", order.OrderID),
-			zap.String("doc_no", docNo),
+			zap.String("bill_id", bill.ID),
+			zap.String("status", status),
 		)
 	}
 
@@ -474,6 +431,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		"success_count": successCount,
 		"fail_count":    len(results) - successCount,
 		"total":         len(results),
+		"message":       "บิลถูกสร้างแล้ว — กรุณาเข้าไปตรวจสอบและกดยืนยันส่งใน /bills",
 	})
 }
 

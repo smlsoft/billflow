@@ -419,6 +419,93 @@ function AddItemForm({
   )
 }
 
+// ─── Catalog metadata cache + lookup helper ───────────────────────────────────
+//
+// Sources of (item_name, score) for a row, in priority order:
+//   1. The item's `candidates` JSON — saved at extraction time, contains
+//      item_name + score from the embedding search.
+//   2. Lazy fetch /api/catalog/:code — for codes the user picked manually
+//      via MapItemModal that are not in candidates.
+//
+// Cache keyed by item_code so we don't re-fetch on every render or for
+// duplicate codes within the same bill.
+const catalogMetaCache = new Map<string, { item_name: string; price?: number | null; unit_code?: string }>()
+
+interface MatchInfo {
+  itemName: string | null
+  score: number | null     // 0..1, null if user-picked code outside candidates
+  catalogPrice: number | null
+}
+
+function useMatchInfo(item: BillItem): MatchInfo {
+  const code = item.item_code ?? ''
+  const candidate = (item.candidates ?? []).find((c) => c.item_code === code)
+  const [fetched, setFetched] = useState<{ item_name: string; price?: number | null } | null>(
+    () => (code && catalogMetaCache.has(code) ? catalogMetaCache.get(code) ?? null : null)
+  )
+
+  useEffect(() => {
+    if (!code || candidate) return
+    if (catalogMetaCache.has(code)) {
+      setFetched(catalogMetaCache.get(code) ?? null)
+      return
+    }
+    let cancelled = false
+    api
+      .get<{ item_name: string; price?: number | null }>(`/api/catalog/${encodeURIComponent(code)}`)
+      .then((res) => {
+        if (cancelled) return
+        const meta = { item_name: res.data.item_name, price: res.data.price }
+        catalogMetaCache.set(code, meta)
+        setFetched(meta)
+      })
+      .catch(() => { /* code not in catalog (user-typed?) — leave blank */ })
+    return () => { cancelled = true }
+  }, [code, candidate])
+
+  if (candidate) {
+    return {
+      itemName: candidate.item_name,
+      score: candidate.score,
+      catalogPrice: typeof (candidate as { price?: number }).price === 'number'
+        ? (candidate as { price?: number }).price ?? null
+        : null,
+    }
+  }
+  return { itemName: fetched?.item_name ?? null, score: null, catalogPrice: fetched?.price ?? null }
+}
+
+// Score → color + label
+function scoreStyle(score: number | null) {
+  if (score == null) return { color: '#94a3b8', bg: '#f1f5f9', label: 'manual', icon: '✎' }
+  const pct = Math.round(score * 100)
+  if (score >= 0.95) return { color: '#15803d', bg: '#dcfce7', label: `${pct}%`, icon: '✓' }
+  if (score >= 0.85) return { color: '#15803d', bg: '#dcfce7', label: `${pct}%`, icon: '✓' }
+  if (score >= 0.60) return { color: '#a16207', bg: '#fef3c7', label: `${pct}%`, icon: '⚠' }
+  return { color: '#b91c1c', bg: '#fee2e2', label: `${pct}%`, icon: '⚠' }
+}
+
+function MatchBadge({ score }: { score: number | null }) {
+  const s = scoreStyle(score)
+  const tooltip = score == null
+    ? 'รหัสนี้ไม่อยู่ใน top-5 catalog candidates ที่ระบบหาให้ — น่าจะแก้ผ่าน MapItemModal'
+    : `ความใกล้เคียงกับ catalog (จาก embedding cosine similarity): ${s.label}`
+  return (
+    <span
+      title={tooltip}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '2px 8px', borderRadius: 12,
+        background: s.bg, color: s.color,
+        fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap',
+      }}
+    >
+      <span>{s.icon}</span>
+      <span>{s.label}</span>
+    </span>
+  )
+}
+
 // ─── Editable item row ───────────────────────────────────────────────────────
 function ItemRow({
   item,
@@ -499,25 +586,44 @@ function ItemRow({
     }
   }
 
+  const matchInfo = useMatchInfo(item)
+  // Catalog vs bill price diff warning — flag if > 30% off and we have both sides
+  const billPrice = item.price ?? 0
+  const catalogPrice = matchInfo.catalogPrice ?? 0
+  const priceMismatch =
+    billPrice > 0 && catalogPrice > 0 &&
+    Math.abs(billPrice - catalogPrice) / catalogPrice > 0.3
+
   if (!editing) {
     return (
       <tr>
-        <td>{item.raw_name}</td>
+        <td style={{ maxWidth: 280 }}>{item.raw_name}</td>
         <td>
           {item.item_code
             ? <span className="bill-item-code">{item.item_code}</span>
             : <span className="bill-item-code bill-item-code--empty">—</span>}
         </td>
-        <td className="text-right">{item.qty}</td>
-        <td>{item.unit_code || '—'}</td>
-        <td className="text-right bill-item-amount">฿{(item.price ?? 0).toLocaleString()}</td>
-        <td className="text-right bill-item-amount">
-          ฿{((item.qty ?? 0) * (item.price ?? 0)).toLocaleString()}
+        <td style={{ maxWidth: 260, color: matchInfo.itemName ? '#0f172a' : '#94a3b8' }}>
+          {matchInfo.itemName ?? '—'}
         </td>
         <td className="text-center">
-          <span className={`badge ${item.mapped ? 'badge-success' : 'badge-warning'}`}>
-            {item.mapped ? 'จับคู่แล้ว' : 'ยังไม่จับคู่'}
-          </span>
+          <MatchBadge score={matchInfo.score} />
+        </td>
+        <td className="text-right">{item.qty}</td>
+        <td>{item.unit_code || '—'}</td>
+        <td className="text-right bill-item-amount">
+          ฿{(item.price ?? 0).toLocaleString()}
+          {priceMismatch && (
+            <div
+              title={`Catalog ราคา ฿${catalogPrice.toLocaleString()} — ต่างจากบิล ${Math.round(Math.abs(billPrice - catalogPrice) / catalogPrice * 100)}%`}
+              style={{ fontSize: '0.7rem', color: '#a16207', marginTop: 2 }}
+            >
+              ⚠ catalog ฿{catalogPrice.toLocaleString()}
+            </div>
+          )}
+        </td>
+        <td className="text-right bill-item-amount">
+          ฿{((item.qty ?? 0) * (item.price ?? 0)).toLocaleString()}
         </td>
         {editable && (
           <td className="text-center" style={{ whiteSpace: 'nowrap' }}>
@@ -553,7 +659,7 @@ function ItemRow({
         />
       )}
       <tr>
-        <td>{item.raw_name}</td>
+        <td style={{ maxWidth: 280 }}>{item.raw_name}</td>
         <td>
           <button
             type="button"
@@ -566,6 +672,12 @@ function ItemRow({
               ? <span style={{ fontFamily: 'monospace' }}>{draft.item_code}</span>
               : <span style={{ color: '#94a3b8' }}>เลือกสินค้า...</span>}
           </button>
+        </td>
+        <td style={{ maxWidth: 260, color: matchInfo.itemName ? '#0f172a' : '#94a3b8' }}>
+          {matchInfo.itemName ?? '—'}
+        </td>
+        <td className="text-center">
+          <MatchBadge score={matchInfo.score} />
         </td>
         <td className="text-right">
           <input
@@ -597,9 +709,6 @@ function ItemRow({
         </td>
         <td className="text-right bill-item-amount">
           ฿{(Number(draft.qty || 0) * Number(draft.price || 0)).toLocaleString()}
-        </td>
-        <td className="text-center">
-          <span className="badge badge-warning">กำลังแก้ไข</span>
         </td>
         <td className="text-center" style={{ whiteSpace: 'nowrap' }}>
           <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={handleSave}>
@@ -757,14 +866,15 @@ export default function BillDetail() {
         <table className="bill-items-table">
           <thead>
             <tr>
-              <th>ชื่อสินค้า</th>
+              <th>ชื่อสินค้า (จาก source)</th>
               <th>Item Code</th>
+              <th>SML Item Name</th>
+              <th className="text-center">Match</th>
               <th className="text-right">จำนวน</th>
               <th>หน่วย</th>
               <th className="text-right">ราคา/หน่วย</th>
               <th className="text-right">รวม</th>
-              <th className="text-center">Mapping</th>
-              {canEdit && <th className="text-center">แก้ไข</th>}
+              {canEdit && <th className="text-center">จัดการ</th>}
             </tr>
           </thead>
           <tbody>

@@ -18,7 +18,7 @@ interface PreviewResponse {
   orders: ShopeeOrder[]; warnings: string[]
   total_orders: number; duplicate_count: number; skipped_count: number
 }
-interface ConfirmResult { order_id: string; success: boolean; doc_no?: string; message?: string }
+interface ConfirmResult { order_id: string; success: boolean; bill_id?: string; doc_no?: string; message?: string }
 
 function fmt(n: number) { return n.toLocaleString('th-TH', { minimumFractionDigits: 2 }) }
 
@@ -327,37 +327,47 @@ export default function ShopeeImport() {
       )}
 
       {step === 'confirming' && (
-        <div className="shopee-processing">กำลังส่งข้อมูลไป SML... กรุณารอสักครู่</div>
+        <div className="shopee-processing">กำลังบันทึกบิล... กรุณารอสักครู่</div>
       )}
 
       {step === 'done' && results && (
         <>
+          <div className="alert" style={{
+            background: '#eff6ff', borderLeft: '3px solid #3b82f6', color: '#1e40af',
+            padding: 12, borderRadius: 6, marginBottom: 16, fontSize: '0.9rem',
+          }}>
+            ✅ <strong>สร้างบิลแล้ว {results.success_count} รายการ</strong> — ระบบจะ map สินค้าให้เบื้องต้น
+            แต่ <strong>ยังไม่ส่ง SML</strong>{' '}
+            กรุณาเข้าไปตรวจสอบรายการสินค้า + แก้ไขให้ถูกต้อง แล้วกด "ยืนยันและส่งไปยัง SML" ในหน้าบิลแต่ละใบ
+          </div>
           <div className="shopee-summary-row">
-            <SummaryCard label="สำเร็จ" value={results.success_count} colorClass="shopee-result-success" />
-            <SummaryCard label="ล้มเหลว" value={results.fail_count} colorClass="shopee-result-fail" />
+            <SummaryCard label="สร้างบิลสำเร็จ" value={results.success_count} colorClass="shopee-result-success" />
+            <SummaryCard label="ข้าม / ล้มเหลว" value={results.fail_count} colorClass="shopee-result-fail" />
             <SummaryCard label="ทั้งหมด" value={results.results.length} colorClass="shopee-result-total" />
           </div>
           <div className="shopee-result-actions">
-            <button type="button" className="btn btn-primary" onClick={() => { setStep('idle'); setPreview(null); setResults(null) }}>
+            <a href="/bills?source=shopee" className="btn btn-primary">ไปตรวจสอบบิลที่สร้าง →</a>
+            <button type="button" className="btn btn-ghost" onClick={() => { setStep('idle'); setPreview(null); setResults(null) }}>
               นำเข้าไฟล์ใหม่
             </button>
-            <a href="/bills?source=shopee" className="btn btn-secondary">ดูบิล Shopee ทั้งหมด →</a>
           </div>
           <div className="shopee-table-wrap">
             <table className="shopee-table">
               <thead>
-                <tr><th>Order ID</th><th>ผล</th><th>Doc No / ข้อความ</th></tr>
+                <tr><th>Order ID</th><th>ผล</th><th>หมายเหตุ</th></tr>
               </thead>
               <tbody>
                 {results.results.map((r) => (
                   <tr key={r.order_id}>
                     <td><span className="shopee-detail-sku">{r.order_id}</span></td>
                     <td>
-                      <span className={r.success ? 'shopee-result-ok' : 'shopee-result-fail-text'}>
-                        {r.success ? 'สำเร็จ' : 'ล้มเหลว'}
-                      </span>
+                      {r.success
+                        ? r.bill_id
+                          ? <a href={`/bills/${r.bill_id}`} className="shopee-result-ok" style={{ textDecoration: 'underline' }}>เปิดบิล →</a>
+                          : <span className="shopee-result-ok">สำเร็จ</span>
+                        : <span className="shopee-result-fail-text">ข้าม / ล้มเหลว</span>}
                     </td>
-                    <td>{r.doc_no ?? r.message}</td>
+                    <td>{r.message}</td>
                   </tr>
                 ))}
               </tbody>
