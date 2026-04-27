@@ -18,9 +18,9 @@ if not PASS:
     sys.exit(1)
 
 # Files to sync (matches the commit)
-FILES = [
-    "frontend/src/pages/BillDetail.tsx",
-]
+# Phase 3a-d release: sync the entire frontend/src tree + config to wipe
+# legacy CSS files cleanly. Easier than hand-listing every file.
+FILES = ["frontend"]
 
 
 def run(client, cmd, label=None, timeout=900):
@@ -45,7 +45,14 @@ def main():
               allow_agent=False, look_for_keys=False)
     print("✓ connected")
 
-    # Build tar of changed files in memory
+    # Build tar of changed files in memory.
+    # Exclude heavyweight dirs that the Docker build can regenerate.
+    SKIP = {"node_modules", "dist", ".git", "backups", "artifacts", "__pycache__"}
+
+    def tar_filter(info):
+        parts = set(info.name.replace("\\", "/").split("/"))
+        return None if parts & SKIP else info
+
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for f in FILES:
@@ -53,7 +60,7 @@ def main():
             if not os.path.exists(local):
                 print(f"⚠️  missing: {f}")
                 continue
-            tar.add(local, arcname=f.replace("\\", "/"))
+            tar.add(local, arcname=f.replace("\\", "/"), filter=tar_filter)
     buf.seek(0)
     print(f"\ntar: {len(buf.getvalue()):,} bytes")
 
@@ -63,13 +70,36 @@ def main():
     sftp.close()
     print("✓ uploaded")
 
+    # Remove legacy CSS files that have been deleted locally — the tar only
+    # adds files, never removes. Matches every page+component .css that the
+    # redesign retired so orphans don't get bundled by Vite.
+    LEGACY_CSS = [
+        "frontend/src/components/Layout.css",
+        "frontend/src/components/StatsCard.css",
+        "frontend/src/components/InsightCard.css",
+        "frontend/src/components/LearningProgress.css",
+        "frontend/src/components/BillStatusBadge.css",
+        "frontend/src/components/BillTable.css",
+        "frontend/src/pages/Login.css",
+        "frontend/src/pages/Dashboard.css",
+        "frontend/src/pages/Bills.css",
+        "frontend/src/pages/Mappings.css",
+        "frontend/src/pages/Logs.css",
+        "frontend/src/pages/Import.css",
+        "frontend/src/pages/ShopeeImport.css",
+        "frontend/src/pages/Settings.css",
+        "frontend/src/pages/CatalogSettings.css",
+    ]
+    rm_cmd = " && ".join(f"rm -f {REMOTE}/{p}" for p in LEGACY_CSS)
+    run(c, rm_cmd, label="remove orphan legacy CSS")
+
     run(c, f"cd {REMOTE} && tar -xzf /tmp/billflow-deploy.tar.gz && rm /tmp/billflow-deploy.tar.gz",
         label="extract")
     run(c, f"mkdir -p {REMOTE}/backups {REMOTE}/artifacts", label="ensure backups + artifacts dirs")
 
     # Rebuild only what's needed based on file paths
-    has_backend_change = any(f.startswith("backend/") for f in FILES)
-    has_frontend_change = any(f.startswith("frontend/") for f in FILES)
+    has_backend_change = any(f == "backend" or f.startswith("backend/") for f in FILES)
+    has_frontend_change = any(f == "frontend" or f.startswith("frontend/") for f in FILES)
     services = []
     if has_backend_change: services.append("backend")
     if has_frontend_change: services.append("frontend")
