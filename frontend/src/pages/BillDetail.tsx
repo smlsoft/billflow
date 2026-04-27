@@ -47,6 +47,260 @@ function JsonSection({ label, data }: { label: string; data: unknown }) {
   )
 }
 
+// ─── Map item modal: search catalog + create new product ────────────────────
+function MapItemModal({
+  rawName,
+  currentCode,
+  currentUnit,
+  currentPrice,
+  onPick,
+  onClose,
+}: {
+  rawName: string
+  currentCode: string
+  currentUnit: string
+  currentPrice: number
+  onPick: (code: string, unitCode: string) => void
+  onClose: () => void
+}) {
+  const [view, setView] = useState<'search' | 'create'>('search')
+  // search state
+  const [query, setQuery] = useState(rawName.slice(0, 80))
+  const [results, setResults] = useState<CatalogMatch[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  // create-product form state
+  const [form, setForm] = useState({
+    code: '',
+    name: rawName.slice(0, 80),
+    unit_code: currentUnit || 'ชิ้น',
+    price: String(currentPrice || 0),
+  })
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState('')
+
+  // Debounced search → /api/catalog/search
+  useEffect(() => {
+    if (view !== 'search') return
+    const q = query.trim()
+    if (q.length < 2) {
+      setResults([])
+      return
+    }
+    const handle = setTimeout(async () => {
+      setSearching(true)
+      setSearchError('')
+      try {
+        const res = await api.get<{ results: CatalogMatch[] }>(`/api/catalog/search`, {
+          params: { q, top: 10 },
+        })
+        setResults(res.data.results ?? [])
+      } catch (err: unknown) {
+        setSearchError(err instanceof Error ? err.message : 'search failed')
+      } finally {
+        setSearching(false)
+      }
+    }, 300)
+    return () => clearTimeout(handle)
+  }, [query, view])
+
+  const handleCreate = async () => {
+    setCreating(true)
+    setCreateError('')
+    try {
+      const payload = {
+        code: form.code.trim(),
+        name: form.name.trim(),
+        unit_code: form.unit_code.trim(),
+        price: Number(form.price) || 0,
+      }
+      const res = await api.post<{ code: string; unit_code: string }>(
+        '/api/catalog/products',
+        payload,
+      )
+      onPick(res.data.code, res.data.unit_code)
+      onClose()
+    } catch (err: unknown) {
+      // axios error shape — try to extract server message
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      setCreateError(e?.response?.data?.error || e?.message || 'create failed')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  function scoreBorder(score: number) {
+    if (score >= 0.85) return '#22c55e'
+    if (score >= 0.6) return '#f59e0b'
+    return '#ef4444'
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'white', borderRadius: 12, padding: 24, width: '100%',
+          maxWidth: 640, maxHeight: '90vh', overflow: 'auto',
+          boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
+            {view === 'search' ? 'เลือกสินค้าจาก SML Catalog' : 'สร้างสินค้าใหม่'}
+          </h3>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+
+        <div style={{ marginBottom: 16, padding: 12, background: '#f8fafc', borderRadius: 6, fontSize: '0.85rem' }}>
+          <div style={{ color: '#64748b', marginBottom: 4 }}>ชื่อสินค้า (raw):</div>
+          <div style={{ color: '#0f172a', fontWeight: 500, wordBreak: 'break-word' }}>{rawName}</div>
+          {currentCode && (
+            <div style={{ marginTop: 6, color: '#64748b', fontSize: '0.8rem' }}>
+              ปัจจุบัน: <code style={{ color: '#0f172a' }}>{currentCode}</code> ({currentUnit || '—'})
+            </div>
+          )}
+        </div>
+
+        {view === 'search' ? (
+          <>
+            <input
+              className="form-input"
+              autoFocus
+              placeholder="ค้นหาด้วยชื่อสินค้า..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={{ width: '100%', marginBottom: 12 }}
+            />
+
+            {searching && <div style={{ color: '#64748b', fontSize: '0.85rem' }}>กำลังค้นหา...</div>}
+            {searchError && <div className="alert alert-danger">{searchError}</div>}
+
+            {!searching && results.length === 0 && query.trim().length >= 2 && (
+              <div style={{ padding: 16, textAlign: 'center', color: '#64748b', background: '#f8fafc', borderRadius: 6 }}>
+                ไม่พบสินค้าที่ตรง
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+              {results.map((r) => (
+                <button
+                  key={r.item_code}
+                  type="button"
+                  onClick={() => { onPick(r.item_code, r.unit_code); onClose() }}
+                  style={{
+                    textAlign: 'left',
+                    padding: 10,
+                    border: `2px solid ${scoreBorder(r.score)}`,
+                    borderRadius: 6,
+                    background: 'white',
+                    cursor: 'pointer',
+                    fontSize: '0.9rem',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, color: '#0f172a' }}>{r.item_code}</div>
+                  <div style={{ color: '#475569', marginTop: 2 }}>{r.item_name}</div>
+                  <div style={{ marginTop: 4, fontSize: '0.75rem', color: '#64748b' }}>
+                    หน่วย: {r.unit_code || '—'} · score: {(r.score * 100).toFixed(0)}%
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div style={{
+              borderTop: '1px solid #e2e8f0', paddingTop: 12, display: 'flex',
+              justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <span style={{ fontSize: '0.85rem', color: '#64748b' }}>ไม่เจอที่ตรง?</span>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  // Pre-fill form with sensible defaults
+                  setForm((f) => ({ ...f, name: query.trim() || rawName.slice(0, 80) }))
+                  setView('create')
+                }}
+              >
+                + สร้างสินค้าใหม่
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ fontSize: '0.85rem', color: '#475569' }}>
+                รหัสสินค้า (Item Code) <span style={{ color: '#ef4444' }}>*</span>
+                <input
+                  className="form-input"
+                  autoFocus
+                  value={form.code}
+                  placeholder="เช่น CON-99001 หรือ INGU-VIT-30ML"
+                  onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                  style={{ width: '100%', marginTop: 4 }}
+                />
+              </label>
+              <label style={{ fontSize: '0.85rem', color: '#475569' }}>
+                ชื่อสินค้า <span style={{ color: '#ef4444' }}>*</span>
+                <input
+                  className="form-input"
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  style={{ width: '100%', marginTop: 4 }}
+                />
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <label style={{ fontSize: '0.85rem', color: '#475569' }}>
+                  หน่วย <span style={{ color: '#ef4444' }}>*</span>
+                  <input
+                    className="form-input"
+                    value={form.unit_code}
+                    placeholder="เช่น ชิ้น, ถุง, กระป๋อง"
+                    onChange={(e) => setForm((f) => ({ ...f, unit_code: e.target.value }))}
+                    style={{ width: '100%', marginTop: 4 }}
+                  />
+                </label>
+                <label style={{ fontSize: '0.85rem', color: '#475569' }}>
+                  ราคา/หน่วย
+                  <input
+                    className="form-input"
+                    type="number"
+                    step="any"
+                    value={form.price}
+                    onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                    style={{ width: '100%', marginTop: 4 }}
+                  />
+                </label>
+              </div>
+
+              {createError && <div className="alert alert-danger">{createError}</div>}
+            </div>
+
+            <div style={{ marginTop: 20, display: 'flex', justifyContent: 'space-between' }}>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={creating} onClick={() => setView('search')}>
+                ← กลับไปค้นหา
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={creating || !form.code.trim() || !form.name.trim() || !form.unit_code.trim()}
+                onClick={handleCreate}
+              >
+                {creating ? 'กำลังสร้าง...' : 'สร้างและเลือกสินค้านี้'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Editable item row ───────────────────────────────────────────────────────
 function ItemRow({
   item,
@@ -61,6 +315,7 @@ function ItemRow({
 }) {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [showMapModal, setShowMapModal] = useState(false)
   const [draft, setDraft] = useState({
     item_code: item.item_code ?? '',
     unit_code: item.unit_code ?? '',
@@ -135,61 +390,77 @@ function ItemRow({
   }
 
   return (
-    <tr>
-      <td>{item.raw_name}</td>
-      <td>
-        <input
-          className="form-input"
-          value={draft.item_code}
-          onChange={(e) => setDraft((d) => ({ ...d, item_code: e.target.value }))}
-          placeholder="SML item_code"
-          style={{ minWidth: 120 }}
+    <>
+      {showMapModal && (
+        <MapItemModal
+          rawName={item.raw_name}
+          currentCode={draft.item_code}
+          currentUnit={draft.unit_code}
+          currentPrice={Number(draft.price) || 0}
+          onPick={(code, unit) => setDraft((d) => ({ ...d, item_code: code, unit_code: unit || d.unit_code }))}
+          onClose={() => setShowMapModal(false)}
         />
-      </td>
-      <td className="text-right">
-        <input
-          className="form-input"
-          type="number"
-          step="any"
-          value={draft.qty}
-          onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
-          style={{ width: 80, textAlign: 'right' }}
-        />
-      </td>
-      <td>
-        <input
-          className="form-input"
-          value={draft.unit_code}
-          onChange={(e) => setDraft((d) => ({ ...d, unit_code: e.target.value }))}
-          style={{ width: 80 }}
-        />
-      </td>
-      <td className="text-right">
-        <input
-          className="form-input"
-          type="number"
-          step="any"
-          value={draft.price}
-          onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
-          style={{ width: 100, textAlign: 'right' }}
-        />
-      </td>
-      <td className="text-right bill-item-amount">
-        ฿{(Number(draft.qty || 0) * Number(draft.price || 0)).toLocaleString()}
-      </td>
-      <td className="text-center">
-        <span className="badge badge-warning">กำลังแก้ไข</span>
-      </td>
-      <td className="text-center" style={{ whiteSpace: 'nowrap' }}>
-        <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={handleSave}>
-          {saving ? '...' : 'บันทึก'}
-        </button>
-        {' '}
-        <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setEditing(false)}>
-          ยกเลิก
-        </button>
-      </td>
-    </tr>
+      )}
+      <tr>
+        <td>{item.raw_name}</td>
+        <td>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setShowMapModal(true)}
+            style={{ minWidth: 140, justifyContent: 'flex-start' }}
+            title="เปิดเพื่อค้นหาหรือสร้างสินค้าใหม่"
+          >
+            {draft.item_code
+              ? <span style={{ fontFamily: 'monospace' }}>{draft.item_code}</span>
+              : <span style={{ color: '#94a3b8' }}>เลือกสินค้า...</span>}
+          </button>
+        </td>
+        <td className="text-right">
+          <input
+            className="form-input"
+            type="number"
+            step="any"
+            value={draft.qty}
+            onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+            style={{ width: 80, textAlign: 'right' }}
+          />
+        </td>
+        <td>
+          <input
+            className="form-input"
+            value={draft.unit_code}
+            onChange={(e) => setDraft((d) => ({ ...d, unit_code: e.target.value }))}
+            style={{ width: 80 }}
+          />
+        </td>
+        <td className="text-right">
+          <input
+            className="form-input"
+            type="number"
+            step="any"
+            value={draft.price}
+            onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+            style={{ width: 100, textAlign: 'right' }}
+          />
+        </td>
+        <td className="text-right bill-item-amount">
+          ฿{(Number(draft.qty || 0) * Number(draft.price || 0)).toLocaleString()}
+        </td>
+        <td className="text-center">
+          <span className="badge badge-warning">กำลังแก้ไข</span>
+        </td>
+        <td className="text-center" style={{ whiteSpace: 'nowrap' }}>
+          <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={handleSave}>
+            {saving ? '...' : 'บันทึก'}
+          </button>
+          {' '}
+          <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setEditing(false)}>
+            ยกเลิก
+          </button>
+        </td>
+      </tr>
+    </>
   )
 }
 

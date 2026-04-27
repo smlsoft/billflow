@@ -102,6 +102,14 @@ func main() {
 	if shippedCustCode == "" {
 		shippedCustCode = cfg.ShopeeSMLCustCode
 	}
+	productClient := sml.NewProductClient(
+		cfg.ShopeeSMLURL,
+		cfg.ShopeeSMLGUID,
+		cfg.ShopeeSMLProvider,
+		cfg.ShopeeSMLConfigFile,
+		cfg.ShopeeSMLDatabase,
+		logger,
+	)
 	poClient := sml.NewPurchaseOrderClient(sml.PurchaseOrderConfig{
 		BaseURL:    cfg.ShopeeSMLURL,
 		GUID:       cfg.ShopeeSMLGUID,
@@ -197,7 +205,7 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, poClient, cfg, lineSvc, auditLogRepo, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, insightSvc, logger)
 	dashH.SetConfigStatus(
@@ -210,7 +218,7 @@ func main() {
 	lineH := handlers.NewLineHandler(lineSvc, aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, mcpClient, billRepo, auditLogRepo, chatRepo, pool, cfg.AutoConfirmThreshold, logger)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
-	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, cfg.AutoConfirmThreshold, logger)
+	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, cfg.AutoConfirmThreshold, logger)
 	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, cfg.AutoConfirmThreshold, logger)
 	shopeeH := handlers.NewShopeeImportHandler(billRepo, auditLogRepo, cfg, logger)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
@@ -270,6 +278,7 @@ func main() {
 		api.GET("/catalog/stats", catalogH.Stats)
 		api.GET("/catalog/search", catalogH.Search)
 		api.GET("/catalog/:code", catalogH.GetOne)
+		api.POST("/catalog/products", middleware.RequireRole("admin", "staff"), catalogH.CreateProduct)
 		api.POST("/catalog/sync", middleware.RequireRole("admin"), catalogH.SyncFromAPI)
 		api.POST("/catalog/import-csv", middleware.RequireRole("admin"), catalogH.ImportCSV)
 		api.POST("/catalog/embed-all", middleware.RequireRole("admin"), catalogH.EmbedAll)

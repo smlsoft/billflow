@@ -19,19 +19,12 @@ if not PASS:
 
 # Files to sync (matches the commit)
 FILES = [
-    ".env.example",
     "backend/cmd/server/main.go",
-    "backend/internal/config/config.go",
-    "backend/internal/database/migrations/004_shopee_shipped.sql",
+    "backend/internal/database/migrations/002_sml_catalog.sql",
     "backend/internal/handlers/bills.go",
-    "backend/internal/handlers/email.go",
-    "backend/internal/handlers/shipped_email.go",
-    "backend/internal/repository/bill_repo.go",
-    "backend/internal/services/email/imap.go",
-    "backend/internal/services/sml/purchaseorder_client.go",
-    "frontend/src/hooks/useBills.ts",
+    "backend/internal/handlers/catalog.go",
+    "backend/internal/services/sml/product_client.go",
     "frontend/src/pages/BillDetail.tsx",
-    "frontend/src/pages/Bills.tsx",
 ]
 
 
@@ -79,14 +72,6 @@ def main():
         label="extract")
     run(c, f"mkdir -p {REMOTE}/backups", label="ensure backups dir")
 
-    # Update IMAP_FILTER_SUBJECT and Shipped SML config in .env if missing
-    run(c, f"cd {REMOTE} && grep -q 'ถูกจัดส่งแล้ว' .env || sed -i 's/^IMAP_FILTER_SUBJECT=.*/&,ถูกจัดส่งแล้ว/' .env",
-        label="add ถูกจัดส่งแล้ว to IMAP_FILTER_SUBJECT")
-    run(c, f"cd {REMOTE} && grep -q '^SHIPPED_SML_DOC_FORMAT=' .env || echo 'SHIPPED_SML_DOC_FORMAT=PO' >> .env",
-        label="add SHIPPED_SML_DOC_FORMAT")
-    run(c, f"cd {REMOTE} && grep -q '^SHIPPED_SML_CUST_CODE=' .env || echo 'SHIPPED_SML_CUST_CODE=' >> .env",
-        label="add SHIPPED_SML_CUST_CODE")
-
     # Rebuild backend + frontend
     rc = run(c, f"cd {REMOTE} && docker compose build backend frontend",
              timeout=900, label="build backend + frontend")
@@ -101,9 +86,22 @@ def main():
 
     # Verify
     run(c, "docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'billflow|NAME'", label="containers")
-    run(c, "curl -s http://localhost:8090/health", label="health")
-    run(c, "docker logs billflow-backend 2>&1 | grep -i 'migration applied'", label="migrations")
-    run(c, "ls -la ~/billflow/backups/", label="backups dir")
+
+    # Health check — must return non-empty body containing "ok", else fail loud.
+    si, so, se = c.exec_command("curl -s -m 5 http://localhost:8090/health", timeout=15)
+    health = so.read().decode("utf-8", errors="replace").strip()
+    print(f"\n========== health ==========\n{health!r}")
+    if '"status":"ok"' not in health:
+        print("❌ health check failed — backend may be crashing. Recent fatal logs:")
+        si, so, se = c.exec_command(
+            "docker logs billflow-backend 2>&1 | grep -i 'fatal\\|panic\\|error.:\\|migration' | tail -20",
+            timeout=15,
+        )
+        print(so.read().decode("utf-8", errors="replace"))
+        c.close()
+        sys.exit(2)
+
+    run(c, "docker logs billflow-backend 2>&1 | grep -i 'migration applied' | tail -10", label="migrations applied")
 
     c.close()
     print("\n✅ deploy complete")

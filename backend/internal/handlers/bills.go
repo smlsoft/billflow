@@ -26,6 +26,7 @@ type BillHandler struct {
 	cfg            *config.Config
 	lineSvc        *lineservice.Service
 	auditRepo      *repository.AuditLogRepo
+	catalogRepo    *repository.SMLCatalogRepo // for unit_code defaults on item edit
 	log            *zap.Logger
 }
 
@@ -38,6 +39,7 @@ func NewBillHandler(
 	cfg *config.Config,
 	lineSvc *lineservice.Service,
 	auditRepo *repository.AuditLogRepo,
+	catalogRepo *repository.SMLCatalogRepo,
 	log *zap.Logger,
 ) *BillHandler {
 	return &BillHandler{
@@ -49,6 +51,7 @@ func NewBillHandler(
 		cfg:           cfg,
 		lineSvc:       lineSvc,
 		auditRepo:     auditRepo,
+		catalogRepo:   catalogRepo,
 		log:           log,
 	}
 }
@@ -450,16 +453,75 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 		return
 	}
 
+	// Find the item being edited so we know its raw_name for F1 feedback
+	var existingItem *models.BillItem
+	for i := range bill.Items {
+		if bill.Items[i].ID == itemID {
+			existingItem = &bill.Items[i]
+			break
+		}
+	}
+	if existingItem == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "item not found in bill"})
+		return
+	}
+
 	var req updateItemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	// If user is changing item_code, fill unit_code from catalog if not provided.
+	// This makes the F1 feedback richer and the SML payload more correct.
+	if req.ItemCode != nil && *req.ItemCode != "" && (req.UnitCode == nil || *req.UnitCode == "") && h.catalogRepo != nil {
+		if cat, _ := h.catalogRepo.GetOne(*req.ItemCode); cat != nil && cat.UnitCode != "" {
+			u := cat.UnitCode
+			req.UnitCode = &u
+		}
+	}
+
 	if err := h.billRepo.UpdateBillItemFields(itemID, req.ItemCode, req.UnitCode, req.Qty, req.Price); err != nil {
 		h.log.Error("UpdateItem", zap.String("bill", billID), zap.String("item", itemID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
 		return
+	}
+
+	// F1 learning loop: if the user supplied a non-empty item_code that's
+	// different from what we previously had, save the (raw_name → item_code)
+	// pair as an ai_learned mapping. Future bills with similar raw_name will
+	// auto-resolve.
+	if req.ItemCode != nil && *req.ItemCode != "" && existingItem.RawName != "" {
+		prev := ""
+		if existingItem.ItemCode != nil {
+			prev = *existingItem.ItemCode
+		}
+		if prev != *req.ItemCode {
+			unit := ""
+			if req.UnitCode != nil {
+				unit = *req.UnitCode
+			}
+			if err := h.mapperSvc.LearnFromFeedback(existingItem.RawName, *req.ItemCode, unit, &billID); err != nil {
+				h.log.Warn("UpdateItem: F1 feedback save failed",
+					zap.String("raw_name", existingItem.RawName),
+					zap.String("item_code", *req.ItemCode),
+					zap.Error(err))
+			} else if h.auditRepo != nil {
+				_ = h.auditRepo.Log(models.AuditEntry{
+					Action:   "mapping_feedback",
+					TargetID: &itemID,
+					Source:   bill.Source,
+					Level:    "info",
+					Detail: map[string]interface{}{
+						"raw_name":      existingItem.RawName,
+						"prev_code":     prev,
+						"new_code":      *req.ItemCode,
+						"unit_code":     unit,
+						"bill_id":       billID,
+					},
+				})
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "item updated"})

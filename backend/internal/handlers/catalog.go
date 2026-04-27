@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -13,16 +14,19 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/catalog"
+	"billflow/internal/services/sml"
 )
 
 // CatalogHandler serves /api/catalog/* endpoints
 type CatalogHandler struct {
-	catalogSvc  *catalog.SMLCatalogService
-	embSvc      *catalog.EmbeddingService
-	catalogIdx  *catalog.CatalogIndex
-	catalogRepo *repository.SMLCatalogRepo
-	logger      *zap.Logger
-	threshold   float64 // auto-confirm threshold
+	catalogSvc    *catalog.SMLCatalogService
+	embSvc        *catalog.EmbeddingService
+	catalogIdx    *catalog.CatalogIndex
+	catalogRepo   *repository.SMLCatalogRepo
+	productClient *sml.ProductClient
+	auditRepo     *repository.AuditLogRepo
+	logger        *zap.Logger
+	threshold     float64 // auto-confirm threshold
 }
 
 func NewCatalogHandler(
@@ -30,16 +34,20 @@ func NewCatalogHandler(
 	emb *catalog.EmbeddingService,
 	idx *catalog.CatalogIndex,
 	repo *repository.SMLCatalogRepo,
+	productClient *sml.ProductClient,
+	auditRepo *repository.AuditLogRepo,
 	threshold float64,
 	logger *zap.Logger,
 ) *CatalogHandler {
 	return &CatalogHandler{
-		catalogSvc:  svc,
-		embSvc:      emb,
-		catalogIdx:  idx,
-		catalogRepo: repo,
-		threshold:   threshold,
-		logger:      logger,
+		catalogSvc:    svc,
+		embSvc:        emb,
+		catalogIdx:    idx,
+		catalogRepo:   repo,
+		productClient: productClient,
+		auditRepo:     auditRepo,
+		threshold:     threshold,
+		logger:        logger,
 	}
 }
 
@@ -236,6 +244,164 @@ func (h *CatalogHandler) GetOne(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, item)
+}
+
+// ─── Create new product ──────────────────────────────────────────────────────
+
+// createProductRequest is the body the frontend sends. It's a compact "quick
+// form" — only the minimum required for SML to accept the product.
+type createProductRequest struct {
+	Code     string  `json:"code" binding:"required"`     // SML item code (user-supplied)
+	Name     string  `json:"name" binding:"required"`     // Product name (Thai or English)
+	UnitCode string  `json:"unit_code" binding:"required"` // e.g. "ชิ้น", "ถุง"
+	Price    float64 `json:"price"`                       // per-unit selling price (>= 0)
+	WHCode   string  `json:"wh_code,omitempty"`           // optional default warehouse
+	ShelfCode string `json:"shelf_code,omitempty"`        // optional default shelf
+}
+
+// POST /api/catalog/products — quick-create a product in SML and sync to local catalog.
+//
+// Flow:
+//  1. Pre-check: reject if item_code already exists in local sml_catalog
+//     (saves a round-trip to SML for an obvious duplicate).
+//  2. Call SML POST /SMLJavaRESTService/v3/api/product. SML may return its
+//     own assigned code in response.data.code (overrides the requested one).
+//  3. Upsert into sml_catalog with status='pending' so embed runs.
+//  4. Trigger embedding in background (non-blocking) + reload index.
+//  5. Audit log.
+//
+// Returns the canonical code (from SML response) so the frontend can fill
+// the bill_item with it.
+func (h *CatalogHandler) CreateProduct(c *gin.Context) {
+	if h.productClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "product client not configured"})
+		return
+	}
+
+	var req createProductRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	req.Code = strings.TrimSpace(req.Code)
+	req.Name = strings.TrimSpace(req.Name)
+	req.UnitCode = strings.TrimSpace(req.UnitCode)
+	if req.Code == "" || req.Name == "" || req.UnitCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "code, name, unit_code are required"})
+		return
+	}
+
+	// 1. Local dup-check — fast fail before SML round-trip
+	existing, _ := h.catalogRepo.GetOne(req.Code)
+	if existing != nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   "product code already exists",
+			"code":    req.Code,
+			"existing": existing,
+		})
+		return
+	}
+
+	// 2. Build SML payload — defaults pulled from the request example
+	priceStr := strconv.FormatFloat(req.Price, 'f', -1, 64)
+	smlReq := sml.CreateProductRequest{
+		Code:         req.Code,
+		Name:         req.Name,
+		TaxType:      0, // VAT แยกนอก (matches Shopee saleinvoice default)
+		ItemType:     0, // สินค้าทั่วไป
+		UnitType:     1,
+		UnitCost:     req.UnitCode,
+		UnitStandard: req.UnitCode,
+		PurchasePoint: 0,
+		Units: []sml.ProductUnit{
+			{UnitCode: req.UnitCode, UnitName: req.UnitCode, StandValue: 1, DivideValue: 1},
+		},
+		PriceFormulas: []sml.ProductPriceFormula{
+			{UnitCode: req.UnitCode, SaleType: 0, Price0: priceStr, TaxType: 0, PriceCurrency: 0},
+		},
+	}
+
+	// 3. POST to SML
+	statusCode, smlResp, err := h.productClient.CreateProduct(smlReq)
+	if err != nil || smlResp == nil || !smlResp.Success {
+		errMsg := ""
+		switch {
+		case err != nil:
+			errMsg = err.Error()
+		case smlResp != nil && smlResp.Message != "":
+			errMsg = fmt.Sprintf("SML rejected (HTTP %d): %s", statusCode, smlResp.Message)
+		default:
+			errMsg = fmt.Sprintf("SML rejected (HTTP %d)", statusCode)
+		}
+		h.logger.Warn("create_product: SML failed", zap.String("code", req.Code), zap.String("error", errMsg))
+		c.JSON(http.StatusBadGateway, gin.H{"error": errMsg})
+		return
+	}
+
+	// 4. Use canonical code from SML response (may differ from request)
+	finalCode := smlResp.Data.Code
+	if finalCode == "" {
+		finalCode = req.Code
+	}
+
+	// 5. Upsert into local catalog with status='pending' — embed will fill later
+	priceVal := req.Price
+	whCode := req.WHCode
+	shelfCode := req.ShelfCode
+	if err := h.catalogRepo.Upsert(models.CatalogItem{
+		ItemCode:        finalCode,
+		ItemName:        req.Name,
+		UnitCode:        req.UnitCode,
+		WHCode:          whCode,
+		ShelfCode:       shelfCode,
+		Price:           &priceVal,
+		EmbeddingStatus: "pending",
+	}); err != nil {
+		h.logger.Error("create_product: catalog upsert failed",
+			zap.String("code", finalCode), zap.Error(err))
+		// SML already accepted — return success, just log the local-sync miss
+	}
+
+	// 6. Trigger embedding in background (non-blocking); reload index after
+	go func(code string) {
+		if !h.embSvc.IsConfigured() {
+			return
+		}
+		if err := h.catalogSvc.EmbedProduct(h.embSvc, code); err != nil {
+			h.logger.Warn("create_product: embed failed",
+				zap.String("code", code), zap.Error(err))
+			return
+		}
+		if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
+			h.logger.Warn("create_product: index reload failed", zap.Error(err))
+		}
+	}(finalCode)
+
+	// 7. Audit log
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action: "product_created",
+			Source: "ui",
+			Level:  "info",
+			Detail: map[string]interface{}{
+				"requested_code": req.Code,
+				"final_code":     finalCode,
+				"name":           req.Name,
+				"unit_code":      req.UnitCode,
+				"price":          req.Price,
+			},
+		})
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"code":      finalCode,
+		"name":      req.Name,
+		"unit_code": req.UnitCode,
+		"wh_code":   whCode,
+		"shelf_code": shelfCode,
+		"message":   "product created and queued for embedding",
+	})
 }
 
 // POST /api/bills/:id/items/:item_id/confirm-match
