@@ -26,6 +26,12 @@ const SOURCE_OPTIONS = [
   { value: 'manual', label: 'Manual' },
 ]
 
+const BILL_TYPE_OPTIONS = [
+  { value: '', label: 'ทุกประเภท' },
+  { value: 'sale', label: 'บิลขาย' },
+  { value: 'purchase', label: 'บิลซื้อ (PO)' },
+]
+
 const SearchIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -37,8 +43,9 @@ export default function Bills() {
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState('')
   const [source, setSource] = useState('')
+  const [billType, setBillType] = useState('')
   const [search, setSearch] = useState('')
-  const { data, loading } = useBills({ page, per_page: PER_PAGE, status, source, search })
+  const { data, loading } = useBills({ page, per_page: PER_PAGE, status, source, bill_type: billType, search })
 
   const totalPages = data ? Math.ceil(data.total / PER_PAGE) : 1
   const hasMore = data ? page * PER_PAGE < data.total : false
@@ -55,6 +62,11 @@ export default function Bills() {
 
   const handleSource = (val: string) => {
     setSource(val)
+    setPage(1)
+  }
+
+  const handleBillType = (val: string) => {
+    setBillType(val)
     setPage(1)
   }
 
@@ -92,6 +104,15 @@ export default function Bills() {
           onChange={(e) => handleSource(e.target.value)}
         >
           {SOURCE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <select
+          className="form-select"
+          value={billType}
+          onChange={(e) => handleBillType(e.target.value)}
+        >
+          {BILL_TYPE_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>

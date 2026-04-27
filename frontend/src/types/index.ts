@@ -26,17 +26,14 @@ export interface CatalogItem {
 }
 
 // ─── Bill ────────────────────────────────────────────────────────────────────
+// Only the 5 statuses the backend actually sets. Migration 002 + 004 keep
+// these values in sync with the bills_status_check CHECK constraint.
 export type BillStatus =
   | 'pending'
-  | 'processing'
   | 'needs_review'
-  | 'confirmed'
-  | 'sent_to_sml'
-  | 'sml_success'
-  | 'sml_failed'
-  | 'error'
   | 'sent'
   | 'failed'
+  | 'skipped'
 
 export interface BillItem {
   id: string

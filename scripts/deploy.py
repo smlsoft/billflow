@@ -19,12 +19,17 @@ if not PASS:
 
 # Files to sync (matches the commit)
 FILES = [
-    "backend/cmd/server/main.go",
-    "backend/internal/handlers/bills.go",
-    "backend/internal/handlers/email.go",
-    "backend/internal/handlers/shipped_email.go",
-    "backend/internal/repository/bill_repo.go",
+    "frontend/src/components/BillStatusBadge.tsx",
+    "frontend/src/components/BillTable.tsx",
+    "frontend/src/hooks/useBills.ts",
     "frontend/src/pages/BillDetail.tsx",
+    "frontend/src/pages/Bills.tsx",
+    "frontend/src/pages/Dashboard.tsx",
+    "frontend/src/pages/Import.tsx",
+    "frontend/src/pages/Login.tsx",
+    "frontend/src/pages/Settings.tsx",
+    "frontend/src/pages/ShopeeImport.tsx",
+    "frontend/src/types/index.ts",
 ]
 
 

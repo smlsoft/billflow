@@ -118,7 +118,8 @@ export default function Settings() {
   const { user } = useAuth()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [config, setConfig] = useState<ConfigStatus | null>(null)
-  const [colMapTab, setColMapTab] = useState<'lazada' | 'shopee'>('lazada')
+  // Shopee column mapping is hardcoded server-side, so the editor only handles Lazada.
+  const colMapTab: 'lazada' | 'shopee' = 'lazada'
 
   useEffect(() => {
     client.get<DashboardStats>('/api/dashboard/stats').then((r) => setStats(r.data)).catch(() => null)
@@ -177,24 +178,16 @@ export default function Settings() {
       {user?.role === 'admin' && (
         <div className="settings-card settings-card--wide">
           <div className="settings-card-header">
-            <h2 className="settings-card-title">Column Mapping — Lazada / Shopee</h2>
+            <h2 className="settings-card-title">Column Mapping — Lazada</h2>
           </div>
           <div className="settings-card-body">
             <p className="settings-col-desc">
               กำหนดชื่อ column ในไฟล์ Excel ให้ตรงกับ field ที่ระบบใช้งาน
+              <br/>
+              <small style={{ color: '#94a3b8' }}>
+                ℹ️ Shopee ใช้ column hardcoded — ปรับใน code ที่ <code>backend/internal/handlers/shopee_import.go</code>
+              </small>
             </p>
-            <div className="settings-tabs">
-              {(['lazada', 'shopee'] as const).map((p) => (
-                <button
-                  type="button"
-                  key={p}
-                  className={`btn btn-sm ${colMapTab === p ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setColMapTab(p)}
-                >
-                  {p.charAt(0).toUpperCase() + p.slice(1)}
-                </button>
-              ))}
-            </div>
             <ColumnMappingEditor key={colMapTab} platform={colMapTab} />
           </div>
         </div>

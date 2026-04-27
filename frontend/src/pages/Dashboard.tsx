@@ -77,12 +77,13 @@ export default function Dashboard() {
     }
   }
 
+  // pending + needs_review both mean "user must act" — combine in display.
+  const awaitingReview = (stats?.pending ?? 0) + (stats?.needs_review ?? 0)
+
   const chartData = stats
     ? [
-        { name: 'Pending',    value: stats.pending,      fill: '#f97316' },
-        { name: 'Review',     value: stats.needs_review, fill: '#eab308' },
-        { name: 'Confirmed',  value: stats.confirmed,    fill: '#22c55e' },
-        { name: 'SML สำเร็จ', value: stats.sml_success,  fill: '#4f46e5' },
+        { name: 'รอตรวจสอบ', value: awaitingReview,    fill: '#eab308' },
+        { name: 'SML สำเร็จ', value: stats.sml_success,  fill: '#22c55e' },
         { name: 'SML ล้มเหลว',value: stats.sml_failed,   fill: '#ef4444' },
       ]
     : []
@@ -119,15 +120,8 @@ export default function Dashboard() {
             iconColor="#4f46e5"
           />
           <StatsCard
-            label="รอดำเนินการ"
-            value={stats?.pending ?? 0}
-            icon={<ClockIcon />}
-            iconBg="#fff7ed"
-            iconColor="#ea580c"
-          />
-          <StatsCard
             label="รอตรวจสอบ"
-            value={stats?.needs_review ?? 0}
+            value={awaitingReview}
             icon={<AlertTriIcon />}
             iconBg="#fefce8"
             iconColor="#ca8a04"
@@ -138,6 +132,13 @@ export default function Dashboard() {
             icon={<CheckIcon />}
             iconBg="#f0fdf4"
             iconColor="#16a34a"
+          />
+          <StatsCard
+            label="SML ล้มเหลว"
+            value={stats?.sml_failed ?? 0}
+            icon={<AlertTriIcon />}
+            iconBg="#fef2f2"
+            iconColor="#dc2626"
           />
         </div>
       )}

@@ -7,6 +7,7 @@ interface BillsFilter {
   per_page?: number
   status?: string
   source?: string
+  bill_type?: string
   search?: string
   date_from?: string
   date_to?: string
@@ -26,6 +27,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.per_page) params.set('per_page', String(filter.per_page))
       if (filter.status) params.set('status', filter.status)
       if (filter.source) params.set('source', filter.source)
+      if (filter.bill_type) params.set('bill_type', filter.bill_type)
       if (filter.search) params.set('search', filter.search)
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)

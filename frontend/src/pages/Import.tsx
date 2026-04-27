@@ -115,6 +115,12 @@ export default function Import() {
       {/* Step 1: Options + Dropzone */}
       {(step === 'idle' || step === 'uploading') && (
         <>
+          {platform === 'lazada' && (
+            <div className="alert alert-warning import-alert--top">
+              🚧 <strong>Lazada import ยังพัฒนาไม่เสร็จ</strong> — รอไฟล์ตัวอย่างจากลูกค้าเพื่อสร้าง parser
+              ระหว่างนี้ใช้ <a href="/import/shopee">/import/shopee</a> สำหรับ Shopee Excel แทน
+            </div>
+          )}
           <div className="import-options">
             <div className="import-options-field">
               <label className="import-options-label" htmlFor="import-platform">Platform</label>
@@ -145,10 +151,18 @@ export default function Import() {
           </div>
 
           <div
-            {...getRootProps()}
-            className={`import-dropzone${isDragActive ? ' import-dropzone--active' : ''}${step === 'uploading' ? ' import-dropzone--disabled' : ''}`}
+            {...getRootProps({
+              onClick: (e) => {
+                if (platform === 'lazada') {
+                  e.stopPropagation()
+                  e.preventDefault()
+                }
+              },
+            })}
+            className={`import-dropzone${isDragActive ? ' import-dropzone--active' : ''}${step === 'uploading' || platform === 'lazada' ? ' import-dropzone--disabled' : ''}`}
+            aria-disabled={platform === 'lazada'}
           >
-            <input {...getInputProps()} />
+            <input {...getInputProps({ disabled: platform === 'lazada' })} />
             {step === 'uploading' ? (
               <p className="import-dropzone-text">กำลังประมวลผล...</p>
             ) : isDragActive ? (

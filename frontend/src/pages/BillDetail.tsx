@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { getBill, retryBill } from '../hooks/useBills'
 import type { Bill, BillItem, CatalogMatch } from '../types'
 import BillStatusBadge from '../components/BillStatusBadge'
@@ -461,6 +462,16 @@ function ItemRow({
         price: Number(draft.price),
       }
       await api.put(`/api/bills/${billId}/items/${item.id}`, payload)
+
+      // F1 learning: backend created an ai_learned mapping if item_code changed.
+      // Surface the success so user knows the system is learning.
+      const prevCode = item.item_code ?? ''
+      if (draft.item_code && draft.item_code !== prevCode) {
+        toast.success('✓ จดจำการจับคู่นี้แล้ว — ครั้งถัดไประบบจะ map ให้อัตโนมัติ', {
+          duration: 3500,
+        })
+      }
+
       onUpdated({
         ...item,
         item_code: draft.item_code,
@@ -472,6 +483,7 @@ function ItemRow({
       setEditing(false)
     } catch (err) {
       console.error('update item failed', err)
+      toast.error('บันทึกไม่สำเร็จ')
     } finally {
       setSaving(false)
     }
@@ -603,130 +615,9 @@ function ItemRow({
   )
 }
 
-// ─── Needs Review: smart catalog match dropdown ──────────────────────────────
-function MatchDropdown({
-  item,
-  billId,
-  onConfirmed,
-}: {
-  item: BillItem
-  billId: string
-  onConfirmed: (itemId: string, match: CatalogMatch) => void
-}) {
-  const candidates: CatalogMatch[] = item.candidates ?? []
-  const [selected, setSelected] = useState<string>(candidates[0]?.item_code ?? '')
-  const [saving, setSaving] = useState(false)
-
-  const selectedMatch = candidates.find((c) => c.item_code === selected)
-
-  function scoreBorder(score: number) {
-    if (score >= 0.85) return '#22c55e'
-    if (score >= 0.6) return '#f59e0b'
-    return '#ef4444'
-  }
-
-  const handleConfirm = async () => {
-    if (!selectedMatch) return
-    setSaving(true)
-    try {
-      await api.post(`/api/bills/${billId}/items/${item.id}/confirm-match`, {
-        item_code: selectedMatch.item_code,
-        unit_code: selectedMatch.unit_code,
-      })
-      onConfirmed(item.id, selectedMatch)
-    } catch {
-      // silently fail — parent can show error
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  if (item.mapped) {
-    return (
-      <div className="match-confirmed">
-        ✓ {item.item_code} <span className="match-confirmed-unit">({item.unit_code})</span>
-      </div>
-    )
-  }
-
-  if (candidates.length === 0) {
-    return <span className="match-no-candidates">ไม่พบสินค้าใกล้เคียง</span>
-  }
-
-  return (
-    <div
-      className="match-dropdown-wrap"
-      style={{ borderLeft: `3px solid ${scoreBorder(candidates[0]?.score ?? 0)}` }}
-    >
-      <select
-        className="match-select"
-        value={selected}
-        aria-label={`เลือกสินค้าสำหรับ ${item.raw_name}`}
-        onChange={(e) => setSelected(e.target.value)}
-      >
-        {candidates.map((c) => (
-          <option key={c.item_code} value={c.item_code}>
-            [{Math.round(c.score * 100)}%] {c.item_code} — {c.item_name} ({c.unit_code})
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        className="btn btn-primary btn-xs"
-        onClick={handleConfirm}
-        disabled={saving || !selected}
-      >
-        {saving ? '...' : 'ยืนยัน'}
-      </button>
-    </div>
-  )
-}
-
-function NeedsReviewSection({
-  bill,
-  onItemConfirmed,
-}: {
-  bill: Bill
-  onItemConfirmed: (itemId: string, match: CatalogMatch) => void
-}) {
-  const unmapped = (bill.items ?? []).filter((i) => !i.mapped)
-  const mapped = (bill.items ?? []).filter((i) => i.mapped)
-
-  return (
-    <div className="needs-review-section">
-      <div className="needs-review-header">
-        <span className="needs-review-icon">🛒</span>
-        <div>
-          <strong>รอยืนยัน Shopee Order</strong>
-          {bill.sml_order_id && (
-            <span className="needs-review-order-id"> #{bill.sml_order_id}</span>
-          )}
-          <div className="needs-review-sub">
-            ยืนยัน {mapped.length}/{(bill.items ?? []).length} รายการแล้ว
-          </div>
-        </div>
-      </div>
-
-      <div className="needs-review-items">
-        {(bill.items ?? []).map((item) => (
-          <div key={item.id} className={`needs-review-item ${item.mapped ? 'needs-review-item--done' : ''}`}>
-            <div className="needs-review-item-name">
-              {item.raw_name}
-              <span className="needs-review-item-qty"> × {item.qty} {item.unit_code ?? ''}</span>
-            </div>
-            <MatchDropdown item={item} billId={bill.id} onConfirmed={onItemConfirmed} />
-          </div>
-        ))}
-      </div>
-
-      {unmapped.length > 0 && (
-        <div className="needs-review-hint">
-          กรุณายืนยันสินค้าที่ยังไม่ map ({unmapped.length} รายการ) ก่อนส่ง SML
-        </div>
-      )}
-    </div>
-  )
-}
+// MatchDropdown + NeedsReviewSection were removed — superseded by the per-row
+// MapItemModal (search + create new) in ItemRow's edit mode, which covers the
+// same needs_review flow with full catalog search instead of just top-5.
 
 export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
@@ -754,20 +645,6 @@ export default function BillDetail() {
     } finally {
       setRetrying(false)
     }
-  }
-
-  const handleItemConfirmed = (itemId: string, match: CatalogMatch) => {
-    setBill((prev) => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        items: (prev.items ?? []).map((item) =>
-          item.id === itemId
-            ? { ...item, mapped: true, item_code: match.item_code, unit_code: match.unit_code }
-            : item
-        ),
-      }
-    })
   }
 
   if (loading) {
@@ -861,27 +738,20 @@ export default function BillDetail() {
           <div className="bill-detail-actions">
             <button
               type="button"
-              className={bill.status === 'failed' ? 'btn btn-danger btn-sm' : 'btn btn-primary btn-sm'}
+              className="btn btn-primary btn-sm"
               onClick={handleRetry}
               disabled={retrying}
             >
               <RefreshIcon />
               {retrying
                 ? 'กำลังส่ง...'
-                : bill.status === 'failed'
-                  ? 'ลองส่ง SML อีกครั้ง'
-                  : `ยืนยันและส่งไปยัง SML ${isPurchase ? '(PO)' : ''}`}
+                : `${bill.status === 'failed' ? '⚠️ ' : ''}ยืนยันและส่งไปยัง SML${isPurchase ? ' (PO)' : ''}`}
             </button>
           </div>
         )}
       </div>
 
-      {/* Needs Review — Shopee email smart match */}
-      {bill.status === 'needs_review' && (
-        <NeedsReviewSection bill={bill} onItemConfirmed={handleItemConfirmed} />
-      )}
-
-      {/* Items */}
+      {/* Items — per-row MapItemModal handles needs_review now */}
       <h3 className="bill-detail-section-title">รายการสินค้า ({bill.items?.length ?? 0} รายการ)</h3>
       <div className="bill-items-table-wrap">
         <table className="bill-items-table">

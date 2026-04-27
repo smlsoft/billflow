@@ -1,9 +1,6 @@
-import { useState, useRef } from 'react'
-import axios from 'axios'
-import { useAuthStore } from '../store/auth'
+import { useState, useRef, useEffect } from 'react'
+import client from '../api/client'
 import './ShopeeImport.css'
-
-const API = import.meta.env.VITE_API_URL || ''
 
 interface ShopeeConfig {
   server_url: string; guid: string; provider: string; config_file_name: string
@@ -23,7 +20,6 @@ interface PreviewResponse {
 }
 interface ConfirmResult { order_id: string; success: boolean; doc_no?: string; message?: string }
 
-function authHeader(token: string) { return { Authorization: `Bearer ${token}` } }
 function fmt(n: number) { return n.toLocaleString('th-TH', { minimumFractionDigits: 2 }) }
 
 function ConfigField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
@@ -74,7 +70,7 @@ function ConfigDialog({ config, onSave, onCancel }: { config: ShopeeConfig; onSa
         </div>
         <div className="shopee-dialog-actions">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>ยกเลิก</button>
-          <button type="button" className="btn btn-primary" onClick={() => onSave(cfg)}>ตกลง — เปิดไฟล์</button>
+          <button type="button" className="btn btn-primary" onClick={() => onSave(cfg)}>บันทึก</button>
         </div>
       </div>
     </div>
@@ -90,30 +86,36 @@ function SummaryCard({ label, value, colorClass }: { label: string; value: numbe
   )
 }
 
-type Step = 'idle' | 'config' | 'uploading' | 'preview' | 'confirming' | 'done'
+type Step = 'idle' | 'uploading' | 'preview' | 'confirming' | 'done'
 
 export default function ShopeeImport() {
-  const token = useAuthStore((s) => s.token) ?? ''
   const fileRef = useRef<HTMLInputElement>(null)
   const [step, setStep] = useState<Step>('idle')
   const [config, setConfig] = useState<ShopeeConfig | null>(null)
+  const [showConfigDialog, setShowConfigDialog] = useState(false)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
   const [results, setResults] = useState<{ success_count: number; fail_count: number; results: ConfirmResult[] } | null>(null)
   const [error, setError] = useState('')
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
 
-  const handleStart = async () => {
-    setError('')
-    try {
-      const { data } = await axios.get<ShopeeConfig>(`${API}/api/settings/shopee-config`, { headers: authHeader(token) })
-      setConfig(data)
-      setStep('config')
-    } catch { setError('โหลด config ไม่ได้') }
+  // Load config once on mount — saves a round-trip + dialog popup before every upload.
+  useEffect(() => {
+    let alive = true
+    client.get<ShopeeConfig>('/api/settings/shopee-config')
+      .then((res) => { if (alive) setConfig(res.data) })
+      .catch(() => { if (alive) setError('โหลด config ไม่ได้') })
+    return () => { alive = false }
+  }, [])
+
+  const handlePickFile = () => {
+    if (!config) return
+    fileRef.current?.click()
   }
 
   const handleConfigSave = (cfg: ShopeeConfig) => {
-    setConfig(cfg); setStep('idle'); fileRef.current?.click()
+    setConfig(cfg)
+    setShowConfigDialog(false)
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,9 +126,10 @@ export default function ShopeeImport() {
     const form = new FormData()
     form.append('file', file)
     try {
-      const { data } = await axios.post<PreviewResponse>(`${API}/api/import/shopee/preview`, form, {
-        headers: { ...authHeader(token), 'Content-Type': 'multipart/form-data' },
+      const res = await client.post<PreviewResponse>('/api/import/shopee/preview', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
       })
+      const data = res.data
       setPreview(data)
       setSelectedIDs(new Set(data.orders.filter((o) => !o.duplicate).map((o) => o.order_id)))
       setStep('preview')
@@ -140,12 +143,11 @@ export default function ShopeeImport() {
     if (!preview || !config || selectedIDs.size === 0) return
     setStep('confirming'); setError('')
     try {
-      const { data } = await axios.post(
-        `${API}/api/import/shopee/confirm`,
+      const res = await client.post(
+        '/api/import/shopee/confirm',
         { config, order_ids: Array.from(selectedIDs), orders: preview.orders },
-        { headers: authHeader(token) }
       )
-      setResults(data); setStep('done')
+      setResults(res.data); setStep('done')
     } catch (err: unknown) {
       setError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'ส่งข้อมูลไม่ได้')
       setStep('preview')
@@ -164,29 +166,64 @@ export default function ShopeeImport() {
     <div>
       <div className="shopee-header">
         <h1 className="shopee-title">นำเข้า Shopee</h1>
-        <p className="shopee-subtitle">อัปโหลดไฟล์ Excel จาก Shopee Seller Center → สร้างใบกำกับสินค้าใน SML อัตโนมัติ</p>
+        <p className="shopee-subtitle">อัปโหลดไฟล์ Excel จาก Shopee Seller Center → สร้างใบกำกับสินค้าใน SML</p>
+      </div>
+
+      <div className="alert" style={{
+        background: '#eff6ff', borderLeft: '3px solid #3b82f6', color: '#1e40af',
+        padding: 12, borderRadius: 6, marginBottom: 16, fontSize: '0.9rem',
+      }}>
+        💡 <strong>ใช้สำหรับ bulk import เท่านั้น</strong> — ถ้าตั้ง email forwarding ของ Shopee แล้ว
+        ระบบดึง order/shipping emails อัตโนมัติทุก 5 นาที (ดูที่ <a href="/bills?source=shopee_email">Shopee Email</a> และ <a href="/bills?source=shopee_shipped">Shopee จัดส่งแล้ว</a>)
       </div>
 
       <input ref={fileRef} type="file" accept=".xlsx" className="visually-hidden" onChange={handleFileChange} />
 
-      {step === 'config' && config && (
-        <ConfigDialog config={config} onSave={handleConfigSave} onCancel={() => setStep('idle')} />
+      {showConfigDialog && config && (
+        <ConfigDialog config={config} onSave={handleConfigSave} onCancel={() => setShowConfigDialog(false)} />
       )}
 
       {error && <div className="alert alert-danger shopee-alert">{error}</div>}
 
       {(step === 'idle' || step === 'uploading') && (
-        <div className="shopee-dropzone">
-          {step === 'uploading' ? (
-            <p className="shopee-dropzone-text">กำลังวิเคราะห์ไฟล์...</p>
-          ) : (
-            <>
-              <div className="shopee-dropzone-icon">📂</div>
-              <p className="shopee-dropzone-text">คลิกเพื่อเลือกไฟล์ Excel (.xlsx) จาก Shopee</p>
-              <button type="button" className="btn btn-primary" onClick={handleStart}>เลือกไฟล์ Shopee</button>
-            </>
+        <>
+          {config && (
+            <div style={{
+              background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6,
+              padding: 10, marginBottom: 16, display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', fontSize: '0.85rem',
+            }}>
+              <div style={{ color: '#475569' }}>
+                <strong>SML config:</strong>{' '}
+                <code>{config.database_name}</code> /{' '}
+                Cust: <code>{config.cust_code || '—'}</code> /{' '}
+                WH: <code>{config.wh_code || '—'}</code> /{' '}
+                Doc: <code>{config.doc_format_code}</code> /{' '}
+                VAT: {config.vat_rate}% (type {config.vat_type})
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowConfigDialog(true)}
+              >
+                แก้ config
+              </button>
+            </div>
           )}
-        </div>
+          <div className="shopee-dropzone">
+            {step === 'uploading' ? (
+              <p className="shopee-dropzone-text">กำลังวิเคราะห์ไฟล์...</p>
+            ) : (
+              <>
+                <div className="shopee-dropzone-icon">📂</div>
+                <p className="shopee-dropzone-text">คลิกเพื่อเลือกไฟล์ Excel (.xlsx) จาก Shopee</p>
+                <button type="button" className="btn btn-primary" onClick={handlePickFile} disabled={!config}>
+                  {config ? 'เลือกไฟล์ Shopee' : 'กำลังโหลด config...'}
+                </button>
+              </>
+            )}
+          </div>
+        </>
       )}
 
       {step === 'preview' && preview && (

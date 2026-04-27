@@ -69,7 +69,7 @@ export default function Login() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@billflow.local"
+                placeholder="your.email@company.com"
                 required
                 autoFocus
                 autoComplete="email"
