@@ -1,11 +1,16 @@
 package handlers
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +20,7 @@ import (
 	"billflow/internal/config"
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
 	"billflow/internal/services/sml"
 )
@@ -33,8 +39,23 @@ type ShopeeImportHandler struct {
 	catalogSvc  *catalog.SMLCatalogService
 	embSvc      *catalog.EmbeddingService
 	catalogIdx  *catalog.CatalogIndex
+	artifactSvc *artifact.Service
 	logger      *zap.Logger
+
+	// Pending uploads keyed by SHA-256 — Preview stashes the raw .xlsx so
+	// Confirm (a separate JSON request) can attach it as an artifact to
+	// every bill it creates. Entries are removed after Confirm or by the
+	// cleanup goroutine when older than 30 minutes.
+	pendingUploads sync.Map
 }
+
+type pendingUpload struct {
+	bytes      []byte
+	filename   string
+	uploadedAt time.Time
+}
+
+const pendingUploadTTL = 30 * time.Minute
 
 func NewShopeeImportHandler(
 	billRepo *repository.BillRepo,
@@ -45,7 +66,7 @@ func NewShopeeImportHandler(
 	catalogIdx *catalog.CatalogIndex,
 	logger *zap.Logger,
 ) *ShopeeImportHandler {
-	return &ShopeeImportHandler{
+	h := &ShopeeImportHandler{
 		billRepo:   billRepo,
 		auditRepo:  auditRepo,
 		cfg:        cfg,
@@ -53,6 +74,33 @@ func NewShopeeImportHandler(
 		embSvc:     embSvc,
 		catalogIdx: catalogIdx,
 		logger:     logger,
+	}
+	go h.gcPendingUploads()
+	return h
+}
+
+// SetArtifactService wires source-artifact storage so the original .xlsx
+// gets archived next to every bill the import creates.
+func (h *ShopeeImportHandler) SetArtifactService(svc *artifact.Service) {
+	h.artifactSvc = svc
+}
+
+// gcPendingUploads runs forever, evicting cached uploads older than the TTL.
+// Tiny goroutine — pending map size is at most a few entries at a time
+// (one per active import session), so a periodic walk is cheap.
+func (h *ShopeeImportHandler) gcPendingUploads() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		h.pendingUploads.Range(func(key, val any) bool {
+			if pu, ok := val.(*pendingUpload); ok {
+				if now.Sub(pu.uploadedAt) > pendingUploadTTL {
+					h.pendingUploads.Delete(key)
+				}
+			}
+			return true
+		})
 	}
 }
 
@@ -116,13 +164,18 @@ type PreviewResponse struct {
 	TotalOrders    int           `json:"total_orders"`
 	DuplicateCount int           `json:"duplicate_count"`
 	SkippedCount   int           `json:"skipped_count"`
+	// FileToken — SHA-256 of the uploaded .xlsx, returned so Confirm
+	// can re-attach the same bytes as an artifact to every bill it
+	// creates. Empty when artifact storage is disabled.
+	FileToken string `json:"file_token,omitempty"`
 }
 
 // ConfirmRequest is sent by the frontend for POST /api/import/shopee/confirm
 type ConfirmRequest struct {
-	Config   ShopeeConfigRequest `json:"config"`
-	OrderIDs []string            `json:"order_ids"` // only these order IDs will be processed
-	Orders   []ShopeeOrder       `json:"orders"`    // full parsed order data
+	Config    ShopeeConfigRequest `json:"config"`
+	OrderIDs  []string            `json:"order_ids"` // only these order IDs will be processed
+	Orders    []ShopeeOrder       `json:"orders"`    // full parsed order data
+	FileToken string              `json:"file_token,omitempty"` // returned by Preview, used for artifact archiving
 }
 
 // ConfirmResult is one processed order result.
@@ -179,10 +232,31 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 	}
 	defer file.Close()
 
-	orders, warnings, err := parseShopeeExcel(file)
+	// Read once into memory so we can both parse it and stash the bytes
+	// for Confirm to archive as an artifact.
+	rawBytes, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "อ่านไฟล์ไม่ได้"})
+		return
+	}
+
+	orders, warnings, err := parseShopeeExcel(bytes.NewReader(rawBytes))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Compute file token + stash for Confirm. Skip when no artifact service
+	// is wired (early dev mode or tests).
+	var fileToken string
+	if h.artifactSvc != nil {
+		sum := sha256.Sum256(rawBytes)
+		fileToken = hex.EncodeToString(sum[:])
+		h.pendingUploads.Store(fileToken, &pendingUpload{
+			bytes:      rawBytes,
+			filename:   fileHeader.Filename,
+			uploadedAt: time.Now(),
+		})
 	}
 
 	// Mark duplicates (orders already in DB)
@@ -220,6 +294,7 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 		Warnings:       warnings,
 		TotalOrders:    len(orders),
 		DuplicateCount: dupCount,
+		FileToken:      fileToken,
 	})
 }
 
@@ -251,6 +326,23 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 
 	const topK = 5
 	const highConfThreshold = 0.85
+
+	// Pull the original .xlsx bytes once so we can attach the same artifact
+	// to every bill the import creates. May be nil when artifact service is
+	// off, when the user re-confirmed long after Preview, or when running
+	// against a Confirm request that didn't go through the new Preview.
+	var (
+		uploadBytes    []byte
+		uploadFilename string
+	)
+	if h.artifactSvc != nil && req.FileToken != "" {
+		if v, ok := h.pendingUploads.LoadAndDelete(req.FileToken); ok {
+			if pu, ok := v.(*pendingUpload); ok {
+				uploadBytes = pu.bytes
+				uploadFilename = pu.filename
+			}
+		}
+	}
 
 	results := []ConfirmResult{}
 
@@ -367,6 +459,35 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			enriched[i].item.BillID = bill.ID
 			candidatesJSON, _ := json.Marshal(enriched[i].candidates)
 			_ = h.billRepo.InsertItemWithCandidates(&enriched[i].item, candidatesJSON)
+		}
+
+		// Archive the source .xlsx as a per-bill artifact so the user can
+		// always trace back which file produced this bill (audit trail
+		// + SHA-256 integrity, same pattern as email_pdf / email_html).
+		if h.artifactSvc != nil && uploadBytes != nil {
+			meta := map[string]interface{}{
+				"order_id":    order.OrderID,
+				"uploaded_by": "",
+				"trace_id":    traceID,
+			}
+			if userID != nil {
+				meta["uploaded_by"] = *userID
+			}
+			filename := uploadFilename
+			if filename == "" {
+				filename = "shopee-import.xlsx"
+			}
+			if _, err := h.artifactSvc.Save(
+				bill.ID,
+				"xlsx",
+				filename,
+				"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+				uploadBytes,
+				meta,
+			); err != nil {
+				h.logger.Warn("shopee_excel: save artifact failed",
+					zap.String("bill_id", bill.ID), zap.Error(err))
+			}
 		}
 
 		// Audit log — bill created (no SML call, that happens later via Retry)

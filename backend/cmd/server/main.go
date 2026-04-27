@@ -225,6 +225,7 @@ func main() {
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, cfg.AutoConfirmThreshold, logger)
 	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, cfg.AutoConfirmThreshold, logger)
 	shopeeH := handlers.NewShopeeImportHandler(billRepo, auditLogRepo, cfg, catalogSvc, embSvc, catalogIdx, logger)
+	shopeeH.SetArtifactService(artifactSvc)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
 

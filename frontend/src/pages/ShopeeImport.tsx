@@ -86,6 +86,7 @@ interface PreviewResponse {
   total_orders: number
   duplicate_count: number
   skipped_count: number
+  file_token?: string
 }
 interface ConfirmResult {
   order_id: string
@@ -292,6 +293,7 @@ export default function ShopeeImport() {
         config,
         order_ids: Array.from(selectedIDs),
         orders: preview.orders,
+        file_token: preview.file_token,
       })
       setResults(res.data)
       setStep('done')
