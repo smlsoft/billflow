@@ -1,22 +1,29 @@
-import type { Anomaly } from '../types'
+import { Badge } from '@/components/ui/badge'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import type { Anomaly } from '@/types'
 
 export default function AnomalyBadge({ anomaly }: { anomaly: Anomaly }) {
   const isError = anomaly.severity === 'error'
   return (
-    <span
-      title={anomaly.message}
-      style={{
-        display: 'inline-block',
-        marginRight: 4,
-        padding: '2px 8px',
-        borderRadius: 12,
-        fontSize: 10,
-        background: isError ? '#ffebee' : '#fff8e1',
-        color: isError ? '#b71c1c' : '#f57f17',
-        cursor: 'help',
-      }}
-    >
-      {isError ? '🚫' : '⚠️'} {anomaly.type.replace('_', ' ')}
-    </span>
+    <TooltipProvider delayDuration={0}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant={isError ? 'destructive' : 'secondary'}
+            className="cursor-help font-normal"
+          >
+            {isError ? '🚫' : '⚠️'} {anomaly.type.replace('_', ' ')}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs text-xs">
+          {anomaly.message}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }

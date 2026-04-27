@@ -1,36 +1,27 @@
 import { useEffect, useState } from 'react'
-import client from '../api/client'
-import type { Mapping, MappingStats } from '../types'
-import LearningProgress from '../components/LearningProgress'
+import { Check, Pencil, Plus, Trash2, X } from 'lucide-react'
 import toast from 'react-hot-toast'
-import './Mappings.css'
 
-const EditIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-  </svg>
-)
-
-const TrashIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="3,6 5,6 21,6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-    <path d="M10 11v6"/><path d="M14 11v6"/>
-    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-  </svg>
-)
-
-const CheckIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="20,6 9,17 4,12"/>
-  </svg>
-)
-
-const XIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-  </svg>
-)
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import LearningProgress from '@/components/LearningProgress'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { EmptyState } from '@/components/common/EmptyState'
+import { PageHeader } from '@/components/common/PageHeader'
+import { Skeleton } from '@/components/ui/skeleton'
+import client from '@/api/client'
+import type { Mapping, MappingStats } from '@/types'
 
 interface MappingDraft {
   raw_name: string
@@ -48,6 +39,7 @@ export default function Mappings() {
   const [editDraft, setEditDraft] = useState<MappingDraft>(emptyDraft)
   const [newMapping, setNewMapping] = useState<MappingDraft>(emptyDraft)
   const [adding, setAdding] = useState(false)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const fetchAll = async () => {
     setLoading(true)
@@ -65,7 +57,9 @@ export default function Mappings() {
     }
   }
 
-  useEffect(() => { fetchAll() }, [])
+  useEffect(() => {
+    fetchAll()
+  }, [])
 
   const startEdit = (m: Mapping) => {
     setEditId(m.id)
@@ -73,8 +67,12 @@ export default function Mappings() {
   }
 
   const handleSave = async (id: string) => {
-    if (!editDraft.raw_name.trim() || !editDraft.item_code.trim() || !editDraft.unit_code.trim()) {
-      toast.error('กรอกครบทั้ง 3 field ก่อนบันทึก')
+    if (
+      !editDraft.raw_name.trim() ||
+      !editDraft.item_code.trim() ||
+      !editDraft.unit_code.trim()
+    ) {
+      toast.error('กรอกครบทั้ง 3 ช่องก่อนบันทึก')
       return
     }
     try {
@@ -87,10 +85,10 @@ export default function Mappings() {
     }
   }
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('ลบ mapping นี้?')) return
+  const handleDelete = async () => {
+    if (!deleteId) return
     try {
-      await client.delete(`/api/mappings/${id}`)
+      await client.delete(`/api/mappings/${deleteId}`)
       fetchAll()
       toast.success('ลบสำเร็จ')
     } catch {
@@ -115,167 +113,241 @@ export default function Mappings() {
   }
 
   return (
-    <div>
-      <div className="mappings-header">
-        <div>
-          <h1 className="mappings-title">Mapping สินค้า</h1>
-          <p className="mappings-subtitle">จัดการการจับคู่ชื่อสินค้ากับรหัสใน SML (F1 Learning)</p>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Mapping สินค้า"
+        description="จัดการการจับคู่ชื่อสินค้ากับรหัสใน SML — ระบบจะเรียนรู้ทุกครั้งที่คุณยืนยัน (F1 Learning)"
+      />
 
-      <div className="mappings-layout">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         {/* Table */}
-        <div>
-          {loading ? (
-            <div className="mappings-table-wrap">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="skeleton" style={{ height: 46, margin: '1px 0' }} />
-              ))}
-            </div>
-          ) : (
-            <div className="mappings-table-wrap">
-              <table className="mappings-table">
-                <thead>
-                  <tr>
-                    <th>ชื่อดิบ (Raw Name)</th>
-                    <th>Item Code</th>
-                    <th>หน่วย</th>
-                    <th className="text-center">แหล่ง</th>
-                    <th className="text-center">ใช้งาน</th>
-                    <th className="text-center">จัดการ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mappings.map((m) => {
-                    const isEditing = editId === m.id
-                    return (
-                      <tr key={m.id}>
-                        <td>
-                          {isEditing ? (
-                            <input
-                              className="form-input"
-                              value={editDraft.raw_name}
-                              onChange={(e) => setEditDraft((d) => ({ ...d, raw_name: e.target.value }))}
-                            />
-                          ) : (
-                            <span className="mappings-raw-name">{m.raw_name}</span>
-                          )}
-                        </td>
-                        <td>
-                          {isEditing ? (
-                            <input
-                              className="form-input"
-                              value={editDraft.item_code}
-                              onChange={(e) => setEditDraft((d) => ({ ...d, item_code: e.target.value }))}
-                              autoFocus
-                            />
-                          ) : (
-                            <span className="mappings-mapped-name">{m.item_code}</span>
-                          )}
-                        </td>
-                        <td>
-                          {isEditing ? (
-                            <input
-                              className="form-input"
-                              value={editDraft.unit_code}
-                              onChange={(e) => setEditDraft((d) => ({ ...d, unit_code: e.target.value }))}
-                              style={{ width: 80 }}
-                            />
-                          ) : (
-                            <span>{m.unit_code || '—'}</span>
-                          )}
-                        </td>
-                        <td className="text-center">
-                          <span className={`badge ${m.source === 'ai_learned' ? 'badge-success' : 'badge-warning'}`}>
-                            {m.source === 'ai_learned' ? 'AI เรียนรู้' : 'manual'}
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/40 hover:bg-muted/40">
+                <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  ชื่อดิบ
+                </TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Item Code
+                </TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  หน่วย
+                </TableHead>
+                <TableHead className="text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  แหล่ง
+                </TableHead>
+                <TableHead className="text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  ใช้
+                </TableHead>
+                <TableHead className="w-[120px] text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  จัดการ
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                Array.from({ length: 6 }).map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell colSpan={6}>
+                      <Skeleton className="h-5 w-full" />
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : mappings.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-12">
+                    <EmptyState
+                      title="ยังไม่มี mapping"
+                      description="ระบบจะเรียนรู้เมื่อคุณตรวจสอบบิล หรือเพิ่มเองจากฟอร์มด้านขวา"
+                    />
+                  </TableCell>
+                </TableRow>
+              ) : (
+                mappings.map((m) => {
+                  const isEditing = editId === m.id
+                  return (
+                    <TableRow key={m.id} className="h-12">
+                      <TableCell>
+                        {isEditing ? (
+                          <Input
+                            value={editDraft.raw_name}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, raw_name: e.target.value }))
+                            }
+                            className="h-8"
+                          />
+                        ) : (
+                          <span className="text-sm">{m.raw_name}</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {isEditing ? (
+                          <Input
+                            value={editDraft.item_code}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, item_code: e.target.value }))
+                            }
+                            className="h-8 font-mono text-xs"
+                            autoFocus
+                          />
+                        ) : (
+                          <span className="font-mono text-xs font-medium">{m.item_code}</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {isEditing ? (
+                          <Input
+                            value={editDraft.unit_code}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, unit_code: e.target.value }))
+                            }
+                            className="h-8 w-20"
+                          />
+                        ) : (
+                          <span className="text-sm text-muted-foreground">
+                            {m.unit_code || '—'}
                           </span>
-                        </td>
-                        <td className="text-center">
-                          <span className="mappings-usage">{m.usage_count}</span>
-                        </td>
-                        <td className="text-center">
-                          <div className="mappings-actions">
-                            {isEditing ? (
-                              <>
-                                <button type="button" className="btn btn-primary btn-sm btn-icon" onClick={() => handleSave(m.id)} title="บันทึก">
-                                  <CheckIcon />
-                                </button>
-                                <button type="button" className="btn btn-secondary btn-sm btn-icon" onClick={() => setEditId(null)} title="ยกเลิก">
-                                  <XIcon />
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => startEdit(m)} title="แก้ไข">
-                                  <EditIcon />
-                                </button>
-                                <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => handleDelete(m.id)} title="ลบ">
-                                  <TrashIcon />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                  {mappings.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="mappings-table-empty">ยังไม่มี mapping</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Badge
+                          variant={m.source === 'ai_learned' ? 'default' : 'secondary'}
+                          className={
+                            m.source === 'ai_learned'
+                              ? 'bg-success/15 text-success hover:bg-success/20'
+                              : ''
+                          }
+                        >
+                          {m.source === 'ai_learned' ? 'AI เรียนรู้' : 'manual'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-center text-xs tabular-nums text-muted-foreground">
+                        {m.usage_count}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-center gap-1">
+                          {isEditing ? (
+                            <>
+                              <Button
+                                size="icon"
+                                variant="default"
+                                className="h-7 w-7"
+                                onClick={() => handleSave(m.id)}
+                                title="บันทึก"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="h-7 w-7"
+                                onClick={() => setEditId(null)}
+                                title="ยกเลิก"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                onClick={() => startEdit(m)}
+                                title="แก้ไข"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                onClick={() => setDeleteId(m.id)}
+                                title="ลบ"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
+              )}
+            </TableBody>
+          </Table>
         </div>
 
         {/* Sidebar */}
-        <div className="mappings-sidebar">
-          {/* Add form */}
-          <div className="mappings-add-card">
-            <div className="mappings-add-card-header">เพิ่ม Mapping ใหม่</div>
-            <form className="mappings-add-card-body" onSubmit={handleAdd} aria-label="เพิ่ม mapping ใหม่">
-              <div className="mappings-add-field">
-                <label className="mappings-add-label">ชื่อดิบ</label>
-                <input
-                  className="form-input"
-                  placeholder="ชื่อสินค้าจาก LINE / Email"
-                  value={newMapping.raw_name}
-                  onChange={(e) => setNewMapping((p) => ({ ...p, raw_name: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="mappings-add-field">
-                <label className="mappings-add-label">Item Code (SML)</label>
-                <input
-                  className="form-input"
-                  placeholder="เช่น CEM001"
-                  value={newMapping.item_code}
-                  onChange={(e) => setNewMapping((p) => ({ ...p, item_code: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="mappings-add-field">
-                <label className="mappings-add-label">หน่วย</label>
-                <input
-                  className="form-input"
-                  placeholder="เช่น ถุง, เส้น"
-                  value={newMapping.unit_code}
-                  onChange={(e) => setNewMapping((p) => ({ ...p, unit_code: e.target.value }))}
-                  required
-                />
-              </div>
-              <button type="submit" className="btn btn-primary" disabled={adding}>
-                {adding ? 'กำลังเพิ่ม...' : 'เพิ่ม Mapping'}
-              </button>
-            </form>
-          </div>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+                <Plus className="h-4 w-4" />
+                เพิ่ม Mapping ใหม่
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleAdd} className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="m-raw">ชื่อดิบ</Label>
+                  <Input
+                    id="m-raw"
+                    placeholder="ชื่อสินค้าจาก LINE / Email"
+                    value={newMapping.raw_name}
+                    onChange={(e) =>
+                      setNewMapping((p) => ({ ...p, raw_name: e.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="m-code">Item Code (SML)</Label>
+                  <Input
+                    id="m-code"
+                    placeholder="เช่น CEM001"
+                    className="font-mono"
+                    value={newMapping.item_code}
+                    onChange={(e) =>
+                      setNewMapping((p) => ({ ...p, item_code: e.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="m-unit">หน่วย</Label>
+                  <Input
+                    id="m-unit"
+                    placeholder="เช่น ถุง, เส้น"
+                    value={newMapping.unit_code}
+                    onChange={(e) =>
+                      setNewMapping((p) => ({ ...p, unit_code: e.target.value }))
+                    }
+                    required
+                  />
+                </div>
+                <Button type="submit" disabled={adding} className="w-full">
+                  {adding ? 'กำลังเพิ่ม…' : 'เพิ่ม Mapping'}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
 
-          {/* F1 stats */}
           {stats && <LearningProgress stats={stats} />}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={deleteId !== null}
+        onOpenChange={(o) => !o && setDeleteId(null)}
+        title="ลบ mapping นี้?"
+        description="หลังลบแล้วระบบจะไม่ใช้ mapping นี้อีก แต่จะกลับมาเรียนรู้ใหม่หากคุณ map ซ้ำในบิลใดบิลหนึ่ง"
+        variant="destructive"
+        confirmLabel="ลบ"
+        onConfirm={handleDelete}
+      />
     </div>
   )
 }

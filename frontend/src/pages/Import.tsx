@@ -1,25 +1,78 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import client from '../api/client'
-import type { BillPreview, ImportConfirmResponse } from '../types'
-import './Import.css'
+import {
+  AlertCircle,
+  AlertTriangle,
+  Construction,
+  FileSpreadsheet,
+  Upload,
+} from 'lucide-react'
+
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { PageHeader } from '@/components/common/PageHeader'
+import client from '@/api/client'
+import { cn } from '@/lib/utils'
+import type { BillPreview, ImportConfirmResponse } from '@/types'
 
 type Step = 'idle' | 'uploading' | 'preview' | 'confirming' | 'result'
 
-function AnomalyBadges({ anomalies, hasBlock }: { anomalies: BillPreview['anomalies']; hasBlock: boolean }) {
+function AnomalyBadges({
+  anomalies,
+  hasBlock,
+}: {
+  anomalies: BillPreview['anomalies']
+  hasBlock: boolean
+}) {
   if (!anomalies?.length && !hasBlock) return null
   return (
-    <span className="import-anomaly-list">
-      {anomalies?.map((a, i) => (
-        <span
-          key={i}
-          title={a.message}
-          className={`import-anomaly-badge ${a.severity === 'block' ? 'import-anomaly-badge--block' : 'import-anomaly-badge--warn'}`}
-        >
-          {a.severity === 'block' ? '🔴' : '🟡'} {a.code}
-        </span>
-      ))}
-    </span>
+    <TooltipProvider delayDuration={0}>
+      <div className="flex flex-wrap gap-1">
+        {anomalies?.map((a, i) => {
+          const isBlock = a.severity === 'block'
+          return (
+            <Tooltip key={i}>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant={isBlock ? 'destructive' : 'secondary'}
+                  className="cursor-help font-normal"
+                >
+                  {isBlock ? '🔴' : '🟡'} {a.code}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                {a.message}
+              </TooltipContent>
+            </Tooltip>
+          )
+        })}
+      </div>
+    </TooltipProvider>
   )
 }
 
@@ -31,6 +84,8 @@ export default function Import() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<ImportConfirmResponse | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const lazadaDisabled = platform === 'lazada'
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
@@ -47,29 +102,34 @@ export default function Import() {
     else setSelectedIds(new Set(confirmable))
   }
 
-  const onDrop = useCallback(async (files: File[]) => {
-    if (!files.length) return
-    setStep('uploading')
-    setErrorMsg(null)
-    try {
-      const form = new FormData()
-      form.append('file', files[0])
-      form.append('platform', platform)
-      form.append('bill_type', billType)
-      const res = await client.post('/api/import/upload', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      const data = res.data
-      setBills(data.bills || [])
-      const preselected = (data.bills as BillPreview[]).filter((b) => !b.has_block).map((b) => b.bill_id)
-      setSelectedIds(new Set(preselected))
-      setStep('preview')
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { error?: string } } }
-      setErrorMsg(err?.response?.data?.error ?? 'อัปโหลดไม่สำเร็จ')
-      setStep('idle')
-    }
-  }, [platform, billType])
+  const onDrop = useCallback(
+    async (files: File[]) => {
+      if (!files.length) return
+      setStep('uploading')
+      setErrorMsg(null)
+      try {
+        const form = new FormData()
+        form.append('file', files[0])
+        form.append('platform', platform)
+        form.append('bill_type', billType)
+        const res = await client.post('/api/import/upload', form, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+        const data = res.data
+        setBills(data.bills || [])
+        const preselected = (data.bills as BillPreview[])
+          .filter((b) => !b.has_block)
+          .map((b) => b.bill_id)
+        setSelectedIds(new Set(preselected))
+        setStep('preview')
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { error?: string } } }
+        setErrorMsg(err?.response?.data?.error ?? 'อัปโหลดไม่สำเร็จ')
+        setStep('idle')
+      }
+    },
+    [platform, billType],
+  )
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -78,7 +138,7 @@ export default function Import() {
       'application/vnd.ms-excel': ['.xls'],
     },
     maxFiles: 1,
-    disabled: step === 'uploading',
+    disabled: step === 'uploading' || lazadaDisabled,
   })
 
   const handleConfirm = async () => {
@@ -98,206 +158,286 @@ export default function Import() {
   }
 
   const reset = () => {
-    setStep('idle'); setBills([]); setSelectedIds(new Set())
-    setResult(null); setErrorMsg(null)
+    setStep('idle')
+    setBills([])
+    setSelectedIds(new Set())
+    setResult(null)
+    setErrorMsg(null)
   }
 
   const confirmable = bills.filter((b) => !b.has_block)
   const blocked = bills.filter((b) => b.has_block)
 
   return (
-    <div>
-      <div className="import-header">
-        <h1 className="import-title">นำเข้าบิล — Lazada</h1>
-        <p className="import-subtitle">อัปโหลดไฟล์ Excel เพื่อสร้างบิลเข้าระบบ SML อัตโนมัติ</p>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="นำเข้าบิล — Lazada"
+        description="อัปโหลดไฟล์ Excel เพื่อสร้างบิลเข้าระบบ SML อัตโนมัติ"
+      />
 
-      {/* Step 1: Options + Dropzone */}
       {(step === 'idle' || step === 'uploading') && (
         <>
-          {platform === 'lazada' && (
-            <div className="alert alert-warning import-alert--top">
-              🚧 <strong>Lazada import ยังพัฒนาไม่เสร็จ</strong> — รอไฟล์ตัวอย่างจากลูกค้าเพื่อสร้าง parser
-              ระหว่างนี้ใช้ <a href="/import/shopee">/import/shopee</a> สำหรับ Shopee Excel แทน
-            </div>
+          {lazadaDisabled && (
+            <Alert>
+              <Construction className="h-4 w-4" />
+              <AlertTitle>Lazada import ยังพัฒนาไม่เสร็จ</AlertTitle>
+              <AlertDescription>
+                รอไฟล์ตัวอย่างจากลูกค้าเพื่อสร้าง parser — ระหว่างนี้ใช้{' '}
+                <a href="/import/shopee" className="font-medium text-primary hover:underline">
+                  /import/shopee
+                </a>{' '}
+                สำหรับ Shopee Excel แทน
+              </AlertDescription>
+            </Alert>
           )}
-          <div className="import-options">
-            <div className="import-options-field">
-              <label className="import-options-label" htmlFor="import-platform">Platform</label>
-              <select
-                id="import-platform"
-                className="form-select"
-                value={platform}
-                onChange={(e) => setPlatform(e.target.value as 'lazada' | 'shopee')}
-                disabled={step === 'uploading'}
-              >
-                <option value="lazada">Lazada</option>
-                <option value="shopee">Shopee</option>
-              </select>
-            </div>
-            <div className="import-options-field">
-              <label className="import-options-label" htmlFor="import-bill-type">ประเภทบิล</label>
-              <select
-                id="import-bill-type"
-                className="form-select"
-                value={billType}
-                onChange={(e) => setBillType(e.target.value as 'sale' | 'purchase')}
-                disabled={step === 'uploading'}
-              >
-                <option value="sale">บิลขาย (Sale)</option>
-                <option value="purchase">บิลซื้อ (Purchase)</option>
-              </select>
-            </div>
-          </div>
+
+          <Card>
+            <CardContent className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="platform">Platform</Label>
+                <Select
+                  value={platform}
+                  onValueChange={(v) => setPlatform(v as 'lazada' | 'shopee')}
+                >
+                  <SelectTrigger id="platform">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="lazada">Lazada</SelectItem>
+                    <SelectItem value="shopee">Shopee</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="bill-type">ประเภทบิล</Label>
+                <Select
+                  value={billType}
+                  onValueChange={(v) => setBillType(v as 'sale' | 'purchase')}
+                >
+                  <SelectTrigger id="bill-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sale">บิลขาย (Sale)</SelectItem>
+                    <SelectItem value="purchase">บิลซื้อ (Purchase)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
 
           <div
-            {...getRootProps({
-              onClick: (e) => {
-                if (platform === 'lazada') {
-                  e.stopPropagation()
-                  e.preventDefault()
-                }
-              },
-            })}
-            className={`import-dropzone${isDragActive ? ' import-dropzone--active' : ''}${step === 'uploading' || platform === 'lazada' ? ' import-dropzone--disabled' : ''}`}
-            aria-disabled={platform === 'lazada'}
+            {...getRootProps()}
+            className={cn(
+              'flex flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors',
+              'min-h-[220px] cursor-pointer p-8 text-center',
+              isDragActive
+                ? 'border-primary bg-primary/5'
+                : 'border-border bg-muted/20 hover:bg-muted/40',
+              (step === 'uploading' || lazadaDisabled) && 'cursor-not-allowed opacity-60',
+            )}
+            aria-disabled={lazadaDisabled}
           >
-            <input {...getInputProps({ disabled: platform === 'lazada' })} />
+            <input {...getInputProps()} />
             {step === 'uploading' ? (
-              <p className="import-dropzone-text">กำลังประมวลผล...</p>
+              <p className="text-sm text-muted-foreground">กำลังประมวลผล…</p>
             ) : isDragActive ? (
-              <p className="import-dropzone-text">วางไฟล์ที่นี่</p>
+              <p className="text-sm font-medium text-primary">วางไฟล์ที่นี่</p>
             ) : (
               <>
-                <div className="import-dropzone-icon">📊</div>
-                <p className="import-dropzone-text">ลากไฟล์ Excel มาวาง หรือคลิกเพื่อเลือก</p>
-                <p className="import-dropzone-hint">รองรับ .xlsx, .xls</p>
+                <FileSpreadsheet className="mb-3 h-10 w-10 text-muted-foreground" />
+                <p className="text-sm font-medium text-foreground">
+                  ลากไฟล์ Excel มาวาง หรือคลิกเพื่อเลือก
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">รองรับ .xlsx, .xls</p>
               </>
             )}
           </div>
 
-          {errorMsg && <div className="alert alert-danger import-alert--top">{errorMsg}</div>}
+          {errorMsg && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{errorMsg}</AlertDescription>
+            </Alert>
+          )}
         </>
       )}
 
-      {/* Step 2: Preview */}
       {step === 'preview' && (
         <>
-          <div className="import-preview-bar">
-            <p className="import-preview-count">
-              <strong>{bills.length}</strong> ออเดอร์จากไฟล์ &nbsp;
-              <span className="import-preview-ok">พร้อมยืนยัน {confirmable.length}</span>
-              {blocked.length > 0 && <span className="import-preview-blocked">บล็อก {blocked.length}</span>}
-            </p>
-            <div className="import-preview-actions">
-              <button type="button" className="btn btn-secondary btn-sm" onClick={reset}>อัปโหลดใหม่</button>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleConfirm}
-                disabled={selectedIds.size === 0}
-              >
-                ยืนยัน {selectedIds.size} ออเดอร์
-              </button>
-            </div>
-          </div>
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div className="flex items-baseline gap-3 text-sm">
+                <span className="font-semibold text-foreground">
+                  {bills.length} ออเดอร์
+                </span>
+                <span className="text-success">พร้อมยืนยัน {confirmable.length}</span>
+                {blocked.length > 0 && (
+                  <span className="text-destructive">บล็อก {blocked.length}</span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={reset}>
+                  อัปโหลดใหม่
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleConfirm}
+                  disabled={selectedIds.size === 0}
+                >
+                  ยืนยัน {selectedIds.size} ออเดอร์
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
 
-          {errorMsg && <div className="alert alert-danger import-alert--bottom">{errorMsg}</div>}
+          {errorMsg && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{errorMsg}</AlertDescription>
+            </Alert>
+          )}
 
-          <div className="import-table-wrap">
-            <table className="import-table">
-              <thead>
-                <tr>
-                  <th>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.size === confirmable.length && confirmable.length > 0}
-                      onChange={toggleAll}
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/40">
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={
+                        selectedIds.size === confirmable.length && confirmable.length > 0
+                      }
+                      onCheckedChange={toggleAll}
+                      aria-label="เลือกทั้งหมด"
                     />
-                  </th>
-                  <th>หมายเลขออเดอร์</th>
-                  <th>ชื่อลูกค้า</th>
-                  <th className="text-center">รายการ</th>
-                  <th className="text-center">จับคู่</th>
-                  <th className="text-right">ยอดรวม</th>
-                  <th>Anomaly</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bills.map((bill) => (
-                  <tr key={bill.bill_id} className={bill.has_block ? 'import-table tbody tr--blocked' : selectedIds.has(bill.bill_id) ? 'import-table tbody tr--selected' : ''}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(bill.bill_id)}
-                        disabled={bill.has_block}
-                        onChange={() => toggleSelect(bill.bill_id)}
-                      />
-                    </td>
-                    <td><span className="import-order-id">{bill.order_id || '—'}</span></td>
-                    <td>{bill.customer_name}</td>
-                    <td className="text-center">{bill.item_count}</td>
-                    <td className="text-center">
-                      <span className={`import-map-ratio ${bill.mapped_count < bill.item_count ? 'import-map-ratio--partial' : 'import-map-ratio--full'}`}>
-                        {bill.mapped_count}/{bill.item_count}
-                      </span>
-                    </td>
-                    <td className="text-right">
-                      {bill.total_amount > 0 ? `฿${bill.total_amount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}` : '—'}
-                    </td>
-                    <td><AnomalyBadges anomalies={bill.anomalies} hasBlock={bill.has_block} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  </TableHead>
+                  <TableHead>หมายเลขออเดอร์</TableHead>
+                  <TableHead>ชื่อลูกค้า</TableHead>
+                  <TableHead className="text-center">รายการ</TableHead>
+                  <TableHead className="text-center">จับคู่</TableHead>
+                  <TableHead className="text-right">ยอดรวม</TableHead>
+                  <TableHead>Anomaly</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {bills.map((bill) => {
+                  const checked = selectedIds.has(bill.bill_id)
+                  return (
+                    <TableRow
+                      key={bill.bill_id}
+                      className={cn(
+                        bill.has_block && 'bg-destructive/5 text-muted-foreground',
+                        checked && !bill.has_block && 'bg-primary/5',
+                      )}
+                    >
+                      <TableCell>
+                        <Checkbox
+                          checked={checked}
+                          disabled={bill.has_block}
+                          onCheckedChange={() => toggleSelect(bill.bill_id)}
+                        />
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {bill.order_id || '—'}
+                      </TableCell>
+                      <TableCell>{bill.customer_name}</TableCell>
+                      <TableCell className="text-center">{bill.item_count}</TableCell>
+                      <TableCell className="text-center">
+                        <span
+                          className={cn(
+                            'tabular-nums',
+                            bill.mapped_count < bill.item_count
+                              ? 'text-warning'
+                              : 'text-success',
+                          )}
+                        >
+                          {bill.mapped_count}/{bill.item_count}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {bill.total_amount > 0
+                          ? `฿${bill.total_amount.toLocaleString('th-TH', {
+                              minimumFractionDigits: 2,
+                            })}`
+                          : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <AnomalyBadges
+                          anomalies={bill.anomalies}
+                          hasBlock={bill.has_block}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
           </div>
         </>
       )}
 
-      {/* Step 3: Confirming */}
       {step === 'confirming' && (
-        <div className="import-processing">กำลังส่งไปยัง SML ERP... โปรดรอสักครู่</div>
+        <Card>
+          <CardContent className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
+            <Upload className="h-4 w-4 animate-pulse" />
+            กำลังส่งไปยัง SML ERP… โปรดรอสักครู่
+          </CardContent>
+        </Card>
       )}
 
-      {/* Step 4: Result */}
       {step === 'result' && result && (
         <>
-          <div className="import-result-cards">
-            <div className="import-result-card import-result-card--success">
-              <div className="import-result-card-value">{result.success}</div>
-              <div className="import-result-card-label">สำเร็จ</div>
-            </div>
-            <div className="import-result-card import-result-card--fail">
-              <div className="import-result-card-value">{result.failed}</div>
-              <div className="import-result-card-label">ล้มเหลว</div>
-            </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Card className="border-success/30 bg-success/5">
+              <CardContent className="p-5 text-center">
+                <p className="text-3xl font-semibold tabular-nums text-success">
+                  {result.success}
+                </p>
+                <p className="mt-1 text-xs font-medium text-muted-foreground">
+                  สำเร็จ
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-destructive/30 bg-destructive/5">
+              <CardContent className="p-5 text-center">
+                <p className="text-3xl font-semibold tabular-nums text-destructive">
+                  {result.failed}
+                </p>
+                <p className="mt-1 text-xs font-medium text-muted-foreground">
+                  ล้มเหลว
+                </p>
+              </CardContent>
+            </Card>
           </div>
 
           {result.errors?.length > 0 && (
             <>
-              <h3 className="import-errors-title">รายการที่ล้มเหลว</h3>
-              <div className="import-table-wrap import-table-wrap--mb">
-                <table className="import-table">
-                  <thead>
-                    <tr>
-                      <th>Bill ID</th>
-                      <th>สาเหตุ</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              <h3 className="flex items-center gap-2 text-sm font-semibold">
+                <AlertTriangle className="h-4 w-4 text-destructive" />
+                รายการที่ล้มเหลว
+              </h3>
+              <div className="overflow-hidden rounded-lg border border-border bg-card">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40">
+                      <TableHead>Bill ID</TableHead>
+                      <TableHead>สาเหตุ</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {result.errors.map((e, i) => (
-                      <tr key={i}>
-                        <td><span className="import-err-bill-id">{e.bill_id}</span></td>
-                        <td><span className="import-err-reason">{e.reason}</span></td>
-                      </tr>
+                      <TableRow key={i}>
+                        <TableCell className="font-mono text-xs">{e.bill_id}</TableCell>
+                        <TableCell className="text-destructive">{e.reason}</TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
             </>
           )}
 
-          <button type="button" className="btn btn-primary" onClick={reset}>นำเข้าไฟล์ใหม่</button>
+          <Button onClick={reset}>นำเข้าไฟล์ใหม่</Button>
         </>
       )}
     </div>

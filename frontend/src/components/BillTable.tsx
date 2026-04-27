@@ -1,7 +1,8 @@
-import type { Bill } from '../types'
-import BillStatusBadge from './BillStatusBadge'
 import dayjs from 'dayjs'
-import './BillTable.css'
+import { Badge } from '@/components/ui/badge'
+import BillStatusBadge from '@/components/BillStatusBadge'
+import { DataTable } from '@/components/common/DataTable'
+import type { Bill } from '@/types'
 
 const SOURCE_LABELS: Record<string, string> = {
   line:           'LINE',
@@ -15,66 +16,77 @@ const SOURCE_LABELS: Record<string, string> = {
 
 interface Props {
   bills: Bill[]
+  loading?: boolean
   onRowClick: (id: string) => void
 }
 
-export default function BillTable({ bills, onRowClick }: Props) {
+export default function BillTable({ bills, loading, onRowClick }: Props) {
   return (
-    <div className="bill-table-wrap">
-      <table className="bill-table">
-        <thead>
-          <tr>
-            <th>เลขบิล</th>
-            <th>Platform</th>
-            <th>วันที่</th>
-            <th className="text-right">ยอดรวม</th>
-            <th className="text-center">สถานะ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {bills.map((b) => (
-            <tr key={b.id} onClick={() => onRowClick(b.id)}>
-              <td>
-                {b.sml_doc_no
-                  ? <span className="bill-table-doc-no">{b.sml_doc_no}</span>
-                  : <span className="bill-table-doc-id">{b.id.slice(0, 8)}…</span>
-                }
-                {b.bill_type === 'purchase' && (
-                  <span
-                    title="Purchase Order"
-                    style={{
-                      marginLeft: 6, padding: '1px 6px', borderRadius: 4,
-                      background: '#fef3c7', color: '#92400e',
-                      fontSize: '0.7rem', fontWeight: 600,
-                    }}
-                  >
-                    PO
-                  </span>
-                )}
-              </td>
-              <td>
-                <span className="bill-source-badge">
-                  {SOURCE_LABELS[b.source] ?? b.source}
+    <DataTable<Bill>
+      data={bills}
+      loading={loading}
+      onRowClick={(b) => onRowClick(b.id)}
+      empty="ไม่พบรายการบิล"
+      columns={[
+        {
+          key: 'doc',
+          header: 'เลขบิล',
+          cell: (b) => (
+            <div className="flex items-center gap-2">
+              {b.sml_doc_no ? (
+                <span className="font-mono text-xs font-medium text-foreground">
+                  {b.sml_doc_no}
                 </span>
-              </td>
-              <td>{dayjs(b.created_at).format('DD/MM/YY HH:mm')}</td>
-              <td className="text-right">
-                <span className="bill-table-amount">
-                  ฿{(b.total_amount ?? 0).toLocaleString()}
+              ) : (
+                <span className="font-mono text-xs text-muted-foreground">
+                  {b.id.slice(0, 8)}…
                 </span>
-              </td>
-              <td className="text-center">
-                <BillStatusBadge status={b.status} />
-              </td>
-            </tr>
-          ))}
-          {bills.length === 0 && (
-            <tr>
-              <td colSpan={5} className="bill-table-empty">ไม่พบรายการ</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+              )}
+              {b.bill_type === 'purchase' && (
+                <Badge variant="secondary" className="h-4 bg-warning/15 px-1 text-[10px] font-semibold text-warning hover:bg-warning/20">
+                  PO
+                </Badge>
+              )}
+            </div>
+          ),
+        },
+        {
+          key: 'source',
+          header: 'ช่องทาง',
+          cell: (b) => (
+            <span className="text-xs text-muted-foreground">
+              {SOURCE_LABELS[b.source] ?? b.source}
+            </span>
+          ),
+        },
+        {
+          key: 'date',
+          header: 'วันที่',
+          cell: (b) => (
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {dayjs(b.created_at).format('DD/MM/YY HH:mm')}
+            </span>
+          ),
+        },
+        {
+          key: 'amount',
+          header: 'ยอดรวม',
+          headerClassName: 'text-right',
+          className: 'text-right',
+          cell: (b) => (
+            <span className="font-medium tabular-nums">
+              ฿{(b.total_amount ?? 0).toLocaleString()}
+            </span>
+          ),
+        },
+        {
+          key: 'status',
+          header: 'สถานะ',
+          headerClassName: 'text-center',
+          className: 'text-center',
+          cell: (b) => <BillStatusBadge status={b.status} />,
+        },
+      ]}
+    />
   )
 }

@@ -1,20 +1,18 @@
-import type { BillStatus } from '../types'
-import './BillStatusBadge.css'
+import { StatusDot } from '@/components/common/StatusDot'
+import type { BillStatus } from '@/types'
 
-const CONFIG: Record<string, { label: string }> = {
-  pending:      { label: 'รอดำเนินการ' },
-  needs_review: { label: 'รอตรวจสอบ' },
-  sent:         { label: 'SML สำเร็จ' },
-  failed:       { label: 'ล้มเหลว' },
-  skipped:      { label: 'ข้ามแล้ว' },
+const CONFIG: Record<
+  string,
+  { label: string; variant: 'success' | 'warning' | 'danger' | 'muted' | 'info' | 'primary' }
+> = {
+  pending:      { label: 'รอดำเนินการ', variant: 'info' },
+  needs_review: { label: 'รอตรวจสอบ',   variant: 'warning' },
+  sent:         { label: 'SML สำเร็จ',  variant: 'success' },
+  failed:       { label: 'ล้มเหลว',     variant: 'danger' },
+  skipped:      { label: 'ข้ามแล้ว',    variant: 'muted' },
 }
 
 export default function BillStatusBadge({ status }: { status: BillStatus | string }) {
-  const cfg = CONFIG[status] ?? { label: status }
-  return (
-    <span className={`bill-status-badge bill-status-badge--${status}`}>
-      <span className="bill-status-dot" />
-      {cfg.label}
-    </span>
-  )
+  const cfg = CONFIG[status] ?? { label: status, variant: 'muted' as const }
+  return <StatusDot variant={cfg.variant} label={cfg.label} />
 }

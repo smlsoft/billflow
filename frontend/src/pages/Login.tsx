@@ -1,28 +1,25 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import client from '../api/client'
-import { useAuthStore } from '../store/auth'
-import type { User } from '../types'
-import './Login.css'
+import { AlertCircle, FileText } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import client from '@/api/client'
+import { useAuthStore } from '@/store/auth'
+import type { User } from '@/types'
 
 interface LoginResponse {
   token: string
   user: User
 }
-
-const LogoIcon = () => (
-  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
-    <polyline points="13,2 13,9 20,9"/>
-    <path d="M9 14l2 2 4-4" strokeWidth="2.5"/>
-  </svg>
-)
-
-const AlertIcon = () => (
-  <svg className="login-error-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-  </svg>
-)
 
 export default function Login() {
   const navigate = useNavigate()
@@ -48,23 +45,28 @@ export default function Login() {
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        {/* Header */}
-        <div className="login-header">
-          <div className="login-logo-wrap">
-            <LogoIcon />
-          </div>
-          <h1 className="login-title">BillFlow</h1>
-          <p className="login-subtitle">AI-powered bill processing system</p>
-        </div>
+    <div className="relative flex min-h-screen items-center justify-center bg-background px-4 py-12">
+      {/* Subtle radial gradient background */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+      >
+        <div className="absolute left-1/2 top-1/4 h-[600px] w-[600px] -translate-x-1/2 rounded-full bg-primary/10 blur-3xl dark:bg-primary/20" />
+      </div>
 
-        {/* Form */}
-        <div className="login-body">
-          <form onSubmit={handleSubmit}>
-            <div className="login-field">
-              <label htmlFor="email">อีเมล</label>
-              <input
+      <Card className="relative w-full max-w-sm">
+        <CardHeader className="items-center text-center">
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+            <FileText className="h-6 w-6" strokeWidth={2.25} />
+          </div>
+          <CardTitle className="text-2xl">BillFlow</CardTitle>
+          <CardDescription>AI-powered bill processing system</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">อีเมล</Label>
+              <Input
                 id="email"
                 type="email"
                 value={email}
@@ -75,9 +77,9 @@ export default function Login() {
                 autoComplete="email"
               />
             </div>
-            <div className="login-field">
-              <label htmlFor="password">รหัสผ่าน</label>
-              <input
+            <div className="space-y-2">
+              <Label htmlFor="password">รหัสผ่าน</Label>
+              <Input
                 id="password"
                 type="password"
                 value={password}
@@ -89,20 +91,22 @@ export default function Login() {
             </div>
 
             {error && (
-              <div className="login-error">
-                <AlertIcon />
-                {error}
-              </div>
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
             )}
 
-            <button type="submit" className="login-btn" disabled={loading}>
-              {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
-            </button>
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'กำลังเข้าสู่ระบบ…' : 'เข้าสู่ระบบ'}
+            </Button>
           </form>
 
-          <p className="login-footer">BillFlow v0.2.0</p>
-        </div>
-      </div>
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            BillFlow v0.2.0
+          </p>
+        </CardContent>
+      </Card>
     </div>
   )
 }

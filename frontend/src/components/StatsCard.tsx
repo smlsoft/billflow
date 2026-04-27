@@ -1,26 +1,46 @@
-import './StatsCard.css'
+import { type LucideIcon } from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
-interface Props {
+export interface StatsCardProps {
   label: string
   value: string | number
-  icon: React.ReactNode
-  iconBg?: string
-  iconColor?: string
+  icon: LucideIcon
+  variant?: 'primary' | 'success' | 'warning' | 'danger' | 'info'
+  hint?: string
+  className?: string
 }
 
-export default function StatsCard({ label, value, icon, iconBg = '#eef2ff', iconColor = '#4f46e5' }: Props) {
+const tone: Record<NonNullable<StatsCardProps['variant']>, string> = {
+  primary: 'bg-primary/10 text-primary',
+  success: 'bg-success/10 text-success',
+  warning: 'bg-warning/10 text-warning',
+  danger: 'bg-destructive/10 text-destructive',
+  info: 'bg-info/10 text-info',
+}
+
+export default function StatsCard({
+  label,
+  value,
+  icon: Icon,
+  variant = 'primary',
+  hint,
+  className,
+}: StatsCardProps) {
   return (
-    <div className="stats-card">
-      <div className="stats-card-top">
-        <p className="stats-card-label">{label}</p>
-        <div
-          className="stats-card-icon"
-          style={{ '--icon-bg': iconBg, '--icon-color': iconColor } as React.CSSProperties}
-        >
-          {icon}
+    <Card className={cn('transition-shadow hover:shadow-sm', className)}>
+      <CardContent className="flex items-start justify-between gap-3 p-5">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+            {value}
+          </p>
+          {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
         </div>
-      </div>
-      <div className="stats-card-value">{value}</div>
-    </div>
+        <div className={cn('flex h-9 w-9 items-center justify-center rounded-lg', tone[variant])}>
+          <Icon className="h-[18px] w-[18px]" strokeWidth={2} />
+        </div>
+      </CardContent>
+    </Card>
   )
 }

@@ -1,7 +1,34 @@
 import { useEffect, useState, useRef, useCallback, useMemo, useReducer } from 'react'
-import api from '../api/client'
-import type { CatalogItem } from '../types'
-import './CatalogSettings.css'
+import {
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  Database,
+  Loader2,
+  RefreshCcw,
+  RotateCw,
+  Search,
+  Sparkles,
+  Upload,
+  X,
+} from 'lucide-react'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { PageHeader } from '@/components/common/PageHeader'
+import api from '@/api/client'
+import { cn } from '@/lib/utils'
+import type { CatalogItem } from '@/types'
 
 interface CatalogStats {
   total: number
@@ -20,20 +47,19 @@ interface ListResponse {
 }
 
 type StatusFilter = '' | 'pending' | 'done' | 'error'
+interface FetchParams { page: number; filter: StatusFilter; query: string }
 
-const SearchIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-  </svg>
-)
-
-const ClearIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-  </svg>
-)
-
-function Pagination({ page, total, perPage, onChange }: { page: number; total: number; perPage: number; onChange: (p: number) => void }) {
+function Pagination({
+  page,
+  total,
+  perPage,
+  onChange,
+}: {
+  page: number
+  total: number
+  perPage: number
+  onChange: (p: number) => void
+}) {
   const totalPages = Math.max(1, Math.ceil(total / perPage))
   if (totalPages <= 1) return null
 
@@ -49,25 +75,75 @@ function Pagination({ page, total, perPage, onChange }: { page: number; total: n
   }
 
   return (
-    <div className="catalog-pagination">
-      <button type="button" className="catalog-page-btn" disabled={page <= 1} onClick={() => onChange(page - 1)}>‹</button>
+    <div className="flex items-center gap-1">
+      <Button
+        size="icon"
+        variant="outline"
+        className="h-7 w-7"
+        disabled={page <= 1}
+        onClick={() => onChange(page - 1)}
+        aria-label="หน้าก่อน"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" />
+      </Button>
       {pages.map((p, i) =>
-        p === '…'
-          ? <span key={`e${i}`} className="catalog-page-ellipsis">…</span>
-          : <button
-              type="button"
-              key={p}
-              className={`catalog-page-btn${page === p ? ' catalog-page-btn--active' : ''}`}
-              onClick={() => onChange(p as number)}
-            >{p}</button>
+        p === '…' ? (
+          <span key={`e${i}`} className="px-1 text-xs text-muted-foreground">
+            …
+          </span>
+        ) : (
+          <Button
+            key={p}
+            size="sm"
+            variant={page === p ? 'default' : 'ghost'}
+            className="h-7 min-w-[28px] px-2 text-xs"
+            onClick={() => onChange(p as number)}
+          >
+            {p}
+          </Button>
+        ),
       )}
-      <button type="button" className="catalog-page-btn" disabled={page >= totalPages} onClick={() => onChange(page + 1)}>›</button>
+      <Button
+        size="icon"
+        variant="outline"
+        className="h-7 w-7"
+        disabled={page >= totalPages}
+        onClick={() => onChange(page + 1)}
+        aria-label="หน้าถัดไป"
+      >
+        <ChevronRight className="h-3.5 w-3.5" />
+      </Button>
     </div>
   )
 }
 
-// Fetch params bundled so useCallback has stable deps
-interface FetchParams { page: number; filter: StatusFilter; query: string }
+function StatChip({
+  label,
+  value,
+  variant = 'muted',
+}: {
+  label: string
+  value: number | string
+  variant?: 'success' | 'warning' | 'danger' | 'primary' | 'muted'
+}) {
+  const styles: Record<typeof variant, string> = {
+    success: 'border-success/30 bg-success/5 text-success',
+    warning: 'border-warning/30 bg-warning/5 text-warning',
+    danger: 'border-destructive/30 bg-destructive/5 text-destructive',
+    primary: 'border-primary/30 bg-primary/5 text-primary',
+    muted: 'border-border bg-card text-foreground',
+  }
+  return (
+    <Card className={cn('flex-1', styles[variant])}>
+      <CardContent className="px-4 py-3">
+        <p className="text-xl font-semibold tabular-nums">{value}</p>
+        <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function CatalogSettings() {
   const [stats, setStats] = useState<CatalogStats | null>(null)
@@ -77,14 +153,18 @@ export default function CatalogSettings() {
   const [syncing, setSyncing] = useState(false)
   const [embedding, setEmbedding] = useState(false)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
-  // draft = what user is typing; params = what was actually fetched
   const [draft, setDraft] = useState('')
   const [params, setParams] = useReducer(
     (_prev: FetchParams, next: Partial<FetchParams> & { reset?: boolean }) => {
       const base = next.reset ? { page: 1, filter: '' as StatusFilter, query: '' } : _prev
-      return { ...base, page: next.page ?? 1, filter: next.filter ?? base.filter, query: next.query ?? base.query }
+      return {
+        ...base,
+        page: next.page ?? 1,
+        filter: next.filter ?? base.filter,
+        query: next.query ?? base.query,
+      }
     },
-    { page: 1, filter: '', query: '' }
+    { page: 1, filter: '', query: '' },
   )
   const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -110,17 +190,14 @@ export default function CatalogSettings() {
     }
   }, [])
 
-  // Fetch when params change
   useEffect(() => {
     fetchItems(params)
   }, [params, fetchItems])
 
-  // Initial stats load
   useEffect(() => {
     fetchStats()
   }, [fetchStats])
 
-  // Auto-refresh stats while embedding is running
   useEffect(() => {
     if (stats?.embed_running) {
       pollRef.current = setInterval(async () => {
@@ -133,8 +210,10 @@ export default function CatalogSettings() {
     } else {
       if (pollRef.current) clearInterval(pollRef.current)
     }
-    return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stats?.embed_running])
 
   function notify(text: string, ok = true) {
@@ -153,16 +232,10 @@ export default function CatalogSettings() {
 
   function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') commitSearch(draft)
-    if (e.key === 'Escape') { setDraft(''); commitSearch('') }
-  }
-
-  function handleClearSearch() {
-    setDraft('')
-    commitSearch('')
-  }
-
-  function handlePageChange(p: number) {
-    setParams({ page: p })
+    if (e.key === 'Escape') {
+      setDraft('')
+      commitSearch('')
+    }
   }
 
   async function handleSync() {
@@ -233,213 +306,290 @@ export default function CatalogSettings() {
     }
   }
 
-  const pct = useMemo(() =>
-    stats && stats.total > 0 ? Math.round(stats.embedded / stats.total * 100) : 0
-  , [stats])
-
+  const pct = useMemo(
+    () => (stats && stats.total > 0 ? Math.round((stats.embedded / stats.total) * 100) : 0),
+    [stats],
+  )
 
   const isEmbedBusy = embedding || (stats?.embed_running ?? false)
 
+  const tabs: Array<{ key: StatusFilter; label: string; count?: number }> = [
+    { key: '', label: 'ทั้งหมด', count: stats?.total },
+    { key: 'done', label: 'Embedded', count: stats?.embedded },
+    { key: 'pending', label: 'Pending', count: stats?.pending },
+    { key: 'error', label: 'Error', count: stats?.error },
+  ]
+
   return (
-    <div className="catalog-page">
+    <div className="space-y-5">
+      <PageHeader
+        title="Catalog สินค้า SML"
+        description="สินค้าจาก SML ใช้สำหรับ Smart Matching อีเมล Shopee + การจับคู่ในบิล"
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
+              <RotateCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
+              {syncing ? 'กำลัง Sync…' : 'Sync จาก SML'}
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <label className="cursor-pointer">
+                <Upload className="h-3.5 w-3.5" />
+                Import CSV
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".csv"
+                  onChange={handleCSVUpload}
+                  className="sr-only"
+                />
+              </label>
+            </Button>
+            <Button size="sm" onClick={handleEmbedAll} disabled={isEmbedBusy}>
+              {isEmbedBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {isEmbedBusy ? 'กำลัง Embed…' : 'Embed All Pending'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleReload}>
+              <RefreshCcw className="h-3.5 w-3.5" />
+              Reload Index
+            </Button>
+          </>
+        }
+      />
 
-      {/* ── Top bar ── */}
-      <div className="catalog-topbar">
-        <div className="catalog-heading">
-          <h1 className="catalog-title">Catalog สินค้า SML</h1>
-          <p className="catalog-subtitle">สินค้าจาก SML ใช้สำหรับ Smart Matching อีเมล Shopee</p>
-        </div>
-        <div className="catalog-actions">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={handleSync} disabled={syncing}>
-            {syncing ? '↻ กำลัง Sync...' : '↻ Sync จาก SML API'}
-          </button>
-          <label className="btn btn-secondary btn-sm catalog-csv-btn">
-            ↑ Import CSV
-            <input ref={fileRef} type="file" accept=".csv" onChange={handleCSVUpload} hidden />
-          </label>
-          <button type="button" className="btn btn-primary btn-sm" onClick={handleEmbedAll} disabled={isEmbedBusy}>
-            {isEmbedBusy ? '⏳ กำลัง Embed...' : '✦ Embed All Pending'}
-          </button>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={handleReload}>
-            ⚡ Reload Index
-          </button>
-        </div>
-      </div>
-
-      {/* ── Toast ── */}
       {message && (
-        <div className={`catalog-toast ${message.ok ? 'catalog-toast--ok' : 'catalog-toast--err'}`}>
-          {message.ok ? '✓' : '✕'} {message.text}
+        <div
+          className={cn(
+            'fixed right-4 top-4 z-50 flex items-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium shadow-md',
+            message.ok
+              ? 'border-success/30 bg-success/10 text-success'
+              : 'border-destructive/30 bg-destructive/10 text-destructive',
+          )}
+        >
+          {message.ok ? '✓' : <AlertCircle className="h-4 w-4" />}
+          {message.text}
         </div>
       )}
 
-      {/* ── Stats row ── */}
       {stats && (
-        <div className="catalog-stats-row">
-          <div className="catalog-stat-card">
-            <span className="catalog-stat-num">{stats.total.toLocaleString()}</span>
-            <span className="catalog-stat-lbl">สินค้าทั้งหมด</span>
-          </div>
-          <div className="catalog-stat-card catalog-stat-card--green">
-            <span className="catalog-stat-num catalog-stat-num--green">{stats.embedded.toLocaleString()}</span>
-            <span className="catalog-stat-lbl">Embedded</span>
-          </div>
-          <div className="catalog-stat-card catalog-stat-card--yellow">
-            <span className="catalog-stat-num catalog-stat-num--yellow">{stats.pending.toLocaleString()}</span>
-            <span className="catalog-stat-lbl">Pending</span>
-          </div>
-          <div className="catalog-stat-card catalog-stat-card--blue">
-            <span className="catalog-stat-num catalog-stat-num--blue">{stats.index_size.toLocaleString()}</span>
-            <span className="catalog-stat-lbl">Index Size</span>
-          </div>
+        <div className="flex flex-wrap gap-3">
+          <StatChip label="สินค้าทั้งหมด" value={stats.total.toLocaleString()} variant="primary" />
+          <StatChip label="Embedded" value={stats.embedded.toLocaleString()} variant="success" />
+          <StatChip label="Pending" value={stats.pending.toLocaleString()} variant="warning" />
+          <StatChip label="Index Size" value={stats.index_size.toLocaleString()} variant="primary" />
           {stats.embed_running ? (
-            <div className="catalog-stat-card catalog-stat-card--pulse">
-              <div className="catalog-embed-running">
-                <div className="catalog-embed-running-dot" />
-                กำลัง Embed...
-              </div>
-              <div className="catalog-embed-hint">auto-refresh ทุก 3 วินาที</div>
-            </div>
+            <Card className="flex-1 border-primary/30 bg-primary/5">
+              <CardContent className="flex items-center gap-3 px-4 py-3">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <div>
+                  <p className="text-sm font-medium text-primary">กำลัง Embed…</p>
+                  <p className="text-xs text-muted-foreground">auto-refresh ทุก 3 วินาที</p>
+                </div>
+              </CardContent>
+            </Card>
           ) : stats.error > 0 ? (
-            <div className="catalog-stat-card catalog-stat-card--red">
-              <span className="catalog-stat-num catalog-stat-num--red">{stats.error}</span>
-              <span className="catalog-stat-lbl">Error</span>
-            </div>
+            <StatChip label="Error" value={stats.error.toLocaleString()} variant="danger" />
           ) : null}
         </div>
       )}
 
-      {/* ── Progress bar ── */}
       {stats && stats.total > 0 && (
-        <div className="catalog-progress-wrap">
-          <div className="catalog-progress-meta">
-            <span className="catalog-progress-label">Embedding Progress</span>
-            <span className="catalog-progress-pct">{stats.embedded.toLocaleString()} / {stats.total.toLocaleString()} ({pct}%)</span>
-          </div>
-          <div className="catalog-progress-track">
-            <div
-              className="catalog-progress-fill"
-              style={{ '--progress': `${pct}%` } as React.CSSProperties}
-            />
-          </div>
-        </div>
+        <Card>
+          <CardContent className="space-y-2 p-4">
+            <div className="flex items-baseline justify-between text-sm">
+              <span className="font-medium text-foreground">Embedding Progress</span>
+              <span className="tabular-nums text-muted-foreground">
+                {stats.embedded.toLocaleString()} / {stats.total.toLocaleString()} ({pct}%)
+              </span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-success transition-all"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </CardContent>
+        </Card>
       )}
 
-      {/* ── Toolbar ── */}
-      <div className="catalog-toolbar">
-        <div className="catalog-tabs">
-          {([
-            { key: '' as StatusFilter,        label: 'ทั้งหมด',  count: stats?.total,    cls: '' },
-            { key: 'done' as StatusFilter,    label: 'Embedded', count: stats?.embedded, cls: '' },
-            { key: 'pending' as StatusFilter, label: 'Pending',  count: stats?.pending,  cls: 'catalog-tab-count--yellow' },
-            { key: 'error' as StatusFilter,   label: 'Error',    count: stats?.error,    cls: 'catalog-tab-count--red' },
-          ]).map(({ key, label, count, cls }) => (
-            <button
-              type="button"
-              key={key}
-              className={`catalog-tab${params.filter === key ? ' catalog-tab--active' : ''}`}
-              onClick={() => handleFilterChange(key)}
-            >
-              {label}
-              {count != null && count > 0 && (
-                <span className={`catalog-tab-count ${params.filter === key ? '' : cls}`}>
-                  {count > 9999 ? '9999+' : count}
-                </span>
-              )}
-            </button>
-          ))}
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5">
+          {tabs.map(({ key, label, count }) => {
+            const active = params.filter === key
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => handleFilterChange(key)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors',
+                  active
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+                {count != null && count > 0 && (
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      'h-4 px-1 text-[10px] tabular-nums',
+                      key === 'pending' && 'bg-warning/15 text-warning',
+                      key === 'error' && 'bg-destructive/15 text-destructive',
+                    )}
+                  >
+                    {count > 9999 ? '9999+' : count}
+                  </Badge>
+                )}
+              </button>
+            )
+          })}
         </div>
-        <div className="catalog-search">
-          <span className="catalog-search-icon"><SearchIcon /></span>
-          <input
-            type="text"
-            className="catalog-search-input"
-            placeholder="ค้นหา... (Enter เพื่อค้นหา)"
+
+        <div className="relative w-full max-w-sm">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="ค้นหา… (Enter เพื่อค้นหา)"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleSearchKeyDown}
+            className="h-9 pl-8 pr-16"
           />
           {draft && (
-            <button type="button" className="catalog-search-clear" onClick={handleClearSearch} title="ล้างการค้นหา">
-              <ClearIcon />
+            <button
+              type="button"
+              className="absolute right-12 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setDraft('')
+                commitSearch('')
+              }}
+              aria-label="ล้างการค้นหา"
+            >
+              <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <button type="button" className="catalog-search-btn" onClick={() => commitSearch(draft)}>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="absolute right-1 top-1/2 h-7 -translate-y-1/2 px-2 text-xs"
+            onClick={() => commitSearch(draft)}
+          >
             ค้นหา
-          </button>
+          </Button>
         </div>
       </div>
 
-      {/* ── Table area ── */}
-      <div className="catalog-table-area">
-        <div className="catalog-table-scroll">
-          <table className="catalog-table">
-            <thead>
-              <tr>
-                <th className="col-code">Item Code</th>
-                <th>ชื่อสินค้า</th>
-                <th className="col-unit">หน่วย</th>
-                <th className="col-price">ราคา</th>
-                <th className="col-status">Embed Status</th>
-                <th className="col-date">Embedded At</th>
-                <th className="col-action">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={7} className="catalog-state-cell">
-                    <div className="catalog-loading-spinner" />
-                    กำลังโหลด...
-                  </td>
-                </tr>
-              ) : items.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="catalog-state-cell">
-                    {params.query ? `ไม่พบสินค้าที่ตรงกับ "${params.query}"` : 'ไม่มีข้อมูล'}
-                  </td>
-                </tr>
-              ) : items.map((item) => (
-                <tr key={item.item_code}>
-                  <td className="catalog-col-code">{item.item_code}</td>
-                  <td>
-                    <div className="catalog-col-name">{item.item_name}</div>
-                    {item.item_name2 && <div className="catalog-col-name2">{item.item_name2}</div>}
-                  </td>
-                  <td className="catalog-col-unit">{item.unit_code || '—'}</td>
-                  <td className="catalog-col-price">
-                    {item.sale_price != null ? `฿${item.sale_price.toLocaleString()}` : '—'}
-                  </td>
-                  <td className="col-status">
-                    <span className={`catalog-badge catalog-badge--${item.embedding_status}`}>
-                      {item.embedding_status === 'done' ? '✓ done' : item.embedding_status}
-                    </span>
-                  </td>
-                  <td className="catalog-col-date">
-                    {item.embedded_at ? new Date(item.embedded_at).toLocaleDateString('th-TH') : '—'}
-                  </td>
-                  <td className="col-action">
-                    {item.embedding_status !== 'done' && (
-                      <button type="button" className="btn btn-secondary btn-xs" onClick={() => handleEmbedOne(item.item_code)}>
-                        Embed
-                      </button>
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/40">
+              <TableHead className="w-[140px]">Item Code</TableHead>
+              <TableHead>ชื่อสินค้า</TableHead>
+              <TableHead className="w-[80px]">หน่วย</TableHead>
+              <TableHead className="w-[100px] text-right">ราคา</TableHead>
+              <TableHead className="w-[120px]">สถานะ</TableHead>
+              <TableHead className="w-[120px]">Embedded At</TableHead>
+              <TableHead className="w-[80px] text-right">Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <TableRow>
+                <TableCell colSpan={7} className="py-12 text-center text-sm text-muted-foreground">
+                  <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
+                  กำลังโหลด…
+                </TableCell>
+              </TableRow>
+            ) : items.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="py-12 text-center text-sm">
+                  <Database className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
+                  <p className="text-muted-foreground">
+                    {params.query
+                      ? `ไม่พบสินค้าที่ตรงกับ "${params.query}"`
+                      : 'ไม่มีข้อมูล'}
+                  </p>
+                </TableCell>
+              </TableRow>
+            ) : (
+              items.map((item) => (
+                <TableRow key={item.item_code}>
+                  <TableCell className="font-mono text-xs font-medium">
+                    {item.item_code}
+                  </TableCell>
+                  <TableCell>
+                    <div className="text-sm">{item.item_name}</div>
+                    {item.item_name2 && (
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {item.item_name2}
+                      </div>
                     )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* ── Footer / pagination ── */}
-        <div className="catalog-footer">
-          <span className="catalog-footer-info">
-            {loading ? 'กำลังโหลด...' : `${total.toLocaleString()} รายการ · หน้า ${params.page} / ${Math.max(1, Math.ceil(total / PER_PAGE))}`}
-          </span>
-          <Pagination page={params.page} total={total} perPage={PER_PAGE} onChange={handlePageChange} />
-        </div>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {item.unit_code || '—'}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {item.sale_price != null
+                      ? `฿${item.sale_price.toLocaleString()}`
+                      : '—'}
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="secondary"
+                      className={cn(
+                        item.embedding_status === 'done' &&
+                          'bg-success/15 text-success hover:bg-success/20',
+                        item.embedding_status === 'pending' &&
+                          'bg-warning/15 text-warning hover:bg-warning/20',
+                        item.embedding_status === 'error' &&
+                          'bg-destructive/15 text-destructive hover:bg-destructive/20',
+                      )}
+                    >
+                      {item.embedding_status === 'done' ? '✓ done' : item.embedding_status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums text-muted-foreground">
+                    {item.embedded_at
+                      ? new Date(item.embedded_at).toLocaleDateString('th-TH')
+                      : '—'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {item.embedding_status !== 'done' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => handleEmbedOne(item.item_code)}
+                      >
+                        Embed
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span>
+          {loading
+            ? 'กำลังโหลด…'
+            : `${total.toLocaleString()} รายการ · หน้า ${params.page} / ${Math.max(1, Math.ceil(total / PER_PAGE))}`}
+        </span>
+        <Pagination
+          page={params.page}
+          total={total}
+          perPage={PER_PAGE}
+          onChange={(p) => setParams({ page: p })}
+        />
+      </div>
     </div>
   )
 }

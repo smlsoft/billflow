@@ -1,154 +1,153 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useBills } from '../hooks/useBills'
-import BillTable from '../components/BillTable'
-import './Bills.css'
+import { Search } from 'lucide-react'
+
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import BillTable from '@/components/BillTable'
+import { PageHeader } from '@/components/common/PageHeader'
+import { useBills } from '@/hooks/useBills'
 
 const PER_PAGE = 20
+const ALL = '__all__'
 
 const STATUS_OPTIONS = [
-  { value: '', label: 'ทุกสถานะ' },
+  { value: ALL, label: 'ทุกสถานะ' },
   { value: 'pending', label: 'รอดำเนินการ' },
   { value: 'needs_review', label: 'รอตรวจสอบ' },
-  { value: 'confirmed', label: 'ยืนยันแล้ว' },
   { value: 'sent', label: 'SML สำเร็จ' },
   { value: 'failed', label: 'ล้มเหลว' },
+  { value: 'skipped', label: 'ข้ามแล้ว' },
 ]
 
 const SOURCE_OPTIONS = [
-  { value: '', label: 'ทุกช่องทาง' },
+  { value: ALL, label: 'ทุกช่องทาง' },
   { value: 'line', label: 'LINE OA' },
   { value: 'email', label: 'Email' },
   { value: 'shopee', label: 'Shopee Excel' },
-  { value: 'shopee_email', label: 'Shopee Email (Order)' },
-  { value: 'shopee_shipped', label: 'Shopee จัดส่งแล้ว (PO)' },
+  { value: 'shopee_email', label: 'Shopee Order' },
+  { value: 'shopee_shipped', label: 'Shopee Shipped (PO)' },
   { value: 'lazada', label: 'Lazada' },
   { value: 'manual', label: 'Manual' },
 ]
 
 const BILL_TYPE_OPTIONS = [
-  { value: '', label: 'ทุกประเภท' },
+  { value: ALL, label: 'ทุกประเภท' },
   { value: 'sale', label: 'บิลขาย' },
   { value: 'purchase', label: 'บิลซื้อ (PO)' },
 ]
 
-const SearchIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-  </svg>
-)
-
 export default function Bills() {
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
-  const [status, setStatus] = useState('')
-  const [source, setSource] = useState('')
-  const [billType, setBillType] = useState('')
+  const [status, setStatus] = useState<string>(ALL)
+  const [source, setSource] = useState<string>(ALL)
+  const [billType, setBillType] = useState<string>(ALL)
   const [search, setSearch] = useState('')
-  const { data, loading } = useBills({ page, per_page: PER_PAGE, status, source, bill_type: billType, search })
 
-  const totalPages = data ? Math.ceil(data.total / PER_PAGE) : 1
+  const { data, loading } = useBills({
+    page,
+    per_page: PER_PAGE,
+    status: status === ALL ? '' : status,
+    source: source === ALL ? '' : source,
+    bill_type: billType === ALL ? '' : billType,
+    search,
+  })
+
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / PER_PAGE)) : 1
   const hasMore = data ? page * PER_PAGE < data.total : false
 
-  const handleSearch = (val: string) => {
-    setSearch(val)
-    setPage(1)
-  }
-
-  const handleStatus = (val: string) => {
-    setStatus(val)
-    setPage(1)
-  }
-
-  const handleSource = (val: string) => {
-    setSource(val)
-    setPage(1)
-  }
-
-  const handleBillType = (val: string) => {
-    setBillType(val)
+  const resetPage = (cb: () => void) => {
+    cb()
     setPage(1)
   }
 
   return (
-    <div>
-      <div className="bills-header">
-        <div>
-          <h1 className="bills-title">รายการบิล</h1>
-          <p className="bills-subtitle">ติดตามและจัดการบิลทั้งหมดในระบบ</p>
-        </div>
-      </div>
+    <div className="space-y-5">
+      <PageHeader title="รายการบิล" description="ติดตามและจัดการบิลทั้งหมดในระบบ" />
 
-      <div className="bills-filter-bar">
-        <div className="bills-search-wrap">
-          <span className="bills-search-icon"><SearchIcon /></span>
-          <input
-            className="bills-search-input"
-            placeholder="ค้นหาผู้ขาย / เลขบิล..."
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full max-w-xs">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="ค้นหาผู้ขาย / เลขบิล…"
             value={search}
-            onChange={(e) => handleSearch(e.target.value)}
+            onChange={(e) => resetPage(() => setSearch(e.target.value))}
+            className="h-9 pl-8"
           />
         </div>
-        <select
-          className="form-select"
-          value={status}
-          onChange={(e) => handleStatus(e.target.value)}
-        >
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <select
-          className="form-select"
-          value={source}
-          onChange={(e) => handleSource(e.target.value)}
-        >
-          {SOURCE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <select
-          className="form-select"
-          value={billType}
-          onChange={(e) => handleBillType(e.target.value)}
-        >
-          {BILL_TYPE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
+
+        <Select value={status} onValueChange={(v) => resetPage(() => setStatus(v))}>
+          <SelectTrigger className="h-9 w-[170px]">
+            <SelectValue placeholder="สถานะ" />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={source} onValueChange={(v) => resetPage(() => setSource(v))}>
+          <SelectTrigger className="h-9 w-[180px]">
+            <SelectValue placeholder="ช่องทาง" />
+          </SelectTrigger>
+          <SelectContent>
+            {SOURCE_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={billType} onValueChange={(v) => resetPage(() => setBillType(v))}>
+          <SelectTrigger className="h-9 w-[150px]">
+            <SelectValue placeholder="ประเภท" />
+          </SelectTrigger>
+          <SelectContent>
+            {BILL_TYPE_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
-      {loading ? (
-        <div className="bills-loading">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="skeleton bills-loading-row" />
-          ))}
+      <BillTable
+        bills={data?.data ?? []}
+        loading={loading}
+        onRowClick={(id) => navigate(`/bills/${id}`)}
+      />
+
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>ทั้งหมด {(data?.total ?? 0).toLocaleString()} รายการ</span>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            ก่อนหน้า
+          </Button>
+          <span className="px-1 tabular-nums text-foreground">
+            หน้า {page} / {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasMore}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            ถัดไป
+          </Button>
         </div>
-      ) : (
-        <>
-          <BillTable bills={data?.data ?? []} onRowClick={(id) => navigate(`/bills/${id}`)} />
-          <div className="bills-footer">
-            <span className="bills-total-label">ทั้งหมด {data?.total ?? 0} รายการ</span>
-            <div className="bills-pagination">
-              <button
-                className="btn btn-secondary btn-sm"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
-              >
-                ก่อนหน้า
-              </button>
-              <span className="bills-page-label">หน้า {page} / {totalPages}</span>
-              <button
-                className="btn btn-secondary btn-sm"
-                disabled={!hasMore}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                ถัดไป
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      </div>
     </div>
   )
 }
