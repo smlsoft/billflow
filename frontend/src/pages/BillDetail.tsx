@@ -56,7 +56,13 @@ function JsonSection({ label, data }: { label: string; data: unknown }) {
 // doc_date, etc.) so we can render labeled rows with an icon and colour-
 // coded flow badge. Falls back to the raw JSON in a collapsed <details>
 // so engineers can still see the full payload.
-function RawDataCard({ data }: { data: Record<string, unknown> | null | undefined }) {
+function RawDataCard({
+  data,
+  items,
+}: {
+  data: Record<string, unknown> | null | undefined
+  items?: BillItem[]
+}) {
   if (!data) return null
 
   const flow = (data.flow as string | undefined) ?? ''
@@ -127,11 +133,63 @@ function RawDataCard({ data }: { data: Record<string, unknown> | null | undefine
       {fieldRow('📎', 'ไฟล์แนบ', file, true)}
       {fieldRow('🏷️', 'สถานะ Shopee', status)}
       {fieldRow('🆔', 'Message ID', msgID, true)}
+      {items && items.length > 0 && (
+        <div style={{
+          marginTop: 12, paddingTop: 12, borderTop: '1px solid #e2e8f0',
+        }}>
+          <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: 8 }}>
+            📋 รายการที่ระบบดึงมา ({items.length} รายการ):
+          </div>
+          {items.map((it) => {
+            const candidate = (it.candidates ?? []).find((c) => c.item_code === it.item_code)
+            const score = candidate?.score
+            const scorePct = score != null ? Math.round(score * 100) : null
+            const scoreColor =
+              score == null ? '#94a3b8' :
+              score >= 0.85 ? '#15803d' :
+              score >= 0.6 ? '#a16207' : '#b91c1c'
+            return (
+              <div key={it.id} style={{
+                display: 'flex', gap: 8, padding: '6px 0',
+                fontSize: '0.85rem', alignItems: 'flex-start',
+                borderBottom: '1px dashed #f1f5f9',
+              }}>
+                <div style={{ flex: 1, color: '#0f172a', wordBreak: 'break-word' }}>
+                  {it.raw_name}
+                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 2 }}>
+                    →{' '}
+                    <code style={{ color: it.item_code ? '#0f172a' : '#ef4444' }}>
+                      {it.item_code ?? '(ยังไม่ map)'}
+                    </code>
+                    {' '}
+                    {candidate?.item_name && (
+                      <span style={{ color: '#475569' }}>· {candidate.item_name}</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ width: 90, textAlign: 'right', color: '#475569', whiteSpace: 'nowrap' }}>
+                  {it.qty} × ฿{(it.price ?? 0).toLocaleString()}
+                </div>
+                {scorePct != null && (
+                  <div style={{
+                    width: 50, textAlign: 'center', fontWeight: 600, color: scoreColor,
+                    fontSize: '0.78rem',
+                  }}>
+                    {scorePct}%
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
       <details style={{ marginTop: 12 }}>
         <summary style={{ cursor: 'pointer', fontSize: '0.8rem', color: '#64748b' }}>
-          ดู JSON ดิบ
+          ดู JSON ดิบ (raw_data + items + candidates)
         </summary>
-        <pre className="json-pre" style={{ marginTop: 8 }}>{JSON.stringify(data, null, 2)}</pre>
+        <pre className="json-pre" style={{ marginTop: 8 }}>
+{JSON.stringify({ raw_data: data, items: items ?? [] }, null, 2)}
+        </pre>
       </details>
     </div>
   )
@@ -1012,7 +1070,7 @@ export default function BillDetail() {
       {bill.raw_data && (
         <>
           <h3 className="bill-detail-section-title">ข้อมูลที่รับมา</h3>
-          <RawDataCard data={bill.raw_data as Record<string, unknown>} />
+          <RawDataCard data={bill.raw_data as Record<string, unknown>} items={bill.items} />
         </>
       )}
       {(bill.sml_payload || bill.sml_response) && (
