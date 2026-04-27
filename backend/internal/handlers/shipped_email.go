@@ -144,6 +144,10 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, me
 		return fmt.Errorf("create shopee_shipped bill: %w", err)
 	}
 
+	// Save the original Shopee shipping email body + envelope as artifacts.
+	h.saveEmailArtifacts(bill.ID, "email_html", "shopee-shipped.html", "text/html",
+		[]byte(bodyText), subject, from, messageID)
+
 	for _, iwc := range itemsWithCandidates {
 		item := iwc.item
 		item.BillID = bill.ID

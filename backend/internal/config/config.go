@@ -85,6 +85,10 @@ type Config struct {
 	BackupCronHour    int
 	InsightLineNotify bool
 	DiskWarnPercent   int
+
+	// Artifacts (original source files attached to each bill)
+	ArtifactsDir      string
+	ArtifactsMaxBytes int64
 }
 
 func Load() *Config {
@@ -139,6 +143,8 @@ func Load() *Config {
 		BackupCronHour:         getEnvInt("BACKUP_CRON_HOUR", 0),
 		InsightLineNotify:      getEnvBool("INSIGHT_LINE_NOTIFY", true),
 		DiskWarnPercent:        getEnvInt("DISK_WARN_PERCENT", 90),
+		ArtifactsDir:           getEnv("ARTIFACTS_DIR", "/app/artifacts"),
+		ArtifactsMaxBytes:      int64(getEnvInt("ARTIFACTS_MAX_BYTES", 10*1024*1024)), // 10 MB
 	}
 
 	if c.JWTSecret == "" {

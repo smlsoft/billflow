@@ -14,6 +14,7 @@ import (
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
 	"billflow/internal/services/anomaly"
+	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
@@ -46,6 +47,8 @@ type EmailHandler struct {
 	embSvc      *catalog.EmbeddingService
 	catalogIdx  *catalog.CatalogIndex
 	catalogRepo *repository.SMLCatalogRepo
+	// Source-artifact storage (PDF/HTML/envelope)
+	artifactSvc *artifact.Service
 }
 
 func NewEmailHandler(
@@ -85,6 +88,42 @@ func (h *EmailHandler) SetCatalogServices(
 	h.embSvc = embSvc
 	h.catalogIdx = catalogIdx
 	h.catalogRepo = catalogRepo
+}
+
+// SetArtifactService wires source-artifact storage for evidence/audit trails.
+func (h *EmailHandler) SetArtifactService(svc *artifact.Service) {
+	h.artifactSvc = svc
+}
+
+// saveEmailArtifacts persists the original source files (binary + envelope JSON)
+// to bill_artifacts. Best-effort: failures are logged but don't break ingestion.
+func (h *EmailHandler) saveEmailArtifacts(
+	billID, kind, filename, contentType string,
+	data []byte,
+	subject, fromAddr, messageID string,
+) {
+	if h.artifactSvc == nil || billID == "" {
+		return
+	}
+	envelope := map[string]interface{}{
+		"subject":    subject,
+		"from":       fromAddr,
+		"message_id": messageID,
+	}
+	// 1. The binary itself (PDF / HTML / etc.)
+	if len(data) > 0 {
+		if _, err := h.artifactSvc.Save(billID, kind, filename, contentType, data, envelope); err != nil {
+			h.logger.Warn("artifact: save body failed",
+				zap.String("bill_id", billID), zap.String("kind", kind), zap.Error(err))
+		}
+	}
+	// 2. Envelope JSON for quick reference (independent from #1 so it shows
+	//    even when the body file is too big and gets rejected by the size cap).
+	envelopeJSON, _ := json.Marshal(envelope)
+	if _, err := h.artifactSvc.Save(billID, "email_envelope", "envelope.json", "application/json", envelopeJSON, nil); err != nil {
+		h.logger.Warn("artifact: save envelope failed",
+			zap.String("bill_id", billID), zap.Error(err))
+	}
 }
 
 // ProcessAttachment is called once per qualifying email attachment.
@@ -142,7 +181,7 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 		return fmt.Errorf("no items extracted from %s", filename)
 	}
 
-	return h.handleExtracted(extracted, filename, messageID, subject, fromAddr, traceID, attachStart)
+	return h.handleExtracted(extracted, filename, mimeType, messageID, subject, fromAddr, traceID, data, attachStart)
 }
 
 // handleExtracted resolves item codes via F1 (exact mappings) → catalog
@@ -157,7 +196,7 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 // unrelated products. The 3000-item embedded catalog is the reliable
 // matcher; the F1 mapping table is reserved for explicit user-confirmed
 // (raw_name → item_code) memory.
-func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, messageID, subject, fromAddr, traceID string, startTime time.Time) error {
+func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mimeType, messageID, subject, fromAddr, traceID string, sourceBytes []byte, startTime time.Time) error {
 	const topK = 5
 	const highConfThreshold = 0.85
 
@@ -257,6 +296,10 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, me
 	if err := h.billRepo.Create(bill); err != nil {
 		return fmt.Errorf("create bill: %w", err)
 	}
+
+	// Save the original PDF + email envelope as a downloadable artifact.
+	// kind="email_pdf" tells the UI to render a "ดู PDF" button (inline).
+	h.saveEmailArtifacts(bill.ID, "email_pdf", filename, mimeType, sourceBytes, subject, fromAddr, messageID)
 
 	// Audit: bill received from email
 	if h.auditRepo != nil {
@@ -492,6 +535,10 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID
 	if err := h.billRepo.Create(bill); err != nil {
 		return fmt.Errorf("create shopee_email bill: %w", err)
 	}
+
+	// Save the email HTML body + envelope as a downloadable artifact.
+	h.saveEmailArtifacts(bill.ID, "email_html", "shopee-order.html", "text/html",
+		[]byte(bodyText), subject, from, messageID)
 
 	// Insert bill items with candidates
 	for _, iwc := range itemsWithCandidates {

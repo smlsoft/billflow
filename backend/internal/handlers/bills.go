@@ -12,6 +12,7 @@ import (
 	"billflow/internal/config"
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/artifact"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/sml"
@@ -27,6 +28,7 @@ type BillHandler struct {
 	lineSvc        *lineservice.Service
 	auditRepo      *repository.AuditLogRepo
 	catalogRepo    *repository.SMLCatalogRepo // for unit_code defaults on item edit
+	artifactSvc    *artifact.Service          // source-artifact storage (PDF/HTML/etc.)
 	log            *zap.Logger
 }
 
@@ -40,6 +42,7 @@ func NewBillHandler(
 	lineSvc *lineservice.Service,
 	auditRepo *repository.AuditLogRepo,
 	catalogRepo *repository.SMLCatalogRepo,
+	artifactSvc *artifact.Service,
 	log *zap.Logger,
 ) *BillHandler {
 	return &BillHandler{
@@ -52,6 +55,7 @@ func NewBillHandler(
 		lineSvc:       lineSvc,
 		auditRepo:     auditRepo,
 		catalogRepo:   catalogRepo,
+		artifactSvc:   artifactSvc,
 		log:           log,
 	}
 }
@@ -658,3 +662,66 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "item updated"})
 }
+
+// ─── Source artifact endpoints ────────────────────────────────────────────────
+
+// GET /api/bills/:id/artifacts
+func (h *BillHandler) ListArtifacts(c *gin.Context) {
+	if h.artifactSvc == nil {
+		c.JSON(http.StatusOK, gin.H{"data": []models.BillArtifact{}})
+		return
+	}
+	billID := c.Param("id")
+	items, err := h.artifactSvc.ListByBill(billID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if items == nil {
+		items = []models.BillArtifact{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+func (h *BillHandler) serveArtifact(c *gin.Context, inline bool) {
+	if h.artifactSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact service not configured"})
+		return
+	}
+	billID := c.Param("id")
+	artID := c.Param("artifact_id")
+
+	data, art, err := h.artifactSvc.Read(artID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if art == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact not found"})
+		return
+	}
+	// Scope check: artifact must belong to the requested bill
+	if art.BillID != billID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact not found for this bill"})
+		return
+	}
+
+	contentType := art.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	disposition := "attachment"
+	if inline {
+		disposition = "inline"
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, art.Filename))
+	c.Header("X-Content-SHA256", art.SHA256)
+	c.Data(http.StatusOK, contentType, data)
+}
+
+// GET /api/bills/:id/artifacts/:artifact_id/download
+func (h *BillHandler) DownloadArtifact(c *gin.Context) { h.serveArtifact(c, false) }
+
+// GET /api/bills/:id/artifacts/:artifact_id/preview
+func (h *BillHandler) PreviewArtifact(c *gin.Context) { h.serveArtifact(c, true) }

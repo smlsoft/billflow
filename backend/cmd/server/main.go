@@ -30,6 +30,7 @@ import (
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/mistral"
+	"billflow/internal/services/artifact"
 	"billflow/internal/services/sml"
 	"billflow/internal/worker"
 )
@@ -68,6 +69,7 @@ func main() {
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	chatRepo := repository.NewChatSessionRepo(db)
 	catalogRepo := repository.NewSMLCatalogRepo(db)
+	artifactRepo := repository.NewBillArtifactRepo(db)
 
 	// Services
 	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel)
@@ -78,6 +80,7 @@ func main() {
 	})
 	mcpClient := sml.NewMCPClient(cfg.SMLBaseURL)
 	insightSvc := insight.New(aiClient)
+	artifactSvc := artifact.New(cfg.ArtifactsDir, cfg.ArtifactsMaxBytes, artifactRepo, logger)
 	pool := worker.New()
 
 	// Shopee SML 248 REST clients — saleinvoice (existing flow) + purchaseorder (shipped emails)
@@ -205,7 +208,7 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, artifactSvc, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, insightSvc, logger)
 	dashH.SetConfigStatus(
@@ -218,6 +221,7 @@ func main() {
 	lineH := handlers.NewLineHandler(lineSvc, aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, mcpClient, billRepo, auditLogRepo, chatRepo, pool, cfg.AutoConfirmThreshold, logger)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
+	emailH.SetArtifactService(artifactSvc)
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, cfg.AutoConfirmThreshold, logger)
 	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, cfg.AutoConfirmThreshold, logger)
 	shopeeH := handlers.NewShopeeImportHandler(billRepo, auditLogRepo, cfg, catalogSvc, embSvc, catalogIdx, logger)
@@ -242,6 +246,9 @@ func main() {
 		api.PUT("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.UpdateItem)
 		api.POST("/bills/:id/items", middleware.RequireRole("admin", "staff"), billH.AddItem)
 		api.DELETE("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.DeleteItemRow)
+		api.GET("/bills/:id/artifacts", billH.ListArtifacts)
+		api.GET("/bills/:id/artifacts/:artifact_id/download", billH.DownloadArtifact)
+		api.GET("/bills/:id/artifacts/:artifact_id/preview", billH.PreviewArtifact)
 
 		// Mappings
 		api.GET("/mappings", mappingH.List)

@@ -48,6 +48,138 @@ function JsonSection({ label, data }: { label: string; data: unknown }) {
   )
 }
 
+// ─── Artifact section: original source files attached to a bill ─────────────
+interface BillArtifact {
+  id: string
+  bill_id: string
+  kind: string
+  filename: string
+  content_type?: string
+  size_bytes: number
+  sha256?: string
+  source_meta?: Record<string, unknown>
+  created_at: string
+}
+
+const KIND_META: Record<string, { icon: string; label: string }> = {
+  email_pdf:      { icon: '📄', label: 'PDF ต้นฉบับ' },
+  email_html:     { icon: '📧', label: 'Email HTML body' },
+  email_envelope: { icon: '📨', label: 'Email envelope' },
+  xlsx:           { icon: '📊', label: 'Shopee Excel' },
+  image:          { icon: '🖼️', label: 'รูปภาพ' },
+  audio:          { icon: '🎙️', label: 'ไฟล์เสียง' },
+  chat_history:   { icon: '💬', label: 'LINE chat' },
+}
+
+function fmtSize(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+
+// Fetch the artifact through the authenticated axios client and hand the
+// result off as a blob URL — needed because <a target="_blank"> can't
+// attach Authorization headers, and we don't want to leak the JWT into a
+// query string that ends up in browser history / proxy logs.
+async function openArtifact(
+  billID: string,
+  artID: string,
+  filename: string,
+  mode: 'preview' | 'download',
+) {
+  try {
+    const res = await api.get(`/api/bills/${billID}/artifacts/${artID}/${mode}`, {
+      responseType: 'blob',
+    })
+    const blobURL = URL.createObjectURL(res.data as Blob)
+    if (mode === 'download') {
+      const a = document.createElement('a')
+      a.href = blobURL
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Tab is still alive so it's safe to revoke once download has started.
+      setTimeout(() => URL.revokeObjectURL(blobURL), 2000)
+    } else {
+      window.open(blobURL, '_blank', 'noopener')
+      // Don't revoke immediately — the new tab needs the URL alive.
+      setTimeout(() => URL.revokeObjectURL(blobURL), 60_000)
+    }
+  } catch (err) {
+    console.error('artifact open failed', err)
+  }
+}
+
+function ArtifactSection({ billId }: { billId: string }) {
+  const [items, setItems] = useState<BillArtifact[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+    api.get<{ data: BillArtifact[] }>(`/api/bills/${billId}/artifacts`)
+      .then((r) => { if (alive) setItems(r.data.data ?? []) })
+      .catch(() => { if (alive) setItems([]) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [billId])
+
+  if (loading || items.length === 0) return null
+
+  return (
+    <>
+      <h3 className="bill-detail-section-title">📎 หลักฐานต้นฉบับ ({items.length})</h3>
+      <div style={{
+        background: 'white', border: '1px solid #e2e8f0', borderRadius: 8,
+        padding: 12, marginBottom: 16,
+      }}>
+        {items.map((a) => {
+          const meta = KIND_META[a.kind] ?? { icon: '📎', label: a.kind }
+          const previewable = a.content_type === 'application/pdf'
+            || (a.content_type ?? '').startsWith('image/')
+            || (a.content_type ?? '').startsWith('text/')
+            || a.content_type === 'application/json'
+          return (
+            <div key={a.id} style={{
+              display: 'flex', gap: 12, alignItems: 'center',
+              padding: '8px 0', borderBottom: '1px solid #f1f5f9',
+              fontSize: '0.9rem',
+            }}>
+              <span style={{ fontSize: '1.2rem' }}>{meta.icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: '#0f172a', fontWeight: 500, wordBreak: 'break-word' }}>{a.filename}</div>
+                <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: 2 }}>
+                  {meta.label} · {fmtSize(a.size_bytes)} · {dayjs(a.created_at).format('DD/MM/YY HH:mm')}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, whiteSpace: 'nowrap' }}>
+                {previewable && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => openArtifact(billId, a.id, a.filename, 'preview')}
+                    title={a.sha256 ? `SHA256: ${a.sha256.slice(0, 16)}…` : ''}
+                  >
+                    👁 ดู
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => openArtifact(billId, a.id, a.filename, 'download')}
+                  title={a.sha256 ? `SHA256: ${a.sha256.slice(0, 16)}…` : ''}
+                >
+                  ⬇ ดาวน์โหลด
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
 // ─── Raw data card: human-readable view of bill.raw_data ─────────────────────
 //
 // Why a card and not raw JSON? raw_data is the audit trail "where this bill
@@ -1073,6 +1205,7 @@ export default function BillDetail() {
           <RawDataCard data={bill.raw_data as Record<string, unknown>} items={bill.items} />
         </>
       )}
+      <ArtifactSection billId={bill.id} />
       {(bill.sml_payload || bill.sml_response) && (
         <>
           <h3 className="bill-detail-section-title">SML Request / Response</h3>

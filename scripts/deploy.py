@@ -19,6 +19,17 @@ if not PASS:
 
 # Files to sync (matches the commit)
 FILES = [
+    ".env.example",
+    "backend/cmd/server/main.go",
+    "backend/internal/config/config.go",
+    "backend/internal/database/migrations/005_bill_artifacts.sql",
+    "backend/internal/handlers/bills.go",
+    "backend/internal/handlers/email.go",
+    "backend/internal/handlers/shipped_email.go",
+    "backend/internal/models/bill_artifact.go",
+    "backend/internal/repository/bill_artifact_repo.go",
+    "backend/internal/services/artifact/storage.go",
+    "docker-compose.yml",
     "frontend/src/pages/BillDetail.tsx",
 ]
 
@@ -65,7 +76,7 @@ def main():
 
     run(c, f"cd {REMOTE} && tar -xzf /tmp/billflow-deploy.tar.gz && rm /tmp/billflow-deploy.tar.gz",
         label="extract")
-    run(c, f"mkdir -p {REMOTE}/backups", label="ensure backups dir")
+    run(c, f"mkdir -p {REMOTE}/backups {REMOTE}/artifacts", label="ensure backups + artifacts dirs")
 
     # Rebuild only what's needed based on file paths
     has_backend_change = any(f.startswith("backend/") for f in FILES)
