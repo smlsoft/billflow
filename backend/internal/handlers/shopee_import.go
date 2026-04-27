@@ -281,22 +281,8 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			continue
 		}
 
-		// Build saleinvoice payload
-		// Pass empty doc_no — let SML generate it (omitempty). The Shopee order_id
-		// is preserved in bills.sml_order_id and raw_data for BillFlow-side tracking.
-		// Why: SML's ic_trans table has UNIQUE (doc_no, trans_flag); reusing the
-		// Shopee order_id as doc_no triggers a duplicate-key violation if SML had
-		// previously imported a row with the same string.
-		payload := sml.BuildInvoicePayload(
-			"",
-			order.DocDate,
-			order.Items,
-			invoiceCfg,
-			productCache,
-		)
-		payloadJSON, _ := json.Marshal(payload)
-
-		// Save bill as pending first
+		// Save bill as pending first so we have a stable bill.ID to base
+		// the SML doc_no on.
 		aiConf := 1.0
 		rawData, _ := json.Marshal(map[string]interface{}{
 			"order_id": order.OrderID,
@@ -337,6 +323,20 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			}
 			_ = h.billRepo.InsertItem(bi)
 		}
+
+		// Build saleinvoice payload with a BF-prefixed doc_no derived from
+		// the bill UUID. The SML saleinvoice endpoint requires a non-empty
+		// doc_no ("JSONObject[\"doc_no\"] not found." otherwise) and using
+		// the bill ID guarantees uniqueness across retries on the same bill.
+		reqDocNo := fmt.Sprintf("BF-INV-%s-%s", time.Now().Format("20060102"), bill.ID[:8])
+		payload := sml.BuildInvoicePayload(
+			reqDocNo,
+			order.DocDate,
+			order.Items,
+			invoiceCfg,
+			productCache,
+		)
+		payloadJSON, _ := json.Marshal(payload)
 
 		// Store SML payload
 		_ = h.billRepo.UpdateSMLPayload(bill.ID, payloadJSON)
@@ -400,8 +400,11 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			continue
 		}
 
-		// Success
+		// Success — fall back to the client-generated doc_no if SML doesn't echo one back.
 		docNo := smlResp.GetDocNo()
+		if docNo == "" {
+			docNo = reqDocNo
+		}
 		_ = h.billRepo.UpdateStatus(bill.ID, "sent", &docNo, smlRespJSON, nil)
 		// Update price history for this bill's items
 		fullBill, err := h.billRepo.FindByID(bill.ID)

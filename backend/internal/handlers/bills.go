@@ -245,7 +245,11 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 	}
 
 	docDate := docDateFromBill(bill)
-	payload := sml.BuildInvoicePayload("", docDate, items, cfg, productCache)
+	// Generate a non-empty doc_no — the SML saleinvoice endpoint started
+	// rejecting empty payloads with "JSONObject[\"doc_no\"] not found" so we
+	// follow the same BF-prefix convention used for purchaseorder.
+	reqDocNo := fmt.Sprintf("BF-INV-%s-%s", time.Now().Format("20060102"), bill.ID[:8])
+	payload := sml.BuildInvoicePayload(reqDocNo, docDate, items, cfg, productCache)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -265,7 +269,11 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 	}
 
 	respJSON, _ := json.Marshal(resp)
+	// Fall back to the client-generated code when SML returns success but no doc_no.
 	docNo := resp.GetDocNo()
+	if docNo == "" {
+		docNo = reqDocNo
+	}
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccess(c, id, bill.Source, reqJSON, respJSON, docNo, start)
