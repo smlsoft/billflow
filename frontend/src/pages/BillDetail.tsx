@@ -61,14 +61,14 @@ interface BillArtifact {
   created_at: string
 }
 
-const KIND_META: Record<string, { icon: string; label: string }> = {
-  email_pdf:      { icon: '📄', label: 'PDF ต้นฉบับ' },
-  email_html:     { icon: '📧', label: 'Email HTML body' },
-  email_envelope: { icon: '📨', label: 'Email envelope' },
-  xlsx:           { icon: '📊', label: 'Shopee Excel' },
-  image:          { icon: '🖼️', label: 'รูปภาพ' },
-  audio:          { icon: '🎙️', label: 'ไฟล์เสียง' },
-  chat_history:   { icon: '💬', label: 'LINE chat' },
+const KIND_META: Record<string, { icon: string; label: string; desc: string }> = {
+  email_pdf:      { icon: '📄', label: 'PDF ต้นฉบับ',      desc: 'ไฟล์แนบ PDF จากอีเมล (เช่นใบสั่งซื้อ/ใบเสร็จ) — bytes เดียวกับที่ลูกค้าได้รับ' },
+  email_html:     { icon: '📧', label: 'Email HTML body',  desc: 'เนื้ออีเมลฉบับเต็ม (HTML) เปิดในเบราว์เซอร์แล้วเห็นรูปสินค้า/ราคา/หมายเลขคำสั่งซื้อแบบที่ต้นทางส่งมา' },
+  email_envelope: { icon: '📨', label: 'Email envelope',    desc: 'Metadata ของอีเมล (subject / from / message_id) เก็บแยกเป็น JSON เผื่อย้อนตรวจที่มาได้แม้ตัว body ใหญ่เกินบันทึก' },
+  xlsx:           { icon: '📊', label: 'Shopee Excel',      desc: 'ไฟล์ Excel ต้นฉบับที่ผู้ใช้อัปโหลด' },
+  image:          { icon: '🖼️', label: 'รูปภาพ',            desc: 'รูปต้นฉบับที่ส่งเข้า LINE OA' },
+  audio:          { icon: '🎙️', label: 'ไฟล์เสียง',          desc: 'voice message ต้นฉบับจาก LINE OA' },
+  chat_history:   { icon: '💬', label: 'LINE chat',         desc: 'ประวัติแชท LINE ที่นำมาสร้างบิลนี้' },
 }
 
 function fmtSize(n: number): string {
@@ -130,26 +130,42 @@ function ArtifactSection({ billId }: { billId: string }) {
     <>
       <h3 className="bill-detail-section-title">📎 หลักฐานต้นฉบับ ({items.length})</h3>
       <div style={{
+        background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
+        padding: '10px 12px', marginBottom: 8,
+        fontSize: '0.82rem', color: '#475569', lineHeight: 1.5,
+      }}>
+        ℹ️ เก็บไฟล์ <b>ต้นฉบับ</b> ที่ระบบใช้สร้างบิลนี้ — เปิดดู/ดาวน์โหลดได้
+        เพื่อย้อนตรวจว่าข้อมูล (สินค้า, จำนวน, ราคา) มาจากที่ไหน
+        ไม่ได้สร้างขึ้นเอง · ทุกไฟล์ถูก hash ด้วย SHA-256 ป้องกันการแก้ไข
+      </div>
+      <div style={{
         background: 'white', border: '1px solid #e2e8f0', borderRadius: 8,
         padding: 12, marginBottom: 16,
       }}>
         {items.map((a) => {
-          const meta = KIND_META[a.kind] ?? { icon: '📎', label: a.kind }
+          const meta = KIND_META[a.kind] ?? { icon: '📎', label: a.kind, desc: '' }
           const previewable = a.content_type === 'application/pdf'
             || (a.content_type ?? '').startsWith('image/')
             || (a.content_type ?? '').startsWith('text/')
             || a.content_type === 'application/json'
           return (
             <div key={a.id} style={{
-              display: 'flex', gap: 12, alignItems: 'center',
-              padding: '8px 0', borderBottom: '1px solid #f1f5f9',
+              display: 'flex', gap: 12, alignItems: 'flex-start',
+              padding: '10px 0', borderBottom: '1px solid #f1f5f9',
               fontSize: '0.9rem',
             }}>
-              <span style={{ fontSize: '1.2rem' }}>{meta.icon}</span>
+              <span style={{ fontSize: '1.2rem', lineHeight: 1.4 }}>{meta.icon}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: '#0f172a', fontWeight: 500, wordBreak: 'break-word' }}>{a.filename}</div>
-                <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: 2 }}>
-                  {meta.label} · {fmtSize(a.size_bytes)} · {dayjs(a.created_at).format('DD/MM/YY HH:mm')}
+                <div style={{ color: '#0f172a', fontWeight: 500, wordBreak: 'break-word' }}>
+                  {meta.label}
+                </div>
+                {meta.desc && (
+                  <div style={{ color: '#475569', fontSize: '0.8rem', marginTop: 2, lineHeight: 1.45 }}>
+                    {meta.desc}
+                  </div>
+                )}
+                <div style={{ color: '#94a3b8', fontSize: '0.75rem', marginTop: 4, fontFamily: 'monospace' }}>
+                  {a.filename} · {fmtSize(a.size_bytes)} · {dayjs(a.created_at).format('DD/MM/YY HH:mm')}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, whiteSpace: 'nowrap' }}>
