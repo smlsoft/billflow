@@ -73,7 +73,8 @@ def main():
     # Remove legacy CSS files that have been deleted locally — the tar only
     # adds files, never removes. Matches every page+component .css that the
     # redesign retired so orphans don't get bundled by Vite.
-    LEGACY_CSS = [
+    LEGACY_FILES = [
+        # Old per-page/per-component CSS files retired in Phase 3
         "frontend/src/components/Layout.css",
         "frontend/src/components/StatsCard.css",
         "frontend/src/components/InsightCard.css",
@@ -89,9 +90,14 @@ def main():
         "frontend/src/pages/ShopeeImport.css",
         "frontend/src/pages/Settings.css",
         "frontend/src/pages/CatalogSettings.css",
+        # Old monolithic BillDetail.tsx + .css — replaced by BillDetail/ dir.
+        # Without removing the .tsx, the stale file keeps importing
+        # uninstalled deps (react-hot-toast) and breaks the Docker build.
+        "frontend/src/pages/BillDetail.tsx",
+        "frontend/src/pages/BillDetail.css",
     ]
-    rm_cmd = " && ".join(f"rm -f {REMOTE}/{p}" for p in LEGACY_CSS)
-    run(c, rm_cmd, label="remove orphan legacy CSS")
+    rm_cmd = " && ".join(f"rm -f {REMOTE}/{p}" for p in LEGACY_FILES)
+    run(c, rm_cmd, label="remove orphan legacy files")
 
     run(c, f"cd {REMOTE} && tar -xzf /tmp/billflow-deploy.tar.gz && rm /tmp/billflow-deploy.tar.gz",
         label="extract")
