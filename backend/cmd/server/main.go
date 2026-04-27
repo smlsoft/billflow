@@ -80,6 +80,46 @@ func main() {
 	insightSvc := insight.New(aiClient)
 	pool := worker.New()
 
+	// Shopee SML 248 REST clients — saleinvoice (existing flow) + purchaseorder (shipped emails)
+	invoiceClient := sml.NewInvoiceClient(sml.InvoiceConfig{
+		BaseURL:    cfg.ShopeeSMLURL,
+		GUID:       cfg.ShopeeSMLGUID,
+		Provider:   cfg.ShopeeSMLProvider,
+		ConfigFile: cfg.ShopeeSMLConfigFile,
+		Database:   cfg.ShopeeSMLDatabase,
+		DocFormat:  cfg.ShopeeSMLDocFormat,
+		CustCode:   cfg.ShopeeSMLCustCode,
+		SaleCode:   cfg.ShopeeSMLSaleCode,
+		BranchCode: cfg.ShopeeSMLBranchCode,
+		WHCode:     cfg.ShopeeSMLWHCode,
+		ShelfCode:  cfg.ShopeeSMLShelfCode,
+		UnitCode:   cfg.ShopeeSMLUnitCode,
+		VATType:    cfg.ShopeeSMLVATType,
+		VATRate:    cfg.ShopeeSMLVATRate,
+		DocTime:    cfg.ShopeeSMLDocTime,
+	}, logger)
+	shippedCustCode := cfg.ShippedSMLCustCode
+	if shippedCustCode == "" {
+		shippedCustCode = cfg.ShopeeSMLCustCode
+	}
+	poClient := sml.NewPurchaseOrderClient(sml.PurchaseOrderConfig{
+		BaseURL:    cfg.ShopeeSMLURL,
+		GUID:       cfg.ShopeeSMLGUID,
+		Provider:   cfg.ShopeeSMLProvider,
+		ConfigFile: cfg.ShopeeSMLConfigFile,
+		Database:   cfg.ShopeeSMLDatabase,
+		DocFormat:  cfg.ShippedSMLDocFormat,
+		CustCode:   shippedCustCode,
+		SaleCode:   cfg.ShopeeSMLSaleCode,
+		BranchCode: cfg.ShopeeSMLBranchCode,
+		WHCode:     cfg.ShopeeSMLWHCode,
+		ShelfCode:  cfg.ShopeeSMLShelfCode,
+		UnitCode:   cfg.ShopeeSMLUnitCode,
+		VATType:    cfg.ShopeeSMLVATType,
+		VATRate:    cfg.ShopeeSMLVATRate,
+		DocTime:    cfg.ShopeeSMLDocTime,
+	}, logger)
+
 	// SML catalog services for Shopee email smart matching
 	smlHeaders := map[string]string{
 		"guid":           cfg.ShopeeSMLGUID,
@@ -157,7 +197,7 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, lineSvc, auditLogRepo, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, poClient, cfg, lineSvc, auditLogRepo, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, insightSvc, logger)
 	dashH.SetConfigStatus(
@@ -191,6 +231,7 @@ func main() {
 		api.GET("/bills", billH.List)
 		api.GET("/bills/:id", billH.Get)
 		api.POST("/bills/:id/retry", billH.Retry)
+		api.PUT("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.UpdateItem)
 
 		// Mappings
 		api.GET("/mappings", mappingH.List)
@@ -264,11 +305,12 @@ func main() {
 
 	emailPoller := jobs.NewEmailPoller(imapSvc, lineSvc, emailH, cfg.IMAPPollInterval, logger)
 	if cfg.IMAPHost != "" {
-		// Wire Shopee email processor
+		// Wire Shopee email processors (order + shipped) — both gated by domain
 		if cfg.ShopeeEmailDomains != "" {
 			domains := strings.Split(cfg.ShopeeEmailDomains, ",")
 			imapSvc.SetShopeeProcessor(emailH.ProcessShopeeEmailBody, domains)
-			logger.Info("shopee email processor wired", zap.Strings("domains", domains))
+			imapSvc.SetShippedProcessor(emailH.ProcessShopeeShippedEmailBody)
+			logger.Info("shopee email processors wired", zap.Strings("domains", domains))
 		}
 		emailPoller.Register(c)
 	}

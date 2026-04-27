@@ -66,6 +66,11 @@ type Config struct {
 	ShopeeSMLVATRate    float64
 	ShopeeSMLDocTime    string
 
+	// Shopee shipped email → SML purchaseorder
+	// Reuses all SHOPEE_SML_* fields above; only doc_format and cust_code differ.
+	ShippedSMLDocFormat string
+	ShippedSMLCustCode  string
+
 	// Gemini (for text-embedding-004)
 	GeminiAPIKey string
 
@@ -125,6 +130,8 @@ func Load() *Config {
 		ShopeeSMLVATType:       getEnvInt("SHOPEE_SML_VAT_TYPE", 0),
 		ShopeeSMLVATRate:       getEnvFloat("SHOPEE_SML_VAT_RATE", 7),
 		ShopeeSMLDocTime:       getEnv("SHOPEE_SML_DOC_TIME", "09:00"),
+		ShippedSMLDocFormat:    getEnv("SHIPPED_SML_DOC_FORMAT", "PO"),
+		ShippedSMLCustCode:     getEnv("SHIPPED_SML_CUST_CODE", getEnv("SHOPEE_SML_CUST_CODE", "")),
 		GeminiAPIKey:           getEnv("GEMINI_API_KEY", ""),
 		ShopeeEmailDomains:     getEnv("SHOPEE_EMAIL_DOMAINS", "shopee.co.th,mail.shopee.co.th,noreply.shopee.co.th"),
 		AutoConfirmThreshold:   getEnvFloat("AUTO_CONFIRM_THRESHOLD", 0.85),

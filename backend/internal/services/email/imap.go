@@ -34,7 +34,8 @@ type IMAPService struct {
 	filterSubjects     []string // lower-cased, parsed from comma-separated config
 	processor          AttachmentProcessor
 	shopeeProcessor    ShopeeBodyProcessor
-	shopeeEmailDomains []string // e.g. ["shopee.co.th","mail.shopee.co.th"]
+	shippedProcessor   ShopeeBodyProcessor // Shopee shipping confirmation emails
+	shopeeEmailDomains []string            // e.g. ["shopee.co.th","mail.shopee.co.th"]
 	logger             *zap.Logger
 }
 
@@ -66,6 +67,12 @@ func (s *IMAPService) SetProcessor(fn AttachmentProcessor) {
 func (s *IMAPService) SetShopeeProcessor(fn ShopeeBodyProcessor, domains []string) {
 	s.shopeeProcessor = fn
 	s.shopeeEmailDomains = domains
+}
+
+// SetShippedProcessor sets the callback for Shopee shipping confirmation emails
+// (subject contains "ถูกจัดส่งแล้ว"). Routed before shopeeProcessor for Shopee-domain emails.
+func (s *IMAPService) SetShippedProcessor(fn ShopeeBodyProcessor) {
+	s.shippedProcessor = fn
 }
 
 // IsConfigured returns true if IMAP host and credentials are set
@@ -231,22 +238,41 @@ func (s *IMAPService) Poll() error {
 			fromAddr = envelope.From[0].Addr()
 		}
 
-		// Check if this is a Shopee order email
-		if s.shopeeProcessor != nil && s.isShopeeEmail(fromAddr) {
-			// Extract body text (HTML preferred, plain fallback)
+		// Shopee-domain emails route to one of two body processors based on subject
+		if s.isShopeeEmail(fromAddr) {
 			bodyText := extractBodyText(bodyBytes)
-			if err := s.shopeeProcessor(envelope.Subject, fromAddr, bodyText, messageID); err == nil && msgUID != 0 {
-				processedUIDs.AddNum(msgUID)
-				processedCount++
-			} else if err != nil {
-				s.logger.Warn("imap_shopee_email_failed",
-					zap.String("trace_id", traceID),
-					zap.String("message_id", messageID),
-					zap.Error(err),
-				)
-				skippedCount++
+
+			// Shipping confirmation (purchase order flow) — match BEFORE order flow
+			if s.shippedProcessor != nil && isShippedSubject(envelope.Subject) {
+				if err := s.shippedProcessor(envelope.Subject, fromAddr, bodyText, messageID); err == nil && msgUID != 0 {
+					processedUIDs.AddNum(msgUID)
+					processedCount++
+				} else if err != nil {
+					s.logger.Warn("imap_shopee_shipped_failed",
+						zap.String("trace_id", traceID),
+						zap.String("message_id", messageID),
+						zap.Error(err),
+					)
+					skippedCount++
+				}
+				continue
 			}
-			continue
+
+			// Regular order email (saleinvoice flow)
+			if s.shopeeProcessor != nil {
+				if err := s.shopeeProcessor(envelope.Subject, fromAddr, bodyText, messageID); err == nil && msgUID != 0 {
+					processedUIDs.AddNum(msgUID)
+					processedCount++
+				} else if err != nil {
+					s.logger.Warn("imap_shopee_email_failed",
+						zap.String("trace_id", traceID),
+						zap.String("message_id", messageID),
+						zap.Error(err),
+					)
+					skippedCount++
+				}
+				continue
+			}
 		}
 
 		if err := s.parseAndProcess(bodyBytes, messageID); err == nil && msgUID != 0 {
@@ -288,6 +314,12 @@ func (s *IMAPService) Poll() error {
 	)
 
 	return nil
+}
+
+// isShippedSubject returns true if the subject indicates a Shopee shipping
+// confirmation ("...ถูกจัดส่งแล้ว..."). Used to route between order vs shipped flows.
+func isShippedSubject(subject string) bool {
+	return strings.Contains(subject, "ถูกจัดส่งแล้ว")
 }
 
 // matchesSubject returns true if subject matches any configured keyword (or no filter set)

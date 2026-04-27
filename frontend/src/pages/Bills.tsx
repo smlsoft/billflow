@@ -15,6 +15,17 @@ const STATUS_OPTIONS = [
   { value: 'failed', label: 'ล้มเหลว' },
 ]
 
+const SOURCE_OPTIONS = [
+  { value: '', label: 'ทุกช่องทาง' },
+  { value: 'line', label: 'LINE OA' },
+  { value: 'email', label: 'Email' },
+  { value: 'shopee', label: 'Shopee Excel' },
+  { value: 'shopee_email', label: 'Shopee Email (Order)' },
+  { value: 'shopee_shipped', label: 'Shopee จัดส่งแล้ว (PO)' },
+  { value: 'lazada', label: 'Lazada' },
+  { value: 'manual', label: 'Manual' },
+]
+
 const SearchIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -25,8 +36,9 @@ export default function Bills() {
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState('')
+  const [source, setSource] = useState('')
   const [search, setSearch] = useState('')
-  const { data, loading } = useBills({ page, per_page: PER_PAGE, status, search })
+  const { data, loading } = useBills({ page, per_page: PER_PAGE, status, source, search })
 
   const totalPages = data ? Math.ceil(data.total / PER_PAGE) : 1
   const hasMore = data ? page * PER_PAGE < data.total : false
@@ -38,6 +50,11 @@ export default function Bills() {
 
   const handleStatus = (val: string) => {
     setStatus(val)
+    setPage(1)
+  }
+
+  const handleSource = (val: string) => {
+    setSource(val)
     setPage(1)
   }
 
@@ -66,6 +83,15 @@ export default function Bills() {
           onChange={(e) => handleStatus(e.target.value)}
         >
           {STATUS_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <select
+          className="form-select"
+          value={source}
+          onChange={(e) => handleSource(e.target.value)}
+        >
+          {SOURCE_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>

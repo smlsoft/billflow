@@ -9,7 +9,7 @@ import './BillDetail.css'
 
 const SOURCE_LABELS: Record<string, string> = {
   line: 'LINE OA', email: 'Email', lazada: 'Lazada', shopee: 'Shopee',
-  shopee_email: 'Shopee Email', manual: 'Manual',
+  shopee_email: 'Shopee Email', shopee_shipped: 'Shopee จัดส่งแล้ว', manual: 'Manual',
 }
 
 const ChevronIcon = () => (
@@ -44,6 +44,152 @@ function JsonSection({ label, data }: { label: string; data: unknown }) {
       </button>
       {open && <pre className="json-pre">{str}</pre>}
     </div>
+  )
+}
+
+// ─── Editable item row ───────────────────────────────────────────────────────
+function ItemRow({
+  item,
+  billId,
+  editable,
+  onUpdated,
+}: {
+  item: BillItem
+  billId: string
+  editable: boolean
+  onUpdated: (updated: BillItem) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [draft, setDraft] = useState({
+    item_code: item.item_code ?? '',
+    unit_code: item.unit_code ?? '',
+    qty: String(item.qty ?? 0),
+    price: String(item.price ?? 0),
+  })
+
+  const reset = () => {
+    setDraft({
+      item_code: item.item_code ?? '',
+      unit_code: item.unit_code ?? '',
+      qty: String(item.qty ?? 0),
+      price: String(item.price ?? 0),
+    })
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const payload: Record<string, unknown> = {
+        item_code: draft.item_code,
+        unit_code: draft.unit_code,
+        qty: Number(draft.qty),
+        price: Number(draft.price),
+      }
+      await api.put(`/api/bills/${billId}/items/${item.id}`, payload)
+      onUpdated({
+        ...item,
+        item_code: draft.item_code,
+        unit_code: draft.unit_code,
+        qty: Number(draft.qty),
+        price: Number(draft.price),
+        mapped: draft.item_code !== '',
+      })
+      setEditing(false)
+    } catch (err) {
+      console.error('update item failed', err)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <tr>
+        <td>{item.raw_name}</td>
+        <td>
+          {item.item_code
+            ? <span className="bill-item-code">{item.item_code}</span>
+            : <span className="bill-item-code bill-item-code--empty">—</span>}
+        </td>
+        <td className="text-right">{item.qty}</td>
+        <td>{item.unit_code || '—'}</td>
+        <td className="text-right bill-item-amount">฿{(item.price ?? 0).toLocaleString()}</td>
+        <td className="text-right bill-item-amount">
+          ฿{((item.qty ?? 0) * (item.price ?? 0)).toLocaleString()}
+        </td>
+        <td className="text-center">
+          <span className={`badge ${item.mapped ? 'badge-success' : 'badge-warning'}`}>
+            {item.mapped ? 'จับคู่แล้ว' : 'ยังไม่จับคู่'}
+          </span>
+        </td>
+        {editable && (
+          <td className="text-center">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { reset(); setEditing(true) }}>
+              แก้ไข
+            </button>
+          </td>
+        )}
+      </tr>
+    )
+  }
+
+  return (
+    <tr>
+      <td>{item.raw_name}</td>
+      <td>
+        <input
+          className="form-input"
+          value={draft.item_code}
+          onChange={(e) => setDraft((d) => ({ ...d, item_code: e.target.value }))}
+          placeholder="SML item_code"
+          style={{ minWidth: 120 }}
+        />
+      </td>
+      <td className="text-right">
+        <input
+          className="form-input"
+          type="number"
+          step="any"
+          value={draft.qty}
+          onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+          style={{ width: 80, textAlign: 'right' }}
+        />
+      </td>
+      <td>
+        <input
+          className="form-input"
+          value={draft.unit_code}
+          onChange={(e) => setDraft((d) => ({ ...d, unit_code: e.target.value }))}
+          style={{ width: 80 }}
+        />
+      </td>
+      <td className="text-right">
+        <input
+          className="form-input"
+          type="number"
+          step="any"
+          value={draft.price}
+          onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+          style={{ width: 100, textAlign: 'right' }}
+        />
+      </td>
+      <td className="text-right bill-item-amount">
+        ฿{(Number(draft.qty || 0) * Number(draft.price || 0)).toLocaleString()}
+      </td>
+      <td className="text-center">
+        <span className="badge badge-warning">กำลังแก้ไข</span>
+      </td>
+      <td className="text-center" style={{ whiteSpace: 'nowrap' }}>
+        <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={handleSave}>
+          {saving ? '...' : 'บันทึก'}
+        </button>
+        {' '}
+        <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setEditing(false)}>
+          ยกเลิก
+        </button>
+      </td>
+    </tr>
   )
 }
 
@@ -236,7 +382,10 @@ export default function BillDetail() {
 
   const rawData = bill.raw_data as Record<string, unknown> | null
   const total = (bill.items ?? []).reduce((s, i) => s + (i.qty ?? 0) * (i.price ?? 0), 0)
-  const canRetry = bill.status === 'failed' || bill.status === 'pending'
+  const canSend = bill.status === 'failed' || bill.status === 'pending' || bill.status === 'needs_review'
+  const canEdit = canSend
+  const isPurchase = bill.bill_type === 'purchase'
+  const counterpartyLabel = isPurchase ? 'ผู้ขาย (Supplier)' : 'ลูกค้า'
 
   return (
     <div>
@@ -256,7 +405,7 @@ export default function BillDetail() {
         <div className="bill-detail-card-body">
           <div className="bill-detail-info-grid">
             <div className="bill-detail-info-row">
-              <span className="bill-detail-info-label">ลูกค้า</span>
+              <span className="bill-detail-info-label">{counterpartyLabel}</span>
               <span className="bill-detail-info-value">{(rawData?.customer_name as string) || '—'}</span>
             </div>
             <div className="bill-detail-info-row">
@@ -298,11 +447,20 @@ export default function BillDetail() {
           <span className="bill-detail-total-amount">฿{total.toLocaleString()}</span>
         </div>
 
-        {canRetry && (
+        {canSend && (
           <div className="bill-detail-actions">
-            <button type="button" className="btn btn-danger btn-sm" onClick={handleRetry} disabled={retrying}>
+            <button
+              type="button"
+              className={bill.status === 'failed' ? 'btn btn-danger btn-sm' : 'btn btn-primary btn-sm'}
+              onClick={handleRetry}
+              disabled={retrying}
+            >
               <RefreshIcon />
-              {retrying ? 'กำลัง retry...' : 'Retry ส่ง SML'}
+              {retrying
+                ? 'กำลังส่ง...'
+                : bill.status === 'failed'
+                  ? 'ลองส่ง SML อีกครั้ง'
+                  : `ยืนยันและส่งไปยัง SML ${isPurchase ? '(PO)' : ''}`}
             </button>
           </div>
         )}
@@ -326,28 +484,28 @@ export default function BillDetail() {
               <th className="text-right">ราคา/หน่วย</th>
               <th className="text-right">รวม</th>
               <th className="text-center">Mapping</th>
+              {canEdit && <th className="text-center">แก้ไข</th>}
             </tr>
           </thead>
           <tbody>
             {(bill.items ?? []).map((item) => (
-              <tr key={item.id}>
-                <td>{item.raw_name}</td>
-                <td>
-                  {item.item_code
-                    ? <span className="bill-item-code">{item.item_code}</span>
-                    : <span className="bill-item-code bill-item-code--empty">—</span>
-                  }
-                </td>
-                <td className="text-right">{item.qty}</td>
-                <td>{item.unit_code || '—'}</td>
-                <td className="text-right bill-item-amount">฿{(item.price ?? 0).toLocaleString()}</td>
-                <td className="text-right bill-item-amount">฿{((item.qty ?? 0) * (item.price ?? 0)).toLocaleString()}</td>
-                <td className="text-center">
-                  <span className={`badge ${item.mapped ? 'badge-success' : 'badge-warning'}`}>
-                    {item.mapped ? 'จับคู่แล้ว' : 'ยังไม่จับคู่'}
-                  </span>
-                </td>
-              </tr>
+              <ItemRow
+                key={item.id}
+                item={item}
+                billId={bill.id}
+                editable={canEdit}
+                onUpdated={(updated) => {
+                  setBill((prev) => {
+                    if (!prev) return prev
+                    return {
+                      ...prev,
+                      items: (prev.items ?? []).map((it) =>
+                        it.id === updated.id ? { ...it, ...updated } : it
+                      ),
+                    }
+                  })
+                }}
+              />
             ))}
           </tbody>
         </table>

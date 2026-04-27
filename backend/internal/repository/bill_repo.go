@@ -217,6 +217,45 @@ func (r *BillRepo) UpdateBillItem(itemID, itemCode, unitCode, mappingID string, 
 	return err
 }
 
+// UpdateBillItemFields applies a partial update to a bill_item row.
+// Each pointer is applied only when non-nil; setting item_code also marks the row mapped.
+func (r *BillRepo) UpdateBillItemFields(itemID string, itemCode, unitCode *string, qty, price *float64) error {
+	sets := []string{}
+	args := []interface{}{}
+	idx := 1
+
+	if itemCode != nil {
+		sets = append(sets, fmt.Sprintf("item_code=$%d", idx))
+		args = append(args, *itemCode)
+		idx++
+		sets = append(sets, fmt.Sprintf("mapped=$%d", idx))
+		args = append(args, *itemCode != "")
+		idx++
+	}
+	if unitCode != nil {
+		sets = append(sets, fmt.Sprintf("unit_code=$%d", idx))
+		args = append(args, *unitCode)
+		idx++
+	}
+	if qty != nil {
+		sets = append(sets, fmt.Sprintf("qty=$%d", idx))
+		args = append(args, *qty)
+		idx++
+	}
+	if price != nil {
+		sets = append(sets, fmt.Sprintf("price=$%d", idx))
+		args = append(args, *price)
+		idx++
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	args = append(args, itemID)
+	query := fmt.Sprintf(`UPDATE bill_items SET %s WHERE id=$%d`, strings.Join(sets, ", "), idx)
+	_, err := r.db.Exec(query, args...)
+	return err
+}
+
 // DashboardStats returns aggregated counts for dashboard
 func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 	stats := map[string]interface{}{}

@@ -137,10 +137,10 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 	return h.handleExtracted(extracted, filename, messageID, traceID, attachStart)
 }
 
-// handleExtracted runs mapper → anomaly → auto-confirm or pending
+// handleExtracted runs mapper → anomaly, then leaves the bill pending for user confirmation.
+// SML send happens later via the Retry handler when the user clicks "ส่ง SML" in the UI.
 func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, messageID, traceID string, startTime time.Time) error {
 	var billItems []models.BillItem
-	var smlItems []sml.SMLItem
 	var itemCodes []string
 
 	for _, extItem := range extracted.Items {
@@ -155,30 +155,14 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, me
 			item.Price = extItem.Price
 		}
 
-		itemCode := extItem.RawName
-		unitCode := extItem.Unit
-
 		if match.Mapping != nil {
 			item.ItemCode = &match.Mapping.ItemCode
 			item.UnitCode = &match.Mapping.UnitCode
 			item.MappingID = &match.Mapping.ID
-			itemCode = match.Mapping.ItemCode
-			unitCode = match.Mapping.UnitCode
-			itemCodes = append(itemCodes, itemCode)
-		}
-
-		price := 0.0
-		if extItem.Price != nil {
-			price = *extItem.Price
+			itemCodes = append(itemCodes, match.Mapping.ItemCode)
 		}
 
 		billItems = append(billItems, item)
-		smlItems = append(smlItems, sml.SMLItem{
-			ItemCode: itemCode,
-			Qty:      extItem.Qty,
-			UnitCode: unitCode,
-			Price:    price,
-		})
 	}
 
 	// F2 Anomaly detection
@@ -240,7 +224,9 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, me
 		_ = h.billRepo.InsertItem(&billItems[i])
 	}
 
-	// Auto-confirm only when all items are mapped AND anomaly check passes
+	// Manual-confirm flow: every email-sourced bill stays pending (or
+	// needs_review when items aren't all mapped) until a user confirms it
+	// in the UI and clicks "ส่ง SML". No auto-send anymore.
 	allMapped := true
 	for _, item := range billItems {
 		if !item.Mapped {
@@ -249,99 +235,33 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, me
 		}
 	}
 
-	// Auto-confirm or leave as pending + notify admin
-	if allMapped && anomaly.CanAutoConfirm(anomalies, extracted.Confidence, h.threshold) {
-		customerName := extracted.CustomerName
-		phone := ""
-		if extracted.CustomerPhone != nil {
-			phone = *extracted.CustomerPhone
-		}
-		req := sml.SaleReserveRequest{
-			ContactName:  customerName,
-			ContactPhone: phone,
-			Items:        smlItems,
-		}
-		reqJSON, _ := json.Marshal(req)
-
-		result, err := h.smlClient.CreateSaleReserve(req)
-		if err != nil {
-			errMsg := err.Error()
-			respJSON, _ := json.Marshal(map[string]string{"error": errMsg})
-			_ = h.billRepo.UpdateStatus(bill.ID, "failed", nil, respJSON, &errMsg)
-			// Audit: SML send failed
-			if h.auditRepo != nil {
-				billIDStr := bill.ID
-				durMs := int(time.Since(startTime).Milliseconds())
-				_ = h.auditRepo.Log(models.AuditEntry{
-					Action:     "sml_failed",
-					TargetID:   &billIDStr,
-					Source:     "email",
-					Level:      "error",
-					TraceID:    traceID,
-					DurationMs: &durMs,
-					Detail: map[string]interface{}{
-						"filename":    filename,
-						"sml_payload": json.RawMessage(reqJSON),
-						"error":       errMsg,
-					},
-				})
-			}
-			h.adminNotify(fmt.Sprintf("⚠️ Email SML failed\nBill: %s\nFile: %s\nError: %s",
-				bill.ID, filename, errMsg))
-			return err
-		}
-
-		respJSON, _ := json.Marshal(result)
-		_ = h.billRepo.UpdateStatus(bill.ID, "sent", &result.DocNo, respJSON, nil)
-		_ = h.billRepo.UpdateSMLPayload(bill.ID, reqJSON)
-		if b, err := h.billRepo.FindByID(bill.ID); err == nil && b != nil {
-			_ = h.billRepo.UpdatePriceHistory(b.Items)
-		}
-		// Audit: SML sent successfully
-		if h.auditRepo != nil {
-			billIDStr := bill.ID
-			durMs := int(time.Since(startTime).Milliseconds())
-			_ = h.auditRepo.Log(models.AuditEntry{
-				Action:     "sml_sent",
-				TargetID:   &billIDStr,
-				Source:     "email",
-				Level:      "info",
-				TraceID:    traceID,
-				DurationMs: &durMs,
-				Detail: map[string]interface{}{
-					"filename":     filename,
-					"doc_no":       result.DocNo,
-					"sml_payload":  json.RawMessage(reqJSON),
-					"sml_response": json.RawMessage(respJSON),
-				},
-			})
-		}
-		h.adminNotify(fmt.Sprintf("✅ Email bill sent\nDoc: %s\nFile: %s\nItems: %d",
-			result.DocNo, filename, len(billItems)))
-	} else {
-		// Audit: bill set to pending
-		if h.auditRepo != nil {
-			billIDStr := bill.ID
-			durMs := int(time.Since(startTime).Milliseconds())
-			_ = h.auditRepo.Log(models.AuditEntry{
-				Action:     "bill_pending",
-				TargetID:   &billIDStr,
-				Source:     "email",
-				Level:      "warn",
-				TraceID:    traceID,
-				DurationMs: &durMs,
-				Detail: map[string]interface{}{
-					"filename":      filename,
-					"reason":        "unmapped_items_or_low_confidence",
-					"all_mapped":    allMapped,
-					"confidence":    extracted.Confidence,
-					"anomaly_count": len(anomalies),
-				},
-			})
-		}
-		h.adminNotify(fmt.Sprintf("📋 Email bill pending review\nBill: %s\nFile: %s\nConfidence: %.2f\nAnomalies: %d",
-			bill.ID, filename, extracted.Confidence, len(anomalies)))
+	status := "pending"
+	if !allMapped {
+		status = "needs_review"
 	}
+	_ = h.billRepo.UpdateStatus(bill.ID, status, nil, nil, nil)
+
+	if h.auditRepo != nil {
+		billIDStr := bill.ID
+		durMs := int(time.Since(startTime).Milliseconds())
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:     "bill_pending",
+			TargetID:   &billIDStr,
+			Source:     "email",
+			Level:      "info",
+			TraceID:    traceID,
+			DurationMs: &durMs,
+			Detail: map[string]interface{}{
+				"filename":      filename,
+				"all_mapped":    allMapped,
+				"confidence":    extracted.Confidence,
+				"anomaly_count": len(anomalies),
+				"status":        status,
+			},
+		})
+	}
+	h.adminNotify(fmt.Sprintf("📋 Email bill pending review\nBill: %s\nFile: %s\nStatus: %s\nConfidence: %.2f\nAnomalies: %d",
+		bill.ID, filename, status, extracted.Confidence, len(anomalies)))
 
 	return nil
 }
@@ -586,15 +506,21 @@ func htmlToText(html string) string {
 // extractShopeeOrderID tries to find the order number from the email subject
 // Shopee subjects are like "คำสั่งซื้อ #250123456789012" or "Order #250123456789012 shipped"
 func extractShopeeOrderID(subject string) string {
-	// Look for # followed by digits
+	// Look for "#" followed by alphanumeric characters (Shopee uses both
+	// pure-digit and alphanumeric IDs, e.g. "260404V08VQU10").
 	idx := strings.Index(subject, "#")
 	if idx < 0 {
 		return ""
 	}
 	rest := subject[idx+1:]
 	end := 0
-	for end < len(rest) && (rest[end] >= '0' && rest[end] <= '9') {
-		end++
+	for end < len(rest) {
+		c := rest[end]
+		if (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			end++
+		} else {
+			break
+		}
 	}
 	if end > 0 {
 		return rest[:end]
