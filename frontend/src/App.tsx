@@ -11,6 +11,7 @@ import Mappings from './pages/Mappings'
 import Settings from './pages/Settings'
 import Logs from './pages/Logs'
 import CatalogSettings from './pages/CatalogSettings'
+import Showcase from './pages/Showcase'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -22,6 +23,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {import.meta.env.DEV && (
+          <Route path="/dev/showcase" element={<Showcase />} />
+        )}
         <Route path="/login" element={<Login />} />
         <Route
           path="/"
