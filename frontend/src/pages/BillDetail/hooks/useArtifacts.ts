@@ -52,7 +52,23 @@ export async function openArtifact(
       `/api/bills/${billID}/artifacts/${artID}/${mode}`,
       { responseType: 'blob' },
     )
-    const blobURL = URL.createObjectURL(res.data as Blob)
+    // Some browsers / axios builds drop the `charset=utf-8` parameter when
+    // building the Blob from the response, leaving plain `text/html` —
+    // that's enough to make the new tab default to Latin-1 and mangle Thai.
+    // Reconstruct the Blob with the full Content-Type from the response
+    // header (or fall back to a UTF-8 default for text-y files).
+    const original = res.data as Blob
+    const headerCT = (res.headers['content-type'] ?? '').toString()
+    const fallbackCT =
+      original.type ||
+      (filename.endsWith('.html')
+        ? 'text/html; charset=utf-8'
+        : filename.endsWith('.json')
+          ? 'application/json; charset=utf-8'
+          : 'application/octet-stream')
+    const fullType = headerCT || fallbackCT
+    const blob = new Blob([original], { type: fullType })
+    const blobURL = URL.createObjectURL(blob)
     if (mode === 'download') {
       const a = document.createElement('a')
       a.href = blobURL
