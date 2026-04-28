@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -709,6 +710,15 @@ func (h *BillHandler) serveArtifact(c *gin.Context, inline bool) {
 	contentType := art.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"
+	}
+	// All our text artifacts (email_html, JSON envelope, etc.) are stored
+	// as UTF-8 bytes. Browsers default text/html / text/plain to Latin-1
+	// when the Content-Type header has no charset, which mangles Thai
+	// (e.g. "เรียน" → "à¹€à¸£à¸µà¸¢à¸™"). Backfill charset=utf-8 so
+	// historical artifacts saved before the canonical fix still render.
+	if (strings.HasPrefix(contentType, "text/") || contentType == "application/json") &&
+		!strings.Contains(strings.ToLower(contentType), "charset=") {
+		contentType = contentType + "; charset=utf-8"
 	}
 	disposition := "attachment"
 	if inline {

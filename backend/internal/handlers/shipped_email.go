@@ -151,7 +151,7 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, me
 	}
 
 	// Save the original Shopee shipping email body + envelope as artifacts.
-	h.saveEmailArtifacts(bill.ID, "email_html", "shopee-shipped.html", "text/html",
+	h.saveEmailArtifacts(bill.ID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8",
 		[]byte(bodyText), subject, from, messageID)
 
 	for _, iwc := range itemsWithCandidates {

@@ -589,7 +589,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID
 	}
 
 	// Save the email HTML body + envelope as a downloadable artifact.
-	h.saveEmailArtifacts(bill.ID, "email_html", "shopee-order.html", "text/html",
+	h.saveEmailArtifacts(bill.ID, "email_html", "shopee-order.html", "text/html; charset=utf-8",
 		[]byte(bodyText), subject, from, messageID)
 
 	// Insert bill items with candidates
