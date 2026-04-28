@@ -10,7 +10,7 @@ const SOURCE_LABELS: Record<string, string> = {
   lazada:         'Lazada',
   shopee:         'Shopee Excel',
   shopee_email:   'Shopee Order',
-  shopee_shipped: 'Shopee Shipped',
+  shopee_shipped: 'Shopee → ใบสั่งซื้อ',
   manual:         'Manual',
 }
 

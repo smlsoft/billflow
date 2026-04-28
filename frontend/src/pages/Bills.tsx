@@ -33,7 +33,7 @@ const SOURCE_OPTIONS = [
   { value: 'email', label: 'Email' },
   { value: 'shopee', label: 'Shopee Excel' },
   { value: 'shopee_email', label: 'Shopee Order' },
-  { value: 'shopee_shipped', label: 'Shopee Shipped (PO)' },
+  { value: 'shopee_shipped', label: 'Shopee → ใบสั่งซื้อ/สั่งจอง' },
   { value: 'lazada', label: 'Lazada' },
   { value: 'manual', label: 'Manual' },
 ]

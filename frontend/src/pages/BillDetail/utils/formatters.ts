@@ -6,7 +6,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   lazada: 'Lazada',
   shopee: 'Shopee',
   shopee_email: 'Shopee Email',
-  shopee_shipped: 'Shopee จัดส่งแล้ว',
+  shopee_shipped: 'Shopee → ใบสั่งซื้อ/สั่งจอง',
   manual: 'Manual',
 }
 
@@ -25,7 +25,10 @@ export const FLOW_META: Record<
     variant: 'bg-orange-100 text-orange-800',
   },
   shopee_shipped: {
-    label: 'Shopee จัดส่งแล้ว (PO)',
+    // Both COD-shipped emails ("ถูกจัดส่งแล้ว") and pay-now confirmation
+    // emails ("ยืนยันการชำระเงิน") route to this flow, so the label can't
+    // claim the package shipped. Frame it by outcome: produces a PO bill.
+    label: 'Shopee → ใบสั่งซื้อ/สั่งจอง',
     icon: '📦',
     variant: 'bg-amber-100 text-amber-800',
   },
