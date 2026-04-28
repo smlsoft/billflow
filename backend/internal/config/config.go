@@ -28,14 +28,8 @@ type Config struct {
 	LineChannelAccessToken string
 	LineAdminUserID        string
 
-	// IMAP
-	IMAPHost          string
-	IMAPPort          int
-	IMAPUser          string
-	IMAPPassword      string
-	IMAPFilterFrom    string
-	IMAPFilterSubject string
-	IMAPPollInterval  time.Duration
+	// IMAP — moved to imap_accounts table (DB-driven, multi-account).
+	// Manage via /settings/email instead of env vars.
 
 	// OpenRouter
 	OpenRouterAPIKey     string
@@ -74,8 +68,8 @@ type Config struct {
 	// Gemini (for text-embedding-004)
 	GeminiAPIKey string
 
-	// Shopee email detection (comma-separated domains)
-	ShopeeEmailDomains string
+	// Shopee email detection moved to per-account `shopee_domains` column
+	// in imap_accounts table.
 
 	// Auto-confirm
 	AutoConfirmThreshold float64
@@ -106,13 +100,6 @@ func Load() *Config {
 		LineChannelSecret:      getEnv("LINE_CHANNEL_SECRET", ""),
 		LineChannelAccessToken: getEnv("LINE_CHANNEL_ACCESS_TOKEN", ""),
 		LineAdminUserID:        getEnv("LINE_ADMIN_USER_ID", ""),
-		IMAPHost:               getEnv("IMAP_HOST", ""),
-		IMAPPort:               getEnvInt("IMAP_PORT", 993),
-		IMAPUser:               getEnv("IMAP_USER", ""),
-		IMAPPassword:           getEnv("IMAP_PASSWORD", ""),
-		IMAPFilterFrom:         getEnv("IMAP_FILTER_FROM", ""),
-		IMAPFilterSubject:      getEnv("IMAP_FILTER_SUBJECT", ""),
-		IMAPPollInterval:       getEnvDuration("IMAP_POLL_INTERVAL", 5*time.Minute),
 		OpenRouterAPIKey:       getEnv("OPENROUTER_API_KEY", ""),
 		OpenRouterModel:        getEnv("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
 		OpenRouterFallback:     getEnv("OPENROUTER_FALLBACK_MODEL", "google/gemini-flash-1.5"),
@@ -137,7 +124,6 @@ func Load() *Config {
 		ShippedSMLDocFormat:    getEnv("SHIPPED_SML_DOC_FORMAT", "PO"),
 		ShippedSMLCustCode:     getEnv("SHIPPED_SML_CUST_CODE", getEnv("SHOPEE_SML_CUST_CODE", "")),
 		GeminiAPIKey:           getEnv("GEMINI_API_KEY", ""),
-		ShopeeEmailDomains:     getEnv("SHOPEE_EMAIL_DOMAINS", "shopee.co.th,mail.shopee.co.th,noreply.shopee.co.th"),
 		AutoConfirmThreshold:   getEnvFloat("AUTO_CONFIRM_THRESHOLD", 0.85),
 		InsightCronHour:        getEnvInt("INSIGHT_CRON_HOUR", 8),
 		BackupCronHour:         getEnvInt("BACKUP_CRON_HOUR", 0),

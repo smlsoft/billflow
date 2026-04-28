@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -157,11 +156,16 @@ func main() {
 		}
 	}
 
-	// Email service
-	imapSvc := emailservice.New(
-		cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUser, cfg.IMAPPassword,
-		cfg.IMAPFilterFrom, cfg.IMAPFilterSubject, logger,
-	)
+	// Email service — multi-account coordinator. Reads imap_accounts table
+	// at boot, spawns one poller goroutine per enabled row. Admin edits
+	// flow back through ReloadAccount/RemoveAccount via the settings API.
+	imapAccountRepo := repository.NewImapAccountRepo(db)
+	imapProcessors := &emailservice.Processors{
+		Attachment:    nil, // wired below once emailH is built
+		ShopeeOrder:   nil,
+		ShopeeShipped: nil,
+	}
+	imapCoordinator := emailservice.NewCoordinator(imapAccountRepo, imapProcessors, lineSvc, logger)
 
 	// Mistral OCR service (optional — used for PDF extraction)
 	ocrClient := mistral.New(cfg.MistralAPIKey)
@@ -211,9 +215,13 @@ func main() {
 	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, artifactSvc, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, insightSvc, logger)
+	imapConfigured := false
+	if accs, err := imapAccountRepo.ListEnabled(); err == nil && len(accs) > 0 {
+		imapConfigured = true
+	}
 	dashH.SetConfigStatus(
 		cfg.LineChannelSecret != "" && cfg.LineChannelAccessToken != "",
-		cfg.IMAPHost != "",
+		imapConfigured,
 		cfg.SMLBaseURL != "",
 		cfg.OpenRouterAPIKey != "",
 		cfg.AutoConfirmThreshold,
@@ -227,6 +235,7 @@ func main() {
 	shopeeH := handlers.NewShopeeImportHandler(billRepo, auditLogRepo, cfg, catalogSvc, embSvc, catalogIdx, logger)
 	shopeeH.SetArtifactService(artifactSvc)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
+	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
 
 	// Webhooks (no auth)
@@ -283,6 +292,16 @@ func main() {
 		api.GET("/settings/column-mappings/:platform", settingsH.GetColumnMappings)
 		api.PUT("/settings/column-mappings/:platform", middleware.RequireRole("admin"), settingsH.UpdateColumnMappings)
 
+		// IMAP accounts (admin only) — multi-mailbox config
+		api.GET("/settings/imap-accounts", middleware.RequireRole("admin"), imapSettingsH.List)
+		api.POST("/settings/imap-accounts", middleware.RequireRole("admin"), imapSettingsH.Create)
+		api.POST("/settings/imap-accounts/test", middleware.RequireRole("admin"), imapSettingsH.TestConnection)
+		api.POST("/settings/imap-accounts/list-folders", middleware.RequireRole("admin"), imapSettingsH.ListFolders)
+		api.GET("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Get)
+		api.PUT("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Update)
+		api.DELETE("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Delete)
+		api.POST("/settings/imap-accounts/:id/poll", middleware.RequireRole("admin"), imapSettingsH.PollNow)
+
 		// Catalog (SML product catalog + smart matching)
 		api.GET("/catalog", catalogH.List)
 		api.GET("/catalog/stats", catalogH.Stats)
@@ -322,17 +341,18 @@ func main() {
 		tokenChecker.Register(c)
 	}
 
-	emailPoller := jobs.NewEmailPoller(imapSvc, lineSvc, emailH, cfg.IMAPPollInterval, logger)
-	if cfg.IMAPHost != "" {
-		// Wire Shopee email processors (order + shipped) — both gated by domain
-		if cfg.ShopeeEmailDomains != "" {
-			domains := strings.Split(cfg.ShopeeEmailDomains, ",")
-			imapSvc.SetShopeeProcessor(emailH.ProcessShopeeEmailBody, domains)
-			imapSvc.SetShippedProcessor(emailH.ProcessShopeeShippedEmailBody)
-			logger.Info("shopee email processors wired", zap.Strings("domains", domains))
-		}
-		emailPoller.Register(c)
+	// Wire processors into the coordinator now that emailH is built, then
+	// boot the multi-account poller. Coordinator reads imap_accounts and
+	// spawns one goroutine per enabled row. Empty list = no polling, no
+	// errors — admin needs to add accounts via /settings/email.
+	imapProcessors.Attachment = emailH.ProcessAttachment
+	imapProcessors.ShopeeOrder = emailH.ProcessShopeeEmailBody
+	imapProcessors.ShopeeShipped = emailH.ProcessShopeeShippedEmailBody
+
+	if err := imapCoordinator.Start(context.Background()); err != nil {
+		logger.Error("imap coordinator start failed", zap.Error(err))
 	}
+	defer imapCoordinator.Stop()
 
 	c.Start()
 	defer c.Stop()

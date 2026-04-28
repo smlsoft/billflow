@@ -11,6 +11,7 @@ import Mappings from './pages/Mappings'
 import Settings from './pages/Settings'
 import Logs from './pages/Logs'
 import CatalogSettings from './pages/CatalogSettings'
+import EmailAccounts from './pages/EmailAccounts'
 import Showcase from './pages/Showcase'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="settings" element={<Settings />} />
           <Route path="logs" element={<Logs />} />
           <Route path="settings/catalog" element={<CatalogSettings />} />
+          <Route path="settings/email" element={<EmailAccounts />} />
         </Route>
       </Routes>
     </BrowserRouter>

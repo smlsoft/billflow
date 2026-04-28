@@ -7,6 +7,7 @@ import {
   FileText,
   LayoutDashboard,
   LogOut,
+  Mail,
   ScrollText,
   Settings,
   ShoppingBag,
@@ -70,6 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'จัดการระบบ',
     items: [
       { to: '/mappings', label: 'Mapping สินค้า', icon: Workflow },
+      { to: '/settings/email', label: 'Email Inboxes', icon: Mail },
       { to: '/settings/catalog', label: 'Catalog SML', icon: Database },
       { to: '/logs', label: 'Activity Log', icon: ScrollText },
       { to: '/settings', label: 'ตั้งค่า', icon: Settings, end: true },
