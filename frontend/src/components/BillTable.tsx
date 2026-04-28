@@ -43,8 +43,12 @@ export default function BillTable({ bills, loading, onRowClick }: Props) {
                 </span>
               )}
               {b.bill_type === 'purchase' && (
-                <Badge variant="secondary" className="h-4 bg-warning/15 px-1 text-[10px] font-semibold text-warning hover:bg-warning/20">
-                  PO
+                <Badge
+                  variant="secondary"
+                  className="h-5 bg-warning/15 px-1.5 text-[10px] font-medium text-warning hover:bg-warning/20"
+                  title="ใบสั่งซื้อ/สั่งจอง (Purchase Order)"
+                >
+                  ใบสั่งซื้อ/สั่งจอง
                 </Badge>
               )}
             </div>

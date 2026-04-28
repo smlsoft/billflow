@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
 import {
   AlertCircle,
+  ChevronDown,
+  FileText,
+  Info,
   Mail,
   Pencil,
   PlayCircle,
   Plus,
+  ShoppingBag,
   Trash2,
 } from 'lucide-react'
 import dayjs from 'dayjs'
@@ -12,6 +16,12 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   Tooltip,
   TooltipContent,
@@ -24,6 +34,7 @@ import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import { StatusDot } from '@/components/common/StatusDot'
 import client from '@/api/client'
+import { cn } from '@/lib/utils'
 import type { IMAPAccount } from '@/pages/EmailAccounts/AccountDialog'
 import { AccountDialog } from '@/pages/EmailAccounts/AccountDialog'
 
@@ -39,6 +50,78 @@ const CHANNEL_META: Record<string, { label: string; cls: string }> = {
   general: { label: 'General', cls: 'bg-secondary text-secondary-foreground' },
   shopee:  { label: 'Shopee',  cls: 'bg-warning/15 text-warning hover:bg-warning/20' },
   lazada:  { label: 'Lazada',  cls: 'bg-info/15 text-info hover:bg-info/20' },
+}
+
+// Help banner shown above the table — collapsible so it doesn't clutter the
+// view once admins are familiar. Default open on first visit (state lives in
+// component memory; resets per page reload).
+function HelpBanner() {
+  const [open, setOpen] = useState(true)
+  return (
+    <Card className="border-info/30 bg-info/5">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-info/10">
+          <Info className="h-4 w-4 text-info" />
+          <span>BillFlow ดึงอีเมลแบบไหน + เลือก channel ยังไง</span>
+          <ChevronDown
+            className={cn(
+              'ml-auto h-4 w-4 text-muted-foreground transition-transform',
+              open && 'rotate-180',
+            )}
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <CardContent className="space-y-3 border-t border-info/20 px-4 pt-3 text-sm">
+            <p className="text-muted-foreground">
+              ระบบดึงอีเมลจาก inbox ที่คุณเพิ่มไว้ มาสร้างบิลอัตโนมัติ —
+              ทุก inbox มี <b>channel</b> กำหนดว่าจะ route อีเมลไปทาง flow ไหน:
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-md border border-border bg-card p-3">
+                <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                  <ShoppingBag className="h-4 w-4 text-warning" />
+                  Channel: <span className="text-warning">Shopee</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  สำหรับ Gmail/Outlook ที่มีอีเมลจาก Shopee — ระบบจะแยก:
+                </p>
+                <ul className="mt-1.5 space-y-0.5 pl-4 text-xs">
+                  <li className="list-disc">
+                    Subject "<b>คำสั่งซื้อ #...</b>" → บิลขาย (saleinvoice)
+                  </li>
+                  <li className="list-disc">
+                    Subject "<b>ถูกจัดส่งแล้ว</b>" หรือ "<b>ยืนยันการชำระเงิน</b>" →
+                    ใบสั่งซื้อ/สั่งจอง (PO)
+                  </li>
+                </ul>
+              </div>
+              <div className="rounded-md border border-border bg-card p-3">
+                <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                  <FileText className="h-4 w-4 text-info" />
+                  Channel: <span className="text-info">General</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  สำหรับ inbox ที่มี PDF / Excel แนบ (เช่น email vendor)
+                </p>
+                <ul className="mt-1.5 space-y-0.5 pl-4 text-xs">
+                  <li className="list-disc">
+                    AI extract ข้อมูลจาก PDF → สร้างบิล
+                  </li>
+                  <li className="list-disc">
+                    รองรับ .pdf, .jpg, .png, .xls, .xlsx
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <div className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
+              ⚠️ Gmail ต้องใช้ <b>App Password</b> (16 หลัก) ไม่ใช่ password จริง —
+              ในฟอร์มเพิ่ม inbox มีปุ่ม "วิธีรับ App Password" ข้างช่อง Password
+            </div>
+          </CardContent>
+        </CollapsibleContent>
+      </Collapsible>
+    </Card>
+  )
 }
 
 function statusVariant(s?: string | null): 'success' | 'warning' | 'danger' | 'muted' {
@@ -145,6 +228,8 @@ export default function EmailAccounts() {
         description="ดึงอีเมลจากหลาย mailbox มาสร้างบิลอัตโนมัติ — แก้ config ได้โดยไม่ต้อง deploy"
         actions={headerActions}
       />
+
+      <HelpBanner />
 
       {!loading && accounts.length === 0 ? (
         <EmptyState

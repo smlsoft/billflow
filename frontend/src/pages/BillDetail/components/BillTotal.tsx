@@ -48,8 +48,8 @@ export function BillTotal({ bill, total, retrying, onRetry }: Props) {
             {retrying
               ? 'กำลังส่ง...'
               : isFailed
-                ? `⚠️ ลองส่งใหม่${isPurchase ? ' (PO)' : ''}`
-                : `ยืนยันและส่งไปยัง SML${isPurchase ? ' (PO)' : ''}`}
+                ? `⚠️ ลองส่งใหม่${isPurchase ? ' (ใบสั่งซื้อ/สั่งจอง)' : ''}`
+                : `ยืนยันและส่งไปยัง SML${isPurchase ? ' (ใบสั่งซื้อ/สั่งจอง)' : ''}`}
           </Button>
         )}
       </CardContent>

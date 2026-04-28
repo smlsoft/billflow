@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import BillStatusBadge from '@/components/BillStatusBadge'
 import type { Bill } from '@/types'
 import { SOURCE_LABELS } from '../utils/formatters'
@@ -44,9 +45,20 @@ export function BillHeader({ bill, errorMsg, retryError }: Props) {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3 border-b">
-          <h2 className="font-mono text-lg font-bold tracking-tight">
-            {bill.sml_doc_no ?? bill.id.slice(0, 8)}
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="font-mono text-lg font-bold tracking-tight">
+              {bill.sml_doc_no ?? bill.id.slice(0, 8)}
+            </h2>
+            {isPurchase && (
+              <Badge
+                variant="secondary"
+                className="bg-warning/15 text-warning hover:bg-warning/20"
+                title="Purchase Order"
+              >
+                ใบสั่งซื้อ/สั่งจอง
+              </Badge>
+            )}
+          </div>
           <BillStatusBadge status={bill.status} />
         </CardHeader>
 
