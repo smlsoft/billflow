@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, Eye, EyeOff, FolderTree, Loader2, X } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, FolderTree, HelpCircle, Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -14,6 +14,11 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -77,6 +82,112 @@ const DEFAULTS: FormState = {
 
 const SHOPEE_DEFAULT_DOMAINS = ['shopee.co.th', 'mail.shopee.co.th', 'noreply.shopee.co.th']
 const SHOPEE_DEFAULT_SUBJECTS = ['คำสั่งซื้อ', 'ถูกจัดส่งแล้ว']
+
+interface ProviderGuide {
+  name: string
+  url: string
+  steps: string[]
+  note?: string
+}
+
+const PROVIDER_GUIDES: Array<{ match: RegExp; guide: ProviderGuide }> = [
+  {
+    match: /gmail|google/i,
+    guide: {
+      name: 'Gmail',
+      url: 'https://myaccount.google.com/apppasswords',
+      steps: [
+        'เข้า Google Account → Security',
+        'เปิด 2-Step Verification ก่อน (จำเป็น — ไม่งั้นเมนู App passwords จะไม่ปรากฏ)',
+        'เปิดหน้า App passwords ตาม link ด้านบน',
+        'เลือก App = "Mail", Device = ระบุชื่อเช่น "BillFlow"',
+        'กด Generate → ได้ password 16 ตัวอักษร (ตัวอย่าง: abcd efgh ijkl mnop) — ลบเว้นวรรคออกได้',
+        'Copy ครั้งเดียวเท่านั้น — ปิดหน้าแล้วดูไม่ได้อีก',
+      ],
+      note: 'ห้ามใช้ password Google จริง — ใช้ App Password (16 หลัก) เท่านั้น',
+    },
+  },
+  {
+    match: /outlook|hotmail|live|office365/i,
+    guide: {
+      name: 'Outlook / Microsoft 365',
+      url: 'https://account.microsoft.com/security/app-passwords',
+      steps: [
+        'เข้า account.microsoft.com → Security',
+        'เปิด Two-step verification ก่อน',
+        'เลือก "Create a new app password"',
+        'ได้ password มาใช้งาน — copy ทั้งสตริง',
+      ],
+      note: 'Outlook IMAP host = imap-mail.outlook.com, port 993',
+    },
+  },
+]
+
+function getProviderGuide(host: string): ProviderGuide | null {
+  for (const { match, guide } of PROVIDER_GUIDES) {
+    if (match.test(host)) return guide
+  }
+  return null
+}
+
+function AppPasswordHelp({ host }: { host: string }) {
+  const guide = getProviderGuide(host)
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          <HelpCircle className="h-3 w-3" />
+          วิธีรับ App Password
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[420px]" align="end">
+        {guide ? (
+          <div className="space-y-3">
+            <div>
+              <h4 className="text-sm font-semibold">วิธีสร้าง App Password ({guide.name})</h4>
+              <a
+                href={guide.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                {guide.url}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+            <ol className="space-y-1.5 pl-4 text-xs text-foreground">
+              {guide.steps.map((s, i) => (
+                <li key={i} className="list-decimal">
+                  {s}
+                </li>
+              ))}
+            </ol>
+            {guide.note && (
+              <p className="rounded-md bg-warning/10 px-2.5 py-1.5 text-xs text-warning">
+                ⚠️ {guide.note}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2 text-xs">
+            <h4 className="text-sm font-semibold">App Password</h4>
+            <p>
+              IMAP server แต่ละที่อาจต้อง <b>App Password</b> (token แทน password จริง)
+              ดูคู่มือของผู้ให้บริการ — มักจะอยู่ที่หน้า "Security" หรือ "Two-step verification"
+            </p>
+            <p className="text-muted-foreground">
+              ตัวอย่าง: Gmail = myaccount.google.com/apppasswords, Outlook =
+              account.microsoft.com/security/app-passwords
+            </p>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 function csvToArray(s: string): string[] {
   return s
@@ -325,14 +436,17 @@ export function AccountDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ac-pwd">
-                Password
-                {editing && (
-                  <span className="ml-1 text-xs font-normal text-muted-foreground">
-                    (เว้นว่างถ้าไม่เปลี่ยน)
-                  </span>
-                )}
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="ac-pwd">
+                  Password
+                  {editing && (
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">
+                      (เว้นว่างถ้าไม่เปลี่ยน)
+                    </span>
+                  )}
+                </Label>
+                <AppPasswordHelp host={form.host} />
+              </div>
               <div className="relative">
                 <Input
                   id="ac-pwd"
