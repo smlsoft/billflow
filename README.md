@@ -200,17 +200,8 @@ LINE_CHANNEL_SECRET=
 LINE_CHANNEL_ACCESS_TOKEN=
 LINE_ADMIN_USER_ID=
 
-# Email IMAP
-# Gmail: IMAP_HOST=imap.gmail.com, IMAP_PORT=993, IMAP_PASSWORD=<App Password 16 หลัก>
-# Outlook: IMAP_HOST=imap-mail.outlook.com, IMAP_PORT=993
-# ⚠️ IMAP_POLL_INTERVAL ต้องไม่น้อยกว่า 5m (Gmail rate limit)
-IMAP_HOST=imap.gmail.com
-IMAP_PORT=993
-IMAP_USER=billing@company.com
-IMAP_PASSWORD=
-IMAP_FILTER_FROM=
-IMAP_FILTER_SUBJECT=PO,Purchase Order,ใบสั่งซื้อ
-IMAP_POLL_INTERVAL=5m
+# Email IMAP config moved to /settings/email admin UI (multi-account)
+# ไม่มี IMAP_* env vars อีกต่อไป
 
 # OpenRouter
 OPENROUTER_API_KEY=sk-or-xxx
@@ -268,13 +259,20 @@ audit_logs                  -- structured log (source, level, duration_ms, trace
 chat_sessions               -- LINE conversation state (persistent)
 sml_catalog                 -- SML product catalog + 1536-dim embeddings
 channel_customer_defaults   -- default cust_code per channel
+imap_accounts               -- multi-account IMAP config (replaces .env IMAP_* singleton)
 ```
+
+Key columns in `imap_accounts`: name, host, port, username, password, mailbox, filter_from,
+filter_subjects[], channel (general/shopee/lazada), shopee_domains[], lookback_days (1-90),
+poll_interval_seconds (≥300), enabled, last_polled_at, last_poll_status, consecutive_failures.
 
 Migrations (run in order, all idempotent):
 - [001_init.sql](backend/internal/database/migrations/001_init.sql) — initial schema
 - [002_audit_logging.sql](backend/internal/database/migrations/002_audit_logging.sql) — audit_logs structured columns
 - [002_sml_catalog.sql](backend/internal/database/migrations/002_sml_catalog.sql) — sml_catalog + sml_order_id + candidates + extended source/status CHECK
 - [003_channel_customer_defaults.sql](backend/internal/database/migrations/003_channel_customer_defaults.sql) — channel_customer_defaults
+- [004_shopee_shipped.sql](backend/internal/database/migrations/004_shopee_shipped.sql) — bills.source shopee_shipped
+- [006_imap_accounts.sql](backend/internal/database/migrations/006_imap_accounts.sql) — imap_accounts table
 
 ---
 
@@ -331,6 +329,19 @@ Migrations (run in order, all idempotent):
 | GET | `/api/settings/status` | JWT | Connection status |
 | GET | `/api/settings/column-mappings/:platform` | JWT | Column mapping config |
 | PUT | `/api/settings/column-mappings/:platform` | admin | Update column mapping |
+
+### Settings — Email Inboxes (admin only)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/settings/imap-accounts` | admin | List all IMAP accounts |
+| POST | `/api/settings/imap-accounts` | admin | Create new inbox |
+| GET | `/api/settings/imap-accounts/:id` | admin | Inbox detail |
+| PUT | `/api/settings/imap-accounts/:id` | admin | Update inbox |
+| DELETE | `/api/settings/imap-accounts/:id` | admin | Delete inbox |
+| POST | `/api/settings/imap-accounts/:id/poll` | admin | Manual poll-now |
+| POST | `/api/settings/imap-accounts/test` | admin | Dry connect + auth + SELECT |
+| POST | `/api/settings/imap-accounts/list-folders` | admin | List mailbox folders |
 
 ### Dashboard
 
@@ -392,24 +403,34 @@ Mode 3 — Voice message (F3)  ← code deployed, ยังไม่ test
 confidence ลด 0.1 อัตโนมัติ
 ```
 
-### Email IMAP (Phase 5)
+### Email IMAP (Phase 5 + session 6: multi-account)
 
 ```
-Background goroutine poll ทุก 5 นาที
-→ filter ตาม IMAP_FILTER_FROM / IMAP_FILTER_SUBJECT
-→ download attachment → AI pipeline (เหมือน LINE)
-→ mark_read หลัง process (กัน process ซ้ำ)
-→ error → LINE admin notify
+EmailCoordinator starts one goroutine per row in imap_accounts (enabled=true).
+Each goroutine polls its mailbox every poll_interval_seconds (DB CHECK >= 300 s).
+
+Per-account channel routing:
+  subject "ถูกจัดส่งแล้ว" or "ยืนยันการชำระเงิน"
+    → ProcessShopeeShippedEmailBody → purchaseorder (SML 248)
+  from domain in shopee_domains && channel=shopee
+    → ProcessShopeeEmailBody → saleinvoice (SML 248)
+  else → download attachment → AI pipeline → pending/needs_review
+
+Admin manages inboxes at /settings/email (no .env changes required).
+AccountDialog: 4-section form, host-aware App Password popover,
+test-connection button, list-folders button.
 ```
+
+**Production inboxes (2026-04-28):**
+- `bos.catdog@gmail.com` — channel=shopee — subjects: คำสั่งซื้อ, ถูกจัดส่งแล้ว
+- `sutee.toe@gmail.com` — channel=shopee — subject: ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #
 
 **รองรับ email provider:**
-- Gmail (ใช้ App Password — ดู [Section 22](#22-gmail-imap-setup-สำหรับติดตั้งที่ร้านลูกค้า))
+- Gmail (ใช้ App Password — เปิด 2-Step Verification ก่อน)
 - Outlook/Hotmail (`imap-mail.outlook.com:993`)
 - IMAP ทั่วไป (port 993 TLS หรือ 143 STARTTLS)
 
-**ข้อจำกัด Gmail:**
-- poll ถี่เกินไป → Gmail block connection (`unexpected EOF`)
-- ใช้ `IMAP_POLL_INTERVAL=5m` ขั้นต่ำ (อย่าใช้ 1m)
+**ข้อจำกัด Gmail:** poll ถี่เกินไป → `unexpected EOF` — min interval 5 min (enforced by DB CHECK)
 
 ### File Import — Lazada/Shopee (Phase 4)
 
@@ -658,9 +679,9 @@ Column mapping เก็บใน DB → admin แก้ได้จาก `/set
 
 | Job | Schedule | Description |
 |---|---|---|
-| Email Poller | ทุก 5 นาที | Poll IMAP + process attachments |
+| IMAP Coordinator | per-account interval (≥5 min) | N goroutines (one per imap_accounts row), each polls its mailbox every poll_interval_seconds |
 | Daily Insight | Cron 08:00 | F4 generate + LINE notify |
-| Backup | Cron 00:00 | `pg_dump` → `backups/YYYYMMDD.sql` |
+| Backup | Cron 00:00 | `pg_dump` → `backups/YYYYMMDD.sql.gz` |
 | Token Checker | ทุกอาทิตย์ | ตรวจ LINE token — แจ้งล่วงหน้า 7 วัน |
 | Disk Monitor | ทุกวัน | แจ้ง admin ถ้า disk > `DISK_WARN_PERCENT` (90%) |
 
@@ -837,32 +858,32 @@ Google บังคับใช้ **2-Step Verification** สำหรับ IM
 3. **IMAP access** → เลือก **Enable IMAP**
 4. กด **Save Changes**
 
-#### ขั้นที่ 4 — ใส่ค่าใน `.env` บน server
+#### ขั้นที่ 4 — เพิ่ม inbox ที่ `/settings/email` (admin UI)
+
+⚠️ ตั้งแต่ session 6 (2026-04-28) **เลิกใช้ `.env` IMAP_*** — config ทั้งหมดเก็บใน DB
+ผ่านตาราง `imap_accounts` แก้ผ่าน admin UI ที่ http://192.168.2.109:3010/settings/email
+
+1. เข้า `/settings/email` (admin only)
+2. คลิก **+ เพิ่ม Inbox** → เลือก preset "Gmail + Shopee" หรือ "Gmail + PDF" เพื่อ pre-fill
+3. กรอก:
+   - **ชื่อ inbox** — เพื่อแยกแยะ (เช่น "Shopee main")
+   - **Username** — `อีเมล@gmail.com`
+   - **Password** — App Password 16 หลักที่ copy มาจากขั้นที่ 2 (ไม่ใช่ password จริง)
+   - **Channel** — `shopee` ถ้าเป็น inbox Shopee, `general` ถ้ารับ PDF/Excel แนบ
+   - **Filter Subjects** — keyword ใน subject (เช่น `ถูกจัดส่งแล้ว`, `ยืนยันการชำระเงิน`)
+   - **Poll interval** — 5+ นาที (ขั้นต่ำเพื่อกัน Gmail rate limit)
+4. คลิก **ทดสอบการเชื่อมต่อ** → ต้องเห็น ✅ "เชื่อมต่อสำเร็จ"
+5. คลิก **บันทึก** → coordinator จะ spawn poller goroutine ทันที
 
 ```bash
-IMAP_HOST=imap.gmail.com
-IMAP_PORT=993
-IMAP_USER=ชื่ออีเมล@gmail.com
-IMAP_PASSWORD=abcdefghijklmnop    # App Password 16 หลัก ไม่มีช่องว่าง
-IMAP_FILTER_FROM=                  # ใส่ email ผู้ส่งถ้าต้องการ filter
-IMAP_FILTER_SUBJECT=PO,Purchase Order,ใบสั่งซื้อ
-IMAP_POLL_INTERVAL=5m              # ห้ามน้อยกว่า 5m
-```
-
-```bash
-# ทดสอบ connection จาก server
+# ทดสอบ connection ผ่าน CLI
 curl -v --ssl-reqd 'imaps://imap.gmail.com:993/INBOX' \
   --user 'ชื่ออีเมล@gmail.com:apppassword16หลัก' 2>&1 | head -20
 # ต้องเห็น "* OK Gimap ready"
-```
 
-```bash
-# restart backend หลังแก้ .env
-cd ~/billflow && docker compose up -d backend
-
-# ดู logs ยืนยัน
-docker logs billflow-backend --tail=20 2>&1
-# ไม่มี "IMAP poll failed" = OK
+# ดู logs ยืนยันว่า account live
+docker logs billflow-backend --tail=20 2>&1 | grep coordinator
+# ต้องเห็น "coordinator_poller_started" สำหรับ account ใหม่
 ```
 
 ---
@@ -871,11 +892,12 @@ docker logs billflow-backend --tail=20 2>&1
 
 | ปัญหา | สาเหตุ | วิธีแก้ |
 |---|---|---|
-| `unexpected EOF` | poll ถี่เกินไป / Gmail rate limit | เพิ่ม `IMAP_POLL_INTERVAL=5m` |
-| `IMAP login failed` | password ผิด / 2FA ไม่ได้เปิด | สร้าง App Password ใหม่ |
-| `IMAP login failed` | ใส่ password จริงแทน App Password | ต้องใช้ App Password เท่านั้น |
+| `unexpected EOF` | poll ถี่เกินไป / Gmail rate limit | เพิ่ม Poll interval ใน `/settings/email` (≥ 5 นาที) |
+| `auth_failed` ใน status | password ผิด / 2FA ไม่ได้เปิด | สร้าง App Password ใหม่ + แก้ใน `/settings/email` |
+| `auth_failed` | ใส่ password จริงแทน App Password | ต้องใช้ App Password เท่านั้น (ดูปุ่ม "วิธีรับ App Password" ใน dialog) |
 | อ่านเมลซ้ำ | เมล mark as read ไม่สำเร็จ | ตรวจ IMAP permission ใน Google account |
-| ไม่เจอเมล | `IMAP_FILTER_FROM` หรือ `IMAP_FILTER_SUBJECT` ไม่ตรง | ลอง clear filter ก่อน แล้วค่อย filter |
+| ไม่เจอเมล | filter from / subject ไม่ตรง | กด "Poll ทันที" หลัง clear filter ใน dialog ของ inbox |
+| Poll fail ≥ 3 รอบติด | account error | ระบบ push LINE แจ้ง admin อัตโนมัติ (throttle 1 ครั้ง/ชม.) |
 
 ---
 
