@@ -324,9 +324,16 @@ func matchesSubject(subject string, filters []string) bool {
 	return false
 }
 
-// isShippedSubject returns true if the subject indicates a Shopee shipping confirmation.
+// isShippedSubject returns true if the subject indicates a Shopee
+// payment-or-shipping confirmation — both should produce a purchase-order
+// bill in SML. The two channels Shopee uses are:
+//   - เก็บเงินปลายทาง (cash on delivery): subject contains "ถูกจัดส่งแล้ว"
+//     when the package ships
+//   - ชำระเงินทันที (pay now): subject contains "ยืนยันการชำระเงิน"
+//     when the buyer pays — this is the equivalent trigger for COD-shipped
 func isShippedSubject(subject string) bool {
-	return strings.Contains(subject, "ถูกจัดส่งแล้ว")
+	return strings.Contains(subject, "ถูกจัดส่งแล้ว") ||
+		strings.Contains(subject, "ยืนยันการชำระเงิน")
 }
 
 // isShopeeFrom returns true if the from address matches any of the configured domains.
