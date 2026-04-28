@@ -96,6 +96,8 @@ def main():
         # uninstalled deps (react-hot-toast) and breaks the Docker build.
         "frontend/src/pages/BillDetail.tsx",
         "frontend/src/pages/BillDetail.css",
+        # Phase 1 of multi-account IMAP deleted the old singleton poller.
+        "backend/internal/jobs/email_poller.go",
     ]
     rm_cmd = " && ".join(f"rm -f {REMOTE}/{p}" for p in LEGACY_FILES)
     run(c, rm_cmd, label="remove orphan legacy files")
