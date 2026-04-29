@@ -7,6 +7,7 @@ import (
 
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/events"
 )
 
 // ChatTagsHandler exposes:
@@ -15,10 +16,11 @@ import (
 type ChatTagsHandler struct {
 	repo      *repository.ChatTagRepo
 	auditRepo *repository.AuditLogRepo
+	broker    *events.Broker
 }
 
-func NewChatTagsHandler(repo *repository.ChatTagRepo, auditRepo *repository.AuditLogRepo) *ChatTagsHandler {
-	return &ChatTagsHandler{repo: repo, auditRepo: auditRepo}
+func NewChatTagsHandler(repo *repository.ChatTagRepo, auditRepo *repository.AuditLogRepo, broker *events.Broker) *ChatTagsHandler {
+	return &ChatTagsHandler{repo: repo, auditRepo: auditRepo, broker: broker}
 }
 
 func (h *ChatTagsHandler) audit(c *gin.Context, action string, detail map[string]interface{}) {
@@ -158,5 +160,15 @@ func (h *ChatTagsHandler) SetTagsForConversation(c *gin.Context) {
 		"tag_count":    len(rows),
 		"labels":       labels,
 	})
+	// Push the new tag set so other admin tabs see chips update without polling.
+	if h.broker != nil {
+		h.broker.Publish(events.Event{
+			Type: events.TypeConversationUpdated,
+			Payload: map[string]any{
+				"line_user_id": lineUserID,
+				"tags":         rows,
+			},
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{"data": rows})
 }

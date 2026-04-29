@@ -15,6 +15,7 @@ import (
 	"billflow/internal/config"
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/events"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/worker"
 )
@@ -33,6 +34,7 @@ type LineHandler struct {
 	auditRepo *repository.AuditLogRepo
 	pool      *worker.Pool
 	cfg       *config.Config
+	broker    *events.Broker
 	logger    *zap.Logger
 }
 
@@ -44,6 +46,7 @@ func NewLineHandler(
 	auditRepo *repository.AuditLogRepo,
 	pool *worker.Pool,
 	cfg *config.Config,
+	broker *events.Broker,
 	logger *zap.Logger,
 ) *LineHandler {
 	return &LineHandler{
@@ -54,6 +57,7 @@ func NewLineHandler(
 		auditRepo: auditRepo,
 		pool:      pool,
 		cfg:       cfg,
+		broker:    broker,
 		logger:    logger,
 	}
 }
@@ -273,6 +277,25 @@ func (h *LineHandler) processMessage(ctx context.Context, event lineEvent, svc *
 	if event.ReplyToken != "" && !isRedelivery && !greetingSent {
 		if err := h.convRepo.SetReplyToken(userID, event.ReplyToken); err != nil {
 			h.logger.Warn("cache reply token", zap.String("user", userID), zap.Error(err))
+		}
+	}
+
+	// Real-time push to admin tabs — broadcast both the new message AND the
+	// updated unread count so the inbox list, the sidebar badge, and any open
+	// thread of this user all update without polling.
+	if h.broker != nil {
+		h.broker.Publish(events.Event{
+			Type: events.TypeMessageReceived,
+			Payload: map[string]any{
+				"line_user_id": userID,
+				"message":      inserted,
+			},
+		})
+		if total, err := h.convRepo.UnreadCount(); err == nil {
+			h.broker.Publish(events.Event{
+				Type:    events.TypeUnreadChanged,
+				Payload: map[string]any{"total": total},
+			})
 		}
 	}
 

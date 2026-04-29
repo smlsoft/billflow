@@ -201,6 +201,43 @@ func (s *Service) GetBotInfo() (*BotInfo, error) {
 	return &info, nil
 }
 
+// MarkMessagesAsRead calls POST /v2/bot/message/markAsRead — sends a read
+// receipt to the customer so their LINE app shows "อ่านแล้ว" under our
+// last message. ⚠ Premium-only feature (LINE Official Account Plus): Free
+// OA returns 403. Caller should toggle this on per-OA only when they've
+// upgraded; we return the error so the caller can log/swallow it.
+//
+// Body shape per LINE docs:
+//   { "chat": { "type": "user", "userId": "Uxxxxxxx" } }
+func (s *Service) MarkMessagesAsRead(userID string) error {
+	if userID == "" {
+		return fmt.Errorf("userID required")
+	}
+	body := map[string]any{
+		"chat": map[string]string{"type": "user", "userId": userID},
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", "https://api.line.me/v2/bot/message/markAsRead", strings.NewReader(string(buf)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("markAsRead: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("markAsRead status %d: %s", resp.StatusCode, bodyBytes)
+	}
+	return nil
+}
+
 // GetProfile fetches the LINE display name + avatar for a userID. Used on
 // first contact (when we upsert a chat_conversations row) and via the manual
 // "🔄 รีเฟรช profile" button in the inbox UI.

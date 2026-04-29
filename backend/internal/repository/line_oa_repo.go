@@ -18,14 +18,16 @@ func NewLineOAAccountRepo(db *sql.DB) *LineOAAccountRepo {
 
 const lineOACols = `
   id, name, channel_secret, channel_access_token, bot_user_id,
-  admin_user_id, greeting, enabled, created_at, updated_at
+  admin_user_id, greeting, enabled, mark_as_read_enabled,
+  created_at, updated_at
 `
 
 func scanLineOA(s interface{ Scan(...any) error }) (*models.LineOAAccount, error) {
 	a := &models.LineOAAccount{}
 	if err := s.Scan(
 		&a.ID, &a.Name, &a.ChannelSecret, &a.ChannelAccessToken, &a.BotUserID,
-		&a.AdminUserID, &a.Greeting, &a.Enabled, &a.CreatedAt, &a.UpdatedAt,
+		&a.AdminUserID, &a.Greeting, &a.Enabled, &a.MarkAsReadEnabled,
+		&a.CreatedAt, &a.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -92,11 +94,11 @@ func (r *LineOAAccountRepo) Create(a *models.LineOAAccount) error {
 	row := r.db.QueryRow(
 		`INSERT INTO line_oa_accounts
 		   (name, channel_secret, channel_access_token, bot_user_id,
-		    admin_user_id, greeting, enabled)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		    admin_user_id, greeting, enabled, mark_as_read_enabled)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id, created_at, updated_at`,
 		a.Name, a.ChannelSecret, a.ChannelAccessToken, a.BotUserID,
-		a.AdminUserID, a.Greeting, a.Enabled,
+		a.AdminUserID, a.Greeting, a.Enabled, a.MarkAsReadEnabled,
 	)
 	if err := row.Scan(&a.ID, &a.CreatedAt, &a.UpdatedAt); err != nil {
 		return fmt.Errorf("create line_oa_account: %w", err)
@@ -127,13 +129,18 @@ func (r *LineOAAccountRepo) Update(id string, in models.LineOAAccountUpsert) (*m
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
+	markAsRead := current.MarkAsReadEnabled
+	if in.MarkAsReadEnabled != nil {
+		markAsRead = *in.MarkAsReadEnabled
+	}
 	_, err = r.db.Exec(
 		`UPDATE line_oa_accounts
 		 SET name = $1, channel_secret = $2, channel_access_token = $3,
 		     admin_user_id = $4, greeting = $5, enabled = $6,
+		     mark_as_read_enabled = $7,
 		     updated_at = NOW()
-		 WHERE id = $7`,
-		in.Name, secret, token, in.AdminUserID, in.Greeting, enabled, id,
+		 WHERE id = $8`,
+		in.Name, secret, token, in.AdminUserID, in.Greeting, enabled, markAsRead, id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update line_oa_account: %w", err)

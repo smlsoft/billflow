@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/th'
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/popover'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import client from '@/api/client'
+import { useChatEvents } from '@/hooks/useChatEvents'
 import { cn } from '@/lib/utils'
 import type { ChatConversation, ChatStatus, ChatTag } from './types'
 
@@ -37,7 +38,10 @@ interface Props {
   onSelectedConvChange?: (conv: ChatConversation | null) => void
 }
 
-const POLL_MS = 30_000
+// 60s safety-net polling — SSE drives real-time updates. Polling exists
+// only to recover from a missed event (broker buffer overflow / silent
+// SSE breakage). Was 30s before SSE; doubled now to halve idle DB load.
+const POLL_MS = 60_000
 
 // ConversationList polls /api/admin/conversations every 30s and renders the
 // inbox. Click a row to select it (URL ?u= updates via parent).
@@ -61,11 +65,12 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
       .catch(() => setAllTags([]))
   }, [])
 
-  useEffect(() => {
-    let alive = true
-    const fetchOnce = async (force = false) => {
-      // Skip polling when the tab is hidden — admin not looking. force=true on
-      // mount + visibilitychange so we always fetch fresh on regain focus.
+  // Single source of truth for fetching the inbox. Called from initial
+  // mount, periodic safety-net poll, tab focus, and SSE event handler.
+  // Memoized on filter state so the SSE useEffect doesn't recreate the
+  // subscription on every render.
+  const fetchInbox = useCallback(
+    async (force = false) => {
       if (
         !force &&
         typeof document !== 'undefined' &&
@@ -86,31 +91,44 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
             },
           },
         )
-        if (alive) {
-          setRows(res.data.data ?? [])
-        }
+        setRows(res.data.data ?? [])
       } catch {
         /* silent — keep last good list */
       } finally {
-        if (alive) setLoading(false)
+        setLoading(false)
       }
-    }
-    fetchOnce(true)
-    intervalRef.current = setInterval(() => fetchOnce(false), POLL_MS)
+    },
+    [unreadOnly, statusTab, search, selectedTagIDs],
+  )
+
+  useEffect(() => {
+    fetchInbox(true)
+    intervalRef.current = setInterval(() => fetchInbox(false), POLL_MS)
 
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
-        fetchOnce(true)
+        fetchInbox(true)
       }
     }
     document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
-      alive = false
       if (intervalRef.current) clearInterval(intervalRef.current)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [unreadOnly, statusTab, search, selectedTagIDs])
+  }, [fetchInbox])
+
+  // SSE — refetch the list on any inbox-relevant event. The list query is
+  // cheap (50 rows + EXISTS subqueries on indexed columns), so it's simpler
+  // and less error-prone than patching individual rows in place. With SSE
+  // wired we get sub-500ms updates without polling more often.
+  const refetchInbox = useCallback(() => {
+    fetchInbox(true)
+  }, [fetchInbox])
+  useChatEvents({
+    onMessage: refetchInbox,
+    onConvUpdated: refetchInbox,
+  })
 
   // Keep parent informed of which conversation is currently selected, so it
   // can pre-fill the customer name in CreateBillPanel.

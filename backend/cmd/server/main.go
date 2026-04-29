@@ -26,6 +26,7 @@ import (
 	"billflow/internal/services/anomaly"
 	"billflow/internal/services/catalog"
 	emailservice "billflow/internal/services/email"
+	"billflow/internal/services/events"
 	"billflow/internal/services/insight"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
@@ -60,6 +61,25 @@ func main() {
 	defer db.Close()
 
 	seedAdminUser(db, logger)
+
+	// On boot, fail any outgoing chat_messages stuck in 'pending' for >5 min.
+	// These rows happen when the server crashes mid-send; without cleanup they
+	// stay "กำลังส่ง…" in the UI forever. 5min covers slow LINE Push without
+	// false positives for normal traffic (Reply/Push complete in ms).
+	if res, err := db.Exec(
+		`UPDATE chat_messages
+		   SET delivery_status = 'failed',
+		       delivery_error  = COALESCE(NULLIF(delivery_error, ''), 'server restart or send timeout')
+		 WHERE direction = 'outgoing'
+		   AND delivery_status = 'pending'
+		   AND created_at < NOW() - INTERVAL '5 minutes'`,
+	); err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			logger.Info("startup_pending_cleanup", zap.Int64("rows", n))
+		}
+	} else {
+		logger.Warn("startup pending cleanup", zap.Error(err))
+	}
 
 	// Repositories
 	userRepo := repository.NewUserRepo(db)
@@ -300,9 +320,14 @@ func main() {
 	}
 	mediaSigner := media.NewSigner(mediaKey)
 
-	lineH := handlers.NewLineHandler(lineRegistry, chatConvRepo, chatMessageRepo, chatMediaRepo, auditLogRepo, pool, cfg, logger)
-	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, mediaSigner, cfg.PublicBaseURL, logger)
+	// In-process pub/sub for SSE — webhook handlers + admin actions Publish,
+	// /api/admin/events subscribers stream events to admin browsers.
+	eventBroker := events.NewBroker()
+
+	lineH := handlers.NewLineHandler(lineRegistry, chatConvRepo, chatMessageRepo, chatMediaRepo, auditLogRepo, pool, cfg, eventBroker, logger)
+	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, mediaSigner, eventBroker, cfg.PublicBaseURL, logger)
 	publicMediaH := handlers.NewPublicMediaHandler(chatMediaRepo, mediaSigner, logger)
+	sseH := handlers.NewSSEHandler(eventBroker, mediaSigner)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetArtifactService(artifactSvc)
@@ -327,6 +352,12 @@ func main() {
 	// LINE servers fetch this URL to deliver image messages to customers.
 	r.GET("/public/media/:mediaID", publicMediaH.Serve)
 
+	// SSE stream — NO JWT, the ?t=<token> query param IS the auth (since
+	// EventSource doesn't support custom headers). Admin first calls
+	// POST /api/admin/events/token (JWT-authenticated, see below) to get a
+	// short-lived signed token, then opens EventSource with ?u=<userID>&t=<token>.
+	r.GET("/api/admin/events", sseH.Stream)
+
 	// Auth (rate-limited: 10 req/min per IP)
 	r.POST("/api/auth/login", middleware.AuthRateLimit(10, time.Minute), authH.Login)
 
@@ -334,6 +365,10 @@ func main() {
 	api := r.Group("/api", middleware.Auth())
 	{
 		api.GET("/auth/me", authH.Me)
+
+		// SSE token issuer — admin POSTs to get a short-lived HMAC token that
+		// EventSource uses as ?t=<token> on /api/admin/events. JWT-protected.
+		api.POST("/admin/events/token", sseH.IssueToken)
 
 		// Bills
 		api.GET("/bills", billH.List)
@@ -438,7 +473,7 @@ func main() {
 			chatGroup.DELETE("/:lineUserId/notes/:noteId", chatNotesH.Delete)
 
 			// Phase 4.9 tags — m2m attach for a single conversation.
-			chatTagsH := handlers.NewChatTagsHandler(chatTagRepo, auditLogRepo)
+			chatTagsH := handlers.NewChatTagsHandler(chatTagRepo, auditLogRepo, eventBroker)
 			chatGroup.GET("/:lineUserId/tags", chatTagsH.TagsForConversation)
 			chatGroup.PUT("/:lineUserId/tags", chatTagsH.SetTagsForConversation)
 			chatGroup.GET("/:lineUserId/messages/:messageId/media", chatInboxH.DownloadMedia)
@@ -472,7 +507,7 @@ func main() {
 		}
 
 		// Phase 4.9 — global chat tag CRUD. /settings/chat-tags admin page.
-		tagsAdminH := handlers.NewChatTagsHandler(chatTagRepo, auditLogRepo)
+		tagsAdminH := handlers.NewChatTagsHandler(chatTagRepo, auditLogRepo, eventBroker)
 		tagsGroup := api.Group("/settings/chat-tags")
 		tagsGroup.Use(middleware.RequireRole("admin", "staff"))
 		{
@@ -505,6 +540,11 @@ func main() {
 		tokenChecker := jobs.NewTokenChecker(lineSvc, logger)
 		tokenChecker.Register(c)
 	}
+
+	// Hourly: clear replyTokens > 1h old so admin replies don't waste a
+	// LINE round-trip on a token we know is dead.
+	replyTokenCleanup := jobs.NewReplyTokenCleanup(db, logger)
+	replyTokenCleanup.Register(c)
 
 	// Wire processors into the coordinator now that emailH is built, then
 	// boot the multi-account poller. Coordinator reads imap_accounts and

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Toaster } from '@/components/ui/sonner'
 import Sidebar from '@/components/layout/Sidebar'
@@ -6,6 +6,7 @@ import Topbar from '@/components/layout/Topbar'
 import { CommandPalette } from '@/components/CommandPalette'
 import { BreadcrumbProvider } from '@/lib/breadcrumbs'
 import { useUIStore } from '@/lib/ui-store'
+import { useEventsStore } from '@/lib/events-store'
 import { useChordHotkeys, useHotkeys } from '@/hooks/useHotkeys'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -21,6 +22,17 @@ export default function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
   const { logout } = useAuth()
+
+  // Open the SSE connection once per authenticated session. The store
+  // multiplexes one EventSource across the whole app — child components
+  // only need to call useChatEvents to subscribe to specific event types.
+  // Disconnect on unmount (logout / hard refresh).
+  const connectEvents = useEventsStore((s) => s.connect)
+  const disconnectEvents = useEventsStore((s) => s.disconnect)
+  useEffect(() => {
+    connectEvents()
+    return () => disconnectEvents()
+  }, [connectEvents, disconnectEvents])
 
   const isFullHeight = FULL_HEIGHT_ROUTES.some((p) => location.pathname.startsWith(p))
 

@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import client from '@/api/client'
+import { useChatEvents } from '@/hooks/useChatEvents'
 import { MessageBubble } from './MessageBubble'
 import { Composer, type PendingAttachment } from './Composer'
 import { CustomerHistoryPanel } from './CustomerHistoryPanel'
@@ -24,7 +25,11 @@ interface Props {
   onExtractMedia: (messageId: string, kind: string) => void
 }
 
-const ACTIVE_POLL_MS = 5_000
+// 30s safety-net polling — SSE is the primary delivery mechanism and arrives
+// in <500ms. Polling exists only to recover from a missed event (rare edge
+// case where the broker dropped on a full buffer or the SSE stream broke
+// silently). Was 5s before SSE — that load is no longer needed.
+const ACTIVE_POLL_MS = 30_000
 
 // MessageThread renders the right pane: header (customer info + เปิดบิลขาย),
 // scrollable message list (poll 5s, delta-fetch via ?since=lastSeen), and
@@ -138,22 +143,74 @@ export function MessageThread({
     }
   }, [lineUserID, isNearBottom, scrollToBottom, conversation, notif, searchQ])
 
-  // Fetch + start polling whenever the active conversation changes.
+  // Effect 1 — runs ONCE per conversation switch. Initial load + mark-read.
+  // Previously this effect listed fetchInitial+fetchDelta in deps, which
+  // caused a re-run on every parent render (ConversationList polling 30s
+  // returns a new conversation reference → fetchDelta useCallback rebuilds
+  // → effect re-fires → mark-read spammed and initial fetch repeated).
+  // Now keyed only on lineUserID so it actually fires once per switch.
   useEffect(() => {
     fetchInitial()
-    // Mark-read fires once per open. Server zeroes unread_admin_count,
-    // sidebar badge updates on next 30s tick.
     client
       .post(`/api/admin/conversations/${encodeURIComponent(lineUserID)}/mark-read`)
       .catch(() => {
         /* silent */
       })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineUserID])
 
-    intervalRef.current = setInterval(fetchDelta, ACTIVE_POLL_MS)
+  // Effect 2 — long-poll safety net. Keep latest fetchDelta in a ref so the
+  // interval always calls the most recent closure (which has the latest
+  // searchQ, conversation, etc) without restarting the timer on every render.
+  const fetchDeltaRef = useRef(fetchDelta)
+  useEffect(() => {
+    fetchDeltaRef.current = fetchDelta
+  }, [fetchDelta])
+
+  useEffect(() => {
+    intervalRef.current = setInterval(() => fetchDeltaRef.current(), ACTIVE_POLL_MS)
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [lineUserID, fetchInitial, fetchDelta])
+  }, [lineUserID])
+
+  // SSE — primary real-time delivery. When this conversation receives a new
+  // message, append it without polling. Other conversations' events are
+  // ignored here (ConversationList handles its own subscription).
+  const onSSEMessage = useCallback(
+    (payload: { line_user_id: string; message: ChatMessage }) => {
+      if (payload.line_user_id !== lineUserID) return
+      setMessages((prev) => {
+        // Dedup: if the optimistic tmp- bubble matches by content+kind, the
+        // SendReply HTTP response already replaced it. Skip if we already
+        // have a real (non-tmp) row with this id.
+        if (prev.some((m) => m.id === payload.message.id)) return prev
+        return [...prev, payload.message]
+      })
+      lastSeenRef.current = payload.message.created_at
+      if (isNearBottom()) {
+        setTimeout(scrollToBottom, 0)
+      }
+      // Notify on incoming messages from this customer (tab focus check
+      // happens inside the hook — no toast spam when admin is looking).
+      if (payload.message.direction === 'incoming') {
+        const senderName = conversation?.display_name || lineUserID.slice(0, 12)
+        const preview =
+          payload.message.kind === 'text'
+            ? payload.message.text_content
+            : payload.message.kind === 'image'
+              ? '📷 รูปภาพ'
+              : payload.message.kind === 'file'
+                ? '📄 ไฟล์'
+                : payload.message.kind === 'audio'
+                  ? '🎙 voice'
+                  : '(ข้อความใหม่)'
+        notif.notify(senderName, preview.slice(0, 80))
+      }
+    },
+    [lineUserID, isNearBottom, scrollToBottom, conversation, notif],
+  )
+  useChatEvents({ onMessage: onSSEMessage })
 
   const handleSend = useCallback(
     async (text: string) => {

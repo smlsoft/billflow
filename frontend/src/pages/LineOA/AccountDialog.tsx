@@ -24,6 +24,7 @@ export interface LineOAAccount {
   admin_user_id: string
   greeting: string
   enabled: boolean
+  mark_as_read_enabled?: boolean
   created_at: string
   updated_at: string
 }
@@ -45,6 +46,7 @@ export function LineOADialog({ open, onOpenChange, account, onSaved }: Props) {
   const [adminUserID, setAdminUserID] = useState('')
   const [greeting, setGreeting] = useState('')
   const [enabled, setEnabled] = useState(true)
+  const [markAsRead, setMarkAsRead] = useState(false)
   const [showSecret, setShowSecret] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -55,6 +57,7 @@ export function LineOADialog({ open, onOpenChange, account, onSaved }: Props) {
       setAdminUserID(account.admin_user_id || '')
       setGreeting(account.greeting || '')
       setEnabled(account.enabled)
+      setMarkAsRead(account.mark_as_read_enabled ?? false)
       // Fetch full account (with credentials) to pre-fill the dialog.
       client
         .get<LineOAAccount>(`/api/settings/line-oa/${account.id}`)
@@ -72,6 +75,7 @@ export function LineOADialog({ open, onOpenChange, account, onSaved }: Props) {
       setAdminUserID('')
       setGreeting('')
       setEnabled(true)
+      setMarkAsRead(false)
     }
     setShowSecret(false)
   }, [open, account])
@@ -91,6 +95,7 @@ export function LineOADialog({ open, onOpenChange, account, onSaved }: Props) {
         admin_user_id: adminUserID.trim(),
         greeting: greeting.trim(),
         enabled,
+        mark_as_read_enabled: markAsRead,
       }
       if (isEdit && account) {
         await client.put(`/api/settings/line-oa/${account.id}`, body)
@@ -186,6 +191,26 @@ export function LineOADialog({ open, onOpenChange, account, onSaved }: Props) {
             <Label htmlFor="oa-enabled" className="cursor-pointer text-sm font-normal">
               เปิดใช้งาน (รับ webhook + ส่ง reply)
             </Label>
+          </div>
+
+          <div className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              id="oa-mark-as-read"
+              checked={markAsRead}
+              onChange={(e) => setMarkAsRead(e.target.checked)}
+              className="mt-0.5 h-4 w-4"
+            />
+            <div className="flex-1">
+              <Label htmlFor="oa-mark-as-read" className="cursor-pointer text-sm font-normal">
+                ส่ง read receipt ให้ลูกค้า (อ่านแล้ว ✓✓)
+              </Label>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                ⚠ ใช้ได้เฉพาะ <strong>OA Plus (พรีเมียม)</strong> เท่านั้น —
+                บัญชีฟรีจะ silently fail ทุกครั้งที่ admin เปิดห้อง.
+                เปิดเมื่อ OA นี้อัปเกรดแล้ว
+              </p>
+            </div>
           </div>
 
           {!isEdit && (

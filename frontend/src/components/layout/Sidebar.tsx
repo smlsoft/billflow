@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Building2,
@@ -19,6 +19,9 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react'
+
+import { useChatEvents } from '@/hooks/useChatEvents'
+import { useEventsStore, type EventsConnectionState } from '@/lib/events-store'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -107,29 +110,30 @@ export default function Sidebar() {
   const [unreadMessages, setUnreadMessages] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Single poll: /api/dashboard/stats now also returns unread_messages so we
-  // don't need a second request. Pause polling when the tab is hidden — saves
-  // bandwidth + battery on admin laptops left open in another tab.
-  useEffect(() => {
-    const fetchStats = async () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        return
-      }
-      try {
-        const res = await client.get<{ pending: number; unread_messages?: number }>(
-          '/api/dashboard/stats',
-        )
-        setPendingCount(res.data.pending ?? 0)
-        setUnreadMessages(res.data.unread_messages ?? 0)
-      } catch {
-        /* silent */
-      }
+  // Bills pending count + unread messages. SSE pushes unread changes
+  // (UnreadChanged event) so the badge updates instantly when admin opens
+  // a thread or a customer messages in. The 60s poll exists as a safety
+  // net to refresh pending count (which has no SSE source) and to recover
+  // if the SSE stream silently drops.
+  const fetchStats = useCallback(async () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      return
     }
-    fetchStats()
-    intervalRef.current = setInterval(fetchStats, 30_000)
+    try {
+      const res = await client.get<{ pending: number; unread_messages?: number }>(
+        '/api/dashboard/stats',
+      )
+      setPendingCount(res.data.pending ?? 0)
+      setUnreadMessages(res.data.unread_messages ?? 0)
+    } catch {
+      /* silent */
+    }
+  }, [])
 
-    // Refresh immediately when the tab regains focus so the badge isn't stale
-    // after the admin comes back from another window.
+  useEffect(() => {
+    fetchStats()
+    intervalRef.current = setInterval(fetchStats, 60_000)
+
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
         fetchStats()
@@ -141,7 +145,15 @@ export default function Sidebar() {
       if (intervalRef.current) clearInterval(intervalRef.current)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [])
+  }, [fetchStats])
+
+  // SSE — instant unread badge updates. Server publishes UnreadChanged on
+  // mark-read + on every inbound webhook.
+  useChatEvents({
+    onUnreadChanged: useCallback((p: { total: number }) => {
+      setUnreadMessages(p.total ?? 0)
+    }, []),
+  })
 
   // Hotkey [ to toggle sidebar
   useEffect(() => {
@@ -279,6 +291,14 @@ export default function Sidebar() {
 
         <Separator />
 
+        {/* Real-time connection state indicator. Reads from the shared
+            events-store; tooltip explains what each state means. Hidden
+            when sidebar collapsed — the dot still shows so admins notice
+            'reconnecting' / 'offline'. */}
+        <div className={cn('px-2 py-1.5', collapsed ? 'flex justify-center' : '')}>
+          <ConnectionDot collapsed={collapsed} />
+        </div>
+
         {/* Collapse toggle */}
         <div className="px-2 py-2">
           <Button
@@ -339,5 +359,71 @@ export default function Sidebar() {
         </div>
       </aside>
     </TooltipProvider>
+  )
+}
+
+// ConnectionDot renders the live SSE connection status as a small colored
+// dot ± label. Reading from the events-store keeps state in one place;
+// every page that uses Layout (i.e. all authenticated routes) sees the
+// same indicator.
+const STATE_META: Record<EventsConnectionState, { label: string; cls: string; tip: string }> = {
+  connecting: {
+    label: 'กำลังเชื่อมต่อ…',
+    cls: 'bg-muted-foreground/40',
+    tip: 'กำลังเปิดการเชื่อมต่อ real-time',
+  },
+  live: {
+    label: 'Live',
+    cls: 'bg-success',
+    tip: 'รับข้อความ real-time แล้ว — ไม่ต้องรีเฟรช',
+  },
+  reconnecting: {
+    label: 'กำลังเชื่อมต่อใหม่',
+    cls: 'bg-warning',
+    tip: 'การเชื่อมต่อหลุด — ระบบกำลังลองใหม่ (ระหว่างนี้จะใช้ polling สำรอง)',
+  },
+  offline: {
+    label: 'Offline',
+    cls: 'bg-destructive',
+    tip: 'ขาดการเชื่อมต่อ real-time — ใช้ polling สำรอง (อัปเดตทุก 60 วินาที)',
+  },
+}
+
+function ConnectionDot({ collapsed }: { collapsed: boolean }) {
+  const status = useEventsStore((s) => s.status)
+  const meta = STATE_META[status]
+  const dot = (
+    <span
+      className={cn(
+        'inline-block h-2 w-2 shrink-0 rounded-full',
+        meta.cls,
+        status === 'connecting' || status === 'reconnecting' ? 'animate-pulse' : '',
+      )}
+    />
+  )
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-help">{dot}</span>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="text-xs">
+          {meta.tip}
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="flex w-full cursor-help items-center gap-1.5 px-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+          {dot}
+          <span>{meta.label}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="text-xs">
+        {meta.tip}
+      </TooltipContent>
+    </Tooltip>
   )
 }

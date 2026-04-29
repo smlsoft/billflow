@@ -10,16 +10,20 @@ import "time"
 // response only when admin reads a single account for editing — the list
 // endpoint masks them.
 type LineOAAccount struct {
-	ID                  string    `json:"id"`
-	Name                string    `json:"name"`
-	ChannelSecret       string    `json:"channel_secret,omitempty"`
-	ChannelAccessToken  string    `json:"channel_access_token,omitempty"`
-	BotUserID           string    `json:"bot_user_id"`
-	AdminUserID         string    `json:"admin_user_id"`
-	Greeting            string    `json:"greeting"`
-	Enabled             bool      `json:"enabled"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	ChannelSecret      string    `json:"channel_secret,omitempty"`
+	ChannelAccessToken string    `json:"channel_access_token,omitempty"`
+	BotUserID          string    `json:"bot_user_id"`
+	AdminUserID        string    `json:"admin_user_id"`
+	Greeting           string    `json:"greeting"`
+	Enabled            bool      `json:"enabled"`
+	// MarkAsReadEnabled — when true, MarkRead handler also calls LINE's
+	// markMessagesAsRead so the customer sees "อ่านแล้ว". Premium-only feature
+	// (LINE Official Account Plus); Free OA returns 403, hence opt-in.
+	MarkAsReadEnabled bool      `json:"mark_as_read_enabled"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // LineOAAccountUpsert is the admin-supplied payload for POST/PUT.
@@ -32,4 +36,5 @@ type LineOAAccountUpsert struct {
 	AdminUserID        string `json:"admin_user_id"`
 	Greeting           string `json:"greeting"`
 	Enabled            *bool  `json:"enabled"`
+	MarkAsReadEnabled  *bool  `json:"mark_as_read_enabled"`
 }

@@ -15,6 +15,7 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
+	"billflow/internal/services/events"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/media"
 	"billflow/internal/services/mistral"
@@ -39,6 +40,7 @@ type ChatInboxHandler struct {
 	aiClient     *ai.Client
 	ocrClient    *mistral.OCRClient
 	mediaSigner  *media.Signer
+	broker       *events.Broker
 	publicURL    string
 	logger       *zap.Logger
 }
@@ -53,6 +55,7 @@ func NewChatInboxHandler(
 	aiClient *ai.Client,
 	ocrClient *mistral.OCRClient,
 	mediaSigner *media.Signer,
+	broker *events.Broker,
 	publicURL string,
 	logger *zap.Logger,
 ) *ChatInboxHandler {
@@ -66,9 +69,40 @@ func NewChatInboxHandler(
 		aiClient:     aiClient,
 		ocrClient:    ocrClient,
 		mediaSigner:  mediaSigner,
+		broker:       broker,
 		publicURL:    publicURL,
 		logger:       logger,
 	}
+}
+
+// publishUnread broadcasts the current global unread count after a state
+// change. Best-effort — if it fails the next polling cycle catches up.
+func (h *ChatInboxHandler) publishUnread() {
+	if h.broker == nil {
+		return
+	}
+	if n, err := h.convRepo.UnreadCount(); err == nil {
+		h.broker.Publish(events.Event{
+			Type:    events.TypeUnreadChanged,
+			Payload: map[string]any{"total": n},
+		})
+	}
+}
+
+// publishConvUpdated broadcasts that a single conversation's metadata changed.
+// Frontend subscribers will refetch / patch the row in their list.
+func (h *ChatInboxHandler) publishConvUpdated(lineUserID string, fields map[string]any) {
+	if h.broker == nil {
+		return
+	}
+	payload := map[string]any{"line_user_id": lineUserID}
+	for k, v := range fields {
+		payload[k] = v
+	}
+	h.broker.Publish(events.Event{
+		Type:    events.TypeConversationUpdated,
+		Payload: payload,
+	})
 }
 
 // pushService returns the LINE service for a given conversation's OA.
@@ -154,6 +188,7 @@ func (h *ChatInboxHandler) SetPhone(c *gin.Context) {
 			Detail:  map[string]interface{}{"line_user_id": lineUserID, "phone": phone},
 		})
 	}
+	h.publishConvUpdated(lineUserID, map[string]any{"phone": phone})
 	c.JSON(http.StatusOK, gin.H{"ok": true, "phone": phone})
 }
 
@@ -190,6 +225,7 @@ func (h *ChatInboxHandler) SetStatus(c *gin.Context) {
 			Detail:  map[string]interface{}{"line_user_id": lineUserID, "status": body.Status},
 		})
 	}
+	h.publishConvUpdated(lineUserID, map[string]any{"status": body.Status})
 	c.JSON(http.StatusOK, gin.H{"ok": true, "status": body.Status})
 }
 
@@ -329,6 +365,18 @@ func (h *ChatInboxHandler) SendReply(c *gin.Context) {
 				"line_user_id":    lineUserID,
 				"message_id":      m.ID,
 				"delivery_method": method,
+			},
+		})
+	}
+	// Broadcast to other admin tabs so they can render the new outgoing
+	// bubble without polling. The sending tab has the optimistic insert
+	// already; this catches everyone else.
+	if h.broker != nil {
+		h.broker.Publish(events.Event{
+			Type: events.TypeMessageReceived,
+			Payload: map[string]any{
+				"line_user_id": lineUserID,
+				"message":      m,
 			},
 		})
 	}
@@ -521,6 +569,15 @@ func (h *ChatInboxHandler) SendMedia(c *gin.Context) {
 			},
 		})
 	}
+	if h.broker != nil {
+		h.broker.Publish(events.Event{
+			Type: events.TypeMessageReceived,
+			Payload: map[string]any{
+				"line_user_id": lineUserID,
+				"message":      m,
+			},
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "sent", "method": method})
 }
 
@@ -545,6 +602,13 @@ func (h *ChatInboxHandler) sendOutgoingImage(lineUserID, originalURL, previewURL
 // ── Mark conversation as read ────────────────────────────────────────────────
 
 // POST /api/admin/conversations/:lineUserId/mark-read
+//
+// Side effects:
+//   1. Zero unread_admin_count for this conversation in BillFlow
+//   2. Broadcast UnreadChanged + ConversationUpdated so other admin tabs
+//      and the sidebar badge update without polling
+//   3. If the OA has mark_as_read_enabled=true, call LINE markMessagesAsRead
+//      so the customer sees "อ่านแล้ว" (Premium feature; ignored otherwise)
 func (h *ChatInboxHandler) MarkRead(c *gin.Context) {
 	lineUserID := c.Param("lineUserId")
 	if lineUserID == "" {
@@ -554,6 +618,21 @@ func (h *ChatInboxHandler) MarkRead(c *gin.Context) {
 	if err := h.convRepo.MarkRead(lineUserID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	h.publishConvUpdated(lineUserID, map[string]any{"unread_admin_count": 0})
+	h.publishUnread()
+
+	// Best-effort LINE read receipt — only if the OA has it enabled.
+	// Errors are logged + swallowed (Free OA returns 403).
+	if conv, _ := h.convRepo.Get(lineUserID); conv != nil && conv.LineOAID != nil {
+		oa := h.lineRegistry.Account(*conv.LineOAID)
+		svc := h.lineRegistry.Get(*conv.LineOAID)
+		if oa != nil && oa.MarkAsReadEnabled && svc != nil {
+			if err := svc.MarkMessagesAsRead(lineUserID); err != nil {
+				h.logger.Debug("LINE markMessagesAsRead failed",
+					zap.String("user", lineUserID), zap.Error(err))
+			}
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
