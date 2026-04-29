@@ -1690,6 +1690,45 @@ lucide-react             ← icon set (shadcn default)
       เกือบทั้งหมด → กิน push quota น้อยมาก → free OA ใช้งานได้ทั้งเดือน
     - **Deferred**: quota dashboard widget ดึงจาก /v2/bot/message/quota และ
       /v2/bot/message/quota/consumption แสดง "ใช้ไป X / 200" — Phase 2
+
+22. Audit log coverage + UX consistency + tag filter (session 16)
+    - **Audit log gaps closed**: 11 chat metadata endpoints ที่เคยไม่ log
+      ตอนนี้บันทึก audit_logs ครบแล้ว — chat_note_*, chat_tag_*,
+      chat_conv_tags_set, chat_quick_reply_*, chat_phone_saved.
+      auditRepo wired เข้า ChatNotesHandler, ChatTagsHandler,
+      ChatQuickReplyHandler ผ่าน constructor ใน main.go
+    - **Body/label snapshots ตอน DELETE**: ก่อน repo.Delete() จะ ListAll
+      หาก่อนแล้วเก็บ body_preview / label / color ลง audit detail —
+      /logs จะแสดงสิ่งที่หายไปแม้ row จริงถูกลบจาก DB แล้ว
+    - **MarkRead ไม่ log โดยเจตนา**: เกิดทุกครั้งที่ admin คลิกห้อง — log
+      จะรกเกินไป ไม่มีคุณค่า audit
+    - **Logs.tsx ACTION_META + summarize**: 17 entries ใหม่ (LINE OA CRUD,
+      admin reply/send-media, status, message receive, CRM lite metadata)
+      พร้อม emoji + ภาษาไทย + tone. summarize() handles per-action detail:
+      reply method แสดง "ฟรี (Reply API)" / "Push", chat_conv_tags_set
+      แสดง list ของ labels ที่เหลือ
+    - **Composer disable เมื่อ status='archived'**: MessageThread แสดง
+      banner muted-tinted "🗄 ห้องนี้ archived แล้ว — กดเปิดอีกครั้งก่อนตอบ"
+      + ปุ่ม "↺ เปิดอีกครั้ง" inline ที่ flip status เป็น 'open' ทันที.
+      Composer prop disabled=true ตอน archived (textarea + send disabled).
+      สอดคล้องกับ semantic ของ Archive (= spam/blocked, ไม่ควรตอบโดยลืม)
+    - **CreateBillPanel phone fallback**: ทั้ง path มี-extract และ
+      ไม่มี-extract ใช้ `prefill.customer_phone ?? conversation.phone ?? ''`
+      → admin ไม่ต้องพิมพ์เบอร์ซ้ำที่บันทึกไว้แล้วผ่าน "บันทึกเบอร์"
+    - **Tag filter ใน inbox**: Phase 3 (เคย defer ใน Phase 4.9 ตอน session 14)
+      - Backend: `ConversationListFilter.TagIDs []string` + EXISTS subquery
+        บน chat_conversation_tags (ANY-match — มีอย่างน้อย 1 tag ตรง).
+        ListConversations parse `?tags=id1,id2,id3` (comma-separated UUID).
+        CountAll mirror logic เพื่อ pagination accuracy
+      - Frontend: ConversationList ดึง /api/settings/chat-tags ครั้งเดียว
+        ตอน mount, ปุ่ม "🏷 Tag" + count badge เปิด popover checkbox list,
+        chip row ใต้ search bar แสดง tag ที่เลือกพร้อม × ลบ. Disabled
+        เมื่อยังไม่มี tag (with hint /settings/chat-tags)
+      - **ANY-match (OR) ไม่ใช่ AND**: เลือก 2 tags = ห้องที่มี tag A หรือ B
+        (ทั้งคู่หรือแค่หนึ่ง). v2 อาจเพิ่ม toggle "all-match"
+    - **ChatTags description sync**: ก่อนหน้านี้ description page เขียน
+      "ใช้ filter ใน /messages" แต่ filter ไม่มีอยู่จริง — แก้ให้ตรงกับ
+      Phase 3 ที่ ship จริงแล้ว ("กรอง inbox ตาม tag ได้ที่ /messages")
 ```
 
 ---
@@ -1872,6 +1911,34 @@ Phase 6 — Web UI Complete
             Verified end-to-end on production (109): composer auto-grow, paste
             image preview, drag-drop, public/media HMAC token round-trip,
             status flip + auto-revive, server search, notes/tags CRUD.
+  [x] 6.25 Hybrid Reply+Push API (LINE quota optimization) ✅ (session 15)
+            ⭐ LINE Reply API ฟรีไม่นับ quota; Push = 200/mo Free OA.
+            Migration 018 caches replyToken on chat_conversations + adds
+            delivery_method to chat_messages. Webhook caches token (skip on
+            isRedelivery + when greeting consumes). ConsumeReplyToken atomic
+            CTE pattern (SELECT FOR UPDATE → UPDATE → return OLD value) so
+            concurrent admins don't race. Send flow tries Reply first, falls
+            back to Push only on token errors (auth/429 don't fall through).
+            UI: "ฟรี"/"Push" badge on outgoing bubbles tells admin which
+            transport was used. Fixed CLAUDE.md quota number 500→200 (was
+            wrong; Light Plan = 200/mo per LINE pricing docs).
+  [x] 6.26 Audit log coverage + UX consistency + tag filter ✅ (session 16)
+            ⭐ Audit gaps closed: 11 chat metadata endpoints (notes/tags/
+            quick-reply CRUD + chat_phone_saved) now log to audit_logs.
+            Body/label snapshots captured on DELETE so /logs preserves what
+            disappeared. MarkRead intentionally not logged (too noisy).
+            Logs.tsx ACTION_META + summarize(): 17 new chat-related entries
+            with Thai labels + emoji + tone — actions that previously
+            rendered as raw strings now show properly.
+            UX: Composer disabled when status='archived' with banner +
+            inline "↺ เปิดอีกครั้ง". CreateBillPanel falls back to
+            conversation.phone when no extract prefill. ChatTags page
+            description fixed (was misleading).
+            Tag filter in inbox (lifted from Phase 4.9 deferral):
+            ConversationListFilter.TagIDs + EXISTS subquery (ANY-match);
+            ConversationList Tag popover w/ multi-select + chip row.
+            Backend ?tags=id1,id2 query param. CountAll mirrors filter
+            logic for pagination accuracy.
 
 Phase 7 — Background Jobs
   [x] 7.1 Cron 08:00 daily insight + LINE notify (F4) ✅
@@ -2061,6 +2128,8 @@ Phases:
               + LINE chatbot → human chat refactor + multi-OA + /messages page (6.23, session 13)
               + composer redesign + admin send-media (Cloudflare Quick Tunnel) + status/search/
                 CRM lite (6.24, session 14)
+              + hybrid Reply+Push API saving 200/mo quota (6.25, session 15)
+              + audit log coverage + UX consistency + tag filter in inbox (6.26, session 16)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
@@ -2071,6 +2140,83 @@ Pending (carry-over):
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
   ⏳ LINE Push quota dashboard (free OA = 200/month — Reply API path is free)
   ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
+
+Recent work (session 16 — 2026-04-29):
+  ⭐ chat: audit log coverage + UX consistency + tag filter in inbox
+       Phase 1 — Audit log gaps closed: 11 chat metadata endpoints
+       (chat_notes 3, chat_tags 4, chat_quick_reply 3, chat_phone_saved 1)
+       now write to audit_logs. auditRepo wired into ChatNotesHandler,
+       ChatTagsHandler, ChatQuickReplyHandler via main.go constructors.
+       Body/label snapshots captured BEFORE delete (ListAll → find by ID →
+       cache body/label/color → repo.Delete → audit with snapshot in
+       detail) so /logs preserves what disappeared even after row gone.
+       MarkRead intentionally NOT logged — fires every thread open, would
+       drown out signal in /logs.
+       Logs.tsx: 17 new ACTION_META entries (line_admin_reply,
+       line_admin_send_media, line_conversation_status, line_message_received,
+       line_oa_*, chat_phone_saved, chat_note_*, chat_tag_*, chat_conv_tags_set,
+       chat_quick_reply_*) with Thai labels + emoji + tone. summarize() per
+       action: reply method shows "ฟรี (Reply API)" / "Push (นับ quota)";
+       chat_conv_tags_set shows resulting tag labels list; deletions use
+       body_preview / label snapshots from audit detail.
+       Phase 2 — UX consistency:
+         - MessageThread renders banner above Composer when conversation.
+           status='archived' with inline "↺ เปิดอีกครั้ง" button. Composer
+           prop disabled=true → textarea + send + attach all disabled.
+           Sound vs Archive semantics (= spam/blocked).
+         - CreateBillPanel both paths (with-extract + without-extract) now
+           use `prefill?.customer_phone ?? conversation?.phone ?? ''` so
+           admin doesn't retype a phone they already saved via the
+           "บันทึกเบอร์" button.
+         - ChatTags page description was misleading ("ใช้ filter ใน
+           /messages" — filter didn't exist). Updated to match Phase 3 ship.
+       Phase 3 — Tag filter in inbox (lifted from session 14 deferral):
+         - Backend: ConversationListFilter.TagIDs []string + EXISTS subquery
+           against chat_conversation_tags (ANY-match — at least one matches).
+           ListConversations parses ?tags=id1,id2,id3 (comma-sep UUIDs).
+           CountAll mirrors filter logic for pagination accuracy.
+         - Frontend: ConversationList fetches /api/settings/chat-tags once
+           on mount. "🏷 Tag" Popover button with multi-select + count badge,
+           chip row beneath search bar showing selected tags w/ × remove.
+           Disabled when no tags exist (with hint to /settings/chat-tags).
+       Verified deploy on 109; backend healthy, no migration needed
+       (Phase 1+3 are pure code changes on existing schema).
+
+Recent work (session 15 — 2026-04-29):
+  ⭐ feat(line): hybrid Reply+Push API to save 200/mo push quota
+       LINE Reply API ฟรีไม่นับ quota (verified docs: "Sending methods that
+       are not counted as message count: Reply messages"). Free OA = 200
+       push/month (Light Plan; old CLAUDE.md "500/mo" was wrong — fixed).
+       Migration 018 adds chat_conversations.last_reply_token + _at and
+       chat_messages.delivery_method ('reply' | 'push' default 'push').
+       Webhook caching (line.go.processMessage): cache event.ReplyToken
+       AFTER greeting check, skip when:
+         - deliveryContext.isRedelivery=true (token may be stale)
+         - greeting reply consumed token (greetingSent=true)
+       Atomic consume (chat_conversation_repo.ConsumeReplyToken): CTE pattern
+         WITH cur AS (SELECT ... FOR UPDATE),
+              upd AS (UPDATE ... RETURNING 1)
+         SELECT FROM cur
+       so two admins replying simultaneously can't both consume the same
+       token — SELECT FOR UPDATE serializes; second tx sees empty column.
+       Send flow (chat_inbox.sendOutgoingText/sendOutgoingImage):
+         token := convRepo.ConsumeReplyToken(userID)
+         if token != "" {
+           err := svc.ReplyText/ReplyImage(token, ...)
+           if err == nil → method='reply', done
+           if lineservice.IsReplyTokenError(err) → fallback to Push
+           else (auth/429/network) → fail without push (don't burn quota)
+         }
+         svc.PushText/PushImage → method='push'
+       lineservice.IsReplyTokenError: substring match on err.Error() for
+       "reply token" — permissive (LINE may change wording). Does NOT
+       match 401 (auth) or 429 (rate limit) — those errors mean Push will
+       also fail or burn quota for nothing.
+       UI: outgoing bubble "ฟรี" (success-tinted, delivery_method='reply')
+       or "Push" (muted, delivery_method='push') with tooltips explaining
+       quota impact.
+       Verified end-to-end on prod 109: schema migrated, code compiles,
+       health check green. Real Reply path will trigger after next inbound.
 
 Recent work (session 14 — 2026-04-29):
   ⭐ feat(chat): composer redesign + admin send-media + Cloudflare Quick Tunnel
@@ -2302,7 +2448,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-29 (session 14)*
+*Last updated: 2026-04-29 (session 16)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*
