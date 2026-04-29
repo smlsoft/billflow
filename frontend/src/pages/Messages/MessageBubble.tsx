@@ -165,9 +165,25 @@ export function MessageBubble({ message, onExtract, onPhoneSaved }: Props) {
             </Button>
           )}
 
-        {/* Footer: timestamp + delivery status */}
+        {/* Footer: timestamp + delivery status + reply/push badge */}
         <div className="flex items-center gap-1.5 px-1 text-[10px] text-muted-foreground">
           <span>{dayjs(message.created_at).format('HH:mm')}</span>
+          {isOutgoing && message.delivery_status === 'sent' && message.delivery_method === 'reply' && (
+            <span
+              className="text-success"
+              title="ส่งผ่าน Reply API — ฟรี ไม่นับ quota (ใช้ภายในเวลาจำกัดหลังลูกค้าทัก)"
+            >
+              ฟรี
+            </span>
+          )}
+          {isOutgoing && message.delivery_status === 'sent' && message.delivery_method === 'push' && (
+            <span
+              className="text-muted-foreground/70"
+              title="ส่งผ่าน Push API — นับ quota เดือนนี้ (ฟรี OA = 200/เดือน)"
+            >
+              Push
+            </span>
+          )}
           {isOutgoing && message.delivery_status === 'failed' && (
             <span
               className="flex items-center gap-0.5 text-destructive"

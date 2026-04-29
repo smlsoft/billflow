@@ -66,11 +66,20 @@ type linePayload struct {
 }
 
 type lineEvent struct {
-	Type       string       `json:"type"`
-	Timestamp  int64        `json:"timestamp"`
-	ReplyToken string       `json:"replyToken"`
-	Source     lineSource   `json:"source"`
-	Message    *lineMessage `json:"message,omitempty"`
+	Type            string              `json:"type"`
+	Timestamp       int64               `json:"timestamp"`
+	ReplyToken      string              `json:"replyToken"`
+	Source          lineSource          `json:"source"`
+	Message         *lineMessage        `json:"message,omitempty"`
+	DeliveryContext *lineDeliveryCtx    `json:"deliveryContext,omitempty"`
+	WebhookEventID  string              `json:"webhookEventId,omitempty"`
+}
+
+// lineDeliveryCtx — LINE marks isRedelivery=true when the same event is sent
+// again after a webhook timeout. Tokens in redelivered events may already be
+// invalid (or about to be), so we skip overwriting our cached replyToken.
+type lineDeliveryCtx struct {
+	IsRedelivery bool `json:"isRedelivery"`
 }
 
 type lineSource struct {
@@ -237,8 +246,10 @@ func (h *LineHandler) processMessage(ctx context.Context, event lineEvent, svc *
 		h.logger.Warn("auto-revive status", zap.String("user", userID), zap.Error(err))
 	}
 
-	// Optional first-contact greeting — per-OA via line_oa_accounts.greeting,
-	// fallback to env LINE_GREETING for OAs without one configured.
+	// First-contact greeting (if configured) consumes the replyToken.
+	// We only cache the token for admin re-use when greeting did NOT consume it.
+	isRedelivery := event.DeliveryContext != nil && event.DeliveryContext.IsRedelivery
+	greetingSent := false
 	if isNew && event.ReplyToken != "" {
 		greet := ""
 		if oa != nil && oa.Greeting != "" {
@@ -249,7 +260,19 @@ func (h *LineHandler) processMessage(ctx context.Context, event lineEvent, svc *
 		if greet != "" {
 			if err := svc.ReplyText(event.ReplyToken, greet); err != nil {
 				h.logger.Warn("send greeting", zap.String("user", userID), zap.Error(err))
+			} else {
+				greetingSent = true
 			}
+		}
+	}
+
+	// Hybrid Reply+Push: cache the replyToken so admin's first response can
+	// use the (free) Reply API instead of Push. Skip when:
+	//   - the event is a redelivery (token may be stale)
+	//   - greeting already consumed this token
+	if event.ReplyToken != "" && !isRedelivery && !greetingSent {
+		if err := h.convRepo.SetReplyToken(userID, event.ReplyToken); err != nil {
+			h.logger.Warn("cache reply token", zap.String("user", userID), zap.Error(err))
 		}
 	}
 

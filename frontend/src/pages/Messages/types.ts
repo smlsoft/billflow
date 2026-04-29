@@ -41,6 +41,9 @@ export interface ChatTag {
 export type ChatDirection = 'incoming' | 'outgoing' | 'system'
 export type ChatKind = 'text' | 'image' | 'file' | 'audio' | 'system'
 export type ChatDelivery = 'sent' | 'failed' | 'pending'
+// Reply = LINE's free Reply API (used cached replyToken from inbound).
+// Push  = LINE Push API — counts toward 200/month free OA quota.
+export type ChatDeliveryMethod = 'reply' | 'push'
 
 export interface ChatMedia {
   id: string
@@ -63,6 +66,7 @@ export interface ChatMessage {
   line_event_ts?: number
   sender_admin_id?: string
   delivery_status: ChatDelivery
+  delivery_method?: ChatDeliveryMethod
   delivery_error?: string
   created_at: string
   media?: ChatMedia | null

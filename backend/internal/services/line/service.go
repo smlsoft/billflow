@@ -42,6 +42,54 @@ func (s *Service) ReplyText(replyToken, text string) error {
 	return err
 }
 
+// ReplyImage sends an image via the (free) Reply API. URLs follow the same
+// rules as PushImage. Caller must have a fresh replyToken from a recent
+// inbound webhook event — token is single-use, expires server-side.
+func (s *Service) ReplyImage(replyToken, originalContentURL, previewImageURL string) error {
+	if replyToken == "" {
+		return fmt.Errorf("replyToken required")
+	}
+	if originalContentURL == "" {
+		return fmt.Errorf("originalContentURL required")
+	}
+	if previewImageURL == "" {
+		previewImageURL = originalContentURL
+	}
+	_, err := s.bot.ReplyMessage(&messaging_api.ReplyMessageRequest{
+		ReplyToken: replyToken,
+		Messages: []messaging_api.MessageInterface{
+			&messaging_api.ImageMessage{
+				OriginalContentUrl: originalContentURL,
+				PreviewImageUrl:    previewImageURL,
+			},
+		},
+	})
+	return err
+}
+
+// IsReplyTokenError reports whether err looks like LINE rejected the
+// replyToken (expired, invalid, or already used). Caller falls back to Push.
+//
+// LINE's 400 errors carry a JSON body like {"message":"Invalid reply token"}
+// which the SDK surfaces in err.Error(). We match a few known phrasings —
+// LINE may add new variants over time, so be permissive.
+//
+// We intentionally do NOT match generic 401/429 here:
+//   - 401 (auth) means the token is bad → Push will also fail; bubble error up
+//   - 429 (rate limit) is transient; falling back to Push burns quota for
+//     no reason, so we return false and let the caller surface the error
+func IsReplyTokenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	// "Invalid reply token" / "The reply token has expired" / "reply token has been used"
+	if strings.Contains(s, "reply token") {
+		return true
+	}
+	return false
+}
+
 // PushAdmin sends a push message to the admin user
 func (s *Service) PushAdmin(text string) error {
 	if s.adminUserID == "" {
@@ -60,7 +108,8 @@ func (s *Service) PushAdmin(text string) error {
 // PushText sends a plain-text Push to an arbitrary LINE userID. Used by the
 // human-chat inbox for admin → customer replies. Push has no reply-window
 // constraint so it works any time the user has us as a friend; counts toward
-// the LINE OA monthly push quota (500/mo on free tier).
+// the LINE OA monthly push quota (200/mo on free Light Plan; Reply API path
+// is preferred and is free — see chat_inbox.sendOutgoingText).
 func (s *Service) PushText(userID, text string) error {
 	if userID == "" {
 		return fmt.Errorf("userID required")

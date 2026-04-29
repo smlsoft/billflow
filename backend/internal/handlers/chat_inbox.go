@@ -270,19 +270,26 @@ func (h *ChatInboxHandler) SendReply(c *gin.Context) {
 		return
 	}
 
-	// Push via the right OA's LINE service.
-	if err := svc.PushText(lineUserID, text); err != nil {
-		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, err.Error())
+	// Hybrid Reply+Push: try the (free) Reply API first if we have a fresh
+	// token cached from the customer's last inbound. Fall back to Push only
+	// when LINE explicitly rejects the token (expired/used).
+	method, sendErr := h.sendOutgoingText(lineUserID, text, svc)
+	if sendErr != nil {
+		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, method, sendErr.Error())
 		m.DeliveryStatus = models.ChatDeliveryFailed
-		m.DeliveryError = err.Error()
-		h.logger.Warn("LINE push failed", zap.String("user", lineUserID), zap.Error(err))
-		// Still 200 — UI shows the bubble with ⚠ + retry.
+		m.DeliveryMethod = method
+		m.DeliveryError = sendErr.Error()
+		h.logger.Warn("LINE send failed",
+			zap.String("user", lineUserID),
+			zap.String("method", method),
+			zap.Error(sendErr))
 		c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "failed"})
 		return
 	}
 
-	_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliverySent, "")
+	_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliverySent, method, "")
 	m.DeliveryStatus = models.ChatDeliverySent
+	m.DeliveryMethod = method
 	_ = h.convRepo.TouchLastMessage(lineUserID, false)
 
 	if h.auditRepo != nil {
@@ -292,10 +299,40 @@ func (h *ChatInboxHandler) SendReply(c *gin.Context) {
 			Source:  "line",
 			Level:   "info",
 			TraceID: c.GetString("trace_id"),
-			Detail:  map[string]interface{}{"line_user_id": lineUserID, "message_id": m.ID},
+			Detail: map[string]interface{}{
+				"line_user_id":    lineUserID,
+				"message_id":      m.ID,
+				"delivery_method": method,
+			},
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "sent"})
+	c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "sent", "method": method})
+}
+
+// sendOutgoingText tries Reply API first (free), falls back to Push (counted)
+// if no token is cached or LINE rejects the cached token. Returns the actual
+// transport used so the caller can record it on the chat_messages row.
+//
+// Errors that are NOT reply-token-related (auth/429/network) propagate back
+// without falling back — pushing in those cases would either also fail or
+// burn quota for no gain.
+func (h *ChatInboxHandler) sendOutgoingText(lineUserID, text string, svc *lineservice.Service) (string, error) {
+	token, _ := h.convRepo.ConsumeReplyToken(lineUserID)
+	if token != "" {
+		if err := svc.ReplyText(token, text); err == nil {
+			return models.ChatDeliveryMethodReply, nil
+		} else if !lineservice.IsReplyTokenError(err) {
+			// Not a token problem — auth/rate-limit/network. Don't burn a Push.
+			return models.ChatDeliveryMethodReply, err
+		}
+		// Token expired/invalid → fall through to Push.
+		h.logger.Info("reply token rejected, falling back to push",
+			zap.String("user", lineUserID))
+	}
+	if err := svc.PushText(lineUserID, text); err != nil {
+		return models.ChatDeliveryMethodPush, err
+	}
+	return models.ChatDeliveryMethodPush, nil
 }
 
 // ── Customer history (Phase 4.5) ─────────────────────────────────────────────
@@ -414,26 +451,32 @@ func (h *ChatInboxHandler) SendMedia(c *gin.Context) {
 	// 2. Save the binary alongside.
 	mediaRow, err := h.mediaRepo.Save(m.ID, fileHeader.Filename, contentType, data)
 	if err != nil {
-		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, err.Error())
+		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, models.ChatDeliveryMethodPush, err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "บันทึกไฟล์ล้มเหลว: " + err.Error()})
 		return
 	}
 	m.Media = mediaRow
 
-	// 3. Build the public signed URL and push to LINE.
+	// 3. Build the public signed URL and send to LINE (Reply if token fresh,
+	//    else Push). Same hybrid logic as sendOutgoingText.
 	publicURL := h.mediaSigner.PublicURL(h.publicURL, mediaRow.ID)
-	if err := svc.PushImage(lineUserID, publicURL, publicURL); err != nil {
-		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, err.Error())
+	method, sendErr := h.sendOutgoingImage(lineUserID, publicURL, publicURL, svc)
+	if sendErr != nil {
+		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, method, sendErr.Error())
 		m.DeliveryStatus = models.ChatDeliveryFailed
-		m.DeliveryError = err.Error()
-		h.logger.Warn("LINE PushImage failed",
-			zap.String("user", lineUserID), zap.Error(err))
+		m.DeliveryMethod = method
+		m.DeliveryError = sendErr.Error()
+		h.logger.Warn("LINE send-image failed",
+			zap.String("user", lineUserID),
+			zap.String("method", method),
+			zap.Error(sendErr))
 		c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "failed"})
 		return
 	}
 
-	_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliverySent, "")
+	_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliverySent, method, "")
 	m.DeliveryStatus = models.ChatDeliverySent
+	m.DeliveryMethod = method
 	_ = h.convRepo.TouchLastMessage(lineUserID, false)
 
 	if h.auditRepo != nil {
@@ -444,14 +487,33 @@ func (h *ChatInboxHandler) SendMedia(c *gin.Context) {
 			Level:   "info",
 			TraceID: c.GetString("trace_id"),
 			Detail: map[string]interface{}{
-				"line_user_id": lineUserID,
-				"message_id":   m.ID,
-				"size_bytes":   mediaRow.SizeBytes,
-				"content_type": mediaRow.ContentType,
+				"line_user_id":    lineUserID,
+				"message_id":      m.ID,
+				"size_bytes":      mediaRow.SizeBytes,
+				"content_type":    mediaRow.ContentType,
+				"delivery_method": method,
 			},
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "sent"})
+	c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "sent", "method": method})
+}
+
+// sendOutgoingImage mirrors sendOutgoingText but for image messages.
+func (h *ChatInboxHandler) sendOutgoingImage(lineUserID, originalURL, previewURL string, svc *lineservice.Service) (string, error) {
+	token, _ := h.convRepo.ConsumeReplyToken(lineUserID)
+	if token != "" {
+		if err := svc.ReplyImage(token, originalURL, previewURL); err == nil {
+			return models.ChatDeliveryMethodReply, nil
+		} else if !lineservice.IsReplyTokenError(err) {
+			return models.ChatDeliveryMethodReply, err
+		}
+		h.logger.Info("reply token rejected on image, falling back to push",
+			zap.String("user", lineUserID))
+	}
+	if err := svc.PushImage(lineUserID, originalURL, previewURL); err != nil {
+		return models.ChatDeliveryMethodPush, err
+	}
+	return models.ChatDeliveryMethodPush, nil
 }
 
 // ── Mark conversation as read ────────────────────────────────────────────────

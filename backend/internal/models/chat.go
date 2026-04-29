@@ -25,6 +25,14 @@ const (
 	ChatDeliveryPending = "pending"
 )
 
+// Delivery method for outgoing messages — "reply" uses LINE's free Reply API
+// (single-use replyToken from a recent inbound webhook); "push" uses Push API
+// which counts toward the monthly quota (200/month free OA plan).
+const (
+	ChatDeliveryMethodReply = "reply"
+	ChatDeliveryMethodPush  = "push"
+)
+
 // ChatConversation is one LINE user we've talked to. PK is the LINE userID
 // (Uxxxxxxxx). display_name + picture_url come from LINE's /v2/bot/profile
 // endpoint and are refreshed when the row is first created (and manually by
@@ -75,6 +83,7 @@ type ChatMessage struct {
 	LineEventTS    *int64     `json:"line_event_ts,omitempty"`
 	SenderAdminID  *string    `json:"sender_admin_id,omitempty"`
 	DeliveryStatus string     `json:"delivery_status"`
+	DeliveryMethod string     `json:"delivery_method,omitempty"`
 	DeliveryError  string     `json:"delivery_error,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	// Media is populated by ListByUser when the message is an image/file/audio.

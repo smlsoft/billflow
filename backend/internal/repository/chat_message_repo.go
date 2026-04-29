@@ -23,7 +23,7 @@ func NewChatMessageRepo(db *sql.DB) *ChatMessageRepo {
 const chatMsgCols = `
   id, line_user_id, direction, kind, text_content,
   line_message_id, line_event_ts, sender_admin_id,
-  delivery_status, delivery_error, created_at
+  delivery_status, delivery_method, delivery_error, created_at
 `
 
 func scanChatMessage(s interface{ Scan(...any) error }) (*models.ChatMessage, error) {
@@ -33,7 +33,7 @@ func scanChatMessage(s interface{ Scan(...any) error }) (*models.ChatMessage, er
 	if err := s.Scan(
 		&m.ID, &m.LineUserID, &m.Direction, &m.Kind, &m.TextContent,
 		&m.LineMessageID, &lineEventTS, &senderAdmin,
-		&m.DeliveryStatus, &m.DeliveryError, &m.CreatedAt,
+		&m.DeliveryStatus, &m.DeliveryMethod, &m.DeliveryError, &m.CreatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -54,16 +54,19 @@ func (r *ChatMessageRepo) Insert(m *models.ChatMessage) error {
 	if m.DeliveryStatus == "" {
 		m.DeliveryStatus = models.ChatDeliverySent
 	}
+	if m.DeliveryMethod == "" {
+		m.DeliveryMethod = models.ChatDeliveryMethodPush
+	}
 	row := r.db.QueryRow(
 		`INSERT INTO chat_messages (
 		   line_user_id, direction, kind, text_content,
 		   line_message_id, line_event_ts, sender_admin_id,
-		   delivery_status, delivery_error
-		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		   delivery_status, delivery_method, delivery_error
+		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		 RETURNING id, created_at`,
 		m.LineUserID, m.Direction, m.Kind, m.TextContent,
 		m.LineMessageID, m.LineEventTS, m.SenderAdminID,
-		m.DeliveryStatus, m.DeliveryError,
+		m.DeliveryStatus, m.DeliveryMethod, m.DeliveryError,
 	)
 	if err := row.Scan(&m.ID, &m.CreatedAt); err != nil {
 		return fmt.Errorf("insert chat_message: %w", err)
@@ -91,7 +94,7 @@ func (r *ChatMessageRepo) ListByUser(lineUserID string, since *time.Time, limit 
 		query := `SELECT
 		            m.id, m.line_user_id, m.direction, m.kind, m.text_content,
 		            m.line_message_id, m.line_event_ts, m.sender_admin_id,
-		            m.delivery_status, m.delivery_error, m.created_at,
+		            m.delivery_status, m.delivery_method, m.delivery_error, m.created_at,
 		            media.id, media.filename, media.content_type, media.size_bytes,
 		            media.sha256, media.storage_path, media.created_at
 		          FROM chat_messages m
@@ -103,7 +106,7 @@ func (r *ChatMessageRepo) ListByUser(lineUserID string, since *time.Time, limit 
 		query := `SELECT
 		            m.id, m.line_user_id, m.direction, m.kind, m.text_content,
 		            m.line_message_id, m.line_event_ts, m.sender_admin_id,
-		            m.delivery_status, m.delivery_error, m.created_at,
+		            m.delivery_status, m.delivery_method, m.delivery_error, m.created_at,
 		            media.id, media.filename, media.content_type, media.size_bytes,
 		            media.sha256, media.storage_path, media.created_at
 		          FROM chat_messages m
@@ -119,7 +122,7 @@ func (r *ChatMessageRepo) ListByUser(lineUserID string, since *time.Time, limit 
 		            SELECT
 		              m.id, m.line_user_id, m.direction, m.kind, m.text_content,
 		              m.line_message_id, m.line_event_ts, m.sender_admin_id,
-		              m.delivery_status, m.delivery_error, m.created_at,
+		              m.delivery_status, m.delivery_method, m.delivery_error, m.created_at,
 		              media.id AS media_id, media.filename, media.content_type, media.size_bytes,
 		              media.sha256, media.storage_path, media.created_at AS media_created_at
 		            FROM chat_messages m
@@ -146,7 +149,7 @@ func (r *ChatMessageRepo) ListByUser(lineUserID string, since *time.Time, limit 
 		if err := rows.Scan(
 			&m.ID, &m.LineUserID, &m.Direction, &m.Kind, &m.TextContent,
 			&m.LineMessageID, &lineEventTS, &senderAdmin,
-			&m.DeliveryStatus, &m.DeliveryError, &m.CreatedAt,
+			&m.DeliveryStatus, &m.DeliveryMethod, &m.DeliveryError, &m.CreatedAt,
 			&mediaID, &mediaFilename, &mediaCT, &mediaSize,
 			&mediaSHA, &mediaPath, &mediaCreated,
 		); err != nil {
@@ -194,12 +197,15 @@ func (r *ChatMessageRepo) Get(messageID string) (*models.ChatMessage, error) {
 	return m, nil
 }
 
-// UpdateDeliveryStatus is used after we attempt the LINE Push to record success
-// or failure. errMsg is "" on success.
-func (r *ChatMessageRepo) UpdateDeliveryStatus(messageID, status, errMsg string) error {
+// UpdateDeliveryStatus is used after we attempt the LINE send to record
+// success or failure. errMsg is "" on success. method is "reply" or "push"
+// — whichever transport actually delivered (or attempted on failure).
+func (r *ChatMessageRepo) UpdateDeliveryStatus(messageID, status, method, errMsg string) error {
 	_, err := r.db.Exec(
-		`UPDATE chat_messages SET delivery_status = $1, delivery_error = $2 WHERE id = $3`,
-		status, errMsg, messageID,
+		`UPDATE chat_messages
+		   SET delivery_status = $1, delivery_method = $2, delivery_error = $3
+		 WHERE id = $4`,
+		status, method, errMsg, messageID,
 	)
 	if err != nil {
 		return fmt.Errorf("update delivery status: %w", err)

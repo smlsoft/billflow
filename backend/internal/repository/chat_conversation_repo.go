@@ -246,9 +246,60 @@ func (r *ChatConversationRepo) SetStatus(lineUserID, status string) error {
 	return nil
 }
 
-// AutoReviveOnInbound reverts status='resolved' → 'open' when a customer
-// sends a new message. 'archived' stays sticky (admin must un-archive).
-// Returns true if the row was actually flipped.
+// SetReplyToken stores the latest replyToken from an inbound webhook event.
+// Per-conversation (not per-message) because admin always replies to the most
+// recent inbound, and newer tokens always supersede older ones. Caller skips
+// this for redelivered events (deliveryContext.isRedelivery) since redelivered
+// tokens may already be invalid and would clobber the live one.
+func (r *ChatConversationRepo) SetReplyToken(lineUserID, token string) error {
+	_, err := r.db.Exec(
+		`UPDATE chat_conversations
+		   SET last_reply_token = $1, last_reply_token_at = NOW()
+		 WHERE line_user_id = $2`,
+		token, lineUserID,
+	)
+	if err != nil {
+		return fmt.Errorf("set reply token: %w", err)
+	}
+	return nil
+}
+
+// ConsumeReplyToken atomically claims the stored replyToken (clearing it so
+// no other admin can reuse it) and returns the OLD value. Returns "" when
+// the column was already empty — caller falls back to Push API.
+//
+// Single-use semantics matter: LINE replyTokens are valid exactly once. If
+// two admins hit SendReply simultaneously, the SELECT FOR UPDATE in the CTE
+// serializes them — the second tx sees an already-empty column and gets "".
+//
+// Why CTE: Postgres RETURNING gives the POST-update row (always ''), so we
+// SELECT the old value first, then UPDATE in the same statement.
+func (r *ChatConversationRepo) ConsumeReplyToken(lineUserID string) (string, error) {
+	var token string
+	err := r.db.QueryRow(
+		`WITH cur AS (
+		   SELECT line_user_id, last_reply_token
+		     FROM chat_conversations
+		    WHERE line_user_id = $1 AND last_reply_token <> ''
+		    FOR UPDATE
+		 ), upd AS (
+		   UPDATE chat_conversations
+		      SET last_reply_token = '', last_reply_token_at = NULL
+		    WHERE line_user_id = (SELECT line_user_id FROM cur)
+		   RETURNING 1
+		 )
+		 SELECT last_reply_token FROM cur`,
+		lineUserID,
+	).Scan(&token)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("consume reply token: %w", err)
+	}
+	return token, nil
+}
+
 func (r *ChatConversationRepo) AutoReviveOnInbound(lineUserID string) (bool, error) {
 	res, err := r.db.Exec(
 		`UPDATE chat_conversations SET status = 'open'

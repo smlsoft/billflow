@@ -593,6 +593,7 @@ CREATE TABLE imap_accounts (
 > - [015_chat_quick_replies.sql](backend/internal/database/migrations/015_chat_quick_replies.sql) — chat_quick_replies table + 4 seed templates (Phase 4.4)
 > - [016_chat_conversation_status.sql](backend/internal/database/migrations/016_chat_conversation_status.sql) — chat_conversations.status (open/resolved/archived) + auto-revive (Phase 4.2 — session 14)
 > - [017_chat_crm.sql](backend/internal/database/migrations/017_chat_crm.sql) — chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags (CRM lite Phase 4.7+4.8+4.9 — session 14)
+> - [018_chat_reply_token.sql](backend/internal/database/migrations/018_chat_reply_token.sql) — chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method (Hybrid Reply+Push API — session 15)
 
 ---
 
@@ -1597,8 +1598,9 @@ lucide-react             ← icon set (shadcn default)
     - Default OA seeded จาก env LINE_* บน first boot (`line_oa_accounts.IsEmpty()`)
       → ถ้า admin ตั้ง LINE_* ใน .env ไว้ ระบบสร้าง row "Default (from .env)" ให้
       → admin แก้ name/greeting/enabled ผ่าน UI ได้, secret/token enter เพียงครั้งเดียว
-    - LINE Push API quota — Free OA = 500 push/เดือน. Phase 4.1 (admin ส่ง media)
-      จะใช้ quota เพิ่ม. ใส่ banner เตือนใน UI หลัง 4.1 ship
+    - LINE Push API quota — **Free OA = 200 push/เดือน** (Light Plan). Reply API
+      ฟรีไม่นับ quota — ดู #21 hybrid send. Phase 4.1 (admin ส่ง media) จะใช้
+      quota เพิ่ม. ใส่ banner เตือนใน UI หลัง 4.1 ship
 
 17. Chat inbox features (Phase 4 — session 13)
     - **Quick replies** (`/api/admin/quick-replies`): 4 seed templates +
@@ -1647,6 +1649,47 @@ lucide-react             ← icon set (shadcn default)
       → 7 colors (gray/red/orange/yellow/green/blue/purple)
       → Tags row ใน thread header ใต้ status; chips + "+ tag" combobox
       → ไม่มี inbox filter by tag ใน v1 (deferred)
+
+21. Hybrid Reply + Push API (session 15 — quota optimization)
+    - **LINE Reply API ฟรี ไม่นับ quota** (verified docs: "Sending methods that
+      are not counted as message count: Reply messages"). Free OA quota = **200
+      push/เดือน** (Light Plan; เอกสารเดิม CLAUDE.md เคยเขียน 500 ผิด — แก้แล้ว)
+    - **migration 018**: chat_conversations.last_reply_token + last_reply_token_at
+      + chat_messages.delivery_method ('reply' | 'push' default 'push')
+    - **Webhook caching**: line.go.processMessage cache event.ReplyToken ลง
+      conversation row หลัง insert message — เว้นกรณี:
+      - `deliveryContext.isRedelivery=true` (token อาจ stale แล้ว ทับของจริง)
+      - greeting reply consumed token ไปแล้ว (`greetingSent=true`)
+    - **Atomic consume**: ConsumeReplyToken ใช้ CTE `WITH cur AS (SELECT ... FOR UPDATE),
+      upd AS (UPDATE ... RETURNING 1) SELECT FROM cur` เพื่อ:
+      1. Lock row (กัน race เมื่อ admin 2 คนตอบพร้อมกัน)
+      2. Capture **OLD** value (PostgreSQL RETURNING ให้ post-update value)
+      3. Clear column atomic
+    - **Send flow** (chat_inbox.sendOutgoingText/sendOutgoingImage):
+      ```
+      token := convRepo.ConsumeReplyToken(userID)
+      if token != "" {
+        err := svc.ReplyText/ReplyImage(token, ...)
+        if err == nil → method='reply', done
+        if lineservice.IsReplyTokenError(err) → fallback to Push
+        else (auth/429/network) → fail without push (don't burn quota)
+      }
+      svc.PushText/PushImage → method='push'
+      ```
+    - **lineservice.IsReplyTokenError**: substring match บน err.Error() หา
+      "reply token" — permissive เพราะ LINE อาจเปลี่ยนข้อความ. **ไม่** match
+      401 (auth)/429 (rate limit) เพื่อหลีกเลี่ยง burning push quota แบบไร้ประโยชน์
+    - **ReplyToken validity**: LINE docs ไม่ระบุเป็นเลขแน่นอน — แค่บอก "subject
+      to change without notice". กลยุทธ์: **try-then-fallback** ดีกว่า hardcode
+      timeout — ถ้า expired LINE บอกเอง
+    - **UI badge** (MessageBubble): outgoing bubble ที่ status=sent แสดง
+      - "ฟรี" สีเขียวอ่อน (delivery_method='reply') — admin รู้ว่าไม่กิน quota
+      - "Push" สีเทาอ่อน (delivery_method='push') — รู้ว่ากินไปแล้ว 1 ใน 200
+      Tooltip อธิบายเพิ่มทั้งสองกรณี
+    - **Behavior change**: admin ที่ตอบไวภายใน reply window จะใช้ Reply API
+      เกือบทั้งหมด → กิน push quota น้อยมาก → free OA ใช้งานได้ทั้งเดือน
+    - **Deferred**: quota dashboard widget ดึงจาก /v2/bot/message/quota และ
+      /v2/bot/message/quota/consumption แสดง "ใช้ไป X / 200" — Phase 2
 ```
 
 ---
@@ -1991,7 +2034,7 @@ Bill flow → SML routing (bills.go Retry handler — 4-way dispatch):
   shopee_shipped           purchase    purchaseorder (248)            party_code from channel_defaults
   any                      any         endpoint URL overridable per (channel,bill_type) in /settings/channels
 
-Migrations applied (17 files):
+Migrations applied (18 files):
   001_init.sql
   002_audit_logging.sql                    (audit_logs structured columns)
   002_sml_catalog.sql                      (sml_catalog + extended CHECK)
@@ -2009,6 +2052,7 @@ Migrations applied (17 files):
   015_chat_quick_replies.sql               (chat_quick_replies + 4 seed templates — Phase 4.4 session 13)
   016_chat_conversation_status.sql         (chat_conversations.status open/resolved/archived — Phase 4.2 session 14)
   017_chat_crm.sql                         (chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags — Phase 4.7+4.8+4.9 session 14)
+  018_chat_reply_token.sql                 (chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method — Hybrid Reply+Push session 15)
 
 Phases:
   Phase 0–7  ✅
@@ -2025,7 +2069,7 @@ Pending (carry-over):
   ⏳ Phase 8 — cloudflared named tunnel + systemd (Quick Tunnel works for now)
   ⏳ Phase 4 carry-over: 4.6 LINE↔SML party link, 4.12 keyboard shortcuts (j/k/e/),
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
-  ⏳ LINE Push quota dashboard (free OA = 500/month — image push uses 1 each)
+  ⏳ LINE Push quota dashboard (free OA = 200/month — Reply API path is free)
   ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
 
 Recent work (session 14 — 2026-04-29):

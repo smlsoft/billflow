@@ -292,6 +292,7 @@ Migrations (run in order, all idempotent):
 - [015_chat_quick_replies.sql](backend/internal/database/migrations/015_chat_quick_replies.sql) — chat_quick_replies table + 4 seed templates for the chat composer (Phase 4.4 — session 13)
 - [016_chat_conversation_status.sql](backend/internal/database/migrations/016_chat_conversation_status.sql) — chat_conversations.status (open/resolved/archived) + auto-revive on inbound (Phase 4.2 — session 14)
 - [017_chat_crm.sql](backend/internal/database/migrations/017_chat_crm.sql) — chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags m2m (CRM lite Phase 4.7+4.8+4.9 — session 14)
+- [018_chat_reply_token.sql](backend/internal/database/migrations/018_chat_reply_token.sql) — chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method (Hybrid Reply+Push API — session 15, makes admin replies free when within reply token window)
 
 ---
 
