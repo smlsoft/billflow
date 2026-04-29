@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"billflow/internal/models"
 )
@@ -130,8 +131,9 @@ type ConversationListFilter struct {
 	Limit      int
 	Offset     int
 	UnreadOnly bool
-	Status     string // "" = no filter; "open" / "resolved" / "archived"
-	Q          string // case-insensitive substring match on display_name + last text
+	Status     string   // "" = no filter; "open" / "resolved" / "archived"
+	Q          string   // case-insensitive substring match on display_name + last text
+	TagIDs     []string // ANY-match — conversation must have at least one of these tags
 }
 
 // List returns conversations ordered by last_message_at DESC.
@@ -173,6 +175,22 @@ func (r *ChatConversationRepo) List(f ConversationListFilter) ([]*ConversationLi
 			   WHERE m.line_user_id = cc.line_user_id
 			     AND m.text_content ILIKE $%d
 			 ))`, len(args), len(args)))
+	}
+	if len(f.TagIDs) > 0 {
+		// ANY-match: conversation has at least one of the requested tag IDs.
+		// pq.Array would let us pass a single $N — but we already use lib/pq
+		// strings only, so build a placeholder list inline.
+		ph := make([]string, 0, len(f.TagIDs))
+		for _, id := range f.TagIDs {
+			args = append(args, id)
+			ph = append(ph, fmt.Sprintf("$%d", len(args)))
+		}
+		addWhere(fmt.Sprintf(
+			`EXISTS (
+			   SELECT 1 FROM chat_conversation_tags ct
+			   WHERE ct.line_user_id = cc.line_user_id
+			     AND ct.tag_id IN (%s)
+			 )`, strings.Join(ph, ",")))
 	}
 
 	q := `SELECT
@@ -392,6 +410,18 @@ func (r *ChatConversationRepo) CountAll(f ConversationListFilter) (int, error) {
 		   WHERE m.line_user_id = chat_conversations.line_user_id
 		     AND m.text_content ILIKE $%d
 		 ))`, len(args), len(args)))
+	}
+	if len(f.TagIDs) > 0 {
+		ph := make([]string, 0, len(f.TagIDs))
+		for _, id := range f.TagIDs {
+			args = append(args, id)
+			ph = append(ph, fmt.Sprintf("$%d", len(args)))
+		}
+		add(fmt.Sprintf(`EXISTS (
+		   SELECT 1 FROM chat_conversation_tags ct
+		   WHERE ct.line_user_id = chat_conversations.line_user_id
+		     AND ct.tag_id IN (%s)
+		 )`, strings.Join(ph, ",")))
 	}
 	var n int
 	if err := r.db.QueryRow(`SELECT COUNT(*) FROM chat_conversations`+where, args...).Scan(&n); err != nil {

@@ -431,14 +431,14 @@ func main() {
 			chatGroup.PATCH("/:lineUserId/phone", chatInboxH.SetPhone)
 
 			// Phase 4.8 internal notes (admin-only annotations).
-			chatNotesH := handlers.NewChatNotesHandler(chatNoteRepo)
+			chatNotesH := handlers.NewChatNotesHandler(chatNoteRepo, auditLogRepo)
 			chatGroup.GET("/:lineUserId/notes", chatNotesH.List)
 			chatGroup.POST("/:lineUserId/notes", chatNotesH.Create)
 			chatGroup.PUT("/:lineUserId/notes/:noteId", chatNotesH.Update)
 			chatGroup.DELETE("/:lineUserId/notes/:noteId", chatNotesH.Delete)
 
 			// Phase 4.9 tags — m2m attach for a single conversation.
-			chatTagsH := handlers.NewChatTagsHandler(chatTagRepo)
+			chatTagsH := handlers.NewChatTagsHandler(chatTagRepo, auditLogRepo)
 			chatGroup.GET("/:lineUserId/tags", chatTagsH.TagsForConversation)
 			chatGroup.PUT("/:lineUserId/tags", chatTagsH.SetTagsForConversation)
 			chatGroup.GET("/:lineUserId/messages/:messageId/media", chatInboxH.DownloadMedia)
@@ -461,7 +461,7 @@ func main() {
 		}
 
 		// Quick reply templates for the chat composer (Phase 4.4)
-		quickReplyH := handlers.NewChatQuickReplyHandler(chatQuickReplyRepo)
+		quickReplyH := handlers.NewChatQuickReplyHandler(chatQuickReplyRepo, auditLogRepo)
 		qrGroup := api.Group("/admin/quick-replies")
 		qrGroup.Use(middleware.RequireRole("admin", "staff"))
 		{
@@ -472,7 +472,7 @@ func main() {
 		}
 
 		// Phase 4.9 — global chat tag CRUD. /settings/chat-tags admin page.
-		tagsAdminH := handlers.NewChatTagsHandler(chatTagRepo)
+		tagsAdminH := handlers.NewChatTagsHandler(chatTagRepo, auditLogRepo)
 		tagsGroup := api.Group("/settings/chat-tags")
 		tagsGroup.Use(middleware.RequireRole("admin", "staff"))
 		{

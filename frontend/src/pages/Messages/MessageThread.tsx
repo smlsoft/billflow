@@ -537,8 +537,23 @@ export function MessageThread({
         </div>
       </div>
 
-      {/* Composer */}
+      {/* Composer — disabled when archived (admin must un-archive first) */}
+      {conversation?.status === 'archived' && (
+        <div className="flex items-center justify-between gap-2 border-t border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+          <span>🗄 ห้องนี้ archived แล้ว — กดเปิดอีกครั้งก่อนตอบ</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 gap-1 px-2 text-[11px]"
+            onClick={() => handleSetStatus('open')}
+          >
+            <RotateCcw className="h-3 w-3" />
+            เปิดอีกครั้ง
+          </Button>
+        </div>
+      )}
       <Composer
+        disabled={conversation?.status === 'archived'}
         onSend={handleSend}
         onSendMedia={handleSendMedia}
         externalAttachments={pendingExternal}

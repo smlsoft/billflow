@@ -95,6 +95,27 @@ const ACTION_META: Record<string, ActionMeta> = {
   channel_default_updated: { label: 'แก้ไขลูกค้า default', emoji: '⚙️', tone: 'info' },
   channel_default_deleted: { label: 'ลบลูกค้า default', emoji: '🗑️', tone: 'muted' },
   channel_default_quick_setup: { label: 'ตั้งค่าลูกค้า default อัตโนมัติ', emoji: '🚀', tone: 'primary' },
+  // LINE chat — admin actions (session 13-15)
+  line_admin_reply: { label: 'ตอบลูกค้าใน LINE', emoji: '💬', tone: 'info' },
+  line_admin_send_media: { label: 'ส่งรูปให้ลูกค้าใน LINE', emoji: '🖼️', tone: 'info' },
+  line_conversation_status: { label: 'เปลี่ยนสถานะห้องแชท', emoji: '🏷️', tone: 'muted' },
+  line_message_received: { label: 'ลูกค้าทักผ่าน LINE', emoji: '📨', tone: 'muted' },
+  // LINE OA accounts (multi-OA)
+  line_oa_created: { label: 'เพิ่ม LINE OA', emoji: '➕', tone: 'primary' },
+  line_oa_updated: { label: 'แก้ไข LINE OA', emoji: '✏️', tone: 'info' },
+  line_oa_deleted: { label: 'ลบ LINE OA', emoji: '🗑️', tone: 'danger' },
+  // Chat CRM lite (Phase 4.7-4.9)
+  chat_phone_saved: { label: 'บันทึกเบอร์ลูกค้า', emoji: '📞', tone: 'info' },
+  chat_note_created: { label: 'เพิ่ม note ภายใน', emoji: '📝', tone: 'info' },
+  chat_note_updated: { label: 'แก้ไข note ภายใน', emoji: '✏️', tone: 'muted' },
+  chat_note_deleted: { label: 'ลบ note ภายใน', emoji: '🗑️', tone: 'muted' },
+  chat_tag_created: { label: 'สร้าง chat tag', emoji: '🏷️', tone: 'primary' },
+  chat_tag_updated: { label: 'แก้ไข chat tag', emoji: '✏️', tone: 'info' },
+  chat_tag_deleted: { label: 'ลบ chat tag', emoji: '🗑️', tone: 'muted' },
+  chat_conv_tags_set: { label: 'เปลี่ยน tag ของห้องแชท', emoji: '🔖', tone: 'muted' },
+  chat_quick_reply_created: { label: 'เพิ่ม quick reply', emoji: '💡', tone: 'info' },
+  chat_quick_reply_updated: { label: 'แก้ไข quick reply', emoji: '✏️', tone: 'muted' },
+  chat_quick_reply_deleted: { label: 'ลบ quick reply', emoji: '🗑️', tone: 'muted' },
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -177,6 +198,34 @@ function summarize(log: AuditLog): string {
     case 'bill_item_added':
     case 'bill_item_deleted':
       return d.raw_name ? String(d.raw_name) : ''
+    // LINE / chat — short summaries from detail
+    case 'line_admin_reply':
+    case 'line_admin_send_media':
+      return d.delivery_method === 'reply' ? 'ฟรี (Reply API)' : 'Push (นับ quota)'
+    case 'line_conversation_status':
+      return d.status ? String(d.status) : ''
+    case 'line_oa_created':
+    case 'line_oa_updated':
+    case 'line_oa_deleted':
+      return [d.name, d.basic_id].filter(Boolean).join(' · ')
+    case 'chat_phone_saved':
+      return d.phone ? String(d.phone) : 'เคลียร์เบอร์'
+    case 'chat_note_created':
+    case 'chat_note_updated':
+    case 'chat_note_deleted':
+      return d.body_preview ? String(d.body_preview) : ''
+    case 'chat_tag_created':
+    case 'chat_tag_updated':
+    case 'chat_tag_deleted':
+      return d.label ? `${d.label}${d.color ? ` (${d.color})` : ''}` : ''
+    case 'chat_conv_tags_set': {
+      const labels = Array.isArray(d.labels) ? d.labels : []
+      return labels.length === 0 ? 'ลบ tag ทั้งหมด' : labels.join(', ')
+    }
+    case 'chat_quick_reply_created':
+    case 'chat_quick_reply_updated':
+    case 'chat_quick_reply_deleted':
+      return d.label ? String(d.label) : ''
     default:
       return ''
   }

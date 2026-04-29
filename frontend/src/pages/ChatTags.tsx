@@ -81,7 +81,7 @@ export default function ChatTags() {
     <div className="space-y-5">
       <PageHeader
         title="Chat Tags"
-        description="Tag สำหรับจัดหมวดบทสนทนาในห้องแชท (VIP / ขายส่ง / spam ฯลฯ) — ใช้ filter ใน /messages"
+        description="Tag สำหรับจัดหมวดบทสนทนาในห้องแชท (VIP / ขายส่ง / spam ฯลฯ) — กรอง inbox ตาม tag ได้ที่ /messages"
         actions={
           <Button
             size="sm"

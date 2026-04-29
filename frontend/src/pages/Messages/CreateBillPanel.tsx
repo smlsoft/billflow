@@ -70,7 +70,9 @@ export function CreateBillPanel({
     if (!open) return
     if (prefill) {
       setCustomerName(prefill.customer_name ?? conversation?.display_name ?? '')
-      setCustomerPhone(prefill.customer_phone ?? '')
+      // Prefer the AI-extracted phone, but fall back to whatever the admin
+      // saved on the conversation (Phase 4.7 "บันทึกเบอร์" button).
+      setCustomerPhone(prefill.customer_phone ?? conversation?.phone ?? '')
       setItems(
         prefill.items.length > 0
           ? prefill.items.map((it) => ({
@@ -84,7 +86,7 @@ export function CreateBillPanel({
       )
     } else {
       setCustomerName(conversation?.display_name ?? '')
-      setCustomerPhone('')
+      setCustomerPhone(conversation?.phone ?? '')
       setItems([emptyDraft()])
     }
     setSearchQ('')

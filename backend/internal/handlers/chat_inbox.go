@@ -84,16 +84,27 @@ func (h *ChatInboxHandler) pushService(conv *models.ChatConversation) *lineservi
 
 // ── Conversation list ────────────────────────────────────────────────────────
 
-// GET /api/admin/conversations?unread=true&status=open&q=ปูน&limit=50&offset=0
+// GET /api/admin/conversations?unread=true&status=open&q=ปูน&tags=id1,id2&limit=50&offset=0
 func (h *ChatInboxHandler) ListConversations(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	// Parse tags=id1,id2,id3 — comma-separated tag UUIDs (ANY-match).
+	var tagIDs []string
+	if raw := strings.TrimSpace(c.Query("tags")); raw != "" {
+		for _, id := range strings.Split(raw, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				tagIDs = append(tagIDs, id)
+			}
+		}
+	}
 	f := repository.ConversationListFilter{
 		Limit:      limit,
 		Offset:     offset,
 		UnreadOnly: c.Query("unread") == "true",
 		Status:     c.Query("status"),
 		Q:          strings.TrimSpace(c.Query("q")),
+		TagIDs:     tagIDs,
 	}
 	rows, err := h.convRepo.List(f)
 	if err != nil {
@@ -124,11 +135,26 @@ func (h *ChatInboxHandler) SetPhone(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.convRepo.SetPhone(lineUserID, strings.TrimSpace(body.Phone)); err != nil {
+	phone := strings.TrimSpace(body.Phone)
+	if err := h.convRepo.SetPhone(lineUserID, phone); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "phone": body.Phone})
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "chat_phone_saved",
+			UserID:  userID,
+			Source:  "line",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail:  map[string]interface{}{"line_user_id": lineUserID, "phone": phone},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "phone": phone})
 }
 
 // PATCH /api/admin/conversations/:lineUserId/status
