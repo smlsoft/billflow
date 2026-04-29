@@ -263,6 +263,22 @@ func (r *SMLCatalogRepo) Stats() (total, done, pending, errCount int, err error)
 	return
 }
 
+// Delete removes a single catalog row by item_code. SML 248 is not touched —
+// callers are expected to have already deleted the master in SML (or to be
+// pruning a zombie left over after an SML-side delete). Returns sql.ErrNoRows
+// when the code wasn't in the catalog.
+func (r *SMLCatalogRepo) Delete(itemCode string) error {
+	res, err := r.db.Exec(`DELETE FROM sml_catalog WHERE item_code = $1`, itemCode)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // GetOne returns a single catalog item
 func (r *SMLCatalogRepo) GetOne(itemCode string) (*models.CatalogItem, error) {
 	var it models.CatalogItem

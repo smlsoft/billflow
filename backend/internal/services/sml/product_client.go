@@ -28,7 +28,9 @@ func NewProductClient(baseURL, guid, provider, configFile, database string, logg
 			"provider":       provider,
 			"configFileName": configFile,
 			"databaseName":   database,
-			"Content-Type":   "application/json",
+			// charset=utf-8 — without it SML decodes Thai text as Latin-1 and
+			// stores mojibake (e.g. "ที่วาง" → "à¸—à¸µà¹ˆà¸§à¸²à¸‡")
+			"Content-Type": "application/json; charset=utf-8",
 		},
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		logger:     logger,
@@ -92,7 +94,7 @@ type CreateProductResponse struct {
 // must NOT be retried, and most other errors are user-fixable validation issues
 // (better to surface them immediately).
 func (c *ProductClient) CreateProduct(req CreateProductRequest) (int, *CreateProductResponse, error) {
-	body, err := json.Marshal(req)
+	body, err := marshalASCII(req)
 	if err != nil {
 		return 0, nil, err
 	}

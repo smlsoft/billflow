@@ -15,9 +15,9 @@
 ### Input Channels
 | Channel | รายละเอียด | ประเภทบิล | Phase | สถานะ |
 |---------|-----------|----------|-------|-------|
-| LINE OA | รูปภาพ, PDF, text, voice | บิลขาย (sale) | Phase 3 | text ✅ / รูป+PDF+voice deployed แต่ยังไม่ test |
+| LINE OA (human chat) | text/image/file/audio → admin inbox `/messages` → reply ผ่าน LINE Push | บิลขาย (sale) | Phase 3 + session 13 | ✅ chat 2 ทาง + เปิดบิลขายจาก chat |
 | Email (IMAP) | attachment PDF/Excel/รูป | บิลขาย (sale) | Phase 5 | deployed, กำลัง test |
-| Shopee Excel | Export จาก Shopee Seller Center | บิลขาย (sale) | Phase 4a | ✅ deployed (รอ SML 224 เปิด) |
+| Shopee Excel | Export จาก Shopee Seller Center | บิลขาย (sale) | Phase 4a | ✅ deployed |
 | Lazada Excel | Export จาก Lazada | บิลขาย + บิลซื้อ | Phase 4b | รอไฟล์จริงจากลูกค้า |
 
 > ⚠️ ใช้ IMAP แทน Gmail API สำหรับ demo — ง่ายกว่า ไม่ต้องผ่าน Google OAuth2 consent
@@ -101,8 +101,9 @@ billflow-postgres  → 5438
 │    GET  /api/bills                 ← list (status/source/   │
 │                                       bill_type filter)     │
 │    GET  /api/bills/:id             ← detail + items         │
-│    POST /api/bills/:id/retry       ← 3-way SML send         │
+│    POST /api/bills/:id/retry       ← 4-way SML send         │
 │                                       (sale_reserve /       │
+│                                        saleorder /          │
 │                                        saleinvoice /        │
 │                                        purchaseorder)       │
 │    PUT  /api/bills/:id/items/:iid  ← edit qty/price/code    │
@@ -158,6 +159,24 @@ billflow-postgres  → 5438
 │    POST /api/settings/imap-accounts/test   ← dry connect   │
 │    POST /api/settings/imap-accounts/list-folders ← enum   │
 │                                                             │
+│    Channel Defaults (admin only):                           │
+│    GET  /api/settings/channel-defaults     ← list all rows │
+│    PUT  /api/settings/channel-defaults     ← upsert by     │
+│                                               (channel,     │
+│                                                bill_type)   │
+│    DEL  /api/settings/channel-defaults/    ← delete row    │
+│         :channel/:bill_type                                 │
+│    POST /api/settings/channel-defaults/    ← auto-pair     │
+│         quick-setup                           AR00001-04    │
+│                                                             │
+│    SML Party Master (admin/staff):                          │
+│    GET  /api/sml/customers?search=&limit=  ← searchable,   │
+│                                               backed by     │
+│                                               PartyCache    │
+│    GET  /api/sml/suppliers?search=&limit=  ← same          │
+│    POST /api/sml/refresh-parties           ← re-fetch SML  │
+│    GET  /api/sml/parties/last-sync         ← sync time     │
+│                                                             │
 │    Webhook:                                                 │
 │    POST /webhook/line              ← LINE OA events         │
 │                                                             │
@@ -168,7 +187,7 @@ billflow-postgres  → 5438
 │                    per-account channel routing:             │
 │                    "ถูกจัดส่งแล้ว" / "ยืนยันการชำระเงิน"  │
 │                       → ShopeeShipped (purchaseorder 248)  │
-│                    other Shopee → saleinvoice (248)        │
+│                    other Shopee → saleorder (248) default  │
 │                    general     → attachment AI pipeline     │
 │                    LINE admin notify on ≥ 3 consecutive    │
 │                    failures (throttled 1/hour per inbox)   │
@@ -190,6 +209,8 @@ billflow-postgres  → 5438
 │                        per imap_accounts row)              │
 │    InsightService    → F4 daily AI summary                 │
 │    Catalog           → embed (1536-dim) + cosine index     │
+│    PartyCache        → in-memory SML customer/supplier     │
+│                        cache (boot + 6h refresh)           │
 │    WorkerPool        → semaphore rate limiting             │
 └──────┬──────────────────────────────┬───────────────────────┘
        │                              │
@@ -218,10 +239,14 @@ billflow-postgres  → 5438
 │  /dashboard        ← stats + charts + F4 AI Insights       │
 │  /bills            ← รายการบิล + filter + anomaly badge    │
 │  /bills/:id        ← รายละเอียด + status + retry           │
+│  /messages         ← LINE OA inbox (human chat) ✨session 13│
 │  /import           ← upload Lazada/Shopee                  │
 │  /mappings         ← จัดการ mapping + F1 learning stats    │
 │  /settings         ← LINE, SML, threshold, columns         │
 │  /settings/email   ← Email Inboxes (admin only)            │
+│  /settings/channels← Channel Defaults (admin only)         │
+│  /settings/line-oa ← LINE OA accounts (multi-OA, session 13)│
+│  /settings/quick-replies ← chat reply templates (session 13)│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -338,13 +363,87 @@ CREATE TABLE platform_column_mappings (
   UNIQUE(platform, field_name)
 );
 
--- Chat Sessions (LINE conversation state — persistent across restart)
-CREATE TABLE chat_sessions (
-  line_user_id   TEXT PRIMARY KEY,
-  history        JSONB NOT NULL DEFAULT '[]',  -- last ~20 messages
-  pending_order  JSONB,                        -- cart state
-  last_active    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- chat_sessions (legacy AI chatbot state) — DROPPED in migration 013 along
+-- with the AI chatbot refactor. Replaced by chat_conversations + chat_messages
+-- + chat_media (human chat inbox) below.
+
+-- LINE OA accounts (multi-OA support, session 13)
+-- One BillFlow can serve multiple LINE OAs (e.g., a chain with 5 stores).
+-- Webhook URL per OA: /webhook/line/<id>. Each OA has its own credentials.
+CREATE TABLE line_oa_accounts (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name                  TEXT NOT NULL,                  -- admin label e.g. "ร้านสาขา A"
+  channel_secret        TEXT NOT NULL,                  -- webhook signature secret
+  channel_access_token  TEXT NOT NULL,                  -- Push API token (long-lived)
+  bot_user_id           TEXT NOT NULL DEFAULT '',       -- auto-fetched from /v2/bot/info on save
+  admin_user_id         TEXT NOT NULL DEFAULT '',       -- LINE userID for error notifications (optional)
+  greeting              TEXT NOT NULL DEFAULT '',       -- one-time auto-reply on first contact (optional)
+  enabled               BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Chat conversations — one row per (LINE userID, LINE OA). Same person on
+-- different OAs has different LINE userIDs anyway, so PK on line_user_id alone
+-- works. line_oa_id tells us which OA's token to use for outbound replies.
+CREATE TABLE chat_conversations (
+  line_user_id          TEXT PRIMARY KEY,
+  line_oa_id            UUID REFERENCES line_oa_accounts(id),  -- which OA owns this convo
+  display_name          TEXT NOT NULL DEFAULT '',
+  picture_url           TEXT NOT NULL DEFAULT '',
+  last_message_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_inbound_at       TIMESTAMPTZ,
+  last_admin_reply_at   TIMESTAMPTZ,
+  unread_admin_count    INT NOT NULL DEFAULT 0,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX chat_conversations_last_message_idx ON chat_conversations(last_message_at DESC);
+CREATE INDEX chat_conversations_unread_idx ON chat_conversations(unread_admin_count) WHERE unread_admin_count > 0;
+
+-- Chat messages — every event in a conversation (incoming/outgoing/system).
+-- For media (kind=image/file/audio) the binary lives in chat_media.
+CREATE TABLE chat_messages (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  line_user_id      TEXT NOT NULL REFERENCES chat_conversations(line_user_id) ON DELETE CASCADE,
+  direction         TEXT NOT NULL CHECK (direction IN ('incoming','outgoing','system')),
+  kind              TEXT NOT NULL CHECK (kind IN ('text','image','file','audio','system')),
+  text_content      TEXT NOT NULL DEFAULT '',
+  line_message_id   TEXT NOT NULL DEFAULT '',  -- LINE inbound message ID for media download
+  line_event_ts     BIGINT,                    -- LINE event timestamp ms (tie-break under retry)
+  sender_admin_id   UUID REFERENCES users(id),
+  delivery_status   TEXT NOT NULL DEFAULT 'sent'
+                    CHECK (delivery_status IN ('sent','failed','pending')),
+  delivery_error    TEXT NOT NULL DEFAULT '',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX chat_messages_thread_idx ON chat_messages(line_user_id, created_at DESC);
+
+-- Chat media (parallel to bill_artifacts; not retrofitted because that table
+-- has bill_id NOT NULL and chat media has no bill).
+CREATE TABLE chat_media (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id        UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  filename          TEXT NOT NULL,
+  content_type      TEXT NOT NULL,
+  size_bytes        BIGINT NOT NULL,
+  sha256            TEXT NOT NULL,                      -- {root}/chat-media/YYYY/MM/<sha256>.<ext>
+  storage_path      TEXT NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Quick reply templates for the chat composer (Phase 4.4)
+-- Admin-curated canned responses ("สวัสดีค่ะ", "เช็คสต๊อกให้สักครู่", etc.).
+-- Composer in /messages opens a popover to inject these into the textarea.
+CREATE TABLE chat_quick_replies (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  label       TEXT NOT NULL,                            -- short display name in picker
+  body        TEXT NOT NULL,                            -- full text injected into composer
+  sort_order  INT NOT NULL DEFAULT 0,
+  created_by  UUID REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- 4 seed rows on first boot: ทักทาย / เช็คสต๊อก / แจ้งราคา / ปิดบิล
 
 -- SML Catalog (smart matching — Shopee email + manual review)
 -- ทำงานเป็น in-memory cosine-similarity index (1536-dim vectors)
@@ -367,15 +466,45 @@ CREATE TABLE sml_catalog (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Channel Customer Defaults (default cust_code per channel)
-CREATE TABLE channel_customer_defaults (
-  channel     TEXT PRIMARY KEY
-              CHECK (channel IN ('line','email','shopee','lazada')),
-  cust_code   TEXT NOT NULL,
-  cust_name   TEXT NOT NULL,
-  cust_phone  TEXT NOT NULL DEFAULT '',
-  updated_by  UUID,
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- Channel Defaults — per (channel, bill_type) SML config
+-- Replaces .env SHOPEE_SML_CUST_CODE / SHIPPED_SML_CUST_CODE (removed session 7)
+-- Admin manages via /settings/channels UI. All 4 SML routes read from here.
+-- Final shape after migrations 007-011.
+CREATE TABLE channel_defaults (
+  channel              TEXT NOT NULL
+                       CHECK (channel IN ('line','email','shopee','lazada','shopee_shipped')),
+  bill_type            TEXT NOT NULL
+                       CHECK (bill_type IN ('sale','purchase')),
+  party_code           TEXT NOT NULL,   -- AR-prefixed for customers, V-prefixed for suppliers
+  party_name           TEXT NOT NULL,
+  party_phone          TEXT NOT NULL DEFAULT '',
+  party_address        TEXT NOT NULL DEFAULT '',
+  party_tax_id         TEXT NOT NULL DEFAULT '',
+  doc_format_code      TEXT NOT NULL DEFAULT '',  -- e.g. "SR", "INV", "PO"
+  endpoint             TEXT NOT NULL DEFAULT '',  -- free-form URL/path, keyword-detected by bills.go
+  doc_prefix           TEXT NOT NULL DEFAULT '',  -- e.g. "BF-SO"
+  doc_running_format   TEXT NOT NULL DEFAULT '',  -- e.g. "YYMM####"
+  -- Inventory + VAT overrides (sentinel '' / -1 = "use server .env default").
+  -- bills.go applyChannelOverrides() overlays these on cfg.ShopeeSML* per channel.
+  wh_code              TEXT NOT NULL DEFAULT '',
+  shelf_code           TEXT NOT NULL DEFAULT '',
+  vat_type             INT  NOT NULL DEFAULT -1,   -- -1=use env, 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
+  vat_rate             NUMERIC(6,3) NOT NULL DEFAULT -1,
+  updated_by           UUID REFERENCES users(id),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel, bill_type)
+);
+-- old channel_customer_defaults (migration 003) renamed to channel_customer_defaults_v1 by 007
+
+-- Doc Counters — atomic per-prefix per-period sequential doc_no generator
+-- Avoids SML UI bug: "prefix-YYYY..." pattern silently dropped.
+-- Period resets by tokens: DD=daily, MM=monthly, YY=yearly.
+CREATE TABLE doc_counters (
+  prefix       TEXT NOT NULL,
+  period       TEXT NOT NULL,    -- "2604" for YYMM, "260428" for YYMMDD, etc.
+  last_used_seq INT NOT NULL DEFAULT 0,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (prefix, period)
 );
 
 -- IMAP Accounts — multi-account email config (replaces .env IMAP_* singleton)
@@ -414,59 +543,67 @@ CREATE TABLE imap_accounts (
 > - [001_init.sql](backend/internal/database/migrations/001_init.sql) — initial schema (users, bills, bill_items, mappings, mapping_feedback, item_price_history, daily_insights, platform_column_mappings, audit_logs, chat_sessions)
 > - [002_audit_logging.sql](backend/internal/database/migrations/002_audit_logging.sql) — audit_logs structured columns (source, level, duration_ms, trace_id) + indexes
 > - [002_sml_catalog.sql](backend/internal/database/migrations/002_sml_catalog.sql) — sml_catalog table + bills.sml_order_id + bill_items.candidates + extended source/status CHECK
-> - [003_channel_customer_defaults.sql](backend/internal/database/migrations/003_channel_customer_defaults.sql) — channel_customer_defaults table
+> - [003_channel_customer_defaults.sql](backend/internal/database/migrations/003_channel_customer_defaults.sql) — channel_customer_defaults table (legacy, renamed to _v1 by 007)
 > - [004_shopee_shipped.sql](backend/internal/database/migrations/004_shopee_shipped.sql) — extends bills.source CHECK to include shopee_shipped
 > - [006_imap_accounts.sql](backend/internal/database/migrations/006_imap_accounts.sql) — imap_accounts table (multi-account IMAP, replaces .env singleton)
+> - [007_channel_defaults.sql](backend/internal/database/migrations/007_channel_defaults.sql) — channel_defaults table (session 7); renames channel_customer_defaults → _v1
+> - [008_channel_defaults_doc_format.sql](backend/internal/database/migrations/008_channel_defaults_doc_format.sql) — adds doc_format_code column
+> - [009_channel_defaults_endpoint.sql](backend/internal/database/migrations/009_channel_defaults_endpoint.sql) — adds endpoint column (initially CHECK-constrained)
+> - [010_channel_defaults_endpoint_freeform.sql](backend/internal/database/migrations/010_channel_defaults_endpoint_freeform.sql) — drops CHECK so admins can type any URL/path
+> - [011_doc_no_format.sql](backend/internal/database/migrations/011_doc_no_format.sql) — adds doc_prefix + doc_running_format columns + doc_counters table
+> - [012_channel_defaults_inventory.sql](backend/internal/database/migrations/012_channel_defaults_inventory.sql) — adds wh_code + shelf_code + vat_type + vat_rate per channel (sentinel '' / -1 falls back to server .env)
+> - [013_chat_inbox.sql](backend/internal/database/migrations/013_chat_inbox.sql) — drops chat_sessions, creates chat_conversations + chat_messages + chat_media (session 13 chatbot → human chat refactor)
+> - [014_line_oa_accounts.sql](backend/internal/database/migrations/014_line_oa_accounts.sql) — line_oa_accounts table + chat_conversations.line_oa_id (multi-OA support, session 13)
+> - [015_chat_quick_replies.sql](backend/internal/database/migrations/015_chat_quick_replies.sql) — chat_quick_replies table + 4 seed templates (Phase 4.4)
 
 ---
 
 ## 6. Use Cases (ละเอียด)
 
-### UC1 — LINE OA รับ PO
+### UC1 — LINE OA human chat inbox (session 13 refactor)
 
-> ✅ DEPLOYED — ทดสอบ text flow ผ่านแล้ว (2026-04-23)
-> ⚠️ image/PDF/voice มี code แต่ยังไม่ได้ test
+> ✅ DEPLOYED — chat 2 ทาง + เปิดบิลขายจาก chat ทดสอบผ่าน (2026-04-29)
+> AI chatbot "น้องบิล" ถูกลบออก — admin คุยเองผ่าน BillFlow `/messages`
 
 ```
-Mode 1 — Conversational Sales (น้องบิล chatbot) ← IMPLEMENTED & TESTED
-──────────────────────────────────────────────────────────
-1. ลูกค้าพูดคุย เช่น "มีปูนขายไหม" "มีเหล็กขายด้วยไหม"
-2. LINE ส่ง webhook POST /webhook/line
-3. verify X-Line-Signature (HMAC-SHA256)
-4. respond HTTP 200 ทันที → process async
-5. AI (ChatSalesV2) วิเคราะห์ intent:
-   - inquiry  → smartSearch SML catalog → แสดง 1-5 รายการให้เลือก
-   - ลูกค้าเลือก "รายการที่ 2" → ถามจำนวน
-   - ลูกค้าพิมพ์จำนวน (รับ "3", "10 ถุง", "สิบถุง" ผ่าน AI ParseQty)
-   - view_cart → แสดงตะกร้า
-   - checkout  → ขอชื่อ+เบอร์ → สรุป → รอ ยืนยัน
-   - ยืนยัน    → ส่ง SML → bill created → แจ้ง LINE
+Flow:
+1. ลูกค้าทักผ่าน LINE OA ใด ๆ ที่ admin เพิ่มไว้ใน /settings/line-oa
+2. LINE webhook POST /webhook/line/:oaId
+3. verify X-Line-Signature ด้วย channel_secret ของ OA นั้น
+4. respond HTTP 200 ทันที → async worker store message
+5. Insert/upsert chat_conversations (line_user_id PK + line_oa_id) + chat_messages
+6. ดึง LINE profile (display_name + picture) บน first contact
+7. ถ้ามี media (image/file/audio) → download bytes → save chat_media
+8. (optional) auto-greeting จาก env LINE_GREETING ใน OA นั้น
+9. ที่ฝั่ง admin: /messages page แสดง inbox ครบทุก OA รวมกัน
+   - เลือกห้อง → reply ผ่าน Composer → POST /api/admin/conversations/:userId/messages
+   - backend ใช้ LineRegistry หา service ของ OA ที่ห้องนั้นอยู่ → Push API
+10. media bubble มีปุ่ม "🔍 สร้างบิลจากสื่อนี้" → manual AI extract → preview
+11. header มีปุ่ม "เปิดบิลขาย" → catalog picker → POST .../bills
+    → bill source="line" status=pending raw_data.line_user_id+line_oa_id
+12. /bills/:id Retry → SML 213 sale_reserve (flow เดิม, channel_defaults party)
 
-Mode 2 — ส่งรูป/PDF PO โดยตรง ← code มีแต่ยังไม่ test
-──────────────────────────────────────────────────────────
-1. ลูกค้าส่งรูปภาพ/PDF ใบสั่งซื้อ
-2. download จาก LINE Content API
-3. AIService (ExtractImage/ExtractPDF) → JSON
-4. สร้าง bill → SML
+Multi-LINE OA (session 13):
+- 1 BillFlow รองรับหลาย LINE OA ได้ (เช่น 5 ร้านในเครือเดียว)
+- /settings/line-oa จัดการ secret + token + name + bot_user_id ต่อ OA
+- Webhook URL ต่อ OA: https://your-domain/webhook/line/<oa_id>
+  → admin ใส่ใน LINE Developer Console ของแต่ละ OA แยกกัน
+- Conversation ผูกกับ line_oa_id → reply กลับใช้ access_token ของ OA นั้น
+- Inbox รวมทุก OA — ConversationList แสดง badge OA ต่อ row
 
-Mode 3 — Voice message (F3) ← code มีแต่ยังไม่ test
-──────────────────────────────────────────────────────────
-1. ลูกค้าส่ง voice message
-2. download ทันที (มี expiry)
-3. TranscribeAudio → text → ส่งต่อเหมือน Mode 1
-4. confidence ลดลง 0.1
+AI methods (ExtractImage / ExtractPDF / ExtractText / TranscribeAudio):
+- ลบจาก auto-pipeline ของ LINE → แต่ยังใช้ใน Email IMAP + manual extract button
+- ChatSales / ChatSalesWithContext / ExtractOrderFromHistory / SalesSystemPrompt: ลบทั้งหมด
 
-Error Cases:
-- SML fail → failed + แจ้ง LINE admin ทันที
-- ไม่พบสินค้า → "ขอโทษค่ะ ไม่พบสินค้า \"X\" ในระบบค่ะ"
-- voice > 60 วินาที → แจ้งให้ส่งสั้นกว่านี้
+Error / fallback:
+- LINE Push fail → chat_messages.delivery_status='failed' + delivery_error → UI ⚠ + retry button
+- Webhook signature mismatch → 400 (ลูกค้าไม่ได้รับผลกระทบ; admin debug ผ่าน /logs)
+- Customer blocked us → Push ตอบ 403 → mark failed; admin เห็น
 
-Open items:
-- [ ] ลบรายการออกจาก cart (ยังไม่มี — ต้องพิมพ์ยกเลิกแล้วเริ่มใหม่)
-- [ ] แก้ไขจำนวนใน cart
-- [ ] test รูปภาพ PO
-- [ ] test PDF attachment
-- [ ] test voice message
+Phase 4 features (planned):
+- Quick replies (template) + customer history panel + browser notifications
+- Conversation status (open/resolved/archived) + search + tags
+- Admin ส่ง media กลับ (ต้อง public URL — รอ Cloudflare Tunnel)
 ```
 
 ### UC2 — Email IMAP (multi-account)
@@ -645,7 +782,24 @@ var AnomalyRules = []AnomalyRule{
 //   {"success":true,"data":null}  ← ถ้าไม่พบ SKU ใน SML
 // ⚠️ ต้องตั้ง SHOPEE_SML_UNIT_CODE เป็น fallback (เช่น "ถุง") เมื่อ data=null
 
-// 2. Create saleinvoice  ← CONFIRMED WORKING (2026-04-24)
+// 1b. Create saleorder  ← CONFIRMED WORKING (2026-04-28) — DEFAULT for Shopee email flow
+// POST /SMLJavaRESTService/v3/api/saleorder
+// Payload: same structure as saleinvoice but field is "items" (not "details"),
+//          "sale_type" field; doc_no MUST be non-empty (use doc_counter YYMM#### format).
+// ⚠️ Bills.go keyword-detects endpoint: URL contains "saleorder"→SaleOrderClient,
+//    "saleinvoice"→InvoiceClient, "purchaseorder"→POClient, else→SMLClient(213).
+// ⚠️ doc_no format: NEVER use "prefix-YYYY..." or "prefix-YY..." — SML UI silently
+//    drops docs matching that pattern. Use prefix WITHOUT trailing hyphen + YYMM####.
+//    Example: prefix="BF-SO", format="YYMM####" → "BF-SO260400001".
+// ⚠️ SML 248 mojibake: charset=utf-8 header was NOT enough (SML ignores it).
+//    Fix: marshalASCII helper escapes non-ASCII as \uXXXX so wire body is pure ASCII.
+//    Used in all 6 POST clients (sale_reserve, saleinvoice, saleorder,
+//    purchaseorder, product, MCP). See §22 #13 for the full story.
+//    File: backend/internal/services/sml/json_ascii.go
+// Client: backend/internal/services/sml/saleorder_client.go
+// Default prefix: BF-SO; counter managed by doc_counter_repo.go
+
+// 2. Create saleinvoice  ← CONFIRMED WORKING (2026-04-24) — legacy ใบกำกับภาษี
 // POST /SMLJavaRESTService/restapi/saleinvoice
 // {
 //   "doc_format_code": "INV",
@@ -701,6 +855,36 @@ var AnomalyRules = []AnomalyRule{
 // Wired to BillFlow: POST /api/catalog/products handler upserts into
 // sml_catalog with status='pending' + triggers background embedding.
 // Used by: BillDetail's MapItemModal "+ สร้างสินค้าใหม่" form.
+
+// 5. Customer / Supplier lookup (Party Master)  ← CONFIRMED WORKING (2026-04-28)
+// GET /SMLJavaRESTService/v3/api/customer?page=1&size=100
+// GET /SMLJavaRESTService/v3/api/supplier?page=1&size=100
+// Auth headers same as above (guid, provider, configFileName, databaseName)
+// Response:
+//   {"success":true,"data":[{"code":"AR00001","name":"ลูกค้า จาก AI",...}],
+//    "pages":11,"page":1,"size":100}
+// PartyClient fetches all pages on boot (paginated, size=100).
+// PartyCache wraps it: in-memory map, boot fetch + 6h background refresh,
+//   sub-ms search by prefix/substring (case-insensitive).
+//
+// Production counts (verified 2026-04-28):
+//   Customers: 1004 records, AR-prefixed
+//     AR00001 "ลูกค้า จาก AI"
+//     AR00002 "ลูกค้า จาก Line"
+//     AR00003 "ลูกค้า จาก Email"
+//     AR00004 "ลูกค้า จาก Shopee"  ← Quick-setup uses AR00001-04
+//   Suppliers:  500 records, V-prefixed (V-001, V-002, …)
+//
+// ⚠️ cust_code for SML 248 (saleinvoice / purchaseorder) MUST come from
+//    channel_defaults table — NOT hardcoded env vars (removed session 7).
+// ⚠️ contact_name for SML 213 (sale_reserve) is overridden with
+//    channel_defaults.party_name to prevent AR pollution from AI chat.
+//    Real customer info remains in bills.raw_data only.
+// ⚠️ Quick-create customer/supplier via API was DROPPED — SML legacy
+//    /restapi/customer requires ~25 fields; v3 returns NullPointerException.
+//    Users create parties in SML manually, then click "รีเฟรช" in BillFlow UI.
+// Client: backend/internal/services/sml/party_client.go
+//         backend/internal/services/sml/party_cache.go
 ```
 
 ---
@@ -810,6 +994,11 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── dashboard.go
 │   │   │   ├── log_handler.go       ← GET /api/logs
 │   │   │   ├── imap_settings.go     ← /api/settings/imap-accounts CRUD ✨NEW
+│   │   │   ├── channel_defaults.go  ← /api/settings/channel-defaults CRUD ✨NEW
+│   │   │   ├── sml_party.go         ← /api/sml/customers|suppliers search ✨NEW
+│   │   │   ├── chat_inbox.go        ← /api/admin/conversations/* CRUD + extract ✨session 13
+│   │   │   ├── chat_quick_reply.go  ← /api/admin/quick-replies CRUD ✨session 13
+│   │   │   ├── line_oa.go           ← /api/settings/line-oa CRUD + test-connect ✨session 13
 │   │   │   └── auth.go
 │   │   ├── middleware/
 │   │   │   ├── auth.go
@@ -819,7 +1008,8 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── mapping.go
 │   │   │   ├── user.go
 │   │   │   ├── audit_log.go
-│   │   │   └── imap_account.go      ← ImapAccount model ✨NEW
+│   │   │   ├── imap_account.go      ← ImapAccount model ✨NEW
+│   │   │   └── channel_default.go   ← ChannelDefault + ChannelDefaultUpsert ✨NEW
 │   │   ├── services/
 │   │   │   ├── ai/
 │   │   │   │   ├── openrouter.go
@@ -828,9 +1018,12 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── anomaly/detector.go     ← F2
 │   │   │   ├── sml/
 │   │   │   │   ├── client.go                ← SML #1 JSON-RPC
-│   │   │   │   ├── saleinvoice_client.go    ← SML #2 REST saleinvoice
+│   │   │   │   ├── saleinvoice_client.go    ← SML #2 REST saleinvoice (legacy)
+│   │   │   │   ├── saleorder_client.go      ← SML #2 REST saleorder (default Shopee) ✨NEW
 │   │   │   │   ├── purchaseorder_client.go  ← SML #2 REST purchaseorder
-│   │   │   │   └── product_client.go        ← SML #2 REST product CRUD
+│   │   │   │   ├── product_client.go        ← SML #2 REST product CRUD
+│   │   │   │   ├── party_client.go          ← GET customer/supplier paginated ✨NEW
+│   │   │   │   └── party_cache.go           ← in-memory cache + 6h refresh ✨NEW
 │   │   │   ├── line/service.go         ← reply + push notify
 │   │   │   ├── email/
 │   │   │   │   ├── coordinator.go      ← starts one goroutine per account ✨NEW
@@ -851,7 +1044,9 @@ mkdir -p ~/billflow/backups
 │   │       ├── mapping_repo.go
 │   │       ├── user_repo.go
 │   │       ├── audit_log_repo.go
-│   │       └── imap_account_repo.go   ← CRUD + status update ✨NEW
+│   │       ├── imap_account_repo.go   ← CRUD + status update ✨NEW
+│   │       ├── channel_default_repo.go← CRUD + IsEmpty ✨NEW
+│   │       └── doc_counter_repo.go    ← GenerateDocNo atomic counter ✨NEW
 │   │   ├── models/  (see models/ above)
 │   ├── go.mod
 │   ├── Dockerfile
@@ -876,6 +1071,26 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── EmailAccounts.tsx        ← /settings/email admin page ✨NEW
 │   │   │   ├── EmailAccounts/
 │   │   │   │   └── AccountDialog.tsx    ← add/edit inbox dialog ✨NEW
+│   │   │   ├── ChannelDefaults.tsx      ← /settings/channels admin page ✨NEW
+│   │   │   ├── ChannelDefaults/
+│   │   │   │   ├── PartyPicker.tsx      ← searchable combobox (cmdk, 250ms debounce) ✨NEW
+│   │   │   │   ├── EditDialog.tsx       ← edit row dialog ✨NEW
+│   │   │   │   └── labels.ts            ← CHANNEL_LABELS, CHANNEL_SLOTS, channelHelp() ✨NEW
+│   │   │   ├── LineOA.tsx               ← /settings/line-oa multi-OA admin page ✨session 13
+│   │   │   ├── LineOA/
+│   │   │   │   └── AccountDialog.tsx    ← add/edit OA + secret/token + greeting ✨session 13
+│   │   │   ├── QuickReplies.tsx         ← /settings/quick-replies template CRUD ✨session 13
+│   │   │   ├── Messages/                ← /messages chat inbox ✨session 13
+│   │   │   │   ├── index.tsx            ← 2-pane layout, deep-link ?u=
+│   │   │   │   ├── ConversationList.tsx ← inbox list, 30s poll, OA badge
+│   │   │   │   ├── MessageThread.tsx    ← active thread, 5s delta poll, mark-read
+│   │   │   │   ├── MessageBubble.tsx    ← text/image/file/audio/system + ⚠ failed
+│   │   │   │   ├── Composer.tsx         ← textarea + Send + 💬 quick-reply popover
+│   │   │   │   ├── CustomerHistoryPanel.tsx  ← Phase 4.5 — past bills inline
+│   │   │   │   ├── CreateBillPanel.tsx  ← catalog picker → POST .../bills (status=pending)
+│   │   │   │   ├── ExtractPreviewDialog.tsx ← manual AI extract from media
+│   │   │   │   ├── useNotifications.ts  ← Phase 4.11 — Notification API + chime
+│   │   │   │   └── types.ts             ← shared types (ChatMessage, ExtractedBill, ...)
 │   │   │   └── Showcase.tsx             ← dev-only component gallery
 │   │   ├── components/
 │   │   │   ├── layout/
@@ -976,20 +1191,20 @@ SHOPEE_SML_PROVIDER=SML1
 SHOPEE_SML_CONFIG_FILE=SMLConfigSML1.xml
 SHOPEE_SML_DATABASE=SMLPLOY
 SHOPEE_SML_DOC_FORMAT=IV
-SHOPEE_SML_CUST_CODE=           ← รหัสลูกค้า Shopee ใน SML
+# cust_code per channel managed via /settings/channels (channel_defaults table — session 7)
+# SHOPEE_SML_CUST_CODE and SHIPPED_SML_CUST_CODE REMOVED — no longer in config.go
 SHOPEE_SML_SALE_CODE=           ← รหัสพนักงานขาย
-SHOPEE_SML_WH_CODE=             ← รหัสคลัง (fallback)
-SHOPEE_SML_SHELF_CODE=          ← รหัสชั้นวาง (fallback)
+SHOPEE_SML_WH_CODE=             ← รหัสคลัง (fallback — overridable per channel via /settings/channels — session 11)
+SHOPEE_SML_SHELF_CODE=          ← รหัสชั้นวาง (fallback — overridable per channel)
 SHOPEE_SML_UNIT_CODE=           ← หน่วย (fallback)
-SHOPEE_SML_VAT_TYPE=0           ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
-SHOPEE_SML_VAT_RATE=7
+SHOPEE_SML_VAT_TYPE=0           ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์% (fallback — overridable per channel)
+SHOPEE_SML_VAT_RATE=7           ← (fallback — overridable per channel)
 SHOPEE_SML_DOC_TIME=09:00
 
 # Shopee shipped → SML purchaseorder (reuses all SHOPEE_SML_* above)
-# Only doc_format and cust_code differ. cust_code falls back to SHOPEE_SML_CUST_CODE if blank.
-# ⚠️ For shipped emails to flow through IMAP, IMAP_FILTER_SUBJECT must include "ถูกจัดส่งแล้ว"
+# supplier_code per channel managed via /settings/channels (channel_defaults table — session 7)
+# SHIPPED_SML_CUST_CODE REMOVED — no longer in config.go
 SHIPPED_SML_DOC_FORMAT=PO
-SHIPPED_SML_CUST_CODE=
 
 # Mistral OCR — required for PDF extraction (model: mistral-ocr-2512)
 MISTRAL_API_KEY=
@@ -1241,6 +1456,99 @@ lucide-react             ← icon set (shadcn default)
    - DB check: docker run --rm postgres:16-alpine psql
      'postgresql://postgres:sml@192.168.2.248:5432/sml1_2026'
      -c "SELECT code, unit_standard FROM ic_inventory LIMIT 10"
+
+10. SML Party Master (Quick-create DROPPED)
+    - SML legacy /restapi/customer ต้องการ ~25 fields (name_1, tambon, zip_code ฯลฯ)
+    - SML v3 /api/customer POST returns NullPointerException ถ้าขาด field ใด
+    - BillFlow ไม่ implement create — ให้ผู้ใช้สร้าง party ใน SML เองแล้วกด "รีเฟรช"
+    - PartyCache ดึงข้อมูลทั้งหมดตอน boot + refresh ทุก 6 ชั่วโมง
+
+11. Channel Defaults (สำคัญมาก — ทุก SML send อ่านจาก table นี้)
+    - ทุก SML send (4 routes) อ่าน cust_code/contact_name จาก channel_defaults table
+    - ถ้าตารางว่าง → retry บิลจะ error ทันที "ยังไม่ได้ตั้งค่าลูกค้า default"
+    - แก้: เข้า /settings/channels กดปุ่ม "ตั้งค่าอัตโนมัติ" (Quick setup)
+      จะ pair AR00001-04 ตามชื่อ channel ให้อัตโนมัติ
+    - SML 213 path (sale_reserve) override contact_name ด้วย party_name จาก table
+      เพื่อกัน AR pollution จาก AI-extracted name; ข้อมูลลูกค้าจริงอยู่ใน raw_data
+    - SML 248 paths (saleorder/saleinvoice/purchaseorder) set cfg.CustCode = party_code จาก table
+    - per-channel WH/Shelf/VAT override (session 11): wh_code, shelf_code,
+      vat_type, vat_rate ใน table จะ overlay ทับ env. Sentinel '' / -1 = "ใช้
+      ค่าจาก server .env" — เลือก override เฉพาะที่ต้องการ. applyChannelOverrides()
+      ใน bills.go ทำให้ทั้ง 3 SML 248 retry paths
+    - production placeholders: AR00001 "ลูกค้า จาก AI" / AR00002 "ลูกค้า จาก Line"
+      AR00003 "ลูกค้า จาก Email" / AR00004 "ลูกค้า จาก Shopee"
+
+12. doc_no SML bug (ค้นพบ session 7-10)
+    - Pattern "prefix-YYYY..." หรือ "prefix-YY..." ใน doc_no → SML POST returns success
+      แต่ doc ไม่แสดงใน SML UI (silently dropped)
+    - Trigger: hyphen ตามด้วย 4-digit year หรือ 2-digit year + month ทันที
+    - วิธีแก้: ใช้ prefix ที่ไม่มี trailing hyphen แล้วต่อด้วย YYMM#### ทันที
+      เช่น "BF-SO" + "YYMM####" → "BF-SO260400001" ✅
+      ห้ามใช้: "BF-SO-" + "YYYY-MM..." → "BF-SO-2026..." ❌
+    - doc_counter_repo.go ใช้ GenerateDocNo(prefix, format, now) จัดการให้อัตโนมัติ
+
+13. SML mojibake — ASCII-escape JSON workaround (session 12 — 2026-04-29)
+    - **เคยคิดว่าแก้ด้วย Content-Type: application/json; charset=utf-8** (session 7-10)
+      แต่ verify จริง session 12 พบว่า **SML 248 server ignore charset header เลย**
+      ไม่ว่าจะ application/json หรือ application/json; charset=utf-8 ก็ mojibake เหมือนกัน
+      เพราะ SML's Java backend อ่าน body ด้วย Latin-1 (ISO-8859-1) ตลอดเวลา
+    - **ทางแก้จริง: marshalASCII helper** ที่ [json_ascii.go](backend/internal/services/sml/json_ascii.go)
+      → escape ทุก non-ASCII rune เป็น \uXXXX (และ surrogate pair สำหรับ BMP+)
+      → body กลายเป็น pure ASCII → Latin-1 vs UTF-8 byte-identical → no mojibake
+      → JSON parser ของ SML จะ unescape ส → "ส" ตาม spec ก่อน server code เห็น
+    - ใช้ใน 6 POST clients ทั้งหมด: sale_reserve (213), saleinvoice + saleorder +
+      purchaseorder + product (248), MCP — แทนที่ json.Marshal ทุกที่ที่ส่ง body ไป SML
+    - **บันทึกใน bills.sml_payload + audit_logs ใช้ json.Marshal ปกติ** (UTF-8 raw Thai)
+      เพื่อให้ admin debug อ่านง่าย — ไม่กระทบ wire bytes ที่ส่งจริง
+    - GET-only client (party_client.go) ไม่ต้องตั้ง — ไม่มี request body
+    - Existing master records ที่ corrupt จาก session ก่อนหน้า (สร้างผ่าน product create
+      ก่อน session 12) ต้องลบ + สร้างใหม่ใน SML — แก้ใน SML ผ่าน BillFlow ไม่ได้
+      เพราะถ้าส่ง update ผ่าน old code path ก็ยัง mojibake
+
+14. doc_no reuse on retry (idempotent)
+    - bills.go บันทึก sml_doc_no ลง DB ก่อน SML call
+    - ถ้า retry บิลที่มี sml_doc_no อยู่แล้ว → ใช้ doc_no เดิม (ไม่ increment counter)
+    - กัน doc_no inflation กรณี transient network fail แล้ว retry
+    - ถ้า retry แล้ว SML ตอบ "duplicate" → user เห็น error ชัด ไม่ใช่ silent skip
+
+15. Catalog per-row actions (session 12 — 2026-04-29)
+    - /settings/catalog แต่ละ row มีปุ่ม Refresh (🔄) + Delete (🗑️)
+    - Refresh: POST /api/catalog/:code/refresh → GET /v3/api/product/{code} จาก SML
+      → upsert ลง sml_catalog (preserve price; sml endpoint ไม่ return price)
+      → SML ตอบ data:null (= product ไม่มีใน SML แล้ว) → 404 + not_found:true
+        → UI แนะนำ "ลบจาก BillFlow"
+    - Delete: DELETE /api/catalog/:code → ลบเฉพาะ BillFlow's sml_catalog row
+      → SML 248 ไม่ถูกแตะ — ใช้ prune zombie ที่ admin ลบจาก SML แล้ว
+      → ทุก action: reload catalog index + audit log
+    - Bulk "Sync จาก SML" ตอนนี้ก็ reload index หลัง upsert ทั้งก้อน
+
+16. Multi-LINE OA (session 13 — 2026-04-29)
+    - ทุก inbound webhook resolve OA โดย:
+      1. URL :oaId ถ้ามี (`/webhook/line/<oa_id>`)
+      2. payload `destination` field (bot's own userID) → registry.GetByBotUserID
+      3. registry.Any() (legacy single-OA fallback)
+    - **Webhook URL ต้องตั้งให้ตรงต่อ OA** — admin ต้องเข้า LINE Developer Console
+      ของแต่ละ OA แล้ววาง URL `/webhook/line/<id>` (copy จาก `/settings/line-oa`)
+    - chat_conversations.line_oa_id ตั้งเฉพาะตอน insert ครั้งแรก — ลูกค้าเดียวกัน
+      ใน OA ต่างกันมี LINE userID ต่างกันอยู่แล้ว ไม่ต้องกังวลเรื่อง row collision
+    - **legacy conversation rows** (ก่อน migration 014) มี line_oa_id = NULL —
+      `pushService(conv)` fallback เป็น `registry.Any()` กัน reply พังตอน admin
+      ตอบห้องเก่า. รอ row ตอบ inbound ครั้งใหม่จะ backfill อัตโนมัติ
+    - Default OA seeded จาก env LINE_* บน first boot (`line_oa_accounts.IsEmpty()`)
+      → ถ้า admin ตั้ง LINE_* ใน .env ไว้ ระบบสร้าง row "Default (from .env)" ให้
+      → admin แก้ name/greeting/enabled ผ่าน UI ได้, secret/token enter เพียงครั้งเดียว
+    - LINE Push API quota — Free OA = 500 push/เดือน. Phase 4.1 (admin ส่ง media)
+      จะใช้ quota เพิ่ม. ใส่ banner เตือนใน UI หลัง 4.1 ship
+
+17. Chat inbox features (Phase 4 — session 13)
+    - **Quick replies** (`/api/admin/quick-replies`): 4 seed templates +
+      admin CRUD. Composer popover เปิดด้วยปุ่ม 💬 → click template → fill textarea
+    - **Customer history panel**: collapsible ใต้ thread header แสดง 10 บิล
+      ล่าสุดของลูกค้าคนนี้ (query `bills WHERE raw_data->>'line_user_id' = ?`)
+      → คลิก doc_no → /bills/:id
+    - **Browser notification + chime**: hook `useNotifications` ใน Messages/.
+      Toggle ปุ่ม 🔔 บน thread header (persisted ใน localStorage). Notification
+      API ใช้ตอน tab hidden เท่านั้น (เลี่ยง double-notify with sonner toast)
 ```
 
 ---
@@ -1318,6 +1626,55 @@ Phase 6 — Web UI Complete
   [x] 6.16 Shopee Excel artifact storage (.xlsx archived per bill) ✅ (session 6)
   [x] 6.17 UTF-8 charset fix for HTML artifacts (text/html; charset=utf-8) ✅ (session 6)
   [x] 6.18 PO → ใบสั่งซื้อ/สั่งจอง relabeling across all UI components ✅ (session 6)
+  [x] 6.19 Per-channel cust_code/contact_name from SML party master + /settings/channels admin UI ✅ (session 7)
+  [x] 6.20 Per-channel endpoint URL + doc_format_code + doc_prefix + doc_running_format (free-form) ✅ (session 7-10)
+            Shopee email default → saleorder (was saleinvoice); 4-way Retry dispatch in bills.go
+            doc_no SML bug fixed: YYMM#### format, no hyphen+year pattern
+            SML UTF-8 charset fix on all 6 POST clients (sale_reserve, saleinvoice,
+            saleorder, purchaseorder, product, MCP — fixes Thai mojibake on product
+            create + chatbot bills, not just Shopee retry)
+            resolveItemName: looks up sml_catalog.item_name by item_code before falling back to raw_name
+            IMAP isShopeeFrom fix: shopee_domains accepts full emails (no @ prepend bug)
+            /logs redesign: 15 action labels, 1-line summary, date groups, stats bar, row expand
+  [x] 6.21 Per-channel WH / Shelf / VAT override + ShopeeImport dialog removed ✅ (session 11)
+            Migration 012 adds wh_code, shelf_code, vat_type, vat_rate columns to channel_defaults
+            (sentinel '' / -1 = "use server .env"). bills.go applyChannelOverrides() overlays them
+            on saleinvoice + saleorder + purchaseorder retry paths.
+            ShopeeImport.tsx config dialog REMOVED (was misleading — only unit_code had effect).
+            Replaced with read-only summary card + link to /settings/channels.
+            EditDialog gains 4 new fields + scrollable body (max-h-[90vh] + grid-rows[auto,1fr,auto]).
+            ChannelDefaults table action button now "แก้ไข" / "ตั้งค่า" (text + icon, default-styled
+            for unset rows) instead of icon-only pencil.
+  [x] 6.22 marshalASCII workaround for SML 248 mojibake + catalog per-row actions ✅ (session 12)
+            ⭐ marshalASCII helper at backend/internal/services/sml/json_ascii.go — escapes
+            non-ASCII as \uXXXX. Replaces json.Marshal in all 6 POST clients (saleorder,
+            saleinvoice, purchaseorder, product, sale_reserve, MCP). Reason: SML 248
+            Java backend reads request body as Latin-1 ALWAYS — Content-Type charset is
+            ignored. Earlier "fix" via charset=utf-8 header (session 7-10) was
+            confirmation bias; verified session 12 that mojibake persists with both
+            'application/json' and 'application/json; charset=utf-8'. ASCII-only body
+            with \uXXXX escapes is byte-identical in Latin-1 vs UTF-8 → SML's JSON
+            parser unescapes back to correct codepoints.
+            Catalog per-row actions: POST /api/catalog/:code/refresh + DELETE
+            /api/catalog/:code. UI: 🔄/🗑️ buttons per row + ConfirmDialog before delete.
+            Refresh GETs single product from SML 248, preserves price, reloads index.
+            Delete is BillFlow-side only — SML 248 untouched (use for zombies).
+            End-to-end verified: created TEST-THAI-001 with Thai name → SML master
+            stored Thai correctly → reused as bill_item.item_code → SML doc Thai correct.
+  [x] 6.23 LINE chatbot → human chat inbox + multi-OA support ✅ (session 13)
+            ⭐ Replaces AI chatbot ("น้องบิล") with admin-driven inbox at /messages.
+            Customer sends LINE message → store in chat_conversations + chat_messages
+            (+ chat_media for binary). Admin replies via Composer → LINE Push API.
+            Manual AI extract from media via "🔍 สร้างบิลจากสื่อนี้" button.
+            "เปิดบิลขาย" panel: catalog picker → POST .../bills (status=pending) →
+            existing /bills/:id Retry → SML 213 sale_reserve.
+            Multi-OA (migration 014): /settings/line-oa CRUD; webhook URL per OA
+            (/webhook/line/<oa_id>); LineRegistry routes Push by conversation's OA.
+            Drops: chatbot path (~900 LOC), ChatSales / ChatSalesWithContext /
+            ExtractOrderFromHistory / SalesSystemPrompt, chat_sessions table,
+            chat_session_repo.go, MCPClient injection in line.go.
+            Polling: 1 endpoint (dashboard/stats merged with unread_messages),
+            paused when tab hidden, refresh on regain focus.
 
 Phase 7 — Background Jobs
   [x] 7.1 Cron 08:00 daily insight + LINE notify (F4) ✅
@@ -1390,7 +1747,7 @@ Report disk usage before and after, then ask before Phase 1.
 
 ---
 
-## 26. Current Status (2026-04-28 — session 6)
+## 26. Current Status (2026-04-28 — session 10)
 
 ```
 Deployed & Running on 192.168.2.109:
@@ -1414,8 +1771,11 @@ SML servers (both confirmed working):
     POST /SMLJavaRESTService/v3/api/purchaseorder   (Shopee shipped / pay-now email)
     POST /SMLJavaRESTService/v3/api/product         (create new product)
     GET  /SMLJavaRESTService/v3/api/product/{sku}   (product lookup)
+    GET  /SMLJavaRESTService/v3/api/customer         (party master — 1004 records)
+    GET  /SMLJavaRESTService/v3/api/supplier         (party master — 500 records)
   Config (SML #2): guid=smlx / SMLGOH / SMLConfigSMLGOH.xml / SML1_2026
-                   cust_code=AR00004, wh=WH-01, shelf=SH-01
+                   wh=WH-01, shelf=SH-01
+                   (cust_code now from channel_defaults table — not .env)
 
 Multi-account IMAP (session 6 — BREAKING change from session 5):
   .env IMAP_* vars removed. Admin adds/edits inboxes via /settings/email.
@@ -1443,30 +1803,202 @@ Shopee Excel artifact: original .xlsx archived per imported bill
 UTF-8 fix: all HTML artifacts now served with "text/html; charset=utf-8"
   Frontend Blob rebuilt with explicit type from Content-Type header
 
-Bill flow → SML routing (bills.go Retry handler):
-  source                   bill_type   endpoint
-  ──────────────────────   ─────────   ──────────────────────
-  line / email / lazada    sale        sale_reserve (213)
-  shopee / shopee_email    sale        saleinvoice (248)
-  shopee_shipped           purchase    purchaseorder (248)
+Channel defaults (session 7 — BREAKING change from session 6):
+  .env SHOPEE_SML_CUST_CODE and SHIPPED_SML_CUST_CODE REMOVED from config.go.
+  All 3 SML send routes now read party_code/party_name from channel_defaults table.
+  Admin manages via /settings/channels (ChannelDefaults.tsx page, sidebar "ลูกค้า / ผู้ขาย").
+  PartyCache: boots from SML 248 GET /v3/api/customer + /v3/api/supplier (all pages),
+    refreshes every 6 hours; PartyPicker uses debounced search.
+  Quick-setup button: auto-pairs AR00001-04 placeholder customers to channels.
+  Production SML placeholder names (verified 2026-04-28):
+    AR00001 "ลูกค้า จาก AI"     → (line, sale) or general fallback
+    AR00002 "ลูกค้า จาก Line"   → (line, sale)
+    AR00003 "ลูกค้า จาก Email"  → (email, sale)
+    AR00004 "ลูกค้า จาก Shopee" → (shopee, sale)
+  Behavior change for LINE: bills now link to AR00002 instead of AI-extracted name.
+    Real customer info still in bills.raw_data.
+  Per-channel WH/Shelf/VAT override (session 11): wh_code, shelf_code, vat_type, vat_rate
+    in channel_defaults table overlay env per channel. Sentinel '' / -1 = use server .env.
+    EditDialog exposes them inline (only shown for SML 248 endpoints — sale_reserve never
+    consumed WH/VAT). GetConfig in shopee_import.go returns the overlaid values so the
+    /import/shopee summary card mirrors what'll actually post.
+  Deferred: Test-send (would create real SML docs); per-channel sale_code/branch override.
+  Quick-create customer/supplier DROPPED (SML API requires ~25 fields / NPE).
+  Shopee Import config dialog REMOVED (session 11): the dialog let users edit cust_code,
+    doc_format, server_url, etc., but the Confirm handler only used unit_code as catalog
+    fallback — every other field was a UI lie. Replaced with read-only summary + link.
 
-Migrations applied (6 files):
+Bill flow → SML routing (bills.go Retry handler — 4-way dispatch):
+  source                   bill_type   endpoint (default)             cust_code source
+  ──────────────────────   ─────────   ────────────────────────────   ─────────────────────────
+  line / email / lazada    sale        sale_reserve (213)             contact_name from channel_defaults
+  shopee / shopee_email    sale        saleorder (248) [was saleinvoice until session 7-10]
+                                       override via channel_defaults.endpoint  party_code from channel_defaults
+  shopee_shipped           purchase    purchaseorder (248)            party_code from channel_defaults
+  any                      any         endpoint URL overridable per (channel,bill_type) in /settings/channels
+
+Migrations applied (15 files):
   001_init.sql
-  002_audit_logging.sql              (audit_logs structured columns)
-  002_sml_catalog.sql                (sml_catalog + extended CHECK)
-  003_channel_customer_defaults.sql
-  004_shopee_shipped.sql             (bills.source shopee_shipped)
-  006_imap_accounts.sql              (imap_accounts table — session 6)
+  002_audit_logging.sql                    (audit_logs structured columns)
+  002_sml_catalog.sql                      (sml_catalog + extended CHECK)
+  003_channel_customer_defaults.sql        (legacy — renamed to _v1 by 007)
+  004_shopee_shipped.sql                   (bills.source shopee_shipped)
+  006_imap_accounts.sql                    (imap_accounts table — session 6)
+  007_channel_defaults.sql                 (channel_defaults table — session 7)
+  008_channel_defaults_doc_format.sql      (adds doc_format_code — session 7-10)
+  009_channel_defaults_endpoint.sql        (adds endpoint column — session 7-10)
+  010_channel_defaults_endpoint_freeform.sql (drops CHECK on endpoint — session 7-10)
+  011_doc_no_format.sql                    (doc_prefix + doc_running_format + doc_counters table)
+  012_channel_defaults_inventory.sql       (wh_code + shelf_code + vat_type + vat_rate — session 11)
+  013_chat_inbox.sql                       (drop chat_sessions, add chat_conversations + chat_messages + chat_media — session 13)
+  014_line_oa_accounts.sql                 (line_oa_accounts + chat_conversations.line_oa_id — session 13)
+  015_chat_quick_replies.sql               (chat_quick_replies + 4 seed templates — Phase 4.4 session 13)
 
 Phases:
   Phase 0–7  ✅
-  Phase 6    ✅ UI redesign (Tailwind/shadcn) + multi-account IMAP + artifacts
+  Phase 6    ✅ UI redesign (Tailwind/shadcn) + multi-account IMAP + artifacts + channel defaults +
+              SML mojibake permanent fix via marshalASCII + catalog per-row actions (6.19-6.22)
+              + LINE chatbot → human chat refactor + multi-OA + /messages page (6.23, session 13)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
-  ⏳ Phase 3 — test รูป/PDF/voice ใน LINE OA (code deployed, never tested)
+  ⏳ Phase 3 — test รูป/PDF/voice ใน LINE chat (auto-extract removed; manual extract works)
   ⏳ Phase 4b — Lazada Excel import (waiting customer files)
   ⏳ Phase 8 — cloudflared + systemd
+  ⏳ Phase 4 (chat power features — quick replies, customer history, browser notif, status, search, tags)
+
+Recent work (session 13 — 2026-04-29):
+  ⭐ feat(line): replace AI chatbot with human chat inbox + multi-OA support
+       Removes ~900 LOC of chatbot path from line.go (ChatSales, pending order
+       cart, regex-based delete/edit, MCP product search). Replaces with simple
+       store-incoming-message + ack flow. Optional first-contact greeting via
+       LINE_GREETING env (per-OA in line_oa_accounts).
+       New schema (migration 013): chat_conversations + chat_messages + chat_media.
+       Drops legacy chat_sessions (24h prune meant no long-lived data anyway).
+       New schema (migration 014): line_oa_accounts table + chat_conversations.line_oa_id.
+       Multi-OA: 1 BillFlow ↔ N LINE OAs (e.g. chain with 5 stores). Webhook URL
+       per OA: /webhook/line/<oa_id>. LineRegistry maps oa_id → service instance
+       so reply uses correct access_token.
+       Backend: chat_inbox.go handler with 8 endpoints (list, messages, reply,
+       mark-read, media download, AI extract from media, create-bill-from-chat,
+       unread-count). PushText + GetProfile added to lineservice.
+       Frontend: /messages page (3-pane: list, thread, composer). CreateBillPanel
+       with catalog picker. ExtractPreviewDialog for manual AI on media. Sidebar
+       nav "ข้อความลูกค้า" + unread badge. Polling: 30s inbox, 5s active thread,
+       paused when tab hidden.
+       /settings/line-oa CRUD page (new) — admin manages OAs (secret + token +
+       greeting + enabled). Test-connect button verifies token via /v2/bot/info.
+       Default OA seeded from existing LINE_* env vars on first boot.
+       Removed: ChatSales / ChatSalesWithContext / ExtractOrderFromHistory from
+       openrouter.go. SalesSystemPrompt from prompts.go. chat_session_repo.go
+       deleted. MCP client construction removed from main.go (code kept in
+       services/sml/mcp.go in case future flows need it).
+       Verified end-to-end: customer text → BillFlow inbox → admin reply → LINE
+       Push → customer receives. เปิดบิลขาย → /bills/:id pending → Retry → SML
+       213 sale_reserve → bill 59d20f8a... created with Thai display correct.
+       Polling consolidation: dashboard/stats now returns unread_messages too,
+       so Sidebar uses 1 endpoint instead of 2. Polling pauses when tab hidden,
+       refreshes immediately on regain focus.
+  feat(line-oa): multi-OA support — 1 BillFlow ↔ N LINE OAs
+       Migration 014 adds line_oa_accounts table + chat_conversations.line_oa_id.
+       New `lineservice.Registry` maps oa_id → *Service so each push uses the
+       right access_token. Webhook URL per OA: /webhook/line/<id>. Default OA
+       seeded from .env LINE_* on first boot (idempotent — only when table empty).
+       /settings/line-oa CRUD page + Test button (calls /v2/bot/info to verify
+       token + cache bot_user_id for webhook routing-by-Destination fallback).
+       ConversationList shows OA badge per row.
+       Verified end-to-end: POST /api/settings/line-oa/<id>/test returns
+       basic_id="@027faszn", bot_user_id="Ub35fdd84..." display_name="ผู้ช่วย
+       ฝ่ายขาย" — token valid + caching works.
+  feat(chat): Phase 4 quick wins (4.4 + 4.5 + 4.11)
+       4.4 Quick replies — migration 015 + 4 seed templates (ทักทาย / เช็คสต๊อก /
+            แจ้งราคา / ปิดบิล). Composer 💬 popover lazy-fetches templates,
+            click → injects body into textarea. Admin CRUD via /api/admin/quick-replies.
+       4.5 Customer history panel — collapsible under thread header. Shows last
+            10 bills tied to this LINE userID via raw_data->>'line_user_id'.
+            Click row → /bills/:id. Verified: existing convo "บอส เฉย ๆ" shows
+            BS20260429070949-ZPWE bill correctly.
+       4.11 Browser notification + audio chime — useNotifications hook with
+            persisted toggle (localStorage). Notification API only fires when
+            tab is hidden (avoids double-notify with in-app toast). WebAudio
+            two-note chime synthesized inline (no asset files needed).
+            🔔/🔕 toggle button in thread header.
+
+Recent work (session 12 — 2026-04-29):
+  ⭐ fix(sml): permanent Thai-display fix via marshalASCII helper
+       Discovered SML 248 Java backend reads request body as Latin-1 ALWAYS,
+       ignoring Content-Type charset. The session 7-10 "fix" via charset=utf-8
+       header was confirmation bias — verified mojibake persists with both
+       'application/json' and 'application/json; charset=utf-8'. Real fix:
+       new helper backend/internal/services/sml/json_ascii.go that escapes
+       non-ASCII as \uXXXX (and surrogate pairs for non-BMP). Body becomes
+       pure ASCII → identical bytes in Latin-1 vs UTF-8 → SML's JSON parser
+       unescapes ส → "ส" before server code sees the string. Applied in
+       all 6 POST clients (saleorder, saleinvoice, purchaseorder, product,
+       sale_reserve, MCP). bills.sml_payload + audit_logs still use
+       json.Marshal (UTF-8) for human-readable storage — only wire bytes
+       changed. Includes unit tests in json_ascii_test.go.
+       Verified end-to-end: created TEST-THAI-001 via /api/catalog/products
+       → SML master stored Thai correctly → mapped in bill 13cddb09… → SML
+       saleorder doc displays Thai correctly.
+       Older HENNA001-style master records that were created with mojibake
+       must be deleted + re-created in SML directly (BillFlow can't fix them
+       in-place because update would also go through old corrupt path before
+       this session).
+  feat(catalog): per-row Refresh + Delete actions on /settings/catalog
+       POST /api/catalog/:code/refresh — GET single product from SML 248,
+       upsert (preserve price; v3 single-product endpoint doesn't return prices),
+       reload memory index. SML returning {"data":null} → 404 + not_found:true,
+       UI prompts admin to "ลบจาก BillFlow ได้".
+       DELETE /api/catalog/:code — local-only delete (SML untouched). Use to
+       prune zombies left after admin deletes products in SML directly.
+       UI: 🔄/🗑️ buttons per row, ConfirmDialog before delete, busyRow tracker
+       for spinners. Action column widened 80px → 200px.
+  ui(import): /import/shopee config dialog REMOVED (was misleading — only
+       unit_code had real effect). Replaced with read-only summary card linking
+       to /settings/channels.
+  Audit (session 12 close): verified all 6 SML POST clients use marshalASCII;
+       no stale references to removed env vars (SHOPEE_SML_CUST_CODE etc);
+       all 4 retry paths in bills.go apply channel_defaults party_code +
+       applyChannelOverrides + resolveDocNo + def.DocFormatCode consistently;
+       no orphan frontend pages. System is consistent end-to-end.
+
+Recent work (session 11 — 2026-04-28):
+  feat(channels): per-channel WH/Shelf/VAT override (migration 012)
+       channel_defaults gains wh_code, shelf_code, vat_type, vat_rate; sentinel '' / -1
+       falls back to server .env. bills.go applyChannelOverlay() applies on saleinvoice +
+       saleorder + purchaseorder retry paths. shopee_import.go GetConfig also overlays
+       so /import/shopee summary mirrors actual SML payload.
+       EditDialog: 4 new fields in a "คลัง / ภาษี" group, only rendered for SML 248
+       endpoints (sale_reserve never consumed WH/VAT).
+  fix(ui): EditDialog body now scrolls — DialogContent gets max-h-[90vh] +
+       grid-rows-[auto_minmax(0,1fr)_auto], body div gets overflow-y-auto.
+  ui(channels): row action button shows "แก้ไข" / "ตั้งค่า" text instead of icon-only;
+       unset rows highlight default-styled (call to action).
+  feat(import): Shopee Import config dialog removed — only unit_code had any effect
+       on Confirm. Replaced with read-only summary card + link to /settings/channels
+       (single source of truth). Drops ~135 lines of misleading UI.
+  Verified end-to-end via curl: PUT override → GET round-trip → /api/settings/shopee-config
+       returns overlaid values (WH-99/SH-99/vat_type=1/vat_rate=7.5). Reset to sentinels
+       falls back to env (WH-01/SH-01/0/7).
+  NOT verified: actual SML payload on Retry — no test bill in DB at session end.
+
+Recent commits (session 7-10):
+  feat: per-channel cust/supplier defaults from SML — /settings/channels + party cache + Quick-setup
+  feat: saleorder_client.go — POST /v3/api/saleorder (new default for Shopee email flow)
+  feat: 4-way Retry dispatch in bills.go (saleorder / saleinvoice / purchaseorder / sale_reserve)
+  feat: doc_counter_repo — GenerateDocNo atomic YYMM#### counter (avoids SML doc_no UI bug)
+  feat: channel_defaults.endpoint + doc_prefix + doc_running_format (migrations 008-011)
+  fix: SML UTF-8 charset — Content-Type: application/json; charset=utf-8 on all 6 POST clients
+       (sale_reserve, saleinvoice, saleorder, purchaseorder, product, MCP — covers product create
+       + LINE chatbot, not just Shopee retry which was caught earlier)
+       ⚠️ SUPERSEDED in session 12: charset header is ignored by SML 248. Real fix is
+       marshalASCII (escape non-ASCII as \uXXXX). Header is kept for hygiene but does nothing.
+  fix: resolveItemName — looks up sml_catalog.item_name before falling back to raw_name
+  fix: IMAP isShopeeFrom — shopee_domains entries no longer have @ prepended (fixed full-email match)
+  ui: /logs redesign — 15 action labels Thai+emoji, 1-line summary, date groups, stats bar, row expand
+  ui: /settings/channels EditDialog — endpoint URL, doc_format, prefix, running format + live preview
+  ui: validation warning on "prefix-YY..." SML bug pattern in EditDialog
 
 Recent commits (session 6):
   0819450 ui: sync 'PO' wording across FLOW_META + source labels
@@ -1483,7 +2015,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-28 (session 6)*
+*Last updated: 2026-04-29 (session 13)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*

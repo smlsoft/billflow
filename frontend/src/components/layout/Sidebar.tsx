@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
+  Building2,
   ChevronsLeft,
   ChevronsRight,
   Database,
@@ -8,6 +9,8 @@ import {
   LayoutDashboard,
   LogOut,
   Mail,
+  MessageSquare,
+  MessageSquareQuote,
   ScrollText,
   Settings,
   ShoppingBag,
@@ -44,7 +47,11 @@ interface NavItem {
   label: string
   icon: LucideIcon
   end?: boolean
-  hasBadge?: boolean
+  // hasBadge identifies which counter feeds the badge:
+  //   "bills"    → pending bill count (existing)
+  //   "messages" → unread chat conversation count (Phase 3)
+  // Boolean true is treated as "bills" for backward compat with existing code.
+  hasBadge?: boolean | 'bills' | 'messages'
 }
 
 interface NavGroup {
@@ -57,7 +64,8 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'ภาพรวม',
     items: [
       { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { to: '/bills', label: 'บิลทั้งหมด', icon: FileText, hasBadge: true },
+      { to: '/bills', label: 'บิลทั้งหมด', icon: FileText, hasBadge: 'bills' },
+      { to: '/messages', label: 'ข้อความลูกค้า', icon: MessageSquare, hasBadge: 'messages' },
     ],
   },
   {
@@ -72,6 +80,9 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/mappings', label: 'Mapping สินค้า', icon: Workflow },
       { to: '/settings/email', label: 'Email Inboxes', icon: Mail },
+      { to: '/settings/line-oa', label: 'LINE OA Accounts', icon: MessageSquare, end: true },
+      { to: '/settings/quick-replies', label: 'Quick Replies', icon: MessageSquareQuote, end: true },
+      { to: '/settings/channels', label: 'ลูกค้า / ผู้ขาย', icon: Building2 },
       { to: '/settings/catalog', label: 'Catalog SML', icon: Database },
       { to: '/logs', label: 'Activity Log', icon: ScrollText },
       { to: '/settings', label: 'ตั้งค่า', icon: Settings, end: true },
@@ -91,21 +102,42 @@ export default function Sidebar() {
   const collapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggle = useUIStore((s) => s.toggleSidebar)
   const [pendingCount, setPendingCount] = useState(0)
+  const [unreadMessages, setUnreadMessages] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Single poll: /api/dashboard/stats now also returns unread_messages so we
+  // don't need a second request. Pause polling when the tab is hidden — saves
+  // bandwidth + battery on admin laptops left open in another tab.
   useEffect(() => {
-    const fetchPending = async () => {
+    const fetchStats = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return
+      }
       try {
-        const res = await client.get<{ pending: number }>('/api/dashboard/stats')
+        const res = await client.get<{ pending: number; unread_messages?: number }>(
+          '/api/dashboard/stats',
+        )
         setPendingCount(res.data.pending ?? 0)
+        setUnreadMessages(res.data.unread_messages ?? 0)
       } catch {
         /* silent */
       }
     }
-    fetchPending()
-    intervalRef.current = setInterval(fetchPending, 30_000)
+    fetchStats()
+    intervalRef.current = setInterval(fetchStats, 30_000)
+
+    // Refresh immediately when the tab regains focus so the badge isn't stale
+    // after the admin comes back from another window.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchStats()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [])
 
@@ -181,7 +213,15 @@ export default function Sidebar() {
 
               {group.items.map((item) => {
                 const Icon = item.icon
-                const showBadge = item.hasBadge && pendingCount > 0
+                const badgeKind =
+                  item.hasBadge === true ? 'bills' : item.hasBadge || null
+                const badgeCount =
+                  badgeKind === 'messages'
+                    ? unreadMessages
+                    : badgeKind === 'bills'
+                      ? pendingCount
+                      : 0
+                const showBadge = !!badgeKind && badgeCount > 0
 
                 const linkInner = (active: boolean) => (
                   <span
@@ -207,7 +247,7 @@ export default function Sidebar() {
                         <span className="flex-1 truncate">{item.label}</span>
                         {showBadge && (
                           <Badge variant="secondary" className="h-5 min-w-[20px] justify-center px-1.5 text-[10px]">
-                            {pendingCount > 99 ? '99+' : pendingCount}
+                            {badgeCount > 99 ? '99+' : badgeCount}
                           </Badge>
                         )}
                       </>

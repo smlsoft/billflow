@@ -136,7 +136,7 @@ func (c *Client) doCreate(req SaleOrderRequest) (*SMLResult, error) {
 		},
 	}
 
-	bodyBytes, err := json.Marshal(rpcReq)
+	bodyBytes, err := marshalASCII(rpcReq)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (c *Client) doCreate(req SaleOrderRequest) (*SMLResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json; charset=utf-8")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("mcp-access-mode", "sales")
 

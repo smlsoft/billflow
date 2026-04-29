@@ -21,13 +21,14 @@ import (
 
 // ImportHandler handles Lazada/Shopee Excel imports (Phase 4)
 type ImportHandler struct {
-	platformRepo *repository.PlatformMappingRepo
-	mapperSvc    *mapper.Service
-	anomalySvc   *anomaly.Service
-	smlClient    *sml.Client
-	billRepo     *repository.BillRepo
-	threshold    float64
-	logger       *zap.Logger
+	platformRepo    *repository.PlatformMappingRepo
+	mapperSvc       *mapper.Service
+	anomalySvc      *anomaly.Service
+	smlClient       *sml.Client
+	billRepo        *repository.BillRepo
+	channelDefaults *repository.ChannelDefaultRepo
+	threshold       float64
+	logger          *zap.Logger
 }
 
 func NewImportHandler(
@@ -36,17 +37,19 @@ func NewImportHandler(
 	anomalySvc *anomaly.Service,
 	smlClient *sml.Client,
 	billRepo *repository.BillRepo,
+	channelDefaults *repository.ChannelDefaultRepo,
 	threshold float64,
 	logger *zap.Logger,
 ) *ImportHandler {
 	return &ImportHandler{
-		platformRepo: platformRepo,
-		mapperSvc:    mapperSvc,
-		anomalySvc:   anomalySvc,
-		smlClient:    smlClient,
-		billRepo:     billRepo,
-		threshold:    threshold,
-		logger:       logger,
+		platformRepo:    platformRepo,
+		mapperSvc:       mapperSvc,
+		anomalySvc:      anomalySvc,
+		smlClient:       smlClient,
+		billRepo:        billRepo,
+		channelDefaults: channelDefaults,
+		threshold:       threshold,
+		logger:          logger,
 	}
 }
 
@@ -483,8 +486,19 @@ func (h *ImportHandler) buildSMLRequest(bill *models.Bill) (sml.SaleReserveReque
 			}
 		}
 	}
+
+	// Override with the (channel, sale) default so SML 213 keeps a single AR
+	// per channel instead of polluting the master with one row per import.
+	if h.channelDefaults != nil {
+		if def, _ := h.channelDefaults.Get(bill.Source, "sale"); def != nil {
+			customerName = def.PartyName
+			if customerPhone == "" {
+				customerPhone = def.PartyPhone
+			}
+		}
+	}
 	if customerName == "" {
-		customerName = "ไม่ระบุชื่อลูกค้า"
+		return sml.SaleReserveRequest{}, fmt.Errorf("ยังไม่ได้ตั้งค่าลูกค้า default สำหรับ %s/sale — ไปที่ /settings/channels", bill.Source)
 	}
 
 	var smlItems []sml.SMLItem

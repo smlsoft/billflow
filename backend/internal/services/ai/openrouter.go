@@ -7,7 +7,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -197,106 +196,11 @@ type ChatMessage struct {
 }
 
 // SalesChatResult holds the chatbot reply and optional extracted order
-type SalesChatResult struct {
-	Reply string
-	Order *ExtractedBill // non-nil = order ready for confirmation
-}
-
-// ChatSales runs the conversational sales AI with history
-func (c *Client) ChatSales(history []ChatMessage, userMsg string) (*SalesChatResult, error) {
-	msgs := []message{
-		{Role: "system", Content: []contentPart{{Type: "text", Text: SalesSystemPrompt}}},
-	}
-	for _, h := range history {
-		msgs = append(msgs, message{
-			Role:    h.Role,
-			Content: []contentPart{{Type: "text", Text: h.Content}},
-		})
-	}
-	msgs = append(msgs, message{
-		Role:    "user",
-		Content: []contentPart{{Type: "text", Text: userMsg}},
-	})
-
-	reqBody := openRouterRequest{Model: c.model, Messages: msgs}
-	body, err := c.doRequest(reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &SalesChatResult{Reply: body}
-
-	// Parse optional <BILL>...</BILL> tag injected by the AI when order is ready
-	if start := strings.Index(body, "<BILL>"); start != -1 {
-		if end := strings.Index(body, "</BILL>"); end != -1 && end > start {
-			billJSON := strings.TrimSpace(body[start+6 : end])
-			var order ExtractedBill
-			if json.Unmarshal([]byte(billJSON), &order) == nil && len(order.Items) > 0 {
-				result.Order = &order
-			}
-			// Strip tag from reply text
-			result.Reply = strings.TrimSpace(body[:start] + body[end+7:])
-		}
-	}
-
-	return result, nil
-}
-
-// ChatSalesWithContext is like ChatSales but injects a product catalog context
-// so the AI can answer product inquiries ("มีปูนอะไรบ้าง") with real SML data.
-func (c *Client) ChatSalesWithContext(history []ChatMessage, userMsg, catalogCtx string) (*SalesChatResult, error) {
-	msgs := []message{
-		{Role: "system", Content: []contentPart{{Type: "text", Text: SalesSystemPrompt}}},
-		{Role: "system", Content: []contentPart{{Type: "text", Text: "สินค้าที่ค้นพบในระบบ SML ณ ขณะนี้:\n" + catalogCtx + "\nโปรดแสดงรายการเหล่านี้ให้ลูกค้าเลือก"}}},
-	}
-	for _, h := range history {
-		msgs = append(msgs, message{
-			Role:    h.Role,
-			Content: []contentPart{{Type: "text", Text: h.Content}},
-		})
-	}
-	msgs = append(msgs, message{
-		Role:    "user",
-		Content: []contentPart{{Type: "text", Text: userMsg}},
-	})
-
-	reqBody := openRouterRequest{Model: c.model, Messages: msgs}
-	body, err := c.doRequest(reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &SalesChatResult{Reply: body}
-	if start := strings.Index(body, "<BILL>"); start != -1 {
-		if end := strings.Index(body, "</BILL>"); end != -1 && end > start {
-			billJSON := strings.TrimSpace(body[start+6 : end])
-			var order ExtractedBill
-			if json.Unmarshal([]byte(billJSON), &order) == nil && len(order.Items) > 0 {
-				result.Order = &order
-			}
-			result.Reply = strings.TrimSpace(body[:start] + body[end+7:])
-		}
-	}
-	return result, nil
-}
-
-// ExtractOrderFromHistory attempts to recover an order from conversation history
-// when the AI indicated it was going to process the order but omitted the <BILL> tag.
-func (c *Client) ExtractOrderFromHistory(history []ChatMessage) (*ExtractedBill, error) {
-	if len(history) == 0 {
-		return nil, fmt.Errorf("empty history")
-	}
-	var sb strings.Builder
-	for _, msg := range history {
-		switch msg.Role {
-		case "user":
-			sb.WriteString("ลูกค้า: " + msg.Content + "\n")
-		case "assistant":
-			sb.WriteString("พนักงาน: " + msg.Content + "\n")
-		}
-	}
-	return c.ExtractText("สรุปรายการสั่งซื้อจากบทสนทนาต่อไปนี้:\n" + sb.String())
-}
+// ChatSales / ChatSalesWithContext / ExtractOrderFromHistory were removed in
+// session 13 along with the AI chatbot ("น้องบิล"). LINE conversations are now
+// human-to-human via the /messages inbox; AI is only used for media extraction
+// (ExtractImage / ExtractPDF / ExtractText / TranscribeAudio) which is still
+// reachable from the chat inbox manual-trigger button + email pipeline.
 
 func (c *Client) doRequest(reqBody openRouterRequest) (string, error) {
 	data, err := json.Marshal(reqBody)

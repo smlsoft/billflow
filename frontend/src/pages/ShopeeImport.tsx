@@ -10,7 +10,6 @@ import {
   ExternalLink,
   FileSpreadsheet,
   Info,
-  Settings as SettingsIcon,
 } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -18,23 +17,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -100,103 +82,6 @@ function fmt(n: number) {
   return n.toLocaleString('th-TH', { minimumFractionDigits: 2 })
 }
 
-function ConfigField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-}) {
-  return (
-    <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <Input value={value} onChange={(e) => onChange(e.target.value)} className="h-8 text-sm" />
-    </div>
-  )
-}
-
-function ConfigDialog({
-  config,
-  open,
-  onOpenChange,
-  onSave,
-}: {
-  config: ShopeeConfig
-  open: boolean
-  onOpenChange: (o: boolean) => void
-  onSave: (c: ShopeeConfig) => void
-}) {
-  const [cfg, setCfg] = useState<ShopeeConfig>(config)
-
-  useEffect(() => {
-    if (open) setCfg(config)
-  }, [open, config])
-
-  const set = (k: keyof ShopeeConfig, v: string | number) =>
-    setCfg((p) => ({ ...p, [k]: v }))
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>ตั้งค่า Shopee SML</DialogTitle>
-          <DialogDescription>
-            ค่าทั้งหมดถูก save บน server — ทุกครั้งที่นำเข้าไฟล์จะใช้ config นี้
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid grid-cols-2 gap-3">
-          <ConfigField label="Server URL" value={cfg.server_url} onChange={(v) => set('server_url', v)} />
-          <ConfigField label="Doc Format Code" value={cfg.doc_format_code} onChange={(v) => set('doc_format_code', v)} />
-          <ConfigField label="GUID" value={cfg.guid} onChange={(v) => set('guid', v)} />
-          <ConfigField label="Provider" value={cfg.provider} onChange={(v) => set('provider', v)} />
-          <ConfigField label="Config File Name" value={cfg.config_file_name} onChange={(v) => set('config_file_name', v)} />
-          <ConfigField label="Database Name" value={cfg.database_name} onChange={(v) => set('database_name', v)} />
-          <ConfigField label="รหัสลูกค้า (Cust Code)" value={cfg.cust_code} onChange={(v) => set('cust_code', v)} />
-          <ConfigField label="รหัสพนักงานขาย (Sale Code)" value={cfg.sale_code} onChange={(v) => set('sale_code', v)} />
-          <ConfigField label="รหัสสาขา (Branch Code)" value={cfg.branch_code} onChange={(v) => set('branch_code', v)} />
-          <ConfigField label="รหัสคลัง (WH Code)" value={cfg.wh_code} onChange={(v) => set('wh_code', v)} />
-          <ConfigField label="รหัสชั้นวาง (Shelf Code)" value={cfg.shelf_code} onChange={(v) => set('shelf_code', v)} />
-          <ConfigField label="หน่วย (Unit Code)" value={cfg.unit_code} onChange={(v) => set('unit_code', v)} />
-          <ConfigField label="เวลาเอกสาร (Doc Time)" value={cfg.doc_time} onChange={(v) => set('doc_time', v)} />
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">VAT Type</Label>
-            <Select
-              value={String(cfg.vat_type)}
-              onValueChange={(v) => set('vat_type', Number(v))}
-            >
-              <SelectTrigger className="h-8 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="0">0 — แยกนอก</SelectItem>
-                <SelectItem value="1">1 — รวมใน</SelectItem>
-                <SelectItem value="2">2 — ศูนย์%</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">VAT Rate (%)</Label>
-            <Input
-              type="number"
-              value={cfg.vat_rate}
-              onChange={(e) => set('vat_rate', Number(e.target.value))}
-              className="h-8 text-sm"
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            ยกเลิก
-          </Button>
-          <Button onClick={() => onSave(cfg)}>บันทึก</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function SummaryCard({
   label,
   value,
@@ -228,7 +113,6 @@ export default function ShopeeImport() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [step, setStep] = useState<Step>('idle')
   const [config, setConfig] = useState<ShopeeConfig | null>(null)
-  const [showConfigDialog, setShowConfigDialog] = useState(false)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
   const [results, setResults] = useState<{
@@ -361,18 +245,6 @@ export default function ShopeeImport() {
         onChange={handleFileChange}
       />
 
-      {config && (
-        <ConfigDialog
-          config={config}
-          open={showConfigDialog}
-          onOpenChange={setShowConfigDialog}
-          onSave={(c) => {
-            setConfig(c)
-            setShowConfigDialog(false)
-          }}
-        />
-      )}
-
       {error && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
@@ -385,40 +257,33 @@ export default function ShopeeImport() {
           {config && (
             <Card>
               <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
-                <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">SML config:</span>
-                  <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                    {config.database_name}
-                  </code>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">ส่งเข้า SML:</span>
                   <span>
-                    Cust:{' '}
+                    DB:{' '}
                     <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                      {config.cust_code || '—'}
+                      {config.database_name}
                     </code>
                   </span>
                   <span>
-                    WH:{' '}
+                    ลูกค้า:{' '}
+                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+                      {config.cust_code || '— ยังไม่ตั้งค่า'}
+                    </code>
+                  </span>
+                  <span>
+                    คลัง:{' '}
                     <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
                       {config.wh_code || '—'}
                     </code>
                   </span>
-                  <span>
-                    Doc:{' '}
-                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                      {config.doc_format_code}
-                    </code>
-                  </span>
-                  <span>
-                    VAT: {config.vat_rate}% (type {config.vat_type})
-                  </span>
+                  <span>VAT {config.vat_rate}%</span>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowConfigDialog(true)}
-                >
-                  <SettingsIcon className="h-3.5 w-3.5" />
-                  แก้ config
+                <Button asChild variant="ghost" size="sm">
+                  <Link to="/settings/channels">
+                    แก้ที่ /settings/channels
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Link>
                 </Button>
               </CardContent>
             </Card>

@@ -757,22 +757,25 @@ export function AccountDialog({
             />
 
             <div className="space-y-1">
-              <Label>Shopee email domains</Label>
+              <Label>ผู้ส่งที่ยอมรับ (Shopee senders)</Label>
               <TagInput
                 value={form.shopee_domains}
                 onChange={(v) => set('shopee_domains', v)}
                 placeholder={
                   isShopee
-                    ? 'เพิ่ม domain แล้วกด Enter (เช่น shopee.co.th)'
+                    ? 'เพิ่ม domain หรืออีเมล แล้วกด Enter'
                     : 'ปิดใช้งาน — เปลี่ยน channel เป็น Shopee ก่อน'
                 }
                 lower
                 className={cn(!isShopee && 'pointer-events-none')}
               />
               <Hint>
-                Default 3 ค่า: <code>shopee.co.th</code>, <code>mail.shopee.co.th</code>,{' '}
-                <code>noreply.shopee.co.th</code> — ระบบจะรับเฉพาะอีเมลจาก domain
-                เหล่านี้เท่านั้น (กันอีเมลปลอม)
+                ใส่ได้ทั้ง <b>domain</b> (เช่น <code>shopee.co.th</code>) หรือ{' '}
+                <b>อีเมลเต็ม</b> (เช่น <code>forwarder@gmail.com</code>) — ระบบจะรับเฉพาะอีเมล
+                ที่ส่งจาก domain/อีเมลในรายการเท่านั้น (กันอีเมลปลอม). Default 3 ค่า:{' '}
+                <code>shopee.co.th</code>, <code>mail.shopee.co.th</code>,{' '}
+                <code>noreply.shopee.co.th</code>. ใช้อีเมลเต็มเมื่อมีคน <i>fwd</i> อีเมล
+                Shopee เข้ามาจากที่อยู่อื่น
               </Hint>
             </div>
           </div>

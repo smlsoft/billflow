@@ -27,6 +27,10 @@ type Config struct {
 	LineChannelSecret      string
 	LineChannelAccessToken string
 	LineAdminUserID        string
+	// LineGreeting is sent as a one-time auto-reply on a customer's FIRST
+	// LINE message. Empty string = no greeting (default). Set this to e.g.
+	// "ขอบคุณค่ะ ทางร้านจะติดต่อกลับเร็ว ๆ นี้นะคะ 🙏" if you want one.
+	LineGreeting string
 
 	// IMAP — moved to imap_accounts table (DB-driven, multi-account).
 	// Manage via /settings/email instead of env vars.
@@ -43,14 +47,14 @@ type Config struct {
 	// SML (existing — JSON-RPC for LINE/Email)
 	SMLBaseURL string
 
-	// Shopee SML (REST API — saleinvoice)
+	// Shopee SML (REST API — saleinvoice).
+	// CustCode moved to channel_defaults table — manage via /settings/channels.
 	ShopeeSMLURL        string
 	ShopeeSMLGUID       string
 	ShopeeSMLProvider   string
 	ShopeeSMLConfigFile string
 	ShopeeSMLDatabase   string
 	ShopeeSMLDocFormat  string
-	ShopeeSMLCustCode   string
 	ShopeeSMLSaleCode   string
 	ShopeeSMLBranchCode string
 	ShopeeSMLWHCode     string
@@ -60,10 +64,9 @@ type Config struct {
 	ShopeeSMLVATRate    float64
 	ShopeeSMLDocTime    string
 
-	// Shopee shipped email → SML purchaseorder
-	// Reuses all SHOPEE_SML_* fields above; only doc_format and cust_code differ.
+	// Shopee shipped email → SML purchaseorder.
+	// Reuses all SHOPEE_SML_* fields above; only doc_format differs.
 	ShippedSMLDocFormat string
-	ShippedSMLCustCode  string
 
 	// Gemini (for text-embedding-004)
 	GeminiAPIKey string
@@ -100,6 +103,7 @@ func Load() *Config {
 		LineChannelSecret:      getEnv("LINE_CHANNEL_SECRET", ""),
 		LineChannelAccessToken: getEnv("LINE_CHANNEL_ACCESS_TOKEN", ""),
 		LineAdminUserID:        getEnv("LINE_ADMIN_USER_ID", ""),
+		LineGreeting:           getEnv("LINE_GREETING", ""),
 		OpenRouterAPIKey:       getEnv("OPENROUTER_API_KEY", ""),
 		OpenRouterModel:        getEnv("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
 		OpenRouterFallback:     getEnv("OPENROUTER_FALLBACK_MODEL", "google/gemini-flash-1.5"),
@@ -112,7 +116,6 @@ func Load() *Config {
 		ShopeeSMLConfigFile:    getEnv("SHOPEE_SML_CONFIG_FILE", "SMLConfigSML1.xml"),
 		ShopeeSMLDatabase:      getEnv("SHOPEE_SML_DATABASE", "SMLPLOY"),
 		ShopeeSMLDocFormat:     getEnv("SHOPEE_SML_DOC_FORMAT", "RU"),
-		ShopeeSMLCustCode:      getEnv("SHOPEE_SML_CUST_CODE", ""),
 		ShopeeSMLSaleCode:      getEnv("SHOPEE_SML_SALE_CODE", ""),
 		ShopeeSMLBranchCode:    getEnv("SHOPEE_SML_BRANCH_CODE", "001"),
 		ShopeeSMLWHCode:        getEnv("SHOPEE_SML_WH_CODE", ""),
@@ -122,7 +125,6 @@ func Load() *Config {
 		ShopeeSMLVATRate:       getEnvFloat("SHOPEE_SML_VAT_RATE", 7),
 		ShopeeSMLDocTime:       getEnv("SHOPEE_SML_DOC_TIME", "09:00"),
 		ShippedSMLDocFormat:    getEnv("SHIPPED_SML_DOC_FORMAT", "PO"),
-		ShippedSMLCustCode:     getEnv("SHIPPED_SML_CUST_CODE", getEnv("SHOPEE_SML_CUST_CODE", "")),
 		GeminiAPIKey:           getEnv("GEMINI_API_KEY", ""),
 		AutoConfirmThreshold:   getEnvFloat("AUTO_CONFIRM_THRESHOLD", 0.85),
 		InsightCronHour:        getEnvInt("INSIGHT_CRON_HOUR", 8),

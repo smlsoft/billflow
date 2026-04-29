@@ -33,14 +33,15 @@ import (
 // which routes through bills.go retrySaleInvoice (same path as Shopee
 // email orders). This unifies all manual-confirm flows.
 type ShopeeImportHandler struct {
-	billRepo    *repository.BillRepo
-	auditRepo   *repository.AuditLogRepo
-	cfg         *config.Config
-	catalogSvc  *catalog.SMLCatalogService
-	embSvc      *catalog.EmbeddingService
-	catalogIdx  *catalog.CatalogIndex
-	artifactSvc *artifact.Service
-	logger      *zap.Logger
+	billRepo        *repository.BillRepo
+	auditRepo       *repository.AuditLogRepo
+	cfg             *config.Config
+	channelDefaults *repository.ChannelDefaultRepo
+	catalogSvc      *catalog.SMLCatalogService
+	embSvc          *catalog.EmbeddingService
+	catalogIdx      *catalog.CatalogIndex
+	artifactSvc     *artifact.Service
+	logger          *zap.Logger
 
 	// Pending uploads keyed by SHA-256 — Preview stashes the raw .xlsx so
 	// Confirm (a separate JSON request) can attach it as an artifact to
@@ -61,19 +62,21 @@ func NewShopeeImportHandler(
 	billRepo *repository.BillRepo,
 	auditRepo *repository.AuditLogRepo,
 	cfg *config.Config,
+	channelDefaults *repository.ChannelDefaultRepo,
 	catalogSvc *catalog.SMLCatalogService,
 	embSvc *catalog.EmbeddingService,
 	catalogIdx *catalog.CatalogIndex,
 	logger *zap.Logger,
 ) *ShopeeImportHandler {
 	h := &ShopeeImportHandler{
-		billRepo:   billRepo,
-		auditRepo:  auditRepo,
-		cfg:        cfg,
-		catalogSvc: catalogSvc,
-		embSvc:     embSvc,
-		catalogIdx: catalogIdx,
-		logger:     logger,
+		billRepo:        billRepo,
+		auditRepo:       auditRepo,
+		cfg:             cfg,
+		channelDefaults: channelDefaults,
+		catalogSvc:      catalogSvc,
+		embSvc:          embSvc,
+		catalogIdx:      catalogIdx,
+		logger:          logger,
 	}
 	go h.gcPendingUploads()
 	return h
@@ -189,23 +192,52 @@ type ConfirmResult struct {
 
 // ─── GET /api/settings/shopee-config ─────────────────────────────────────────
 
-// GetConfig returns the default Shopee SML config from env (pre-fill for dialog).
+// GetConfig returns the active Shopee SML config — env defaults overlaid with
+// per-channel overrides from channel_defaults (shopee, sale). Read-only: the
+// /import/shopee page renders this as a summary card so users see what'll
+// actually be sent on Retry.
 func (h *ShopeeImportHandler) GetConfig(c *gin.Context) {
+	custCode := ""
+	whCode := h.cfg.ShopeeSMLWHCode
+	shelfCode := h.cfg.ShopeeSMLShelfCode
+	vatType := h.cfg.ShopeeSMLVATType
+	vatRate := h.cfg.ShopeeSMLVATRate
+	docFormat := h.cfg.ShopeeSMLDocFormat
+	if h.channelDefaults != nil {
+		if def, _ := h.channelDefaults.Get("shopee", "sale"); def != nil {
+			custCode = def.PartyCode
+			if def.WHCode != "" {
+				whCode = def.WHCode
+			}
+			if def.ShelfCode != "" {
+				shelfCode = def.ShelfCode
+			}
+			if def.VATType >= 0 {
+				vatType = def.VATType
+			}
+			if def.VATRate >= 0 {
+				vatRate = def.VATRate
+			}
+			if def.DocFormatCode != "" {
+				docFormat = def.DocFormatCode
+			}
+		}
+	}
 	c.JSON(http.StatusOK, ShopeeConfigRequest{
 		ServerURL:  h.cfg.ShopeeSMLURL,
 		GUID:       h.cfg.ShopeeSMLGUID,
 		Provider:   h.cfg.ShopeeSMLProvider,
 		ConfigFile: h.cfg.ShopeeSMLConfigFile,
 		Database:   h.cfg.ShopeeSMLDatabase,
-		DocFormat:  h.cfg.ShopeeSMLDocFormat,
-		CustCode:   h.cfg.ShopeeSMLCustCode,
+		DocFormat:  docFormat,
+		CustCode:   custCode,
 		SaleCode:   h.cfg.ShopeeSMLSaleCode,
 		BranchCode: h.cfg.ShopeeSMLBranchCode,
-		WHCode:     h.cfg.ShopeeSMLWHCode,
-		ShelfCode:  h.cfg.ShopeeSMLShelfCode,
+		WHCode:     whCode,
+		ShelfCode:  shelfCode,
 		UnitCode:   h.cfg.ShopeeSMLUnitCode,
-		VATType:    h.cfg.ShopeeSMLVATType,
-		VATRate:    h.cfg.ShopeeSMLVATRate,
+		VATType:    vatType,
+		VATRate:    vatRate,
 		DocTime:    h.cfg.ShopeeSMLDocTime,
 	})
 }

@@ -102,7 +102,7 @@ func (m *MCPClient) callTool(name string, arguments map[string]interface{}) (str
 		"name":      name,
 		"arguments": arguments,
 	}
-	body, err := json.Marshal(payload)
+	body, err := marshalASCII(payload)
 	if err != nil {
 		return "", err
 	}
@@ -111,7 +111,7 @@ func (m *MCPClient) callTool(name string, arguments map[string]interface{}) (str
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	req.Header.Set("mcp-access-mode", "sales")
 
 	resp, err := m.httpClient.Do(req)

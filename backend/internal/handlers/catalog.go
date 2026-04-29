@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,7 +105,93 @@ func (h *CatalogHandler) SyncFromAPI(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	// Reload in-memory index so /api/catalog/search reflects the new rows
+	// without waiting for the next embed batch.
+	if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
+		h.logger.Warn("catalog: reload index after sync", zap.Error(err))
+	}
 	c.JSON(http.StatusOK, gin.H{"synced": count, "message": fmt.Sprintf("synced %d items from SML", count)})
+}
+
+// POST /api/catalog/:code/refresh — refresh a single row from SML 248
+// Used by the per-row "รีเฟรช" button on /settings/catalog.
+func (h *CatalogHandler) RefreshOne(c *gin.Context) {
+	code := c.Param("code")
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "item code required"})
+		return
+	}
+	item, notFound, err := h.catalogSvc.RefreshOne(code)
+	if err != nil {
+		h.logger.Error("catalog refresh one", zap.String("code", code), zap.Error(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if notFound {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":     "ไม่พบสินค้า " + code + " ใน SML — อาจถูกลบจาก SML แล้ว",
+			"not_found": true,
+		})
+		return
+	}
+	if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
+		h.logger.Warn("catalog: reload index after refresh", zap.Error(err))
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "catalog_refresh_one",
+			UserID:  userID,
+			Source:  "catalog",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail:  map[string]interface{}{"item_code": code, "item_name": item.ItemName},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"item": item, "message": "refreshed from SML"})
+}
+
+// DELETE /api/catalog/:code — delete a single row from BillFlow's catalog.
+// SML 248 is NOT touched — this is for pruning local zombies left over after
+// an SML-side delete, or for clearing rows the admin doesn't want matched.
+func (h *CatalogHandler) DeleteOne(c *gin.Context) {
+	code := c.Param("code")
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "item code required"})
+		return
+	}
+	if err := h.catalogRepo.Delete(code); err != nil {
+		// repo returns sql.ErrNoRows when the code wasn't there — surface as 404
+		// so the UI can distinguish "already gone" from "real failure".
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "ไม่พบสินค้า " + code + " ใน BillFlow"})
+			return
+		}
+		h.logger.Error("catalog delete one", zap.String("code", code), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
+		h.logger.Warn("catalog: reload index after delete", zap.Error(err))
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "catalog_delete_one",
+			UserID:  userID,
+			Source:  "catalog",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail:  map[string]interface{}{"item_code": code},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": code, "message": "ลบจาก BillFlow แล้ว (SML ไม่ถูกแตะ)"})
 }
 
 // POST /api/catalog/import-csv  — upload CSV file

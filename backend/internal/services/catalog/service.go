@@ -151,6 +151,104 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 	return total, nil
 }
 
+// singleProductV3Response is the shape of GET /v3/api/product/{code}.
+// Different from the /product/v4 list shape used by SyncFromAPI — the single
+// endpoint uses "name" instead of "name_1" and doesn't include prices.
+type singleProductV3Response struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Code         string  `json:"code"`
+		Name         string  `json:"name"`
+		Name2        string  `json:"name_2"`
+		UnitStandard string  `json:"unit_standard"`
+		GroupMain    string  `json:"group_main"`
+		BalanceQty   float64 `json:"balance_qty"`
+		Units        []struct {
+			UnitCode string `json:"unit_code"`
+		} `json:"units"`
+	} `json:"data"`
+}
+
+// RefreshOne re-fetches a single product from SML 248 and upserts it into
+// sml_catalog. Used by the per-row "รีเฟรช" button on /settings/catalog.
+//
+// Why not reuse SyncFromAPI: that endpoint pages through the entire SML
+// catalog (~minutes for thousands of items). This shortcut takes one HTTP
+// round-trip and only refreshes the fields that are likely to drift after
+// an SML-side rename: name, unit, group, balance_qty.
+//
+// Price is intentionally left untouched — the per-product GET endpoint
+// doesn't return prices, and we don't want to wipe the price column.
+//
+// Returns:
+//   - nil with `notFound = true` when SML returned 404 (caller should tell
+//     the user the product no longer exists in SML and offer Delete).
+//   - the upserted item otherwise.
+func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogItem, notFound bool, err error) {
+	url := fmt.Sprintf("%s/SMLJavaRESTService/v3/api/product/%s", s.smlBaseURL, itemCode)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	for k, v := range s.smlHeaders {
+		req.Header.Set(k, v)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, true, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("SML API %d: %s", resp.StatusCode, string(body))
+	}
+	var r singleProductV3Response
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, false, fmt.Errorf("parse: %w — body: %s", err, string(body))
+	}
+	// SML 248 returns either:
+	//   - 200 {"success":false}  (some versions)
+	//   - 200 {"success":true, "data":null}  (current — what 192.168.2.248 returns)
+	//   - 200 {"success":true, "data":{"code":"", ...}}  (defensive)
+	// All three mean "no such product" → caller should offer Delete instead.
+	if !r.Success || r.Data.Code == "" {
+		return nil, true, nil
+	}
+	d := r.Data
+	unit := d.UnitStandard
+	if unit == "" && len(d.Units) > 0 {
+		unit = d.Units[0].UnitCode
+	}
+	ci := models.CatalogItem{
+		ItemCode:  d.Code,
+		ItemName:  d.Name,
+		ItemName2: d.Name2,
+		UnitCode:  unit,
+		GroupCode: d.GroupMain,
+	}
+	bq := d.BalanceQty
+	ci.BalanceQty = &bq
+	// Preserve price from existing row — single-product GET endpoint doesn't
+	// return prices, so leaving ci.Price nil would wipe what's already stored.
+	if existing, _ := s.repo.GetOne(itemCode); existing != nil && existing.Price != nil {
+		p := *existing.Price
+		ci.Price = &p
+	}
+	if err := s.repo.Upsert(ci); err != nil {
+		return nil, false, fmt.Errorf("upsert: %w", err)
+	}
+	// Re-fetch so the caller sees the canonical row (with timestamps + price
+	// preserved from the prior version).
+	out, err := s.repo.GetOne(itemCode)
+	if err != nil {
+		return nil, false, fmt.Errorf("readback: %w", err)
+	}
+	return out, false, nil
+}
+
 // parseProductV4Response handles several possible SML API response shapes
 func parseProductV4Response(body []byte) (items []smlProductItem, currentPage, maxPage int, err error) {
 	// Try array directly first

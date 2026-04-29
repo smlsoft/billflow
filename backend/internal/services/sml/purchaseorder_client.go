@@ -53,7 +53,8 @@ func (c *PurchaseOrderClient) headers() map[string]string {
 		"provider":       c.cfg.Provider,
 		"configFileName": c.cfg.ConfigFile,
 		"databaseName":   c.cfg.Database,
-		"Content-Type":   "application/json",
+		// charset=utf-8 — see saleorder_client.go for the SML mojibake background
+		"Content-Type": "application/json; charset=utf-8",
 	}
 }
 
@@ -137,13 +138,14 @@ func (r *PurchaseOrderResponse) GetDocNo() string {
 // ─── Create ───────────────────────────────────────────────────────────────────
 
 // CreatePurchaseOrder posts a PO with built-in retry (3 attempts, backoff 1/3/5s).
-func (c *PurchaseOrderClient) CreatePurchaseOrder(payload PurchaseOrderPayload) (int, *PurchaseOrderResponse, error) {
-	body, err := json.Marshal(payload)
+// urlOverride: empty = default; absolute URL = as-is; path = cfg.BaseURL + path.
+func (c *PurchaseOrderClient) CreatePurchaseOrder(payload PurchaseOrderPayload, urlOverride string) (int, *PurchaseOrderResponse, error) {
+	body, err := marshalASCII(payload)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	url := c.cfg.BaseURL + "/SMLJavaRESTService/v3/api/purchaseorder"
+	url := resolveSMLURL(c.cfg.BaseURL, "/SMLJavaRESTService/v3/api/purchaseorder", urlOverride)
 
 	backoffs := []time.Duration{0, 1 * time.Second, 3 * time.Second, 5 * time.Second}
 	var lastResp *PurchaseOrderResponse

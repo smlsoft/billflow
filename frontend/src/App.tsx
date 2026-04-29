@@ -12,6 +12,10 @@ import Settings from './pages/Settings'
 import Logs from './pages/Logs'
 import CatalogSettings from './pages/CatalogSettings'
 import EmailAccounts from './pages/EmailAccounts'
+import ChannelDefaults from './pages/ChannelDefaults'
+import LineOA from './pages/LineOA'
+import Messages from './pages/Messages'
+import QuickReplies from './pages/QuickReplies'
 import Showcase from './pages/Showcase'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -40,6 +44,7 @@ export default function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="bills" element={<Bills />} />
           <Route path="bills/:id" element={<BillDetail />} />
+          <Route path="messages" element={<Messages />} />
           <Route path="import" element={<Import />} />
           <Route path="import/shopee" element={<ShopeeImport />} />
           <Route path="mappings" element={<Mappings />} />
@@ -47,6 +52,9 @@ export default function App() {
           <Route path="logs" element={<Logs />} />
           <Route path="settings/catalog" element={<CatalogSettings />} />
           <Route path="settings/email" element={<EmailAccounts />} />
+          <Route path="settings/channels" element={<ChannelDefaults />} />
+          <Route path="settings/line-oa" element={<LineOA />} />
+          <Route path="settings/quick-replies" element={<QuickReplies />} />
         </Route>
       </Routes>
     </BrowserRouter>

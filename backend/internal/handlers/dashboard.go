@@ -15,6 +15,7 @@ import (
 type DashboardHandler struct {
 	billRepo             *repository.BillRepo
 	insightRepo          *repository.InsightRepo
+	convRepo             *repository.ChatConversationRepo
 	insightSvc           *insight.Service
 	lineConfigured       bool
 	imapConfigured       bool
@@ -27,12 +28,14 @@ type DashboardHandler struct {
 func NewDashboardHandler(
 	billRepo *repository.BillRepo,
 	insightRepo *repository.InsightRepo,
+	convRepo *repository.ChatConversationRepo,
 	insightSvc *insight.Service,
 	log *zap.Logger,
 ) *DashboardHandler {
 	return &DashboardHandler{
 		billRepo:    billRepo,
 		insightRepo: insightRepo,
+		convRepo:    convRepo,
 		insightSvc:  insightSvc,
 		log:         log,
 	}
@@ -48,6 +51,10 @@ func (h *DashboardHandler) SetConfigStatus(line, imap, sml, ai bool, threshold f
 }
 
 // GET /api/dashboard/stats
+//
+// Returns the existing bill stats plus `unread_messages` so the Sidebar can
+// power both the /bills pending badge and the /messages unread badge with a
+// single poll instead of two.
 func (h *DashboardHandler) Stats(c *gin.Context) {
 	stats, err := h.billRepo.DashboardStats()
 	if err != nil {
@@ -55,7 +62,18 @@ func (h *DashboardHandler) Stats(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	c.JSON(http.StatusOK, stats)
+	// Wrap the stats struct as a map so we can attach extra fields without
+	// changing the existing DashboardStats type signature.
+	out := map[string]interface{}{}
+	statsBytes, _ := json.Marshal(stats)
+	_ = json.Unmarshal(statsBytes, &out)
+
+	if h.convRepo != nil {
+		if unread, err := h.convRepo.UnreadCount(); err == nil {
+			out["unread_messages"] = unread
+		}
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // GET /api/dashboard/insights — returns last 7 daily insights

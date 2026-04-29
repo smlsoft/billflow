@@ -6,9 +6,11 @@ import {
   Database,
   Loader2,
   RefreshCcw,
+  RefreshCw,
   RotateCw,
   Search,
   Sparkles,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react'
@@ -25,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { PageHeader } from '@/components/common/PageHeader'
 import api from '@/api/client'
 import { cn } from '@/lib/utils'
@@ -306,6 +309,45 @@ export default function CatalogSettings() {
     }
   }
 
+  // Tracks which row is currently running an action so we can disable
+  // its buttons and show a spinner without blocking the rest of the table.
+  const [busyRow, setBusyRow] = useState<{ code: string; action: 'refresh' | 'delete' } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+
+  async function handleRefreshOne(code: string) {
+    setBusyRow({ code, action: 'refresh' })
+    try {
+      await api.post(`/api/catalog/${code}/refresh`)
+      notify(`รีเฟรช ${code} จาก SML สำเร็จ`)
+      fetchItems(params)
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: { error?: string; not_found?: boolean } } }
+      if (e?.response?.data?.not_found) {
+        notify(`ไม่พบ ${code} ใน SML — ลบจาก BillFlow ได้`, false)
+      } else {
+        notify(e?.response?.data?.error ?? `รีเฟรช ${code} ล้มเหลว`, false)
+      }
+    } finally {
+      setBusyRow(null)
+    }
+  }
+
+  async function handleDeleteOne(code: string) {
+    setBusyRow({ code, action: 'delete' })
+    try {
+      await api.delete(`/api/catalog/${code}`)
+      notify(`ลบ ${code} จาก BillFlow แล้ว (SML ไม่ถูกแตะ)`)
+      fetchStats()
+      fetchItems(params)
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } }
+      notify(e?.response?.data?.error ?? `ลบ ${code} ล้มเหลว`, false)
+    } finally {
+      setBusyRow(null)
+      setPendingDelete(null)
+    }
+  }
+
   const pct = useMemo(
     () => (stats && stats.total > 0 ? Math.round((stats.embedded / stats.total) * 100) : 0),
     [stats],
@@ -494,7 +536,7 @@ export default function CatalogSettings() {
               <TableHead className="w-[100px] text-right">ราคา</TableHead>
               <TableHead className="w-[120px]">สถานะ</TableHead>
               <TableHead className="w-[120px]">Embedded At</TableHead>
-              <TableHead className="w-[80px] text-right">Action</TableHead>
+              <TableHead className="w-[200px] text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -559,16 +601,46 @@ export default function CatalogSettings() {
                       : '—'}
                   </TableCell>
                   <TableCell className="text-right">
-                    {item.embedding_status !== 'done' && (
+                    <div className="flex items-center justify-end gap-1">
+                      {item.embedding_status !== 'done' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => handleEmbedOne(item.item_code)}
+                        >
+                          Embed
+                        </Button>
+                      )}
                       <Button
                         size="sm"
-                        variant="outline"
-                        className="h-7 text-xs"
-                        onClick={() => handleEmbedOne(item.item_code)}
+                        variant="ghost"
+                        className="h-7 px-2"
+                        title="รีเฟรชจาก SML — ดึงชื่อ/หน่วย/balance จาก SML 248 ใหม่"
+                        disabled={busyRow?.code === item.item_code}
+                        onClick={() => handleRefreshOne(item.item_code)}
                       >
-                        Embed
+                        {busyRow?.code === item.item_code && busyRow.action === 'refresh' ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        )}
                       </Button>
-                    )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-destructive hover:text-destructive"
+                        title="ลบจาก BillFlow (SML ไม่ถูกแตะ)"
+                        disabled={busyRow?.code === item.item_code}
+                        onClick={() => setPendingDelete(item.item_code)}
+                      >
+                        {busyRow?.code === item.item_code && busyRow.action === 'delete' ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -590,6 +662,22 @@ export default function CatalogSettings() {
           onChange={(p) => setParams({ page: p })}
         />
       </div>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        onOpenChange={(v) => !v && setPendingDelete(null)}
+        title="ลบสินค้าออกจาก Catalog"
+        description={
+          pendingDelete
+            ? `ลบ ${pendingDelete} ออกจาก BillFlow catalog? — SML 248 จะไม่ถูกแตะ ทำงานเฉพาะ BillFlow ฝั่งเดียว`
+            : ''
+        }
+        confirmLabel="ลบ"
+        variant="destructive"
+        onConfirm={() => {
+          if (pendingDelete) handleDeleteOne(pendingDelete)
+        }}
+      />
     </div>
   )
 }

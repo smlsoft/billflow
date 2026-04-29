@@ -46,6 +46,40 @@ func coalesceStatus(s, fallback string) string {
 	return s
 }
 
+// ListByLineUserID returns recent bills tied to a LINE user, joined via
+// raw_data->>'line_user_id'. Used by the chat customer-history panel
+// (Phase 4.5). Capped to limit; no pagination — keep it simple.
+func (r *BillRepo) ListByLineUserID(lineUserID string, limit int) ([]models.Bill, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := r.db.Query(
+		`SELECT id, bill_type, source, status, sml_doc_no, ai_confidence,
+		        error_msg, created_at, sent_at
+		 FROM bills
+		 WHERE raw_data->>'line_user_id' = $1
+		 ORDER BY created_at DESC
+		 LIMIT $2`,
+		lineUserID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ListByLineUserID: %w", err)
+	}
+	defer rows.Close()
+	var out []models.Bill
+	for rows.Next() {
+		b := models.Bill{}
+		if err := rows.Scan(
+			&b.ID, &b.BillType, &b.Source, &b.Status, &b.SMLDocNo,
+			&b.AIConfidence, &b.ErrorMsg, &b.CreatedAt, &b.SentAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	b := &models.Bill{}
 	var anomaliesRaw []byte

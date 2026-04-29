@@ -1,0 +1,522 @@
+package handlers
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	"billflow/internal/models"
+	"billflow/internal/repository"
+	"billflow/internal/services/ai"
+	lineservice "billflow/internal/services/line"
+	"billflow/internal/services/mistral"
+)
+
+// ChatInboxHandler exposes /api/admin/conversations/* — admin-side endpoints
+// for the human chat inbox. List conversations, fetch messages, send replies,
+// download media, AI-extract a media row, create a bill from chat context,
+// mark-read, unread-count.
+//
+// Multi-OA: SendReply looks up the conversation's line_oa_id and pushes via
+// the matching service from lineRegistry, so each OA's own access_token is
+// used. Falls back to registry.Any() when a conversation has no OA tagged
+// (legacy rows from before migration 014).
+type ChatInboxHandler struct {
+	convRepo     *repository.ChatConversationRepo
+	msgRepo      *repository.ChatMessageRepo
+	mediaRepo    *repository.ChatMediaRepo
+	billRepo     *repository.BillRepo
+	auditRepo    *repository.AuditLogRepo
+	lineRegistry *lineservice.Registry
+	aiClient     *ai.Client
+	ocrClient    *mistral.OCRClient
+	logger       *zap.Logger
+}
+
+func NewChatInboxHandler(
+	convRepo *repository.ChatConversationRepo,
+	msgRepo *repository.ChatMessageRepo,
+	mediaRepo *repository.ChatMediaRepo,
+	billRepo *repository.BillRepo,
+	auditRepo *repository.AuditLogRepo,
+	lineRegistry *lineservice.Registry,
+	aiClient *ai.Client,
+	ocrClient *mistral.OCRClient,
+	logger *zap.Logger,
+) *ChatInboxHandler {
+	return &ChatInboxHandler{
+		convRepo:     convRepo,
+		msgRepo:      msgRepo,
+		mediaRepo:    mediaRepo,
+		billRepo:     billRepo,
+		auditRepo:    auditRepo,
+		lineRegistry: lineRegistry,
+		aiClient:     aiClient,
+		ocrClient:    ocrClient,
+		logger:       logger,
+	}
+}
+
+// pushService returns the LINE service for a given conversation's OA.
+// Falls back to registry.Any() when the row has no line_oa_id (legacy).
+func (h *ChatInboxHandler) pushService(conv *models.ChatConversation) *lineservice.Service {
+	if conv != nil && conv.LineOAID != nil && *conv.LineOAID != "" {
+		if svc := h.lineRegistry.Get(*conv.LineOAID); svc != nil {
+			return svc
+		}
+	}
+	return h.lineRegistry.Any()
+}
+
+// ── Conversation list ────────────────────────────────────────────────────────
+
+// GET /api/admin/conversations?unread=true&limit=50&offset=0
+func (h *ChatInboxHandler) ListConversations(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	unreadOnly := c.Query("unread") == "true"
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := h.convRepo.List(limit, offset, unreadOnly)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	total, _ := h.convRepo.CountAll(unreadOnly)
+	c.JSON(http.StatusOK, gin.H{
+		"data":   rows,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+// GET /api/admin/conversations/unread-count
+func (h *ChatInboxHandler) UnreadCount(c *gin.Context) {
+	n, err := h.convRepo.UnreadCount()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"count": n})
+}
+
+// ── Messages within a conversation ───────────────────────────────────────────
+
+// GET /api/admin/conversations/:lineUserId/messages?since=ISO&limit=100
+func (h *ChatInboxHandler) ListMessages(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	var since *time.Time
+	if s := c.Query("since"); s != "" {
+		t, err := time.Parse(time.RFC3339Nano, s)
+		if err == nil {
+			since = &t
+		}
+	}
+	rows, err := h.msgRepo.ListByUser(lineUserID, since, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	conv, _ := h.convRepo.Get(lineUserID)
+	c.JSON(http.StatusOK, gin.H{
+		"data":         rows,
+		"conversation": conv,
+	})
+}
+
+// ── Admin sends a text reply ─────────────────────────────────────────────────
+
+type sendReplyRequest struct {
+	Text string `json:"text" binding:"required"`
+}
+
+// POST /api/admin/conversations/:lineUserId/messages
+//
+// Inserts an outgoing chat_message in DB (status=pending) → calls LINE Push API
+// → updates status to sent or failed depending on the result.
+// Returns the persisted row so the client can render it immediately.
+func (h *ChatInboxHandler) SendReply(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	var req sendReplyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	text := strings.TrimSpace(req.Text)
+	if text == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty text"})
+		return
+	}
+
+	// Look up the conversation to determine which OA's token to push with.
+	conv, _ := h.convRepo.Get(lineUserID)
+	if conv == nil {
+		// Stub row so the FK on chat_messages doesn't fail. No OA tagged —
+		// pushService falls back to registry.Any() in single-OA setups.
+		_, _, _ = h.convRepo.Upsert(lineUserID, "", "")
+		conv, _ = h.convRepo.Get(lineUserID)
+	}
+
+	svc := h.pushService(conv)
+	if svc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "LINE OA not configured — go to /settings/line-oa to add one",
+		})
+		return
+	}
+
+	var senderID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		senderID = &uid
+	}
+
+	m := &models.ChatMessage{
+		LineUserID:     lineUserID,
+		Direction:      models.ChatDirectionOutgoing,
+		Kind:           models.ChatKindText,
+		TextContent:    text,
+		SenderAdminID:  senderID,
+		DeliveryStatus: models.ChatDeliveryPending,
+	}
+	if err := h.msgRepo.Insert(m); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Push via the right OA's LINE service.
+	if err := svc.PushText(lineUserID, text); err != nil {
+		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, err.Error())
+		m.DeliveryStatus = models.ChatDeliveryFailed
+		m.DeliveryError = err.Error()
+		h.logger.Warn("LINE push failed", zap.String("user", lineUserID), zap.Error(err))
+		// Still 200 — UI shows the bubble with ⚠ + retry.
+		c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "failed"})
+		return
+	}
+
+	_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliverySent, "")
+	m.DeliveryStatus = models.ChatDeliverySent
+	_ = h.convRepo.TouchLastMessage(lineUserID, false)
+
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "line_admin_reply",
+			UserID:  senderID,
+			Source:  "line",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail:  map[string]interface{}{"line_user_id": lineUserID, "message_id": m.ID},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "sent"})
+}
+
+// ── Customer history (Phase 4.5) ─────────────────────────────────────────────
+
+// GET /api/admin/conversations/:lineUserId/history
+//
+// Returns the bills this LINE customer has placed (joined via raw_data->>
+// 'line_user_id') so admin can see "this person ordered X last week" right
+// next to the chat thread.
+func (h *ChatInboxHandler) CustomerHistory(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	rows, err := h.billRepo.ListByLineUserID(lineUserID, 10)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+// ── Mark conversation as read ────────────────────────────────────────────────
+
+// POST /api/admin/conversations/:lineUserId/mark-read
+func (h *ChatInboxHandler) MarkRead(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	if err := h.convRepo.MarkRead(lineUserID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ── Media file download (image/file/audio) ───────────────────────────────────
+
+// GET /api/admin/conversations/:lineUserId/messages/:messageId/media
+//
+// Streams the binary content with the original Content-Type, so an <img> tag
+// or <audio> tag can render it directly. The :lineUserId in the URL is for
+// REST aesthetics — auth is the same as everything else (admin/staff JWT).
+func (h *ChatInboxHandler) DownloadMedia(c *gin.Context) {
+	messageID := c.Param("messageId")
+	if messageID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "messageId required"})
+		return
+	}
+	media, err := h.mediaRepo.GetByMessageID(messageID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if media == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "media not found"})
+		return
+	}
+	data, _, err := h.mediaRepo.ReadBytes(media.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ct := media.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	c.Header("Content-Disposition", "inline; filename=\""+media.Filename+"\"")
+	c.Data(http.StatusOK, ct, data)
+}
+
+// ── Manual AI extract on a media message ─────────────────────────────────────
+
+// POST /api/admin/conversations/:lineUserId/messages/:messageId/extract
+//
+// Runs the appropriate AI extractor on the attached media and returns the
+// preview ExtractedBill. Does NOT write anything to DB — admin then chooses
+// to "ใช้ข้อมูลนี้สร้างบิล" which triggers the bill-create endpoint below.
+func (h *ChatInboxHandler) ExtractFromMedia(c *gin.Context) {
+	messageID := c.Param("messageId")
+	if messageID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "messageId required"})
+		return
+	}
+	if h.aiClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI client not configured"})
+		return
+	}
+
+	msg, err := h.msgRepo.Get(messageID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if msg == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "message not found"})
+		return
+	}
+
+	media, err := h.mediaRepo.GetByMessageID(messageID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if media == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "message has no media to extract"})
+		return
+	}
+	data, _, err := h.mediaRepo.ReadBytes(media.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var extracted *ai.ExtractedBill
+	switch msg.Kind {
+	case models.ChatKindImage:
+		extracted, err = h.aiClient.ExtractImage(base64.StdEncoding.EncodeToString(data), media.ContentType)
+	case models.ChatKindFile:
+		// Treat as PDF — Mistral OCR if configured, else direct AI.
+		if !strings.Contains(strings.ToLower(media.ContentType), "pdf") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "only PDF files supported for now"})
+			return
+		}
+		if h.ocrClient != nil && h.ocrClient.IsConfigured() {
+			ocrText, oerr := h.ocrClient.ExtractTextFromPDF(base64.StdEncoding.EncodeToString(data))
+			if oerr != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "OCR failed: " + oerr.Error()})
+				return
+			}
+			extracted, err = h.aiClient.ExtractText(ocrText)
+		} else {
+			extracted, err = h.aiClient.ExtractPDF(base64.StdEncoding.EncodeToString(data))
+		}
+	case models.ChatKindAudio:
+		text, terr := h.aiClient.TranscribeAudio(data)
+		if terr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "transcription failed: " + terr.Error()})
+			return
+		}
+		extracted, err = h.aiClient.ExtractText(text)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media kind not extractable: " + msg.Kind})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if extracted == nil {
+		c.JSON(http.StatusOK, gin.H{"extracted": nil, "note": "no items detected"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"extracted": extracted})
+}
+
+// ── Create bill from a conversation ──────────────────────────────────────────
+
+type createBillFromChatRequest struct {
+	CustomerName  string                  `json:"customer_name"`
+	CustomerPhone string                  `json:"customer_phone"`
+	Note          string                  `json:"note"`
+	Items         []chatBillItemInputRow `json:"items" binding:"required,min=1"`
+}
+
+type chatBillItemInputRow struct {
+	ItemCode string  `json:"item_code"`
+	RawName  string  `json:"raw_name" binding:"required"`
+	UnitCode string  `json:"unit_code"`
+	Qty      float64 `json:"qty" binding:"required,gt=0"`
+	Price    float64 `json:"price"`
+}
+
+// POST /api/admin/conversations/:lineUserId/bills
+//
+// Creates a Bill with source="line", status="pending", raw_data.line_user_id =
+// the conversation's userID. Items are inserted as bill_items rows. The bill
+// then shows up in /bills and the admin can use the existing Retry button to
+// push it to SML 213 sale_reserve — no new SML code path.
+func (h *ChatInboxHandler) CreateBill(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	var req createBillFromChatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	conv, _ := h.convRepo.Get(lineUserID)
+	customerName := strings.TrimSpace(req.CustomerName)
+	if customerName == "" && conv != nil {
+		customerName = conv.DisplayName
+	}
+
+	rawData := map[string]interface{}{
+		"flow":         "line_chat",
+		"line_user_id": lineUserID,
+		"customer_name": customerName,
+	}
+	if req.CustomerPhone != "" {
+		rawData["customer_phone"] = req.CustomerPhone
+	}
+	if req.Note != "" {
+		rawData["note"] = req.Note
+	}
+	rawJSON, _ := json.Marshal(rawData)
+
+	conf := 1.0 // human-curated, not AI
+	bill := &models.Bill{
+		BillType:     "sale",
+		Source:       "line",
+		Status:       "pending",
+		RawData:      rawJSON,
+		AIConfidence: &conf,
+	}
+	if uid := c.GetString("user_id"); uid != "" {
+		bill.CreatedBy = &uid
+	}
+	if err := h.billRepo.Create(bill); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	for _, it := range req.Items {
+		bi := &models.BillItem{
+			BillID:  bill.ID,
+			RawName: it.RawName,
+			Qty:     it.Qty,
+		}
+		if it.ItemCode != "" {
+			code := it.ItemCode
+			bi.ItemCode = &code
+			bi.Mapped = true
+		}
+		if it.UnitCode != "" {
+			unit := it.UnitCode
+			bi.UnitCode = &unit
+		}
+		if it.Price > 0 {
+			price := it.Price
+			bi.Price = &price
+		}
+		if err := h.billRepo.InsertItem(bi); err != nil {
+			h.logger.Warn("insert bill item from chat",
+				zap.String("bill_id", bill.ID), zap.Error(err))
+		}
+	}
+
+	// Drop a system message in the chat thread so the conversation has a
+	// breadcrumb pointing to the bill (helps admins picking up the thread later).
+	systemText := "📄 สร้างบิลขายแล้ว — รอตรวจสอบและส่ง SML"
+	sysMsg := &models.ChatMessage{
+		LineUserID:  lineUserID,
+		Direction:   models.ChatDirectionSystem,
+		Kind:        models.ChatKindSystem,
+		TextContent: systemText,
+	}
+	_ = h.msgRepo.Insert(sysMsg)
+	_ = h.convRepo.TouchLastMessage(lineUserID, false)
+
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		billIDStr := bill.ID
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "bill_created",
+			TargetID: &billIDStr,
+			UserID:   userID,
+			Source:   "line_chat",
+			Level:    "info",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"line_user_id": lineUserID,
+				"items_count":  len(req.Items),
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"bill_id": bill.ID,
+		"message": "สร้างบิลแล้ว — กรุณาตรวจสอบและกดส่ง SML ใน /bills",
+	})
+}

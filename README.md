@@ -93,7 +93,7 @@ Go Backend (Gin) :8090
   ├── POST /api/auth/login
   ├── GET  /api/bills                       ← list (filter: status/source/bill_type)
   ├── GET  /api/bills/:id
-  ├── POST /api/bills/:id/retry             ← 3-way SML send (manual confirm)
+  ├── POST /api/bills/:id/retry             ← 4-way SML send (saleorder/saleinvoice/purchaseorder/sale_reserve)
   ├── PUT  /api/bills/:id/items/:item_id    ← edit item + F1 auto-learn
   ├── POST /api/bills/:id/items             ← add new line item
   ├── DEL  /api/bills/:id/items/:item_id    ← delete line item
@@ -118,7 +118,13 @@ Go Backend (Gin) :8090
   ├── POST /api/import/shopee/preview       ← parse + dedup check
   ├── POST /api/import/shopee/confirm       ← ส่ง SML 248
   ├── GET  /api/settings/column-mappings/:platform
-  └── PUT  /api/settings/column-mappings/:platform
+  ├── PUT  /api/settings/column-mappings/:platform
+  ├── GET/PUT/DEL /api/settings/channel-defaults  ← per-channel cust_code (admin)
+  ├── POST /api/settings/channel-defaults/quick-setup
+  ├── GET  /api/sml/customers                      ← PartyCache search
+  ├── GET  /api/sml/suppliers
+  ├── POST /api/sml/refresh-parties
+  └── GET  /api/sml/parties/last-sync
          │
     ┌────┴────┐
 PostgreSQL   External APIs
@@ -220,7 +226,8 @@ SHOPEE_SML_PROVIDER=SML1
 SHOPEE_SML_CONFIG_FILE=SMLConfigSML1.xml
 SHOPEE_SML_DATABASE=SMLPLOY
 SHOPEE_SML_DOC_FORMAT=IV
-SHOPEE_SML_CUST_CODE=       # รหัสลูกค้า Shopee ใน SML
+# cust_code per channel → managed via /settings/channels admin UI (channel_defaults table)
+# SHOPEE_SML_CUST_CODE removed — set party_code in /settings/channels instead
 SHOPEE_SML_SALE_CODE=       # รหัสพนักงานขาย
 SHOPEE_SML_WH_CODE=         # รหัสคลัง (fallback)
 SHOPEE_SML_SHELF_CODE=      # รหัสชั้นวาง (fallback)
@@ -258,7 +265,8 @@ platform_column_mappings    -- Lazada/Shopee column name config
 audit_logs                  -- structured log (source, level, duration_ms, trace_id)
 chat_sessions               -- LINE conversation state (persistent)
 sml_catalog                 -- SML product catalog + 1536-dim embeddings
-channel_customer_defaults   -- default cust_code per channel
+channel_defaults            -- per (channel, bill_type): party_code/name + endpoint URL + doc_format + doc_prefix + running format + WH/Shelf/VAT override
+doc_counters                -- atomic per-prefix per-period sequential doc_no generator (avoids SML UI bug)
 imap_accounts               -- multi-account IMAP config (replaces .env IMAP_* singleton)
 ```
 
@@ -270,9 +278,18 @@ Migrations (run in order, all idempotent):
 - [001_init.sql](backend/internal/database/migrations/001_init.sql) — initial schema
 - [002_audit_logging.sql](backend/internal/database/migrations/002_audit_logging.sql) — audit_logs structured columns
 - [002_sml_catalog.sql](backend/internal/database/migrations/002_sml_catalog.sql) — sml_catalog + sml_order_id + candidates + extended source/status CHECK
-- [003_channel_customer_defaults.sql](backend/internal/database/migrations/003_channel_customer_defaults.sql) — channel_customer_defaults
+- [003_channel_customer_defaults.sql](backend/internal/database/migrations/003_channel_customer_defaults.sql) — channel_customer_defaults (legacy, renamed to _v1 by 007)
 - [004_shopee_shipped.sql](backend/internal/database/migrations/004_shopee_shipped.sql) — bills.source shopee_shipped
 - [006_imap_accounts.sql](backend/internal/database/migrations/006_imap_accounts.sql) — imap_accounts table
+- [007_channel_defaults.sql](backend/internal/database/migrations/007_channel_defaults.sql) — channel_defaults table (replaces .env SHOPEE_SML_CUST_CODE / SHIPPED_SML_CUST_CODE)
+- [008_channel_defaults_doc_format.sql](backend/internal/database/migrations/008_channel_defaults_doc_format.sql) — adds doc_format_code column
+- [009_channel_defaults_endpoint.sql](backend/internal/database/migrations/009_channel_defaults_endpoint.sql) — adds endpoint column
+- [010_channel_defaults_endpoint_freeform.sql](backend/internal/database/migrations/010_channel_defaults_endpoint_freeform.sql) — drops CHECK; free-form URL/path
+- [011_doc_no_format.sql](backend/internal/database/migrations/011_doc_no_format.sql) — doc_prefix + doc_running_format + doc_counters table
+- [012_channel_defaults_inventory.sql](backend/internal/database/migrations/012_channel_defaults_inventory.sql) — adds wh_code + shelf_code + vat_type + vat_rate per channel (sentinel '' / -1 = "use server .env")
+- [013_chat_inbox.sql](backend/internal/database/migrations/013_chat_inbox.sql) — drops chat_sessions, creates chat_conversations + chat_messages + chat_media (LINE chatbot → human chat refactor — session 13)
+- [014_line_oa_accounts.sql](backend/internal/database/migrations/014_line_oa_accounts.sql) — line_oa_accounts table + chat_conversations.line_oa_id (multi-OA: 1 BillFlow ↔ N LINE OAs — session 13)
+- [015_chat_quick_replies.sql](backend/internal/database/migrations/015_chat_quick_replies.sql) — chat_quick_replies table + 4 seed templates for the chat composer (Phase 4.4 — session 13)
 
 ---
 
@@ -329,6 +346,19 @@ Migrations (run in order, all idempotent):
 | GET | `/api/settings/status` | JWT | Connection status |
 | GET | `/api/settings/column-mappings/:platform` | JWT | Column mapping config |
 | PUT | `/api/settings/column-mappings/:platform` | admin | Update column mapping |
+
+### Settings — Channel Defaults (admin only)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/settings/channel-defaults` | admin | List all (channel, bill_type) rows |
+| PUT | `/api/settings/channel-defaults` | admin | Upsert row — set party_code/name per channel |
+| DELETE | `/api/settings/channel-defaults/:channel/:bill_type` | admin | Delete row |
+| POST | `/api/settings/channel-defaults/quick-setup` | admin | Auto-pair channels with SML placeholder AR00001-04 |
+| GET | `/api/sml/customers` | admin/staff | Searchable customer list (PartyCache) |
+| GET | `/api/sml/suppliers` | admin/staff | Searchable supplier list (PartyCache) |
+| POST | `/api/sml/refresh-parties` | admin | Re-fetch party master from SML |
+| GET | `/api/sml/parties/last-sync` | admin/staff | Last sync timestamp |
 
 ### Settings — Email Inboxes (admin only)
 
@@ -766,7 +796,7 @@ sudo systemctl start cloudflared
 | 4b | Lazada import: Excel parser + Web UI | ⏳ รอไฟล์จากลูกค้า |
 | 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped → PO) | ✅ Done |
 | 5+ | Manual-confirm flow — auto-send removed; user confirms in BillDetail UI | ✅ Done |
-| 6 | Web UI: Dashboard, Bills, BillDetail (edit/add/delete items, MapItemModal), Mappings, Settings, Catalog, Logs | ✅ Done + UX cleanup pass (13 issues) |
+| 6 | Web UI complete. Session 6: Tailwind/shadcn redesign + multi-account IMAP + artifacts. Session 7: channel_defaults + /settings/channels + SML party cache. Session 7-10: saleorder default + endpoint URL + doc_no generator + /logs redesign. Session 11: per-channel WH/Shelf/VAT override + ShopeeImport dialog removed + scrollable EditDialog. Session 12: marshalASCII permanent SML mojibake fix + catalog per-row Refresh/Delete. Session 13: LINE chatbot → human chat inbox + multi-OA (/messages, /settings/line-oa, webhook /webhook/line/:oaId, ~900 LOC chatbot removed) + Phase 4 quick wins (4.4 quick replies, 4.5 customer history panel, 4.11 browser notifications + chime) | ✅ Done |
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
@@ -987,4 +1017,4 @@ bash scripts/test.sh all 192.168.2.109:8090
 
 ---
 
-*BillFlow v0.2.0 — Last updated: 2026-04-24 | Server: 192.168.2.109 | Ports: backend:8090 / frontend:3010 / postgres:5438*
+*BillFlow v0.2.0 — Last updated: 2026-04-28 | Server: 192.168.2.109 | Ports: backend:8090 / frontend:3010 / postgres:5438*

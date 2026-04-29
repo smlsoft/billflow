@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -52,7 +53,8 @@ func (c *InvoiceClient) headers() map[string]string {
 		"provider":       c.cfg.Provider,
 		"configFileName": c.cfg.ConfigFile,
 		"databaseName":   c.cfg.Database,
-		"Content-Type":   "application/json",
+		// charset=utf-8 — see saleorder_client.go for the SML mojibake background
+		"Content-Type": "application/json; charset=utf-8",
 	}
 }
 
@@ -234,13 +236,14 @@ func (r *InvoiceResponse) GetDocNo() string {
 }
 
 // CreateInvoice posts a saleinvoice to SML and returns the response.
-func (c *InvoiceClient) CreateInvoice(payload InvoicePayload) (int, *InvoiceResponse, error) {
-	body, err := json.Marshal(payload)
+// urlOverride: empty = default; absolute URL = as-is; path = cfg.BaseURL + path.
+func (c *InvoiceClient) CreateInvoice(payload InvoicePayload, urlOverride string) (int, *InvoiceResponse, error) {
+	body, err := marshalASCII(payload)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	url := c.cfg.BaseURL + "/SMLJavaRESTService/restapi/saleinvoice"
+	url := resolveSMLURL(c.cfg.BaseURL, "/SMLJavaRESTService/restapi/saleinvoice", urlOverride)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
@@ -332,6 +335,28 @@ func CalcItemVAT(price, qty float64, vatType int, vatRate float64) CalcVATResult
 		VATAmount:        vatAmount,
 		SumAmountExclVAT: sumExc,
 	}
+}
+
+// resolveSMLURL combines a base URL with the per-call override.
+//   - override = ""  → baseURL + defaultPath
+//   - override starts with "http://" or "https://" → use as-is (absolute)
+//   - override starts with "/" → baseURL + override (path swap)
+//   - anything else → treat as path (prepend "/")
+//
+// Lets admins on /settings/channels point a channel at any SML host/path
+// without redeploying — see handlers/bills.go:resolveEndpoint for keyword
+// detection that picks which client to call.
+func resolveSMLURL(baseURL, defaultPath, override string) string {
+	if override == "" {
+		return baseURL + defaultPath
+	}
+	if strings.HasPrefix(override, "http://") || strings.HasPrefix(override, "https://") {
+		return override
+	}
+	if !strings.HasPrefix(override, "/") {
+		override = "/" + override
+	}
+	return baseURL + override
 }
 
 func round2(v float64) float64 { return math.Round(v*100) / 100 }

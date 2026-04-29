@@ -336,11 +336,31 @@ func isShippedSubject(subject string) bool {
 		strings.Contains(subject, "ยืนยันการชำระเงิน")
 }
 
-// isShopeeFrom returns true if the from address matches any of the configured domains.
+// isShopeeFrom returns true if the from address matches any of the configured
+// entries. Each entry may be either:
+//   - a domain like "shopee.co.th" → matches if from ends with "@shopee.co.th"
+//   - a full email like "user@example.com" → matches the exact address (used
+//     for forwarded mail where a single forwarder relays Shopee notifications
+//     into the bot's inbox under their own gmail address)
 func isShopeeFrom(from string, domains []string) bool {
-	from = strings.ToLower(from)
+	from = strings.ToLower(strings.TrimSpace(from))
+	if from == "" {
+		return false
+	}
 	for _, d := range domains {
-		if strings.HasSuffix(from, "@"+strings.ToLower(d)) {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == "" {
+			continue
+		}
+		// Full email entry → exact match
+		if strings.Contains(d, "@") {
+			if from == d {
+				return true
+			}
+			continue
+		}
+		// Domain entry → suffix match against @<domain>
+		if strings.HasSuffix(from, "@"+d) {
 			return true
 		}
 	}

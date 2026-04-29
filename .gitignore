@@ -25,3 +25,9 @@ backups/*.sql
 .vscode/settings.json
 *.swp
 backend/server
+
+# Claude Code per-project state (agents, plans, settings)
+.claude/
+
+# Ad-hoc local scripts / scratch notes
+delete_bills.md

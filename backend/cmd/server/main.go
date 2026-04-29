@@ -20,6 +20,7 @@ import (
 	"billflow/internal/handlers"
 	"billflow/internal/jobs"
 	"billflow/internal/middleware"
+	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
 	"billflow/internal/services/anomaly"
@@ -66,9 +67,15 @@ func main() {
 	insightRepo := repository.NewInsightRepo(db)
 	platformRepo := repository.NewPlatformMappingRepo(db)
 	auditLogRepo := repository.NewAuditLogRepo(db)
-	chatRepo := repository.NewChatSessionRepo(db)
 	catalogRepo := repository.NewSMLCatalogRepo(db)
 	artifactRepo := repository.NewBillArtifactRepo(db)
+	channelDefaultRepo := repository.NewChannelDefaultRepo(db)
+	docCounterRepo := repository.NewDocCounterRepo(db)
+	chatConvRepo := repository.NewChatConversationRepo(db)
+	chatMessageRepo := repository.NewChatMessageRepo(db)
+	chatMediaRepo := repository.NewChatMediaRepo(db, cfg.ArtifactsDir, cfg.ArtifactsMaxBytes)
+	chatQuickReplyRepo := repository.NewChatQuickReplyRepo(db)
+	lineOARepo := repository.NewLineOAAccountRepo(db)
 
 	// Services
 	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel)
@@ -77,12 +84,16 @@ func main() {
 	smlClient := sml.New(sml.Config{
 		BaseURL: cfg.SMLBaseURL,
 	})
-	mcpClient := sml.NewMCPClient(cfg.SMLBaseURL)
+	// MCPClient (sml.NewMCPClient) was used by the AI chatbot for product
+	// inquiry — removed in session 13. The MCP client code itself is kept
+	// in services/sml/mcp.go in case future flows need it.
 	insightSvc := insight.New(aiClient)
 	artifactSvc := artifact.New(cfg.ArtifactsDir, cfg.ArtifactsMaxBytes, artifactRepo, logger)
 	pool := worker.New()
 
-	// Shopee SML 248 REST clients — saleinvoice (existing flow) + purchaseorder (shipped emails)
+	// Shopee SML 248 REST clients — saleorder (default sale path), saleinvoice
+	// (kept for admins who pin endpoint='saleinvoice' on a channel) + purchaseorder.
+	// CustCode is filled at request time from channel_defaults — see handlers/bills.go.
 	invoiceClient := sml.NewInvoiceClient(sml.InvoiceConfig{
 		BaseURL:    cfg.ShopeeSMLURL,
 		GUID:       cfg.ShopeeSMLGUID,
@@ -90,7 +101,6 @@ func main() {
 		ConfigFile: cfg.ShopeeSMLConfigFile,
 		Database:   cfg.ShopeeSMLDatabase,
 		DocFormat:  cfg.ShopeeSMLDocFormat,
-		CustCode:   cfg.ShopeeSMLCustCode,
 		SaleCode:   cfg.ShopeeSMLSaleCode,
 		BranchCode: cfg.ShopeeSMLBranchCode,
 		WHCode:     cfg.ShopeeSMLWHCode,
@@ -100,10 +110,22 @@ func main() {
 		VATRate:    cfg.ShopeeSMLVATRate,
 		DocTime:    cfg.ShopeeSMLDocTime,
 	}, logger)
-	shippedCustCode := cfg.ShippedSMLCustCode
-	if shippedCustCode == "" {
-		shippedCustCode = cfg.ShopeeSMLCustCode
-	}
+	saleOrderClient := sml.NewSaleOrderClient(sml.SaleOrderConfig{
+		BaseURL:    cfg.ShopeeSMLURL,
+		GUID:       cfg.ShopeeSMLGUID,
+		Provider:   cfg.ShopeeSMLProvider,
+		ConfigFile: cfg.ShopeeSMLConfigFile,
+		Database:   cfg.ShopeeSMLDatabase,
+		DocFormat:  cfg.ShopeeSMLDocFormat,
+		SaleCode:   cfg.ShopeeSMLSaleCode,
+		BranchCode: cfg.ShopeeSMLBranchCode,
+		WHCode:     cfg.ShopeeSMLWHCode,
+		ShelfCode:  cfg.ShopeeSMLShelfCode,
+		UnitCode:   cfg.ShopeeSMLUnitCode,
+		VATType:    cfg.ShopeeSMLVATType,
+		VATRate:    cfg.ShopeeSMLVATRate,
+		DocTime:    cfg.ShopeeSMLDocTime,
+	}, logger)
 	productClient := sml.NewProductClient(
 		cfg.ShopeeSMLURL,
 		cfg.ShopeeSMLGUID,
@@ -119,7 +141,6 @@ func main() {
 		ConfigFile: cfg.ShopeeSMLConfigFile,
 		Database:   cfg.ShopeeSMLDatabase,
 		DocFormat:  cfg.ShippedSMLDocFormat,
-		CustCode:   shippedCustCode,
 		SaleCode:   cfg.ShopeeSMLSaleCode,
 		BranchCode: cfg.ShopeeSMLBranchCode,
 		WHCode:     cfg.ShopeeSMLWHCode,
@@ -129,6 +150,18 @@ func main() {
 		VATRate:    cfg.ShopeeSMLVATRate,
 		DocTime:    cfg.ShopeeSMLDocTime,
 	}, logger)
+
+	// SML party cache — fetches all customer + supplier records from SML 248
+	// at boot, refreshes every 6 h. Powers the /settings/channels picker.
+	partyClient := sml.NewPartyClient(sml.PartyConfig{
+		BaseURL:    cfg.ShopeeSMLURL,
+		GUID:       cfg.ShopeeSMLGUID,
+		Provider:   cfg.ShopeeSMLProvider,
+		ConfigFile: cfg.ShopeeSMLConfigFile,
+		Database:   cfg.ShopeeSMLDatabase,
+	}, logger)
+	partyCache := sml.NewPartyCache(partyClient, logger)
+	partyCache.Start(context.Background())
 
 	// SML catalog services for Shopee email smart matching
 	smlHeaders := map[string]string{
@@ -147,13 +180,43 @@ func main() {
 		logger.Info("catalog: index loaded", zap.Int("size", catalogIdx.Size()))
 	}
 
-	// LINE service (optional — skip if not configured)
+	// LINE service (legacy single instance) — kept for PushAdmin paths used by
+	// insight cron, disk monitor, and email coordinator error notifications.
+	// The chat inbox uses lineRegistry instead so each conversation routes to
+	// the right OA's access_token.
 	var lineSvc *lineservice.Service
 	if cfg.LineChannelSecret != "" && cfg.LineChannelAccessToken != "" {
 		lineSvc, err = lineservice.New(cfg.LineChannelSecret, cfg.LineChannelAccessToken, cfg.LineAdminUserID)
 		if err != nil {
 			logger.Warn("LINE service init failed", zap.Error(err))
 		}
+	}
+
+	// Multi-OA registry. Seeds a default OA from LINE_* env vars on first boot
+	// (when line_oa_accounts is empty) so existing single-OA installs keep
+	// working without admin intervention.
+	lineRegistry := lineservice.NewRegistry(lineOARepo, logger)
+	if empty, _ := lineOARepo.IsEmpty(); empty {
+		if cfg.LineChannelSecret != "" && cfg.LineChannelAccessToken != "" {
+			seed := &models.LineOAAccount{
+				Name:               "Default (from .env)",
+				ChannelSecret:      cfg.LineChannelSecret,
+				ChannelAccessToken: cfg.LineChannelAccessToken,
+				AdminUserID:        cfg.LineAdminUserID,
+				Greeting:           cfg.LineGreeting,
+				Enabled:            true,
+			}
+			if err := lineOARepo.Create(seed); err != nil {
+				logger.Warn("seed default LINE OA failed", zap.Error(err))
+			} else {
+				logger.Info("seeded default LINE OA from env",
+					zap.String("oa_id", seed.ID),
+					zap.String("name", seed.Name))
+			}
+		}
+	}
+	if err := lineRegistry.Reload(); err != nil {
+		logger.Warn("LINE OA registry initial reload failed", zap.Error(err))
 	}
 
 	// Email service — multi-account coordinator. Reads imap_accounts table
@@ -212,9 +275,9 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, artifactSvc, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
-	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, insightSvc, logger)
+	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, insightSvc, logger)
 	imapConfigured := false
 	if accs, err := imapAccountRepo.ListEnabled(); err == nil && len(accs) > 0 {
 		imapConfigured = true
@@ -226,19 +289,26 @@ func main() {
 		cfg.OpenRouterAPIKey != "",
 		cfg.AutoConfirmThreshold,
 	)
-	lineH := handlers.NewLineHandler(lineSvc, aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, mcpClient, billRepo, auditLogRepo, chatRepo, pool, cfg.AutoConfirmThreshold, logger)
+	lineH := handlers.NewLineHandler(lineRegistry, chatConvRepo, chatMessageRepo, chatMediaRepo, auditLogRepo, pool, cfg, logger)
+	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, logger)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetArtifactService(artifactSvc)
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, cfg.AutoConfirmThreshold, logger)
-	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, cfg.AutoConfirmThreshold, logger)
-	shopeeH := handlers.NewShopeeImportHandler(billRepo, auditLogRepo, cfg, catalogSvc, embSvc, catalogIdx, logger)
+	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, channelDefaultRepo, cfg.AutoConfirmThreshold, logger)
+	shopeeH := handlers.NewShopeeImportHandler(billRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, logger)
 	shopeeH.SetArtifactService(artifactSvc)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
+	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, partyCache, logger)
+	smlPartyH := handlers.NewSMLPartyHandler(partyCache, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
 
 	// Webhooks (no auth)
+	// Webhook routes:
+	//   /webhook/line/:oaId  → multi-OA URL (admin pastes from /settings/line-oa)
+	//   /webhook/line        → legacy single-OA fallback (resolves via Destination → Any())
+	r.POST("/webhook/line/:oaId", lineH.Webhook)
 	r.POST("/webhook/line", lineH.Webhook)
 
 	// Auth (rate-limited: 10 req/min per IP)
@@ -292,6 +362,18 @@ func main() {
 		api.GET("/settings/column-mappings/:platform", settingsH.GetColumnMappings)
 		api.PUT("/settings/column-mappings/:platform", middleware.RequireRole("admin"), settingsH.UpdateColumnMappings)
 
+		// Channel defaults (admin only) — per-(channel, bill_type) party config
+		api.GET("/settings/channel-defaults", middleware.RequireRole("admin"), channelDefaultsH.List)
+		api.PUT("/settings/channel-defaults", middleware.RequireRole("admin"), channelDefaultsH.Upsert)
+		api.DELETE("/settings/channel-defaults/:channel/:bill_type", middleware.RequireRole("admin"), channelDefaultsH.Delete)
+		api.POST("/settings/channel-defaults/quick-setup", middleware.RequireRole("admin"), channelDefaultsH.QuickSetup)
+
+		// SML party master proxy — search customers/suppliers from cache
+		api.GET("/sml/customers", middleware.RequireRole("admin", "staff"), smlPartyH.SearchCustomers)
+		api.GET("/sml/suppliers", middleware.RequireRole("admin", "staff"), smlPartyH.SearchSuppliers)
+		api.POST("/sml/refresh-parties", middleware.RequireRole("admin"), smlPartyH.Refresh)
+		api.GET("/sml/parties/last-sync", middleware.RequireRole("admin", "staff"), smlPartyH.LastSync)
+
 		// IMAP accounts (admin only) — multi-mailbox config
 		api.GET("/settings/imap-accounts", middleware.RequireRole("admin"), imapSettingsH.List)
 		api.POST("/settings/imap-accounts", middleware.RequireRole("admin"), imapSettingsH.Create)
@@ -313,9 +395,50 @@ func main() {
 		api.POST("/catalog/embed-all", middleware.RequireRole("admin"), catalogH.EmbedAll)
 		api.POST("/catalog/reload-index", middleware.RequireRole("admin"), catalogH.ReloadIndex)
 		api.POST("/catalog/:code/embed", middleware.RequireRole("admin"), catalogH.EmbedOne)
+		api.POST("/catalog/:code/refresh", middleware.RequireRole("admin"), catalogH.RefreshOne)
+		api.DELETE("/catalog/:code", middleware.RequireRole("admin"), catalogH.DeleteOne)
 
 		// Confirm catalog match for a needs_review bill item
 		api.POST("/bills/:id/items/:item_id/confirm-match", middleware.RequireRole("admin", "staff"), catalogH.ConfirmMatch)
+
+		// Chat inbox (LINE OA human-to-human conversations)
+		chatGroup := api.Group("/admin/conversations")
+		chatGroup.Use(middleware.RequireRole("admin", "staff"))
+		{
+			chatGroup.GET("", chatInboxH.ListConversations)
+			chatGroup.GET("/unread-count", chatInboxH.UnreadCount)
+			chatGroup.GET("/:lineUserId/messages", chatInboxH.ListMessages)
+			chatGroup.POST("/:lineUserId/messages", chatInboxH.SendReply)
+			chatGroup.POST("/:lineUserId/mark-read", chatInboxH.MarkRead)
+			chatGroup.GET("/:lineUserId/messages/:messageId/media", chatInboxH.DownloadMedia)
+			chatGroup.POST("/:lineUserId/messages/:messageId/extract", chatInboxH.ExtractFromMedia)
+			chatGroup.POST("/:lineUserId/bills", chatInboxH.CreateBill)
+			chatGroup.GET("/:lineUserId/history", chatInboxH.CustomerHistory)
+		}
+
+		// LINE OA accounts (admin-only) — /settings/line-oa CRUD + test button
+		lineOAH := handlers.NewLineOAHandler(lineOARepo, lineRegistry, auditLogRepo, logger)
+		lineOAGroup := api.Group("/settings/line-oa")
+		lineOAGroup.Use(middleware.RequireRole("admin"))
+		{
+			lineOAGroup.GET("", lineOAH.List)
+			lineOAGroup.GET("/:id", lineOAH.Get)
+			lineOAGroup.POST("", lineOAH.Create)
+			lineOAGroup.PUT("/:id", lineOAH.Update)
+			lineOAGroup.DELETE("/:id", lineOAH.Delete)
+			lineOAGroup.POST("/:id/test", lineOAH.Test)
+		}
+
+		// Quick reply templates for the chat composer (Phase 4.4)
+		quickReplyH := handlers.NewChatQuickReplyHandler(chatQuickReplyRepo)
+		qrGroup := api.Group("/admin/quick-replies")
+		qrGroup.Use(middleware.RequireRole("admin", "staff"))
+		{
+			qrGroup.GET("", quickReplyH.List)
+			qrGroup.POST("", middleware.RequireRole("admin"), quickReplyH.Create)
+			qrGroup.PUT("/:id", middleware.RequireRole("admin"), quickReplyH.Update)
+			qrGroup.DELETE("/:id", middleware.RequireRole("admin"), quickReplyH.Delete)
+		}
 	}
 
 	// Background jobs

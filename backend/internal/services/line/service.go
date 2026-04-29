@@ -57,6 +57,102 @@ func (s *Service) PushAdmin(text string) error {
 	return err
 }
 
+// PushText sends a plain-text Push to an arbitrary LINE userID. Used by the
+// human-chat inbox for admin → customer replies. Push has no reply-window
+// constraint so it works any time the user has us as a friend; counts toward
+// the LINE OA monthly push quota (500/mo on free tier).
+func (s *Service) PushText(userID, text string) error {
+	if userID == "" {
+		return fmt.Errorf("userID required")
+	}
+	_, err := s.bot.PushMessage(
+		&messaging_api.PushMessageRequest{
+			To:       userID,
+			Messages: []messaging_api.MessageInterface{&messaging_api.TextMessage{Text: text}},
+		},
+		"",
+	)
+	return err
+}
+
+// UserProfile is the subset of /v2/bot/profile/{userId} we care about.
+type UserProfile struct {
+	DisplayName   string `json:"displayName"`
+	PictureURL    string `json:"pictureUrl"`
+	StatusMessage string `json:"statusMessage"`
+	UserID        string `json:"userId"`
+}
+
+// BotInfo is the subset of /v2/bot/info we care about — used to verify the
+// access_token is valid and to cache the bot's own user ID for webhook routing.
+type BotInfo struct {
+	UserID      string `json:"userId"`
+	BasicID     string `json:"basicId"`
+	PremiumID   string `json:"premiumId"`
+	DisplayName string `json:"displayName"`
+	PictureURL  string `json:"pictureUrl"`
+	ChatMode    string `json:"chatMode"`
+	MarkAsRead  string `json:"markAsReadMode"`
+}
+
+// GetBotInfo calls /v2/bot/info — used by /settings/line-oa "Test" button to
+// verify a token is alive and to capture bot_user_id.
+func (s *Service) GetBotInfo() (*BotInfo, error) {
+	req, err := http.NewRequest("GET", "https://api.line.me/v2/bot/info", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get bot info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get bot info status %d: %s", resp.StatusCode, body)
+	}
+	var info BotInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("decode bot info: %w", err)
+	}
+	return &info, nil
+}
+
+// GetProfile fetches the LINE display name + avatar for a userID. Used on
+// first contact (when we upsert a chat_conversations row) and via the manual
+// "🔄 รีเฟรช profile" button in the inbox UI.
+//
+// Returns nil profile (no error) when the user has us blocked or LINE returns
+// 404 — caller should fall back to displaying the userID.
+func (s *Service) GetProfile(userID string) (*UserProfile, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("userID required")
+	}
+	req, err := http.NewRequest("GET", "https://api.line.me/v2/bot/profile/"+userID, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get profile: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get profile status %d: %s", resp.StatusCode, body)
+	}
+	var p UserProfile
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		return nil, fmt.Errorf("decode profile: %w", err)
+	}
+	return &p, nil
+}
+
 // ValidateSignature verifies X-Line-Signature header
 func (s *Service) ValidateSignature(body []byte, signature string) bool {
 	return linebot.ValidateSignature(s.channelSecret, signature, body)
