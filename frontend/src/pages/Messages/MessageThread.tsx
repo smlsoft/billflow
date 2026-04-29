@@ -113,7 +113,14 @@ export function MessageThread({
       const newRows = res.data.data ?? []
       if (newRows.length === 0) return
       const stick = isNearBottom()
-      setMessages((prev) => [...prev, ...newRows])
+      // Defensive dedup by id — SSE may have inserted some of these rows
+      // between the ?since=… read on the server and our setState here.
+      setMessages((prev) => {
+        const existing = new Set(prev.map((m) => m.id))
+        const fresh = newRows.filter((m) => !existing.has(m.id))
+        if (fresh.length === 0) return prev
+        return [...prev, ...fresh]
+      })
       lastSeenRef.current = newRows[newRows.length - 1].created_at
 
       // Notify on incoming messages — sound + (when tab hidden) browser
@@ -181,10 +188,41 @@ export function MessageThread({
     (payload: { line_user_id: string; message: ChatMessage }) => {
       if (payload.line_user_id !== lineUserID) return
       setMessages((prev) => {
-        // Dedup: if the optimistic tmp- bubble matches by content+kind, the
-        // SendReply HTTP response already replaced it. Skip if we already
-        // have a real (non-tmp) row with this id.
+        // Three-way dedup against the race between SSE event + HTTP response.
+        // Both arrive ~simultaneously after admin sends; without dedup we'd
+        // briefly show the same outgoing bubble twice until next refresh.
+        //
+        //   1. Real id already in the list (HTTP response landed first)
+        //      → skip, that path already replaced the optimistic tmp- row.
+        //   2. Outgoing event matches an optimistic tmp- row by content
+        //      → REPLACE that row. The HTTP response's later .map() then
+        //        finds no tmp- row to replace and is a harmless no-op.
+        //   3. Otherwise → genuinely new message (incoming, or sent from
+        //        another admin tab) → append.
         if (prev.some((m) => m.id === payload.message.id)) return prev
+
+        if (payload.message.direction === 'outgoing') {
+          const tmpIdx = prev.findIndex((m) => {
+            if (!m.id.startsWith('tmp-')) return false
+            if (m.direction !== 'outgoing') return false
+            if (m.kind !== payload.message.kind) return false
+            // text matches by exact content; image matches by filename
+            // (size is also identical but filename alone is enough).
+            if (m.kind === 'text') {
+              return m.text_content === payload.message.text_content
+            }
+            if (m.kind === 'image') {
+              return m.media?.filename === payload.message.media?.filename
+            }
+            return false
+          })
+          if (tmpIdx >= 0) {
+            const next = [...prev]
+            next[tmpIdx] = payload.message
+            return next
+          }
+        }
+
         return [...prev, payload.message]
       })
       lastSeenRef.current = payload.message.created_at

@@ -594,6 +594,7 @@ CREATE TABLE imap_accounts (
 > - [016_chat_conversation_status.sql](backend/internal/database/migrations/016_chat_conversation_status.sql) — chat_conversations.status (open/resolved/archived) + auto-revive (Phase 4.2 — session 14)
 > - [017_chat_crm.sql](backend/internal/database/migrations/017_chat_crm.sql) — chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags (CRM lite Phase 4.7+4.8+4.9 — session 14)
 > - [018_chat_reply_token.sql](backend/internal/database/migrations/018_chat_reply_token.sql) — chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method (Hybrid Reply+Push API — session 15)
+> - [019_line_oa_mark_as_read.sql](backend/internal/database/migrations/019_line_oa_mark_as_read.sql) — line_oa_accounts.mark_as_read_enabled per-OA opt-in toggle for LINE Premium "อ่านแล้ว" read receipts (session 17)
 
 ---
 
@@ -1729,6 +1730,105 @@ lucide-react             ← icon set (shadcn default)
     - **ChatTags description sync**: ก่อนหน้านี้ description page เขียน
       "ใช้ filter ใน /messages" แต่ filter ไม่มีอยู่จริง — แก้ให้ตรงกับ
       Phase 3 ที่ ship จริงแล้ว ("กรอง inbox ตาม tag ได้ที่ /messages")
+
+23. Real-time inbox via SSE + production polish (session 17)
+    - **Why SSE not WebSocket**: admin inbox ต้องการ one-way push (server →
+      client) เท่านั้น. SSE ใช้ HTTP/1.1 streaming + browser-native
+      EventSource (auto-reconnect built-in), ไม่ต้อง upgrade handshake
+      หรือ framing layer. Cloudflare Tunnel ผ่านได้โดยตรงไม่ต้อง config.
+      WS = overkill สำหรับ use case นี้
+    - **Architecture**:
+      ```
+      LINE webhook → handlers/line.go.processMessage
+        → chat_messages INSERT
+        → broker.Publish(MessageReceived)  ← in-process pubsub
+                  ↓ fan-out non-blocking (drop on full buffer)
+      handlers/sse.go.Stream (per admin tab)
+        → text/event-stream wire format
+                  ↓
+      lib/events-store.ts (Zustand singleton EventSource)
+        → useChatEvents hook subscribers
+        → MessageThread / ConversationList / Sidebar
+      ```
+    - **In-process broker** (`services/events/broker.go`): sync.RWMutex +
+      map[uint64]*subscriber. Subscribe returns buffered channel (16) +
+      cleanup func. Publish non-blocking — full buffer = drop event for
+      that subscriber (heartbeat will re-open SSE if truly stuck).
+      Single-container deploy = no Redis needed; if scale out later swap
+      this struct for a Redis-backed implementation, interface stays same
+    - **HMAC token auth for SSE**: EventSource ไม่ support custom headers
+      → JWT ใน query string ไม่ปลอดภัย. ใช้ pattern เดียวกับ media URL:
+      POST /api/admin/events/token (JWT-protected) → reuse media.Signer
+      กับ subject = adminUserID, TTL 5 min → return token. Frontend
+      เปิด `EventSource('/api/admin/events?u=<userID>&t=<token>')`.
+      Stream endpoint อยู่นอก JWT group — token IS the auth
+    - **Wire format**:
+      ```
+      event: hello
+      data: {}
+
+      event: message_received
+      data: {"line_user_id":"U…","message":{...}}
+
+      :heartbeat                            ← every 20s, ignored by EventSource
+      ```
+      `X-Accel-Buffering: no` header → nginx/Cloudflare ไม่ buffer
+    - **Events fan-out** (current 6 publish points):
+      - line.go processMessage → MessageReceived + UnreadChanged on inbound
+      - chat_inbox SendReply / SendMedia → MessageReceived (admin tab อื่น
+        เห็น), self-tab dedup ที่ฝั่ง client
+      - chat_inbox SetStatus / SetPhone / MarkRead → ConversationUpdated
+      - chat_inbox MarkRead → UnreadChanged (sidebar badge)
+      - chat_tags SetTagsForConversation → ConversationUpdated
+    - **Self-tab duplicate dedup** (MessageThread.tsx onSSEMessage):
+      เมื่อ admin ส่งข้อความ — optimistic insert tmp-row → HTTP response
+      มา replace tmp ด้วย real id → SSE event มาด้วยรายการเดียวกัน. ถ้า
+      ไม่ dedup จะเห็น 2 bubble. **3-way dedup**:
+      1. Real id อยู่ใน list แล้ว → skip
+      2. Outgoing event match tmp- row โดย kind+content/filename →
+         **REPLACE tmp** (ไม่ append). HTTP response .map() ที่ตามมา
+         หา tmp ไม่เจอ = harmless no-op
+      3. ถ้าไม่ match ทั้งคู่ → append (incoming หรือ admin tab อื่นส่ง)
+      Polling fetchDelta ก็มี defensive dedup by id เผื่อ race ระหว่าง
+      ?since= และ SSE
+    - **Frontend store** (`lib/events-store.ts`): Zustand singleton —
+      EventSource เดียวต่อ tab. State: connecting / live / reconnecting
+      / offline. Reconnect backoff [3,6,12,20,30]s; หลัง 5 รอบ →
+      offline (polling 60s safety net รับช่วง). useChatEvents hook
+      subscribe → handler dispatch by event type
+    - **MessageThread useEffect bug fix**: เดิม useEffect deps =
+      [lineUserID, fetchInitial, fetchDelta] — fetchDelta ใช้
+      `conversation` (prop จาก parent) + `searchQ` (state) ใน deps →
+      rebuild ทุกครั้งที่ ConversationList polling 30s update parent
+      หรือ admin พิมพ์ search → useEffect re-run → mark-read + initial
+      fetch ยิงซ้ำ. **Fix**: split เป็น 2 effect (ทั้งคู่ key เฉพาะ
+      lineUserID) + ref pattern (`fetchDeltaRef.current`) ให้ interval
+      ใช้ closure ล่าสุดได้โดยไม่ restart timer. ลด API call ~95%
+    - **Polling intervals (safety net หลัง SSE)**:
+      - MessageThread delta poll: 5s → 30s
+      - ConversationList: 30s → 60s
+      - Sidebar /dashboard/stats: 30s → 60s
+      SSE drives real-time; polling รับเฉพาะกรณี broker drop / SSE
+      silent break
+    - **LINE markAsRead** (อ่านแล้ว ✓✓): service.go MarkMessagesAsRead
+      → POST /v2/bot/message/markAsRead. **Premium feature เท่านั้น**
+      (LINE Official Account Plus). Free OA ตอบ 403. ใส่ toggle ต่อ OA
+      ใน /settings/line-oa (มี warning "OA Plus only"). Default OFF เพราะ
+      ส่วนใหญ่เป็น Free. Best-effort call จาก MarkRead handler — error
+      log + swallow
+    - **Stale reply-token cron** (`jobs/reply_token_cleanup.go`): hourly
+      `UPDATE chat_conversations SET last_reply_token = ''
+       WHERE last_reply_token_at < NOW() - INTERVAL '1 hour'` —
+      LINE token หมดอายุ subjective period; 1h เป็น safe upper bound.
+      ลด wasted Reply API round-trip ตอน admin ตอบหลัง pause นาน
+    - **Pending message cleanup on boot**: server crash ตอน admin กำลัง
+      ส่ง → bubble ค้าง 'pending' ตลอด. Startup SQL flips outgoing
+      pending > 5 min → 'failed' พร้อม delivery_error. ไม่กระทบ rows
+      ปัจจุบัน (Reply/Push เสร็จในมิลลิวินาที)
+    - **Connection state indicator** (Sidebar): จุดเล็ก ๆ ล่าง sidebar
+      reading จาก events-store. 4 states (connecting/live/reconnecting/
+      offline) + tooltip ภาษาไทย + animate-pulse ตอน reconnecting.
+      Visible ทุกหน้า admin login จึงรู้สถานะ real-time ทุกที่
 ```
 
 ---
@@ -1939,6 +2039,34 @@ Phase 6 — Web UI Complete
             ConversationList Tag popover w/ multi-select + chip row.
             Backend ?tags=id1,id2 query param. CountAll mirrors filter
             logic for pagination accuracy.
+  [x] 6.27 Real-time inbox via SSE + production polish ✅ (session 17)
+            ⭐ Replaces aggressive polling (5s thread / 30s inbox / 30s
+            sidebar) with Server-Sent Events for sub-second admin updates.
+            Polling kept at 30/60s as safety net.
+            Backend: services/events/broker.go in-process pubsub +
+            handlers/sse.go SSE stream + token issuer (HMAC via media.Signer
+            with subject=adminUserID, 5min TTL). Publish points: webhook
+            inbound, SendReply, SendMedia, SetStatus, SetPhone, MarkRead,
+            SetTagsForConversation. Migration 019 adds line_oa_accounts.
+            mark_as_read_enabled per-OA opt-in for LINE Premium "อ่านแล้ว"
+            (Free OA returns 403, hence opt-in). jobs/reply_token_cleanup
+            hourly clears tokens >1h. Startup cleanup flips outgoing
+            chat_messages stuck >5min in 'pending' → 'failed' (recovery
+            from server crashes).
+            Frontend: lib/events-store.ts Zustand singleton EventSource
+            (one per tab) + reconnect backoff [3,6,12,20,30]s; hooks/
+            useChatEvents.ts typed subscription hook. Layout connects
+            on mount. Connection state indicator dot in Sidebar.
+            BUG FIX: MessageThread useEffect was re-running on every
+            parent render (mark-read spam). Split into 2 effects keyed
+            on lineUserID + ref pattern for fetchDelta.
+            Self-tab dedup: SSE event for admin's own send replaces the
+            optimistic tmp- row instead of adding (matches kind+content
+            for text, kind+filename for image). Fixes the "2 bubbles
+            until refresh" duplicate.
+            AccountDialog mark-as-read checkbox in /settings/line-oa.
+            Verified end-to-end: SSE token round-trip, hello event arrives,
+            heartbeats every 20s, dedup works for self-tab.
 
 Phase 7 — Background Jobs
   [x] 7.1 Cron 08:00 daily insight + LINE notify (F4) ✅
@@ -2101,7 +2229,7 @@ Bill flow → SML routing (bills.go Retry handler — 4-way dispatch):
   shopee_shipped           purchase    purchaseorder (248)            party_code from channel_defaults
   any                      any         endpoint URL overridable per (channel,bill_type) in /settings/channels
 
-Migrations applied (18 files):
+Migrations applied (19 files):
   001_init.sql
   002_audit_logging.sql                    (audit_logs structured columns)
   002_sml_catalog.sql                      (sml_catalog + extended CHECK)
@@ -2120,6 +2248,7 @@ Migrations applied (18 files):
   016_chat_conversation_status.sql         (chat_conversations.status open/resolved/archived — Phase 4.2 session 14)
   017_chat_crm.sql                         (chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags — Phase 4.7+4.8+4.9 session 14)
   018_chat_reply_token.sql                 (chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method — Hybrid Reply+Push session 15)
+  019_line_oa_mark_as_read.sql             (line_oa_accounts.mark_as_read_enabled per-OA toggle for LINE Premium "อ่านแล้ว" — session 17)
 
 Phases:
   Phase 0–7  ✅
@@ -2130,6 +2259,8 @@ Phases:
                 CRM lite (6.24, session 14)
               + hybrid Reply+Push API saving 200/mo quota (6.25, session 15)
               + audit log coverage + UX consistency + tag filter in inbox (6.26, session 16)
+              + real-time SSE + connection indicator + LINE markAsRead +
+                stale-token cron + pending cleanup (6.27, session 17)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
@@ -2140,6 +2271,58 @@ Pending (carry-over):
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
   ⏳ LINE Push quota dashboard (free OA = 200/month — Reply API path is free)
   ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
+
+Recent work (session 17 — 2026-04-29):
+  ⭐ chat: real-time inbox via SSE + production-grade polish
+       Replaces aggressive polling (5s thread / 30s inbox / 30s sidebar)
+       with Server-Sent Events for sub-second admin updates. Polling kept
+       at 30/60s as safety net.
+       Backend: services/events/broker.go in-process pubsub (sync.RWMutex
+       + buffered channels). handlers/sse.go SSE stream with 20s heartbeat
+       + X-Accel-Buffering=no. Token via POST /api/admin/events/token
+       (JWT-required) reuses media.Signer with subject=adminUserID, 5min
+       TTL. Stream itself outside JWT group — token IS the auth.
+       Publish points: webhook inbound (MessageReceived + UnreadChanged),
+       SendReply/SendMedia (MessageReceived), SetStatus/SetPhone/MarkRead
+       (ConversationUpdated), MarkRead (UnreadChanged), tags
+       SetTagsForConversation (ConversationUpdated).
+       Migration 019: line_oa_accounts.mark_as_read_enabled — per-OA opt-in
+       for LINE Premium markAsRead API (Free OA returns 403). Wired through
+       repo + AccountDialog UI checkbox with "OA Plus only" warning.
+       service.go MarkMessagesAsRead(userID) — best-effort POST /v2/bot/
+       message/markAsRead from MarkRead handler when OA has it enabled.
+       jobs/reply_token_cleanup.go hourly cron clears reply tokens >1h.
+       Startup SQL flips chat_messages outgoing pending >5min → 'failed'
+       (recovers from server crashes leaving "กำลังส่ง…" forever).
+       Frontend: lib/events-store.ts Zustand singleton EventSource (one
+       per tab regardless of subscribers). Reconnect with exponential
+       backoff [3,6,12,20,30]s; after 5 failures → status='offline' and
+       polling fallback owns updates. hooks/useChatEvents.ts typed
+       subscription. Layout.tsx connects on mount, disconnects on unmount.
+       BUG FIX MessageThread useEffect: was listing fetchInitial+fetchDelta
+       in deps, causing re-runs every parent render (ConversationList
+       polling 30s → new conversation reference → fetchDelta useCallback
+       rebuilds → useEffect re-fires → mark-read spammed every 30s and
+       on every search keystroke). Split into 2 effects keyed only on
+       lineUserID + ref pattern for fetchDelta. ~95% fewer API calls.
+       MessageThread polling 5s → 30s safety net. ConversationList
+       30s → 60s. Sidebar 30s → 60s. SSE drives real-time.
+       MessageBubble subscribes via useChatEvents.onMessage. Self-tab
+       dedup: 3-way logic in onSSEMessage —
+         1. Real id already present → skip
+         2. Outgoing matches optimistic tmp- row by kind+content (text)
+            or kind+filename (image) → REPLACE tmp instead of adding
+         3. Otherwise → append (genuinely new)
+       Fixes the "2 bubbles until refresh" race between SSE event +
+       HTTP response. Defensive dedup by id added to fetchDelta too.
+       ConversationList subscribes to onMessage + onConvUpdated → refetch
+       inbox (cheap query, simpler than patching rows).
+       Sidebar subscribes to onUnreadChanged for instant badge updates.
+       Adds ConnectionDot — pulsing dot reading from events-store with
+       Thai tooltip explaining each state (live/reconnecting/offline).
+       Visible in collapsed + expanded sidebar.
+       Verified end-to-end on prod 109: SSE token round-trip works,
+       hello event arrives, heartbeats every 20s.
 
 Recent work (session 16 — 2026-04-29):
   ⭐ chat: audit log coverage + UX consistency + tag filter in inbox
@@ -2448,7 +2631,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-29 (session 16)*
+*Last updated: 2026-04-29 (session 17)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*
