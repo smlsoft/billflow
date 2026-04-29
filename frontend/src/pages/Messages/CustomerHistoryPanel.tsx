@@ -38,7 +38,8 @@ const STATUS_COLORS: Record<string, string> = {
 export function CustomerHistoryPanel({ lineUserID }: Props) {
   const [bills, setBills] = useState<BillSummary[]>([])
   const [loading, setLoading] = useState(false)
-  const [open, setOpen] = useState(true)
+  // Default closed — tighter layout. Admin clicks the bar to expand.
+  const [open, setOpen] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -63,11 +64,17 @@ export function CustomerHistoryPanel({ lineUserID }: Props) {
 
   const sentCount = bills.filter((b) => b.status === 'sent').length
 
+  // Skip rendering entirely when there are no bills and we've finished loading
+  // — avoids an empty bar wasting a row of vertical space.
+  if (!loading && bills.length === 0) {
+    return null
+  }
+
   return (
     <div className="border-b border-border bg-muted/20">
       <Button
         variant="ghost"
-        className="flex h-9 w-full items-center justify-between gap-1.5 rounded-none px-4 text-xs"
+        className="flex h-7 w-full items-center justify-between gap-1.5 rounded-none px-3 text-[11px]"
         onClick={() => setOpen((v) => !v)}
       >
         <span className="flex items-center gap-1.5 font-medium">

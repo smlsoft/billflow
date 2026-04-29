@@ -231,6 +231,11 @@ func (h *LineHandler) processMessage(ctx context.Context, event lineEvent, svc *
 	if err := h.convRepo.IncrementUnread(userID); err != nil {
 		h.logger.Warn("increment unread", zap.String("user", userID), zap.Error(err))
 	}
+	// Phase 4.2: customer messaged us → revive a 'resolved' thread to 'open'.
+	// 'archived' stays sticky (admin must un-archive manually).
+	if _, err := h.convRepo.AutoReviveOnInbound(userID); err != nil {
+		h.logger.Warn("auto-revive status", zap.String("user", userID), zap.Error(err))
+	}
 
 	// Optional first-contact greeting — per-OA via line_oa_accounts.greeting,
 	// fallback to env LINE_GREETING for OAs without one configured.

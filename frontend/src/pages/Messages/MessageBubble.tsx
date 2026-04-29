@@ -1,15 +1,25 @@
 import { useState } from 'react'
-import { AlertCircle, FileIcon, Sparkles } from 'lucide-react'
+import { AlertCircle, FileIcon, Phone, Sparkles } from 'lucide-react'
 import dayjs from 'dayjs'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import client from '@/api/client'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from './types'
 
 interface Props {
   message: ChatMessage
   onExtract?: (messageId: string, kind: string) => void
+  // Phase 4.7: when a phone number is detected in incoming text, the parent
+  // owns the conversation row + can refresh after save.
+  onPhoneSaved?: (phone: string) => void
 }
+
+// Thai phone number — accepts 9-10 digit blocks with optional space/dash
+// separators. Examples it'll match: "0812345678", "081-234-5678",
+// "081 234 5678", "+66812345678"
+const PHONE_RE = /(\+?\d{1,3}[\s-]?)?\d{2,3}[\s-]?\d{3,4}[\s-]?\d{4}/
 
 // MessageBubble renders one chat row.
 // - text: rounded bubble, gray for incoming / primary-tinted for outgoing
@@ -19,8 +29,35 @@ interface Props {
 // - system: muted centered note (e.g. "📄 สร้างบิลขายแล้ว")
 // - failed delivery: ⚠ icon + error tooltip
 // All media rows ALSO get a "🔍 สร้างบิลจากสื่อนี้" button that triggers AI extract.
-export function MessageBubble({ message, onExtract }: Props) {
+export function MessageBubble({ message, onExtract, onPhoneSaved }: Props) {
   const [imgExpanded, setImgExpanded] = useState(false)
+  const [savingPhone, setSavingPhone] = useState(false)
+  const [phoneSaved, setPhoneSaved] = useState(false)
+
+  // Detect phone in incoming text bubbles — outgoing/system don't get the
+  // "save phone" affordance (admin replies obviously aren't customer phones).
+  const detectedPhone =
+    message.direction === 'incoming' && message.kind === 'text'
+      ? message.text_content.match(PHONE_RE)?.[0]
+      : null
+
+  const savePhone = async () => {
+    if (!detectedPhone || savingPhone) return
+    setSavingPhone(true)
+    try {
+      await client.patch(
+        `/api/admin/conversations/${encodeURIComponent(message.line_user_id)}/phone`,
+        { phone: detectedPhone },
+      )
+      setPhoneSaved(true)
+      onPhoneSaved?.(detectedPhone)
+      toast.success(`บันทึกเบอร์ ${detectedPhone} แล้ว`)
+    } catch (e: any) {
+      toast.error('บันทึกเบอร์ไม่สำเร็จ: ' + (e?.message ?? 'unknown'))
+    } finally {
+      setSavingPhone(false)
+    }
+  }
 
   const isOutgoing = message.direction === 'outgoing'
   const isSystem = message.direction === 'system' || message.kind === 'system'
@@ -35,9 +72,15 @@ export function MessageBubble({ message, onExtract }: Props) {
     )
   }
 
-  const mediaURL = message.media
-    ? `/api/admin/conversations/${encodeURIComponent(message.line_user_id)}/messages/${message.id}/media`
-    : null
+  // Optimistic outgoing messages from MessageThread use a blob: URL (local
+  // preview) until the upload completes. After upload they'll be replaced
+  // with the real persisted message which uses the API URL pattern.
+  const localPreview = (message as ChatMessage & { _localPreviewURL?: string })._localPreviewURL
+  const mediaURL = localPreview
+    ? localPreview
+    : message.media
+      ? `/api/admin/conversations/${encodeURIComponent(message.line_user_id)}/messages/${message.id}/media`
+      : null
 
   return (
     <div className={cn('flex w-full gap-2', isOutgoing ? 'justify-end' : 'justify-start')}>
@@ -91,6 +134,20 @@ export function MessageBubble({ message, onExtract }: Props) {
           <audio controls src={mediaURL} className="h-10">
             ระบบไม่รองรับการเล่นเสียง
           </audio>
+        )}
+
+        {/* Phase 4.7 — phone detected in incoming text → "บันทึกเบอร์" button */}
+        {detectedPhone && !phoneSaved && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 gap-1 px-2 text-[10px]"
+            onClick={savePhone}
+            disabled={savingPhone}
+          >
+            <Phone className="h-3 w-3" />
+            บันทึกเบอร์ {detectedPhone}
+          </Button>
         )}
 
         {/* Manual AI extract trigger for media */}

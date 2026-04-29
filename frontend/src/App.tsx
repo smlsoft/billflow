@@ -13,6 +13,7 @@ import Logs from './pages/Logs'
 import CatalogSettings from './pages/CatalogSettings'
 import EmailAccounts from './pages/EmailAccounts'
 import ChannelDefaults from './pages/ChannelDefaults'
+import ChatTags from './pages/ChatTags'
 import LineOA from './pages/LineOA'
 import Messages from './pages/Messages'
 import QuickReplies from './pages/QuickReplies'
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="settings/channels" element={<ChannelDefaults />} />
           <Route path="settings/line-oa" element={<LineOA />} />
           <Route path="settings/quick-replies" element={<QuickReplies />} />
+          <Route path="settings/chat-tags" element={<ChatTags />} />
         </Route>
       </Routes>
     </BrowserRouter>

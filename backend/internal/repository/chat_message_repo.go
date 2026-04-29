@@ -74,44 +74,61 @@ func (r *ChatMessageRepo) Insert(m *models.ChatMessage) error {
 // ListByUser returns messages in a conversation, oldest-first (so UI scrolls
 // down to the newest at the bottom). When `since` is non-nil, only messages
 // strictly after that timestamp are returned (used for delta polling).
+// When q is non-empty, filters to messages whose text_content matches ILIKE.
 //
 // Always hydrates .Media for image/file/audio rows.
-func (r *ChatMessageRepo) ListByUser(lineUserID string, since *time.Time, limit int) ([]*models.ChatMessage, error) {
+func (r *ChatMessageRepo) ListByUser(lineUserID string, since *time.Time, limit int, q string) ([]*models.ChatMessage, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 
 	var rows *sql.Rows
 	var err error
-	q := `SELECT
-	        m.id, m.line_user_id, m.direction, m.kind, m.text_content,
-	        m.line_message_id, m.line_event_ts, m.sender_admin_id,
-	        m.delivery_status, m.delivery_error, m.created_at,
-	        media.id, media.filename, media.content_type, media.size_bytes,
-	        media.sha256, media.storage_path, media.created_at
-	      FROM chat_messages m
-	      LEFT JOIN chat_media media ON media.message_id = m.id
-	      WHERE m.line_user_id = $1`
-	if since != nil {
-		q += ` AND m.created_at > $2 ORDER BY m.created_at ASC LIMIT $3`
-		rows, err = r.db.Query(q, lineUserID, *since, limit)
+
+	// Phase D thread-search: when q is non-empty, filter by text_content
+	// ILIKE. Skip the since-delta path (search returns full match list).
+	if q != "" {
+		query := `SELECT
+		            m.id, m.line_user_id, m.direction, m.kind, m.text_content,
+		            m.line_message_id, m.line_event_ts, m.sender_admin_id,
+		            m.delivery_status, m.delivery_error, m.created_at,
+		            media.id, media.filename, media.content_type, media.size_bytes,
+		            media.sha256, media.storage_path, media.created_at
+		          FROM chat_messages m
+		          LEFT JOIN chat_media media ON media.message_id = m.id
+		          WHERE m.line_user_id = $1 AND m.text_content ILIKE $2
+		          ORDER BY m.created_at ASC LIMIT $3`
+		rows, err = r.db.Query(query, lineUserID, "%"+q+"%", limit)
+	} else if since != nil {
+		query := `SELECT
+		            m.id, m.line_user_id, m.direction, m.kind, m.text_content,
+		            m.line_message_id, m.line_event_ts, m.sender_admin_id,
+		            m.delivery_status, m.delivery_error, m.created_at,
+		            media.id, media.filename, media.content_type, media.size_bytes,
+		            media.sha256, media.storage_path, media.created_at
+		          FROM chat_messages m
+		          LEFT JOIN chat_media media ON media.message_id = m.id
+		          WHERE m.line_user_id = $1
+		            AND m.created_at > $2
+		          ORDER BY m.created_at ASC LIMIT $3`
+		rows, err = r.db.Query(query, lineUserID, *since, limit)
 	} else {
 		// No since → show the most recent N messages, oldest-first.
 		// Subquery to grab the latest N then re-order ascending.
-		q = `SELECT * FROM (
-		       SELECT
-		         m.id, m.line_user_id, m.direction, m.kind, m.text_content,
-		         m.line_message_id, m.line_event_ts, m.sender_admin_id,
-		         m.delivery_status, m.delivery_error, m.created_at,
-		         media.id AS media_id, media.filename, media.content_type, media.size_bytes,
-		         media.sha256, media.storage_path, media.created_at AS media_created_at
-		       FROM chat_messages m
-		       LEFT JOIN chat_media media ON media.message_id = m.id
-		       WHERE m.line_user_id = $1
-		       ORDER BY m.created_at DESC
-		       LIMIT $2
-		     ) sub ORDER BY created_at ASC`
-		rows, err = r.db.Query(q, lineUserID, limit)
+		query := `SELECT * FROM (
+		            SELECT
+		              m.id, m.line_user_id, m.direction, m.kind, m.text_content,
+		              m.line_message_id, m.line_event_ts, m.sender_admin_id,
+		              m.delivery_status, m.delivery_error, m.created_at,
+		              media.id AS media_id, media.filename, media.content_type, media.size_bytes,
+		              media.sha256, media.storage_path, media.created_at AS media_created_at
+		            FROM chat_messages m
+		            LEFT JOIN chat_media media ON media.message_id = m.id
+		            WHERE m.line_user_id = $1
+		            ORDER BY m.created_at DESC
+		            LIMIT $2
+		          ) sub ORDER BY created_at ASC`
+		rows, err = r.db.Query(query, lineUserID, limit)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list chat_messages: %w", err)

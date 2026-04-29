@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import client from '@/api/client'
 import { cn } from '@/lib/utils'
-import type { ChatConversation } from './types'
+import type { ChatConversation, ChatStatus } from './types'
 
 dayjs.extend(relativeTime)
 dayjs.locale('th')
@@ -29,6 +29,7 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
   const [rows, setRows] = useState<ChatConversation[]>([])
   const [unreadOnly, setUnreadOnly] = useState(false)
   const [search, setSearch] = useState('')
+  const [statusTab, setStatusTab] = useState<ChatStatus>('open')
   const [loading, setLoading] = useState(true)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -47,7 +48,14 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
       try {
         const res = await client.get<{ data: ChatConversation[] | null }>(
           '/api/admin/conversations',
-          { params: { unread: unreadOnly || undefined, limit: 100 } },
+          {
+            params: {
+              unread: unreadOnly || undefined,
+              status: statusTab,
+              q: search.trim() || undefined,
+              limit: 100,
+            },
+          },
         )
         if (alive) {
           setRows(res.data.data ?? [])
@@ -73,7 +81,7 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
       if (intervalRef.current) clearInterval(intervalRef.current)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [unreadOnly])
+  }, [unreadOnly, statusTab, search])
 
   // Keep parent informed of which conversation is currently selected, so it
   // can pre-fill the customer name in CreateBillPanel.
@@ -83,32 +91,53 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
     onSelectedConvChange(found)
   }, [rows, selectedID, onSelectedConvChange])
 
-  const filtered = search
-    ? rows.filter((r) =>
-        (r.display_name || r.line_user_id).toLowerCase().includes(search.toLowerCase()),
-      )
-    : rows
+  // Search is server-side now (passed as ?q= to /api/admin/conversations);
+  // no client-side filter needed.
+  const filtered = rows
+
+  const STATUS_TABS: Array<{ key: ChatStatus; label: string }> = [
+    { key: 'open', label: 'เปิดอยู่' },
+    { key: 'resolved', label: 'ปิดแล้ว' },
+    { key: 'archived', label: 'Archive' },
+  ]
 
   return (
     <div className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
-      <div className="flex flex-col gap-2 border-b border-border p-3">
+      {/* Status tab strip */}
+      <div className="flex items-center gap-0.5 border-b border-border px-1 pt-1">
+        {STATUS_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setStatusTab(t.key)}
+            className={cn(
+              'flex-1 rounded-t-md px-2 py-1 text-[11px] font-medium transition-colors',
+              statusTab === t.key
+                ? 'bg-accent text-accent-foreground'
+                : 'text-muted-foreground hover:bg-accent/40',
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-1.5 border-b border-border p-2">
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="ค้นหาชื่อลูกค้า…"
-          className="h-8 text-sm"
+          placeholder="ค้นหา (ชื่อหรือข้อความ)…"
+          className="h-7 flex-1 text-xs"
         />
-        <div className="flex items-center justify-between text-xs">
-          <Button
-            variant={unreadOnly ? 'default' : 'outline'}
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={() => setUnreadOnly((v) => !v)}
-          >
-            {unreadOnly ? 'แสดงทั้งหมด' : 'เฉพาะที่ยังไม่อ่าน'}
-          </Button>
-          <span className="text-muted-foreground">{filtered.length} รายการ</span>
-        </div>
+        <Button
+          variant={unreadOnly ? 'default' : 'outline'}
+          size="sm"
+          className="h-7 shrink-0 px-2 text-[11px]"
+          onClick={() => setUnreadOnly((v) => !v)}
+          title={unreadOnly ? 'แสดงทั้งหมด' : 'เฉพาะที่ยังไม่อ่าน'}
+        >
+          {unreadOnly ? 'ทั้งหมด' : 'ยังไม่อ่าน'}
+        </Button>
       </div>
 
       <ScrollArea className="flex-1">

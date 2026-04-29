@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
 	lineservice "billflow/internal/services/line"
+	"billflow/internal/services/media"
 	"billflow/internal/services/mistral"
 )
 
@@ -36,6 +38,8 @@ type ChatInboxHandler struct {
 	lineRegistry *lineservice.Registry
 	aiClient     *ai.Client
 	ocrClient    *mistral.OCRClient
+	mediaSigner  *media.Signer
+	publicURL    string
 	logger       *zap.Logger
 }
 
@@ -48,6 +52,8 @@ func NewChatInboxHandler(
 	lineRegistry *lineservice.Registry,
 	aiClient *ai.Client,
 	ocrClient *mistral.OCRClient,
+	mediaSigner *media.Signer,
+	publicURL string,
 	logger *zap.Logger,
 ) *ChatInboxHandler {
 	return &ChatInboxHandler{
@@ -59,6 +65,8 @@ func NewChatInboxHandler(
 		lineRegistry: lineRegistry,
 		aiClient:     aiClient,
 		ocrClient:    ocrClient,
+		mediaSigner:  mediaSigner,
+		publicURL:    publicURL,
 		logger:       logger,
 	}
 }
@@ -76,29 +84,87 @@ func (h *ChatInboxHandler) pushService(conv *models.ChatConversation) *lineservi
 
 // ── Conversation list ────────────────────────────────────────────────────────
 
-// GET /api/admin/conversations?unread=true&limit=50&offset=0
+// GET /api/admin/conversations?unread=true&status=open&q=ปูน&limit=50&offset=0
 func (h *ChatInboxHandler) ListConversations(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	unreadOnly := c.Query("unread") == "true"
-	if limit <= 0 || limit > 200 {
-		limit = 50
+	f := repository.ConversationListFilter{
+		Limit:      limit,
+		Offset:     offset,
+		UnreadOnly: c.Query("unread") == "true",
+		Status:     c.Query("status"),
+		Q:          strings.TrimSpace(c.Query("q")),
 	}
-	if offset < 0 {
-		offset = 0
-	}
-	rows, err := h.convRepo.List(limit, offset, unreadOnly)
+	rows, err := h.convRepo.List(f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	total, _ := h.convRepo.CountAll(unreadOnly)
+	total, _ := h.convRepo.CountAll(f)
 	c.JSON(http.StatusOK, gin.H{
 		"data":   rows,
 		"total":  total,
-		"limit":  limit,
-		"offset": offset,
+		"limit":  f.Limit,
+		"offset": f.Offset,
 	})
+}
+
+// PATCH /api/admin/conversations/:lineUserId/phone
+// Body: {phone: "081-234-5678"}  — pass empty string to clear.
+func (h *ChatInboxHandler) SetPhone(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	var body struct {
+		Phone string `json:"phone"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.convRepo.SetPhone(lineUserID, strings.TrimSpace(body.Phone)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "phone": body.Phone})
+}
+
+// PATCH /api/admin/conversations/:lineUserId/status
+// Body: {status: "open"|"resolved"|"archived"}
+func (h *ChatInboxHandler) SetStatus(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	var body struct {
+		Status string `json:"status" binding:"required,oneof=open resolved archived"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.convRepo.SetStatus(lineUserID, body.Status); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "line_conversation_status",
+			UserID:  userID,
+			Source:  "line",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail:  map[string]interface{}{"line_user_id": lineUserID, "status": body.Status},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "status": body.Status})
 }
 
 // GET /api/admin/conversations/unread-count
@@ -128,7 +194,8 @@ func (h *ChatInboxHandler) ListMessages(c *gin.Context) {
 			since = &t
 		}
 	}
-	rows, err := h.msgRepo.ListByUser(lineUserID, since, limit)
+	q := strings.TrimSpace(c.Query("q"))
+	rows, err := h.msgRepo.ListByUser(lineUserID, since, limit, q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -250,6 +317,141 @@ func (h *ChatInboxHandler) CustomerHistory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+// ── Admin sends an image (Phase B) ───────────────────────────────────────────
+
+// POST /api/admin/conversations/:lineUserId/messages/media
+//
+// Multipart upload (field "file") of an image. Saves the bytes to chat_media,
+// inserts an outgoing chat_message (kind='image'), then pushes to LINE via
+// the conversation's OA. LINE's servers fetch the bytes from the public
+// /public/media/:id?t=<token> endpoint.
+//
+// LINE only supports image/video/audio for Push — no `file` type. v1 accepts
+// images only; admin gets a clear toast if they try a non-image upload.
+func (h *ChatInboxHandler) SendMedia(c *gin.Context) {
+	lineUserID := c.Param("lineUserId")
+	if lineUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lineUserId required"})
+		return
+	}
+	if h.publicURL == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "PUBLIC_BASE_URL ยังไม่ได้ตั้ง — ดู /tmp/billflow-tunnel.log แล้ว paste URL ลง .env",
+		})
+		return
+	}
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ต้องแนบไฟล์ในฟิลด์ 'file'"})
+		return
+	}
+	// LINE limits image to ≤10MB. Reject early to avoid wasting upload bandwidth.
+	if fileHeader.Size > 10*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "ไฟล์เกิน 10MB — LINE จำกัดขนาดรูปไว้ที่ 10MB",
+		})
+		return
+	}
+
+	src, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "เปิดไฟล์ไม่ได้: " + err.Error()})
+		return
+	}
+	defer src.Close()
+	data, err := io.ReadAll(src)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "อ่านไฟล์ไม่ได้: " + err.Error()})
+		return
+	}
+
+	contentType := fileHeader.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "LINE รองรับเฉพาะรูปภาพในการ push — ไฟล์อื่นกรุณาส่งทาง email หรือ link (ปัจจุบัน: " + contentType + ")",
+		})
+		return
+	}
+
+	conv, _ := h.convRepo.Get(lineUserID)
+	if conv == nil {
+		_, _, _ = h.convRepo.Upsert(lineUserID, "", "")
+		conv, _ = h.convRepo.Get(lineUserID)
+	}
+	svc := h.pushService(conv)
+	if svc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "LINE OA ไม่ได้ตั้งค่า — เพิ่ม OA ใน /settings/line-oa ก่อน",
+		})
+		return
+	}
+
+	var senderID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		senderID = &uid
+	}
+
+	// 1. Insert outgoing message row first (status=pending) — same pattern as
+	//    SendReply for text. Lets the UI render an optimistic bubble.
+	m := &models.ChatMessage{
+		LineUserID:     lineUserID,
+		Direction:      models.ChatDirectionOutgoing,
+		Kind:           models.ChatKindImage,
+		SenderAdminID:  senderID,
+		DeliveryStatus: models.ChatDeliveryPending,
+	}
+	if err := h.msgRepo.Insert(m); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 2. Save the binary alongside.
+	mediaRow, err := h.mediaRepo.Save(m.ID, fileHeader.Filename, contentType, data)
+	if err != nil {
+		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "บันทึกไฟล์ล้มเหลว: " + err.Error()})
+		return
+	}
+	m.Media = mediaRow
+
+	// 3. Build the public signed URL and push to LINE.
+	publicURL := h.mediaSigner.PublicURL(h.publicURL, mediaRow.ID)
+	if err := svc.PushImage(lineUserID, publicURL, publicURL); err != nil {
+		_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliveryFailed, err.Error())
+		m.DeliveryStatus = models.ChatDeliveryFailed
+		m.DeliveryError = err.Error()
+		h.logger.Warn("LINE PushImage failed",
+			zap.String("user", lineUserID), zap.Error(err))
+		c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "failed"})
+		return
+	}
+
+	_ = h.msgRepo.UpdateDeliveryStatus(m.ID, models.ChatDeliverySent, "")
+	m.DeliveryStatus = models.ChatDeliverySent
+	_ = h.convRepo.TouchLastMessage(lineUserID, false)
+
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "line_admin_send_media",
+			UserID:  senderID,
+			Source:  "line",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"line_user_id": lineUserID,
+				"message_id":   m.ID,
+				"size_bytes":   mediaRow.SizeBytes,
+				"content_type": mediaRow.ContentType,
+			},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"message": m, "delivery": "sent"})
 }
 
 // ── Mark conversation as read ────────────────────────────────────────────────

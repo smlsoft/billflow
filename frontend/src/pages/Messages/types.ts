@@ -1,6 +1,8 @@
 // Shared types between the Messages page and its child components.
 // Mirrors backend models in backend/internal/models/chat.go.
 
+export type ChatStatus = 'open' | 'resolved' | 'archived'
+
 export interface ChatConversation {
   line_user_id: string
   // Multi-OA: which LINE OA owns this conversation. line_oa_name is the
@@ -9,10 +11,30 @@ export interface ChatConversation {
   line_oa_name?: string
   display_name: string
   picture_url: string
+  phone: string
+  status: ChatStatus
   last_message_at: string
   last_inbound_at?: string | null
   last_admin_reply_at?: string | null
   unread_admin_count: number
+  created_at: string
+}
+
+// Phase 4.8 internal admin notes
+export interface ChatNote {
+  id: string
+  line_user_id: string
+  body: string
+  created_by?: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Phase 4.9 tags
+export interface ChatTag {
+  id: string
+  label: string
+  color: string
   created_at: string
 }
 

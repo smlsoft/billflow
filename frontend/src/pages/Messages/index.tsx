@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { MessageSquare } from 'lucide-react'
 
-import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
 import { ConversationList } from './ConversationList'
 import { MessageThread } from './MessageThread'
@@ -45,13 +44,11 @@ export default function Messages() {
   }, [createBillOpen])
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col gap-3">
-      <PageHeader
-        title="ข้อความลูกค้า (LINE OA)"
-        description="คุยกับลูกค้าผ่าน BillFlow โดยตรง — ไม่ต้องเข้า LINE OA web"
-      />
-
-      <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-3">
+    // Layout.tsx removes default padding for /messages — we get full
+    // viewport-under-topbar to work with. Inner regions (message list)
+    // handle their own scroll; the outer chrome is fixed.
+    <div className="flex h-full min-h-0 flex-col p-2">
+      <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)] gap-2">
         <ConversationList
           selectedID={selectedID}
           onSelect={handleSelect}

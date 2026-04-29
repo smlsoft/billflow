@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Bell, BellOff, Plus, RefreshCw } from 'lucide-react'
+import { Archive, ArchiveRestore, Bell, BellOff, Check, Plus, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import dayjs from 'dayjs'
 
+import { Input } from '@/components/ui/input'
+
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import client from '@/api/client'
 import { MessageBubble } from './MessageBubble'
-import { Composer } from './Composer'
+import { Composer, type PendingAttachment } from './Composer'
 import { CustomerHistoryPanel } from './CustomerHistoryPanel'
+import { NotesPanel } from './NotesPanel'
+import { TagsBar } from './TagsBar'
 import { useNotifications } from './useNotifications'
 import type { ChatConversation, ChatMessage } from './types'
 
@@ -36,6 +41,14 @@ export function MessageThread({
   const scrollRootRef = useRef<HTMLDivElement | null>(null)
   const lastSeenRef = useRef<string>('')
   const notif = useNotifications()
+  // Drag-drop state — pendingExternal is consumed once by Composer.
+  const [pendingExternal, setPendingExternal] = useState<PendingAttachment[]>([])
+  const [isDraggingFile, setIsDraggingFile] = useState(false)
+  const dragCounterRef = useRef(0)
+  // Phase D: thread-level search. When non-empty, polling pauses and fetch
+  // calls /messages?q=<term> for filtered results.
+  const [searchQ, setSearchQ] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
 
   // Auto-scroll to bottom when new messages arrive AND user is already near
   // the bottom (within 80px). Otherwise leave the scroll position alone so we
@@ -53,18 +66,21 @@ export function MessageThread({
     root.scrollTop = root.scrollHeight
   }, [])
 
-  const fetchInitial = useCallback(async () => {
+  const fetchInitial = useCallback(async (q?: string) => {
     setLoading(true)
     try {
       const res = await client.get<{ data: ChatMessage[] | null }>(
         `/api/admin/conversations/${encodeURIComponent(lineUserID)}/messages`,
-        { params: { limit: 100 } },
+        { params: { limit: 100, q: q || undefined } },
       )
       const rows = res.data.data ?? []
       setMessages(rows)
-      lastSeenRef.current = rows.length > 0 ? rows[rows.length - 1].created_at : ''
-      // Defer to next paint so DOM exists before we scroll.
-      setTimeout(scrollToBottom, 0)
+      // Search results don't update lastSeenRef so polling keeps using the
+      // pre-search marker once admin clears the search.
+      if (!q) {
+        lastSeenRef.current = rows.length > 0 ? rows[rows.length - 1].created_at : ''
+        setTimeout(scrollToBottom, 0)
+      }
     } catch (e: any) {
       toast.error('โหลดข้อความล้มเหลว: ' + (e?.message ?? 'unknown'))
     } finally {
@@ -77,6 +93,11 @@ export function MessageThread({
     // Skip polling when the tab is hidden — saves a round-trip every 5s when
     // admin has BillFlow open in a background tab.
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      return
+    }
+    // While search is active, polling for new messages would mix delta
+    // results into the search list — pause until admin clears search.
+    if (searchQ.trim() !== '') {
       return
     }
     try {
@@ -115,7 +136,7 @@ export function MessageThread({
     } catch {
       /* silent */
     }
-  }, [lineUserID, isNearBottom, scrollToBottom, conversation, notif])
+  }, [lineUserID, isNearBottom, scrollToBottom, conversation, notif, searchQ])
 
   // Fetch + start polling whenever the active conversation changes.
   useEffect(() => {
@@ -175,36 +196,205 @@ export function MessageThread({
     [lineUserID, scrollToBottom],
   )
 
+  // Send a single image attachment. Mirrors handleSend's optimistic insert
+  // pattern but uses multipart upload and the /messages/media endpoint.
+  const handleSendMedia = useCallback(
+    async (file: File) => {
+      const tmpURL = URL.createObjectURL(file)
+      const optimistic: ChatMessage = {
+        id: 'tmp-' + Date.now(),
+        line_user_id: lineUserID,
+        direction: 'outgoing',
+        kind: 'image',
+        text_content: '',
+        delivery_status: 'pending',
+        created_at: new Date().toISOString(),
+        // Fake media row so the bubble renders the local preview immediately.
+        media: {
+          id: 'tmp-media',
+          message_id: 'tmp-media',
+          filename: file.name,
+          content_type: file.type,
+          size_bytes: file.size,
+          sha256: '',
+          storage_path: tmpURL,
+          created_at: new Date().toISOString(),
+        },
+      }
+      // Override the bubble URL so it points at the local blob during upload.
+      // MessageBubble normally uses /api/.../media but tmp message has tmp id.
+      ;(optimistic as ChatMessage & { _localPreviewURL?: string })._localPreviewURL = tmpURL
+      setMessages((prev) => [...prev, optimistic])
+      setTimeout(scrollToBottom, 0)
+
+      try {
+        const form = new FormData()
+        form.append('file', file)
+        const res = await client.post<{ message: ChatMessage; delivery: string }>(
+          `/api/admin/conversations/${encodeURIComponent(lineUserID)}/messages/media`,
+          form,
+          { headers: { 'Content-Type': 'multipart/form-data' } },
+        )
+        URL.revokeObjectURL(tmpURL)
+        setMessages((prev) =>
+          prev.map((m) => (m.id === optimistic.id ? res.data.message : m)),
+        )
+        lastSeenRef.current = res.data.message.created_at
+        if (res.data.delivery === 'failed') {
+          toast.error('ส่งรูปไม่สำเร็จ — กดที่ ⚠ บนข้อความเพื่อดูรายละเอียด')
+        }
+      } catch (e: any) {
+        URL.revokeObjectURL(tmpURL)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === optimistic.id
+              ? { ...m, delivery_status: 'failed', delivery_error: e?.response?.data?.error ?? e?.message ?? 'unknown' }
+              : m,
+          ),
+        )
+        toast.error('ส่งรูปไม่สำเร็จ: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
+      }
+    },
+    [lineUserID, scrollToBottom],
+  )
+
+  // Debounced search — refetch on each searchQ change. Empty searchQ is a
+  // signal to resume normal mode (calls fetchInitial without q which also
+  // resets lastSeenRef and re-scrolls to bottom).
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      const trimmed = searchQ.trim()
+      if (trimmed) {
+        fetchInitial(trimmed)
+      } else if (searchOpen) {
+        // search box just closed → refresh to current state
+        fetchInitial()
+      }
+    }, 250)
+    return () => clearTimeout(handle)
+  }, [searchQ, searchOpen, fetchInitial])
+
+  // Phase C: change conversation status. Shows toast on success so admin
+  // confirms the action; parent (Messages/index.tsx) re-fetches via
+  // ConversationList's polling — list filter then hides the row from the
+  // current tab.
+  const handleSetStatus = useCallback(
+    async (status: 'open' | 'resolved' | 'archived') => {
+      try {
+        await client.patch(
+          `/api/admin/conversations/${encodeURIComponent(lineUserID)}/status`,
+          { status },
+        )
+        const label = status === 'resolved' ? 'ปิดเรื่อง' : status === 'archived' ? 'archive' : 'เปิด'
+        toast.success(`${label}แล้ว`)
+      } catch (e: any) {
+        toast.error('เปลี่ยนสถานะไม่สำเร็จ: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
+      }
+    },
+    [lineUserID],
+  )
+
+  // Drag-drop on the entire thread div. dragCounter handles enter/leave on
+  // children: a single drag event series can fire multiple enter/leave as the
+  // pointer moves across nested elements; we only show the overlay once.
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return
+    dragCounterRef.current += 1
+    setIsDraggingFile(true)
+  }
+  const handleDragLeave = () => {
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
+    if (dragCounterRef.current === 0) setIsDraggingFile(false)
+  }
+  const handleDragOver = (e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
+  }
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setIsDraggingFile(false)
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'))
+    if (files.length === 0) return
+    setPendingExternal(
+      files.map((f, i) => ({
+        id: `drop-${Date.now()}-${i}`,
+        file: f,
+        previewURL: URL.createObjectURL(f),
+      })),
+    )
+  }
+
   const initials = (conversation?.display_name || '?').slice(0, 2).toUpperCase()
 
   return (
-    <div className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <Avatar className="h-9 w-9 shrink-0">
+    <div
+      className="relative flex min-h-0 flex-col rounded-lg border border-border bg-card"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {isDraggingFile && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
+          <div className="rounded-full bg-card px-4 py-2 text-sm font-medium shadow">
+            วางไฟล์เพื่อแนบ
+          </div>
+        </div>
+      )}
+      {/* Header — compact (h-12). Customer name + OA badge inline so admins
+          see "which LINE OA" at a glance without leaving for the inbox list. */}
+      <div className="flex h-12 items-center justify-between gap-2 border-b border-border px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Avatar className="h-8 w-8 shrink-0">
             {conversation?.picture_url && (
               <AvatarImage src={conversation.picture_url} alt={conversation.display_name} />
             )}
-            <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+            <AvatarFallback className="text-[10px]">{initials}</AvatarFallback>
           </Avatar>
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium">
-              {conversation?.display_name || lineUserID.slice(0, 12)}
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-sm font-medium">
+                {conversation?.display_name || lineUserID.slice(0, 12)}
+              </span>
+              {conversation?.line_oa_name && (
+                <Badge
+                  variant="outline"
+                  className="h-4 shrink-0 px-1 text-[9px] font-normal"
+                  title={`LINE OA: ${conversation.line_oa_name}`}
+                >
+                  {conversation.line_oa_name}
+                </Badge>
+              )}
+              {conversation?.status === 'resolved' && (
+                <Badge variant="secondary" className="h-4 shrink-0 bg-success/15 px-1 text-[9px] font-normal text-success">
+                  ปิดแล้ว
+                </Badge>
+              )}
+              {conversation?.status === 'archived' && (
+                <Badge variant="secondary" className="h-4 shrink-0 bg-muted px-1 text-[9px] font-normal text-muted-foreground">
+                  Archive
+                </Badge>
+              )}
             </div>
-            <div className="truncate font-mono text-[10px] text-muted-foreground">
-              {lineUserID}
+            <div className="flex items-center gap-1.5 leading-tight">
+              <span className="truncate font-mono text-[10px] text-muted-foreground">
+                {conversation?.phone
+                  ? `📞 ${conversation.phone}`
+                  : `${lineUserID.slice(0, 18)}…`}
+              </span>
               {conversation?.last_message_at && (
-                <> · ล่าสุด {dayjs(conversation.last_message_at).format('DD/MM HH:mm')}</>
+                <span className="text-[10px] text-muted-foreground">
+                  · {dayjs(conversation.last_message_at).format('DD/MM HH:mm')}
+                </span>
               )}
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
-            className="h-8 px-2"
+            className="h-7 px-2"
             onClick={notif.toggle}
             title={notif.enabled ? 'ปิดเสียง / desktop notification' : 'เปิดเสียง / desktop notification'}
           >
@@ -215,23 +405,120 @@ export function MessageThread({
             )}
           </Button>
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
-            className="h-8 gap-1.5"
-            onClick={fetchInitial}
+            className="h-7 px-2"
+            onClick={() => {
+              setSearchOpen((v) => !v)
+              if (searchOpen) setSearchQ('')
+            }}
+            title="ค้นหาในห้องนี้"
+          >
+            <Search className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2"
+            onClick={() => fetchInitial()}
             title="รีเฟรชข้อความ"
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" className="h-8 gap-1.5" onClick={onOpenCreateBill}>
+          {/* Status actions — render based on current state */}
+          {conversation?.status === 'open' && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2.5 text-xs"
+              onClick={() => handleSetStatus('resolved')}
+              title="ทำเครื่องหมายว่าจบเรื่องแล้ว — ห้องจะกลับมาเปิดอีกครั้งเมื่อลูกค้าทักใหม่"
+            >
+              <Check className="h-3.5 w-3.5" />
+              ปิดเรื่อง
+            </Button>
+          )}
+          {conversation?.status === 'resolved' && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2.5 text-xs"
+              onClick={() => handleSetStatus('open')}
+              title="เปิดห้องอีกครั้ง"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              เปิดอีกครั้ง
+            </Button>
+          )}
+          {conversation?.status !== 'archived' ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2"
+              onClick={() => handleSetStatus('archived')}
+              title="Archive ห้องนี้ — ใช้สำหรับ spam/บอท (ไม่ revive อัตโนมัติ)"
+            >
+              <Archive className="h-3.5 w-3.5" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2"
+              onClick={() => handleSetStatus('open')}
+              title="เปิดห้องจาก Archive"
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <Button size="sm" className="h-7 gap-1 px-2.5 text-xs" onClick={onOpenCreateBill}>
             <Plus className="h-3.5 w-3.5" />
             เปิดบิลขาย
           </Button>
         </div>
       </div>
 
+      {/* Tags row (Phase 4.9) — slim bar with chips + "+ tag" affordance */}
+      <div className="flex items-center gap-1.5 border-b border-border bg-muted/10 px-3 py-1">
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">tags</span>
+        <TagsBar lineUserID={lineUserID} />
+      </div>
+
+      {/* Notes panel (Phase 4.8) — admin-only annotations */}
+      <NotesPanel lineUserID={lineUserID} />
+
       {/* Customer history (Phase 4.5) — past bills from this LINE user */}
       <CustomerHistoryPanel lineUserID={lineUserID} />
+
+      {/* Phase D: search bar (collapsible) */}
+      {searchOpen && (
+        <div className="flex items-center gap-1.5 border-b border-border bg-muted/20 px-3 py-1.5">
+          <Search className="h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            placeholder="ค้นหาข้อความในห้องนี้…"
+            autoFocus
+            className="h-7 flex-1 text-xs"
+          />
+          {searchQ && (
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {messages.length} ผลลัพธ์
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-1.5"
+            onClick={() => {
+              setSearchOpen(false)
+              setSearchQ('')
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
 
       {/* Scrollable message list — native scrollbar so we can keep a direct ref */}
       <div ref={scrollRootRef} className="flex-1 overflow-y-auto">
@@ -251,7 +538,12 @@ export function MessageThread({
       </div>
 
       {/* Composer */}
-      <Composer onSend={handleSend} />
+      <Composer
+        onSend={handleSend}
+        onSendMedia={handleSendMedia}
+        externalAttachments={pendingExternal}
+        onConsumeExternal={() => setPendingExternal([])}
+      />
     </div>
   )
 }

@@ -29,6 +29,7 @@ import (
 	"billflow/internal/services/insight"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
+	"billflow/internal/services/media"
 	"billflow/internal/services/mistral"
 	"billflow/internal/services/artifact"
 	"billflow/internal/services/sml"
@@ -75,6 +76,8 @@ func main() {
 	chatMessageRepo := repository.NewChatMessageRepo(db)
 	chatMediaRepo := repository.NewChatMediaRepo(db, cfg.ArtifactsDir, cfg.ArtifactsMaxBytes)
 	chatQuickReplyRepo := repository.NewChatQuickReplyRepo(db)
+	chatNoteRepo := repository.NewChatNoteRepo(db)
+	chatTagRepo := repository.NewChatTagRepo(db)
 	lineOARepo := repository.NewLineOAAccountRepo(db)
 
 	// Services
@@ -289,8 +292,17 @@ func main() {
 		cfg.OpenRouterAPIKey != "",
 		cfg.AutoConfirmThreshold,
 	)
+	// Media signer for /public/media/:id?t=<token>. Falls back to JWT_SECRET
+	// when MEDIA_SIGNING_KEY is empty so single-secret deployments work.
+	mediaKey := cfg.MediaSigningKey
+	if mediaKey == "" {
+		mediaKey = cfg.JWTSecret
+	}
+	mediaSigner := media.NewSigner(mediaKey)
+
 	lineH := handlers.NewLineHandler(lineRegistry, chatConvRepo, chatMessageRepo, chatMediaRepo, auditLogRepo, pool, cfg, logger)
-	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, logger)
+	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, mediaSigner, cfg.PublicBaseURL, logger)
+	publicMediaH := handlers.NewPublicMediaHandler(chatMediaRepo, mediaSigner, logger)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetArtifactService(artifactSvc)
@@ -310,6 +322,10 @@ func main() {
 	//   /webhook/line        → legacy single-OA fallback (resolves via Destination → Any())
 	r.POST("/webhook/line/:oaId", lineH.Webhook)
 	r.POST("/webhook/line", lineH.Webhook)
+
+	// Public media endpoint — NO JWT, the HMAC token IS the auth.
+	// LINE servers fetch this URL to deliver image messages to customers.
+	r.GET("/public/media/:mediaID", publicMediaH.Serve)
 
 	// Auth (rate-limited: 10 req/min per IP)
 	r.POST("/api/auth/login", middleware.AuthRateLimit(10, time.Minute), authH.Login)
@@ -409,7 +425,22 @@ func main() {
 			chatGroup.GET("/unread-count", chatInboxH.UnreadCount)
 			chatGroup.GET("/:lineUserId/messages", chatInboxH.ListMessages)
 			chatGroup.POST("/:lineUserId/messages", chatInboxH.SendReply)
+			chatGroup.POST("/:lineUserId/messages/media", chatInboxH.SendMedia)
 			chatGroup.POST("/:lineUserId/mark-read", chatInboxH.MarkRead)
+			chatGroup.PATCH("/:lineUserId/status", chatInboxH.SetStatus)
+			chatGroup.PATCH("/:lineUserId/phone", chatInboxH.SetPhone)
+
+			// Phase 4.8 internal notes (admin-only annotations).
+			chatNotesH := handlers.NewChatNotesHandler(chatNoteRepo)
+			chatGroup.GET("/:lineUserId/notes", chatNotesH.List)
+			chatGroup.POST("/:lineUserId/notes", chatNotesH.Create)
+			chatGroup.PUT("/:lineUserId/notes/:noteId", chatNotesH.Update)
+			chatGroup.DELETE("/:lineUserId/notes/:noteId", chatNotesH.Delete)
+
+			// Phase 4.9 tags — m2m attach for a single conversation.
+			chatTagsH := handlers.NewChatTagsHandler(chatTagRepo)
+			chatGroup.GET("/:lineUserId/tags", chatTagsH.TagsForConversation)
+			chatGroup.PUT("/:lineUserId/tags", chatTagsH.SetTagsForConversation)
 			chatGroup.GET("/:lineUserId/messages/:messageId/media", chatInboxH.DownloadMedia)
 			chatGroup.POST("/:lineUserId/messages/:messageId/extract", chatInboxH.ExtractFromMedia)
 			chatGroup.POST("/:lineUserId/bills", chatInboxH.CreateBill)
@@ -438,6 +469,17 @@ func main() {
 			qrGroup.POST("", middleware.RequireRole("admin"), quickReplyH.Create)
 			qrGroup.PUT("/:id", middleware.RequireRole("admin"), quickReplyH.Update)
 			qrGroup.DELETE("/:id", middleware.RequireRole("admin"), quickReplyH.Delete)
+		}
+
+		// Phase 4.9 — global chat tag CRUD. /settings/chat-tags admin page.
+		tagsAdminH := handlers.NewChatTagsHandler(chatTagRepo)
+		tagsGroup := api.Group("/settings/chat-tags")
+		tagsGroup.Use(middleware.RequireRole("admin", "staff"))
+		{
+			tagsGroup.GET("", tagsAdminH.ListAll)
+			tagsGroup.POST("", middleware.RequireRole("admin"), tagsAdminH.Create)
+			tagsGroup.PUT("/:id", middleware.RequireRole("admin"), tagsAdminH.Update)
+			tagsGroup.DELETE("/:id", middleware.RequireRole("admin"), tagsAdminH.Delete)
 		}
 	}
 

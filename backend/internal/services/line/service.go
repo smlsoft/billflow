@@ -75,6 +75,39 @@ func (s *Service) PushText(userID, text string) error {
 	return err
 }
 
+// PushImage sends an image Push. Both URLs MUST be HTTPS and reachable from
+// LINE's servers (they fetch the bytes when delivering to the customer).
+// originalContentUrl: ≤10MB JPEG/PNG/WebP, ≤4096×4096
+// previewImageUrl:    ≤1MB JPEG, ≤240×240 — can be the same URL when small
+//
+// LINE Push API does not support a `file` message type, so PDFs / docs from
+// the inbox can't be pushed back to the customer; only image/video/audio.
+// Workaround for files: use a Flex Message with a download link (deferred).
+func (s *Service) PushImage(userID, originalContentURL, previewImageURL string) error {
+	if userID == "" {
+		return fmt.Errorf("userID required")
+	}
+	if originalContentURL == "" {
+		return fmt.Errorf("originalContentURL required")
+	}
+	if previewImageURL == "" {
+		previewImageURL = originalContentURL
+	}
+	_, err := s.bot.PushMessage(
+		&messaging_api.PushMessageRequest{
+			To: userID,
+			Messages: []messaging_api.MessageInterface{
+				&messaging_api.ImageMessage{
+					OriginalContentUrl: originalContentURL,
+					PreviewImageUrl:    previewImageURL,
+				},
+			},
+		},
+		"",
+	)
+	return err
+}
+
 // UserProfile is the subset of /v2/bot/profile/{userId} we care about.
 type UserProfile struct {
 	DisplayName   string `json:"displayName"`

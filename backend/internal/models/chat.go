@@ -29,6 +29,13 @@ const (
 // (Uxxxxxxxx). display_name + picture_url come from LINE's /v2/bot/profile
 // endpoint and are refreshed when the row is first created (and manually by
 // the admin via UI).
+// Conversation lifecycle status (Phase 4.2)
+const (
+	ChatStatusOpen     = "open"
+	ChatStatusResolved = "resolved"
+	ChatStatusArchived = "archived"
+)
+
 type ChatConversation struct {
 	LineUserID        string     `json:"line_user_id"`
 	// LineOAID points at line_oa_accounts.id — tells backend which OA's
@@ -37,6 +44,14 @@ type ChatConversation struct {
 	LineOAID          *string    `json:"line_oa_id,omitempty"`
 	DisplayName       string     `json:"display_name"`
 	PictureURL        string     `json:"picture_url"`
+	// Phone — saved by admin via "บันทึกเบอร์" button on detected phone in
+	// incoming messages (Phase 4.7). Empty when not yet captured.
+	Phone             string     `json:"phone"`
+	// Status is the lifecycle state:
+	//   open      — active, shows in default inbox
+	//   resolved  — admin marked done; auto-reverts to open on new inbound
+	//   archived  — sticky (no auto-revive); for spam/blocked threads
+	Status            string     `json:"status"`
 	LastMessageAt     time.Time  `json:"last_message_at"`
 	LastInboundAt     *time.Time `json:"last_inbound_at,omitempty"`
 	LastAdminReplyAt  *time.Time `json:"last_admin_reply_at,omitempty"`

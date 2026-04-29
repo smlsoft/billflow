@@ -17,7 +17,7 @@ func NewChatConversationRepo(db *sql.DB) *ChatConversationRepo {
 }
 
 const chatConvCols = `
-  line_user_id, line_oa_id, display_name, picture_url,
+  line_user_id, line_oa_id, display_name, picture_url, phone, status,
   last_message_at, last_inbound_at, last_admin_reply_at,
   unread_admin_count, created_at
 `
@@ -27,7 +27,7 @@ func scanChatConversation(s interface{ Scan(...any) error }) (*models.ChatConver
 	var lineOAID sql.NullString
 	var lastInbound, lastAdminReply sql.NullTime
 	err := s.Scan(
-		&c.LineUserID, &lineOAID, &c.DisplayName, &c.PictureURL,
+		&c.LineUserID, &lineOAID, &c.DisplayName, &c.PictureURL, &c.Phone, &c.Status,
 		&c.LastMessageAt, &lastInbound, &lastAdminReply,
 		&c.UnreadAdminCount, &c.CreatedAt,
 	)
@@ -81,7 +81,7 @@ func (r *ChatConversationRepo) UpsertWithOA(
 	var lastInbound, lastAdminReply sql.NullTime
 	var isNew bool
 	if err := row.Scan(
-		&c.LineUserID, &lineOAID, &c.DisplayName, &c.PictureURL,
+		&c.LineUserID, &lineOAID, &c.DisplayName, &c.PictureURL, &c.Phone, &c.Status,
 		&c.LastMessageAt, &lastInbound, &lastAdminReply,
 		&c.UnreadAdminCount, &c.CreatedAt, &isNew,
 	); err != nil {
@@ -125,25 +125,67 @@ type ConversationListRow struct {
 	LineOAName string `json:"line_oa_name,omitempty"`
 }
 
+// ConversationListFilter holds the query options for List.
+type ConversationListFilter struct {
+	Limit      int
+	Offset     int
+	UnreadOnly bool
+	Status     string // "" = no filter; "open" / "resolved" / "archived"
+	Q          string // case-insensitive substring match on display_name + last text
+}
+
 // List returns conversations ordered by last_message_at DESC.
-// unreadOnly filters to rows with unread_admin_count > 0.
 // Each row includes the OA's display name (line_oa_name) for badge rendering.
-func (r *ChatConversationRepo) List(limit, offset int, unreadOnly bool) ([]*ConversationListRow, error) {
+// Phase D adds Q (search) — ILIKE on display_name + the most recent text from
+// chat_messages (LATERAL subquery).
+func (r *ChatConversationRepo) List(f ConversationListFilter) ([]*ConversationListRow, error) {
+	limit, offset := f.Limit, f.Offset
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	args := []any{limit, offset}
+	where := ""
+	addWhere := func(cond string) {
+		if where == "" {
+			where = " WHERE " + cond
+		} else {
+			where += " AND " + cond
+		}
+	}
+	if f.UnreadOnly {
+		addWhere("cc.unread_admin_count > 0")
+	}
+	if f.Status != "" {
+		args = append(args, f.Status)
+		addWhere(fmt.Sprintf("cc.status = $%d", len(args)))
+	}
+	if f.Q != "" {
+		// ILIKE on display_name OR latest message text. Subquery is LATERAL
+		// so it sees the outer cc.line_user_id.
+		args = append(args, "%"+f.Q+"%")
+		addWhere(fmt.Sprintf(
+			`(cc.display_name ILIKE $%d OR EXISTS (
+			   SELECT 1 FROM chat_messages m
+			   WHERE m.line_user_id = cc.line_user_id
+			     AND m.text_content ILIKE $%d
+			 ))`, len(args), len(args)))
+	}
+
 	q := `SELECT
 	        cc.line_user_id, cc.line_oa_id, cc.display_name, cc.picture_url,
+	        cc.phone, cc.status,
 	        cc.last_message_at, cc.last_inbound_at, cc.last_admin_reply_at,
 	        cc.unread_admin_count, cc.created_at,
 	        COALESCE(oa.name, '') AS line_oa_name
 	      FROM chat_conversations cc
-	      LEFT JOIN line_oa_accounts oa ON oa.id = cc.line_oa_id`
-	if unreadOnly {
-		q += ` WHERE cc.unread_admin_count > 0`
-	}
-	q += ` ORDER BY cc.last_message_at DESC LIMIT $1 OFFSET $2`
-	rows, err := r.db.Query(q, limit, offset)
+	      LEFT JOIN line_oa_accounts oa ON oa.id = cc.line_oa_id` +
+		where +
+		` ORDER BY cc.last_message_at DESC LIMIT $1 OFFSET $2`
+	rows, err := r.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list chat_conversations: %w", err)
 	}
@@ -155,6 +197,7 @@ func (r *ChatConversationRepo) List(limit, offset int, unreadOnly bool) ([]*Conv
 		var lastInbound, lastAdminReply sql.NullTime
 		if err := rows.Scan(
 			&row.LineUserID, &lineOAID, &row.DisplayName, &row.PictureURL,
+			&row.Phone, &row.Status,
 			&row.LastMessageAt, &lastInbound, &lastAdminReply,
 			&row.UnreadAdminCount, &row.CreatedAt,
 			&row.LineOAName,
@@ -176,6 +219,47 @@ func (r *ChatConversationRepo) List(limit, offset int, unreadOnly bool) ([]*Conv
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// SetPhone stores a phone number on a conversation (Phase 4.7).
+func (r *ChatConversationRepo) SetPhone(lineUserID, phone string) error {
+	_, err := r.db.Exec(
+		`UPDATE chat_conversations SET phone = $1 WHERE line_user_id = $2`,
+		phone, lineUserID,
+	)
+	if err != nil {
+		return fmt.Errorf("set phone: %w", err)
+	}
+	return nil
+}
+
+// SetStatus changes a conversation's lifecycle state. Caller validates that
+// the value is one of open/resolved/archived; the DB CHECK enforces it too.
+func (r *ChatConversationRepo) SetStatus(lineUserID, status string) error {
+	_, err := r.db.Exec(
+		`UPDATE chat_conversations SET status = $1 WHERE line_user_id = $2`,
+		status, lineUserID,
+	)
+	if err != nil {
+		return fmt.Errorf("set status: %w", err)
+	}
+	return nil
+}
+
+// AutoReviveOnInbound reverts status='resolved' → 'open' when a customer
+// sends a new message. 'archived' stays sticky (admin must un-archive).
+// Returns true if the row was actually flipped.
+func (r *ChatConversationRepo) AutoReviveOnInbound(lineUserID string) (bool, error) {
+	res, err := r.db.Exec(
+		`UPDATE chat_conversations SET status = 'open'
+		 WHERE line_user_id = $1 AND status = 'resolved'`,
+		lineUserID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("auto-revive: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // TouchLastMessage updates last_message_at = NOW(), and (when isInbound) also
@@ -232,14 +316,34 @@ func (r *ChatConversationRepo) UnreadCount() (int, error) {
 	return n, nil
 }
 
-// CountAll returns total number of conversations (for pagination).
-func (r *ChatConversationRepo) CountAll(unreadOnly bool) (int, error) {
-	q := `SELECT COUNT(*) FROM chat_conversations`
-	if unreadOnly {
-		q += ` WHERE unread_admin_count > 0`
+// CountAll returns total number of conversations matching the filter.
+func (r *ChatConversationRepo) CountAll(f ConversationListFilter) (int, error) {
+	args := []any{}
+	where := ""
+	add := func(cond string) {
+		if where == "" {
+			where = " WHERE " + cond
+		} else {
+			where += " AND " + cond
+		}
+	}
+	if f.UnreadOnly {
+		add("unread_admin_count > 0")
+	}
+	if f.Status != "" {
+		args = append(args, f.Status)
+		add(fmt.Sprintf("status = $%d", len(args)))
+	}
+	if f.Q != "" {
+		args = append(args, "%"+f.Q+"%")
+		add(fmt.Sprintf(`(display_name ILIKE $%d OR EXISTS (
+		   SELECT 1 FROM chat_messages m
+		   WHERE m.line_user_id = chat_conversations.line_user_id
+		     AND m.text_content ILIKE $%d
+		 ))`, len(args), len(args)))
 	}
 	var n int
-	if err := r.db.QueryRow(q).Scan(&n); err != nil {
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM chat_conversations`+where, args...).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil

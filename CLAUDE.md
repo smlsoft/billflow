@@ -445,6 +445,42 @@ CREATE TABLE chat_quick_replies (
 );
 -- 4 seed rows on first boot: ทักทาย / เช็คสต๊อก / แจ้งราคา / ปิดบิล
 
+-- Conversation lifecycle status (Phase 4.2 / migration 016)
+-- ALTER TABLE chat_conversations ADD COLUMN status TEXT NOT NULL DEFAULT 'open'
+--   CHECK (status IN ('open','resolved','archived'));
+-- - open      → active, default inbox tab
+-- - resolved  → admin marked done; auto-revive on inbound (handlers/line.go)
+-- - archived  → sticky (no auto-revive); for spam/blocked threads
+
+-- CRM lite — phone + notes + tags (Phase 4.7+4.8+4.9 / migration 017)
+-- ALTER TABLE chat_conversations ADD COLUMN phone TEXT NOT NULL DEFAULT '';
+-- (saved by "บันทึกเบอร์" button when regex matches incoming text)
+
+-- Internal admin annotations on a conversation (never sent to LINE)
+CREATE TABLE chat_notes (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  line_user_id TEXT NOT NULL REFERENCES chat_conversations(line_user_id) ON DELETE CASCADE,
+  body         TEXT NOT NULL,
+  created_by   UUID REFERENCES users(id),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Global tag list (admin-curated) + many-to-many with conversations.
+-- Used for inbox filtering (VIP / ขายส่ง / spam ฯลฯ).
+CREATE TABLE chat_tags (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  label      TEXT NOT NULL UNIQUE,
+  color      TEXT NOT NULL DEFAULT 'gray',  -- gray/red/orange/yellow/green/blue/purple
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE chat_conversation_tags (
+  line_user_id TEXT NOT NULL REFERENCES chat_conversations(line_user_id) ON DELETE CASCADE,
+  tag_id       UUID NOT NULL REFERENCES chat_tags(id) ON DELETE CASCADE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (line_user_id, tag_id)
+);
+
 -- SML Catalog (smart matching — Shopee email + manual review)
 -- ทำงานเป็น in-memory cosine-similarity index (1536-dim vectors)
 CREATE TABLE sml_catalog (
@@ -555,6 +591,8 @@ CREATE TABLE imap_accounts (
 > - [013_chat_inbox.sql](backend/internal/database/migrations/013_chat_inbox.sql) — drops chat_sessions, creates chat_conversations + chat_messages + chat_media (session 13 chatbot → human chat refactor)
 > - [014_line_oa_accounts.sql](backend/internal/database/migrations/014_line_oa_accounts.sql) — line_oa_accounts table + chat_conversations.line_oa_id (multi-OA support, session 13)
 > - [015_chat_quick_replies.sql](backend/internal/database/migrations/015_chat_quick_replies.sql) — chat_quick_replies table + 4 seed templates (Phase 4.4)
+> - [016_chat_conversation_status.sql](backend/internal/database/migrations/016_chat_conversation_status.sql) — chat_conversations.status (open/resolved/archived) + auto-revive (Phase 4.2 — session 14)
+> - [017_chat_crm.sql](backend/internal/database/migrations/017_chat_crm.sql) — chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags (CRM lite Phase 4.7+4.8+4.9 — session 14)
 
 ---
 
@@ -997,7 +1035,11 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── channel_defaults.go  ← /api/settings/channel-defaults CRUD ✨NEW
 │   │   │   ├── sml_party.go         ← /api/sml/customers|suppliers search ✨NEW
 │   │   │   ├── chat_inbox.go        ← /api/admin/conversations/* CRUD + extract ✨session 13
+│   │   │   │                            (+ SendMedia + SetStatus + SetPhone session 14)
 │   │   │   ├── chat_quick_reply.go  ← /api/admin/quick-replies CRUD ✨session 13
+│   │   │   ├── chat_notes.go        ← /api/admin/conversations/:user/notes CRUD ✨session 14
+│   │   │   ├── chat_tags.go         ← /api/settings/chat-tags + per-conv m2m ✨session 14
+│   │   │   ├── public_media.go      ← GET /public/media/:id?t= (HMAC, no JWT) ✨session 14
 │   │   │   ├── line_oa.go           ← /api/settings/line-oa CRUD + test-connect ✨session 13
 │   │   │   └── auth.go
 │   │   ├── middleware/
@@ -1009,7 +1051,8 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── user.go
 │   │   │   ├── audit_log.go
 │   │   │   ├── imap_account.go      ← ImapAccount model ✨NEW
-│   │   │   └── channel_default.go   ← ChannelDefault + ChannelDefaultUpsert ✨NEW
+│   │   │   ├── channel_default.go   ← ChannelDefault + ChannelDefaultUpsert ✨NEW
+│   │   │   └── chat_crm.go          ← ChatNote + ChatTag types ✨session 14
 │   │   ├── services/
 │   │   │   ├── ai/
 │   │   │   │   ├── openrouter.go
@@ -1024,7 +1067,8 @@ mkdir -p ~/billflow/backups
 │   │   │   │   ├── product_client.go        ← SML #2 REST product CRUD
 │   │   │   │   ├── party_client.go          ← GET customer/supplier paginated ✨NEW
 │   │   │   │   └── party_cache.go           ← in-memory cache + 6h refresh ✨NEW
-│   │   │   ├── line/service.go         ← reply + push notify
+│   │   │   ├── line/service.go         ← reply + push notify (+ PushImage session 14)
+│   │   │   ├── media/signer.go         ← HMAC-SHA256 signed URL helper ✨session 14
 │   │   │   ├── email/
 │   │   │   │   ├── coordinator.go      ← starts one goroutine per account ✨NEW
 │   │   │   │   ├── account.go          ← per-account poll loop ✨NEW
@@ -1046,6 +1090,8 @@ mkdir -p ~/billflow/backups
 │   │       ├── audit_log_repo.go
 │   │       ├── imap_account_repo.go   ← CRUD + status update ✨NEW
 │   │       ├── channel_default_repo.go← CRUD + IsEmpty ✨NEW
+│   │       ├── chat_note_repo.go      ← chat_notes CRUD ✨session 14
+│   │       ├── chat_tag_repo.go       ← chat_tags + per-conv m2m ✨session 14
 │   │       └── doc_counter_repo.go    ← GenerateDocNo atomic counter ✨NEW
 │   │   ├── models/  (see models/ above)
 │   ├── go.mod
@@ -1080,17 +1126,20 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── LineOA/
 │   │   │   │   └── AccountDialog.tsx    ← add/edit OA + secret/token + greeting ✨session 13
 │   │   │   ├── QuickReplies.tsx         ← /settings/quick-replies template CRUD ✨session 13
+│   │   │   ├── ChatTags.tsx             ← /settings/chat-tags admin (color picker) ✨session 14
 │   │   │   ├── Messages/                ← /messages chat inbox ✨session 13
 │   │   │   │   ├── index.tsx            ← 2-pane layout, deep-link ?u=
-│   │   │   │   ├── ConversationList.tsx ← inbox list, 30s poll, OA badge
-│   │   │   │   ├── MessageThread.tsx    ← active thread, 5s delta poll, mark-read
-│   │   │   │   ├── MessageBubble.tsx    ← text/image/file/audio/system + ⚠ failed
-│   │   │   │   ├── Composer.tsx         ← textarea + Send + 💬 quick-reply popover
+│   │   │   │   ├── ConversationList.tsx ← inbox list, status tabs, server search ✨session 14
+│   │   │   │   ├── MessageThread.tsx    ← drag-drop, search bar, status header ✨session 14
+│   │   │   │   ├── MessageBubble.tsx    ← + phone-detect "บันทึกเบอร์" button ✨session 14
+│   │   │   │   ├── Composer.tsx         ← inline compact redesign (auto-grow) ✨session 14
+│   │   │   │   ├── NotesPanel.tsx       ← Phase 4.8 — internal notes ✨session 14
+│   │   │   │   ├── TagsBar.tsx          ← Phase 4.9 — tag chips + picker ✨session 14
 │   │   │   │   ├── CustomerHistoryPanel.tsx  ← Phase 4.5 — past bills inline
 │   │   │   │   ├── CreateBillPanel.tsx  ← catalog picker → POST .../bills (status=pending)
 │   │   │   │   ├── ExtractPreviewDialog.tsx ← manual AI extract from media
 │   │   │   │   ├── useNotifications.ts  ← Phase 4.11 — Notification API + chime
-│   │   │   │   └── types.ts             ← shared types (ChatMessage, ExtractedBill, ...)
+│   │   │   │   └── types.ts             ← shared types (ChatMessage, ChatNote, ChatTag, ...)
 │   │   │   └── Showcase.tsx             ← dev-only component gallery
 │   │   ├── components/
 │   │   │   ├── layout/
@@ -1200,6 +1249,17 @@ SHOPEE_SML_UNIT_CODE=           ← หน่วย (fallback)
 SHOPEE_SML_VAT_TYPE=0           ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์% (fallback — overridable per channel)
 SHOPEE_SML_VAT_RATE=7           ← (fallback — overridable per channel)
 SHOPEE_SML_DOC_TIME=09:00
+
+# LINE chat — admin send media (Phase 4.1 session 14)
+# PUBLIC_BASE_URL must be reachable by LINE servers (jp/sg). When admin sends
+# image, BillFlow constructs originalContentUrl/previewImageUrl pointing here.
+# Discover the active Cloudflare Quick Tunnel URL once: 
+#   grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-tunnel.log
+# URL changes when cloudflared restarts (rare; current uptime 6+ days)
+PUBLIC_BASE_URL=
+# Signs short-lived /public/media/:id?t=... tokens (HMAC-SHA256). When empty,
+# falls back to JWT_SECRET so single-secret deployments work without extra config.
+MEDIA_SIGNING_KEY=
 
 # Shopee shipped → SML purchaseorder (reuses all SHOPEE_SML_* above)
 # supplier_code per channel managed via /settings/channels (channel_defaults table — session 7)
@@ -1549,6 +1609,44 @@ lucide-react             ← icon set (shadcn default)
     - **Browser notification + chime**: hook `useNotifications` ใน Messages/.
       Toggle ปุ่ม 🔔 บน thread header (persisted ใน localStorage). Notification
       API ใช้ตอน tab hidden เท่านั้น (เลี่ยง double-notify with sonner toast)
+
+18. Admin send-media + Cloudflare Quick Tunnel (session 14 — Phase 4.1)
+    - **LINE Push API รองรับเฉพาะ image/video/audio** — ไม่มี file (PDF/doc) type
+      → admin ส่ง PDF กลับลูกค้าไม่ได้ผ่าน Push (workaround: Flex link, deferred)
+    - Image limits: ≤10MB JPEG/PNG/WebP, ≤4096×4096 (originalContentUrl)
+      Preview: ≤1MB JPEG ≤240×240 — ใช้ URL เดียวได้ถ้าไฟล์เล็ก
+    - **Cloudflare Quick Tunnel** ทำงานบน server (PID 2265016, log /tmp/billflow-tunnel.log)
+      → URL: https://recorders-thinks-distance-injuries.trycloudflare.com
+      → URL **เปลี่ยนเมื่อ cloudflared restart** — admin ต้อง re-paste ลง .env
+      → uptime ปัจจุบัน 6+ วัน (started manually, no systemd)
+      → v2/Phase 8: replace ด้วย named tunnel + domain
+    - **HMAC-signed public URL**: /public/media/:id?t=<token> ที่ token = exp.signature
+      → 1h expiry; LINE มักดึงรูปใน 1-2 วินาที, expiry ยาวพอกัน retry
+      → Signing key: `MEDIA_SIGNING_KEY` env, fallback เป็น JWT_SECRET
+    - **Drag-drop overlay** บน MessageThread + paste image (clipboard) บน textarea
+    - non-image upload → toast warning ทันที (โดยไม่ส่ง LINE)
+    - ค่า PUBLIC_BASE_URL ว่าง → SendMedia handler ตอบ 503 "ยังไม่ได้ตั้ง"
+
+19. Conversation lifecycle status (session 14 — Phase 4.2)
+    - migration 016: chat_conversations.status (open/resolved/archived)
+    - **Auto-revive**: ลูกค้าส่ง inbound → status='resolved' → กลับเป็น 'open' อัตโนมัติ
+      ใน processMessage (`AutoReviveOnInbound`). 'archived' sticky — ไม่ revive
+    - ConversationList tabs: เปิดอยู่ / ปิดแล้ว / Archive
+    - Thread header buttons: ✓ ปิดเรื่อง / ↺ เปิดอีกครั้ง / 🗄 Archive / ↻ unarchive
+
+20. CRM lite (session 14 — Phase 4.7 + 4.8 + 4.9)
+    - migration 017: phone column + chat_notes + chat_tags + chat_conversation_tags
+    - **Phone detect**: regex `(\+?\d{1,3}[\s-]?)?\d{2,3}[\s-]?\d{3,4}[\s-]?\d{4}` ที่ MessageBubble
+      → ปุ่ม "บันทึกเบอร์" ปรากฏใน incoming text bubbles ที่ match
+      → click → PATCH /api/admin/conversations/:user/phone
+      → header แสดง 📞 <เบอร์> แทน LINE userID
+      → CreateBillPanel prefill จาก conversation.phone
+    - **Notes**: collapsible bar (ซ่อนถ้าไม่มี notes), warning yellow tint
+      ไม่ส่ง LINE; เห็นได้ทุก admin/staff (no per-admin private)
+    - **Tags**: global table + m2m. /settings/chat-tags admin CRUD page
+      → 7 colors (gray/red/orange/yellow/green/blue/purple)
+      → Tags row ใน thread header ใต้ status; chips + "+ tag" combobox
+      → ไม่มี inbox filter by tag ใน v1 (deferred)
 ```
 
 ---
@@ -1675,6 +1773,62 @@ Phase 6 — Web UI Complete
             chat_session_repo.go, MCPClient injection in line.go.
             Polling: 1 endpoint (dashboard/stats merged with unread_messages),
             paused when tab hidden, refresh on regain focus.
+  [x] 6.24 Composer redesign + admin send-media + status/search/CRM lite ✅ (session 14)
+            ⭐ Phase A — composer UX: replaced 3 hardcoded h-[60px] elements
+            (popover btn / textarea / send btn) with a single rounded wrapper
+            (rounded-2xl, focus-within ring). Auto-grow textarea (1→6 rows max,
+            scrolls past 6) via useLayoutEffect + scrollHeight. Toolbar 📎 + 💬
+            (h-8 w-8 ghost icon) on left, send button collapses h-8 w-8 → h-8
+            px-3 with "ส่ง" label when canSend. PendingAttachment[] state +
+            thumbnail strip + × remove. onPaste captures clipboard images.
+            ⭐ Phase B — admin send-media (image/JPEG/PNG/WebP, ≤10MB):
+            Backend: services/media/signer.go (HMAC-SHA256 token, exp_unix.sig
+            base64url, default 1h TTL); handlers/public_media.go GET /public/
+            media/:id?t= (no JWT — token IS the auth, Cache-Control max-age=300);
+            chat_inbox.SendMedia (multipart upload → save chat_media → insert
+            outgoing chat_message kind=image → build signed URL using
+            cfg.PublicBaseURL → svc.PushImage); lineservice.PushImage(userID,
+            originalContentURL, previewImageURL).
+            Frontend: drag-drop overlay on MessageThread (dragCounterRef for
+            nested children); optimistic UI via _localPreviewURL blob URL; URL.
+            revokeObjectURL on cleanup; MessageBubble localPreview branch checked
+            before API URL pattern.
+            Cloudflare Quick Tunnel: discovered already running on 109 (PID
+            2265016, --url http://localhost:8090, log /tmp/billflow-tunnel.log).
+            URL: https://recorders-thinks-distance-injuries.trycloudflare.com.
+            v1 = admin pastes URL into PUBLIC_BASE_URL .env (re-paste only on
+            cloudflared restart — current uptime 6+ days). MEDIA_SIGNING_KEY
+            falls back to JWT_SECRET when empty.
+            LIMITATION: LINE Push ไม่มี file type — รองรับเฉพาะ image/video/
+            audio/sticker/template/flex. v1 = image only. PDF/file outbound
+            defer (workaround Flex Message link in v2).
+            ⭐ Phase C — conversation status (migration 016):
+            chat_conversations.status (open/resolved/archived). On inbound:
+            convRepo.AutoReviveOnInbound flips resolved→open (archived sticky).
+            ConversationList: 3-tab strip top (เปิดอยู่ default / ปิดแล้ว /
+            Archive). Thread header: status badges (ปิดแล้ว / Archive) + actions
+            (✓ ปิดเรื่อง / ↺ เปิดอีกครั้ง / Archive / unarchive).
+            ⭐ Phase D — search (no schema):
+            Inbox-level: ConversationListFilter.Q → ILIKE on display_name +
+            EXISTS subquery on chat_messages.text_content. Replaces client-side
+            filter with server-side ?q=. Thread-level: chat_message_repo.
+            ListByUser accepts q → ILIKE branch; MessageThread search bar
+            collapsible, 250ms debounce, pauses delta polling while q!=''.
+            ⭐ Phase E — CRM lite (migration 017):
+            4.7 Phone — chat_conversations.phone column. PHONE_RE in
+            MessageBubble matches incoming text → "บันทึกเบอร์ <num>" button →
+            PATCH .../phone. (CreateBillPanel prefill deferred.)
+            4.8 Notes — chat_notes table; CRUD endpoints; NotesPanel.tsx
+            collapsible warning-tinted bar (auto-hides when empty + closed).
+            Internal-only — never sent to LINE.
+            4.9 Tags — chat_tags (global) + chat_conversation_tags (m2m).
+            TagsBar.tsx chips + popover picker; 7 colors (gray/red/orange/
+            yellow/green/blue/purple). /settings/chat-tags admin page (sidebar:
+            "Chat Tags").
+            New routes (App.tsx + Sidebar.tsx): /settings/chat-tags.
+            Verified end-to-end on production (109): composer auto-grow, paste
+            image preview, drag-drop, public/media HMAC token round-trip,
+            status flip + auto-revive, server search, notes/tags CRUD.
 
 Phase 7 — Background Jobs
   [x] 7.1 Cron 08:00 daily insight + LINE notify (F4) ✅
@@ -1837,7 +1991,7 @@ Bill flow → SML routing (bills.go Retry handler — 4-way dispatch):
   shopee_shipped           purchase    purchaseorder (248)            party_code from channel_defaults
   any                      any         endpoint URL overridable per (channel,bill_type) in /settings/channels
 
-Migrations applied (15 files):
+Migrations applied (17 files):
   001_init.sql
   002_audit_logging.sql                    (audit_logs structured columns)
   002_sml_catalog.sql                      (sml_catalog + extended CHECK)
@@ -1853,19 +2007,108 @@ Migrations applied (15 files):
   013_chat_inbox.sql                       (drop chat_sessions, add chat_conversations + chat_messages + chat_media — session 13)
   014_line_oa_accounts.sql                 (line_oa_accounts + chat_conversations.line_oa_id — session 13)
   015_chat_quick_replies.sql               (chat_quick_replies + 4 seed templates — Phase 4.4 session 13)
+  016_chat_conversation_status.sql         (chat_conversations.status open/resolved/archived — Phase 4.2 session 14)
+  017_chat_crm.sql                         (chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags — Phase 4.7+4.8+4.9 session 14)
 
 Phases:
   Phase 0–7  ✅
   Phase 6    ✅ UI redesign (Tailwind/shadcn) + multi-account IMAP + artifacts + channel defaults +
               SML mojibake permanent fix via marshalASCII + catalog per-row actions (6.19-6.22)
               + LINE chatbot → human chat refactor + multi-OA + /messages page (6.23, session 13)
+              + composer redesign + admin send-media (Cloudflare Quick Tunnel) + status/search/
+                CRM lite (6.24, session 14)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
   ⏳ Phase 3 — test รูป/PDF/voice ใน LINE chat (auto-extract removed; manual extract works)
   ⏳ Phase 4b — Lazada Excel import (waiting customer files)
-  ⏳ Phase 8 — cloudflared + systemd
-  ⏳ Phase 4 (chat power features — quick replies, customer history, browser notif, status, search, tags)
+  ⏳ Phase 8 — cloudflared named tunnel + systemd (Quick Tunnel works for now)
+  ⏳ Phase 4 carry-over: 4.6 LINE↔SML party link, 4.12 keyboard shortcuts (j/k/e/),
+       4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
+  ⏳ LINE Push quota dashboard (free OA = 500/month — image push uses 1 each)
+  ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
+
+Recent work (session 14 — 2026-04-29):
+  ⭐ feat(chat): composer redesign + admin send-media + Cloudflare Quick Tunnel
+       Phase A — Composer.tsx full rewrite. Replaced 3 hardcoded h-[60px]
+       elements with single rounded-2xl wrapper (focus-within ring). Auto-grow
+       textarea via useLayoutEffect + scrollHeight (1→6 rows max, scrolls past).
+       📎 + 💬 toolbar (h-8 w-8 ghost) on left, send button collapses to icon
+       when empty / expands h-8 px-3 with "ส่ง" label when canSend. Added
+       PendingAttachment[] state, thumbnail strip with × remove, onPaste handler.
+       Phase B — admin send-media (image only, JPEG/PNG/WebP, ≤10MB):
+       New backend/internal/services/media/signer.go — HMAC-SHA256 signed URL
+       (exp_unix.sig in base64url, 1h default TTL, constant-time verify).
+       Falls back from MEDIA_SIGNING_KEY → JWT_SECRET when key empty.
+       New handlers/public_media.go — GET /public/media/:id?t=<token> outside
+       /api JWT group; token IS the auth (LINE servers fetch this URL).
+       Cache-Control: public, max-age=300.
+       chat_inbox.SendMedia: multipart upload → save chat_media → insert
+       outgoing chat_message kind=image → build `cfg.PublicBaseURL +
+       "/public/media/<id>?t=<sig>"` → svc.PushImage(originalURL, previewURL).
+       lineservice.PushImage(userID, originalContentURL, previewImageURL).
+       Frontend: drag-drop overlay on MessageThread (dragCounterRef for nested
+       child enter/leave); optimistic UI via _localPreviewURL blob URL on the
+       outgoing ChatMessage; URL.revokeObjectURL on cleanup; MessageBubble
+       checks localPreview first before falling back to API URL pattern.
+       Cloudflare Quick Tunnel: discovered already running on host 109
+       (PID 2265016, --url http://localhost:8090, log /tmp/billflow-tunnel.log,
+       URL https://recorders-thinks-distance-injuries.trycloudflare.com).
+       v1 = admin pastes URL into PUBLIC_BASE_URL .env (re-paste only on
+       cloudflared restart — current uptime 6+ days, log persists).
+       LIMITATION: LINE Push has no `file` type — text/image/video/audio/
+       sticker/template/flex only. v1 = image only. PDF/file outbound deferred
+       (Flex Message link workaround in v2).
+  feat(chat): conversation status (Phase 4.2)
+       Migration 016 adds chat_conversations.status (open/resolved/archived)
+       with default 'open' + index on (status, last_message_at DESC).
+       New chat_conversation_repo.SetStatus + AutoReviveOnInbound
+       (UPDATE WHERE status='resolved' — archived sticky).
+       handlers/line.go.processMessage: after IncrementUnread, calls
+       AutoReviveOnInbound to flip resolved→open on new inbound.
+       New PATCH /api/admin/conversations/:user/status endpoint.
+       Frontend: ConversationList tab strip (เปิดอยู่ default / ปิดแล้ว /
+       Archive); MessageThread header status badges + actions
+       (✓ ปิดเรื่อง / ↺ เปิดอีกครั้ง / Archive / unarchive).
+       Refetches list on tab change; pauses delta polling unrelated.
+  feat(chat): inbox + thread search (Phase 4.3)
+       No schema. ConversationListFilter.Q → ILIKE on display_name +
+       EXISTS subquery against chat_messages.text_content. Inbox search
+       moves from client-side filter → server-side ?q=. Thread search:
+       chat_message_repo.ListByUser accepts q → ILIKE branch (renamed local
+       var query to avoid collision with parameter); MessageThread search
+       bar collapsible above message list, 250ms debounce, pauses delta
+       polling while q != ''. v1 ILIKE only — pg_trgm GIN deferred (volume
+       low).
+  feat(chat): CRM lite — phone + notes + tags (Phase 4.7+4.8+4.9)
+       Migration 017 adds chat_conversations.phone (TEXT NOT NULL DEFAULT '')
+       + chat_notes table + chat_tags table (color enum hint) +
+       chat_conversation_tags m2m (PK on (line_user_id, tag_id)).
+       4.7 Phone — MessageBubble PHONE_RE matches Thai phone in incoming
+            text bubbles only → "บันทึกเบอร์ <num>" button → PATCH .../phone.
+            Outgoing/system bubbles never get the button (admin replies
+            obviously aren't customer phones).
+       4.8 Notes — chat_note_repo.go (ListByUser/Create/Update/Delete) +
+            handlers/chat_notes.go CRUD endpoints. NotesPanel.tsx
+            collapsible warning-tinted bar; auto-hides when empty + closed.
+            Internal-only — never sent to LINE.
+       4.9 Tags — chat_tag_repo.go (global CRUD + TagsForConversation +
+            SetTagsForConversation tx-based replace-set) +
+            handlers/chat_tags.go (global + per-conv m2m).
+            TagsBar.tsx chips + popover picker, 7 colors (gray/red/orange/
+            yellow/green/blue/purple). New /settings/chat-tags admin page
+            (ChatTags.tsx) with color picker grid + "ดูตัวอย่าง" preview.
+            Sidebar nav: "Chat Tags" (Tag icon).
+  Verified end-to-end on prod 109:
+       - Composer auto-grow + paste image preview + drag-drop work
+       - HMAC token round-trip: GET /public/media/<id>?t=<sig> → 200 + bytes;
+         tampered token → 403
+       - Status flip + auto-revive on inbound (tested resolved→open and
+         archived stays sticky)
+       - Server search returns matching convos by display_name OR text
+       - Notes CRUD + tags m2m via /settings/chat-tags
+       Migration 016 + 017 idempotent (IF NOT EXISTS / ALTER TABLE ADD COLUMN
+       IF NOT EXISTS) so re-runs safe.
 
 Recent work (session 13 — 2026-04-29):
   ⭐ feat(line): replace AI chatbot with human chat inbox + multi-OA support
@@ -2015,7 +2258,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-29 (session 13)*
+*Last updated: 2026-04-29 (session 14)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*

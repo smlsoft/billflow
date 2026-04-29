@@ -32,6 +32,18 @@ type Config struct {
 	// "ขอบคุณค่ะ ทางร้านจะติดต่อกลับเร็ว ๆ นี้นะคะ 🙏" if you want one.
 	LineGreeting string
 
+	// PublicBaseURL is the externally reachable HTTPS URL of this backend
+	// (e.g. the Cloudflare Quick Tunnel URL). Used when constructing
+	// originalContentUrl + previewImageUrl for LINE Push image messages —
+	// LINE's servers fetch these URLs to deliver media to customers, so they
+	// MUST be reachable from the public internet. Empty = admin can't send
+	// images yet (UI hides the attach feature with a tooltip).
+	PublicBaseURL string
+
+	// MediaSigningKey signs short-lived public media URLs (HMAC-SHA256).
+	// Defaults to JWT_SECRET when empty so single-secret deployments work.
+	MediaSigningKey string
+
 	// IMAP — moved to imap_accounts table (DB-driven, multi-account).
 	// Manage via /settings/email instead of env vars.
 
@@ -104,6 +116,8 @@ func Load() *Config {
 		LineChannelAccessToken: getEnv("LINE_CHANNEL_ACCESS_TOKEN", ""),
 		LineAdminUserID:        getEnv("LINE_ADMIN_USER_ID", ""),
 		LineGreeting:           getEnv("LINE_GREETING", ""),
+		PublicBaseURL:          getEnv("PUBLIC_BASE_URL", ""),
+		MediaSigningKey:        getEnv("MEDIA_SIGNING_KEY", ""),
 		OpenRouterAPIKey:       getEnv("OPENROUTER_API_KEY", ""),
 		OpenRouterModel:        getEnv("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
 		OpenRouterFallback:     getEnv("OPENROUTER_FALLBACK_MODEL", "google/gemini-flash-1.5"),

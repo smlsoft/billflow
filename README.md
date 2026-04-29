@@ -290,6 +290,8 @@ Migrations (run in order, all idempotent):
 - [013_chat_inbox.sql](backend/internal/database/migrations/013_chat_inbox.sql) — drops chat_sessions, creates chat_conversations + chat_messages + chat_media (LINE chatbot → human chat refactor — session 13)
 - [014_line_oa_accounts.sql](backend/internal/database/migrations/014_line_oa_accounts.sql) — line_oa_accounts table + chat_conversations.line_oa_id (multi-OA: 1 BillFlow ↔ N LINE OAs — session 13)
 - [015_chat_quick_replies.sql](backend/internal/database/migrations/015_chat_quick_replies.sql) — chat_quick_replies table + 4 seed templates for the chat composer (Phase 4.4 — session 13)
+- [016_chat_conversation_status.sql](backend/internal/database/migrations/016_chat_conversation_status.sql) — chat_conversations.status (open/resolved/archived) + auto-revive on inbound (Phase 4.2 — session 14)
+- [017_chat_crm.sql](backend/internal/database/migrations/017_chat_crm.sql) — chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags m2m (CRM lite Phase 4.7+4.8+4.9 — session 14)
 
 ---
 
@@ -796,7 +798,7 @@ sudo systemctl start cloudflared
 | 4b | Lazada import: Excel parser + Web UI | ⏳ รอไฟล์จากลูกค้า |
 | 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped → PO) | ✅ Done |
 | 5+ | Manual-confirm flow — auto-send removed; user confirms in BillDetail UI | ✅ Done |
-| 6 | Web UI complete. Session 6: Tailwind/shadcn redesign + multi-account IMAP + artifacts. Session 7: channel_defaults + /settings/channels + SML party cache. Session 7-10: saleorder default + endpoint URL + doc_no generator + /logs redesign. Session 11: per-channel WH/Shelf/VAT override + ShopeeImport dialog removed + scrollable EditDialog. Session 12: marshalASCII permanent SML mojibake fix + catalog per-row Refresh/Delete. Session 13: LINE chatbot → human chat inbox + multi-OA (/messages, /settings/line-oa, webhook /webhook/line/:oaId, ~900 LOC chatbot removed) + Phase 4 quick wins (4.4 quick replies, 4.5 customer history panel, 4.11 browser notifications + chime) | ✅ Done |
+| 6 | Web UI complete. Session 6: Tailwind/shadcn redesign + multi-account IMAP + artifacts. Session 7: channel_defaults + /settings/channels + SML party cache. Session 7-10: saleorder default + endpoint URL + doc_no generator + /logs redesign. Session 11: per-channel WH/Shelf/VAT override + ShopeeImport dialog removed + scrollable EditDialog. Session 12: marshalASCII permanent SML mojibake fix + catalog per-row Refresh/Delete. Session 13: LINE chatbot → human chat inbox + multi-OA (/messages, /settings/line-oa, webhook /webhook/line/:oaId, ~900 LOC chatbot removed) + Phase 4 quick wins (4.4 quick replies, 4.5 customer history panel, 4.11 browser notifications + chime). Session 14: composer redesign (auto-grow, paste, drag-drop) + admin send-image via Cloudflare Quick Tunnel + HMAC-signed /public/media/ URLs + conversation status (open/resolved/archived + auto-revive) + server-side inbox/thread search + CRM lite (phone detect, internal notes, tags + /settings/chat-tags) | ✅ Done |
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
@@ -1017,4 +1019,4 @@ bash scripts/test.sh all 192.168.2.109:8090
 
 ---
 
-*BillFlow v0.2.0 — Last updated: 2026-04-28 | Server: 192.168.2.109 | Ports: backend:8090 / frontend:3010 / postgres:5438*
+*BillFlow v0.2.0 — Last updated: 2026-04-29 (session 14) | Server: 192.168.2.109 | Ports: backend:8090 / frontend:3010 / postgres:5438*
