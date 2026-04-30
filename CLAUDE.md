@@ -1883,6 +1883,81 @@ lucide-react             ← icon set (shadcn default)
       - `animate-pulse` เฉพาะ urgent dots — ไม่ใช้กับ neutral
       - micro-interaction: `hover:-translate-y-0.5` บน ActionCards +
         ArrowUpRight เคลื่อนตาม hover
+
+25. Heuristic Evaluation pass — 16 fixes across 3 sprints (session 19 — 2026-04-30)
+    Full audit ของทุก admin page (Dashboard, Bills, BillDetail, Logs,
+    Messages, LineOA, QuickReplies, ChatTags, Settings, EmailAccounts,
+    ChannelDefaults, CatalogSettings, Mappings, Import, ShopeeImport)
+    หา redundancy + workflow gap + naming inconsistency + discoverability
+    issues. ผลลัพธ์ = 16 patches กระจายใน 3 sprint ภายใน session เดียว
+    - **Sprint A — Critical (5 fixes)**:
+      - **A1 lib/labels.ts SSOT**: 1 หน้าเดิมเรียก "ล้มเหลว", หน้าอื่น
+        เรียก "บิลล้มเหลว", หน้าที่สาม "ส่ง SML ล้มเหลว" — 3 ชื่อสำหรับ
+        status เดียว. ใหม่: `BILL_STATUS_LABEL` / `BILL_SOURCE_LABEL` /
+        `BILL_TYPE_LABEL` / `PAGE_TITLE` ใน lib/labels.ts. Bills, Dashboard,
+        ActionCards, BillStatusBadge, Mappings ทั้งหมด import จากที่นี่
+      - **A2 /settings root rewrite**: ลบ "ข้อมูลผู้ใช้" card (ซ้ำ avatar
+        dropdown), ลบ "สรุประบบ" card (ซ้ำ Dashboard). Backend
+        /api/settings/status เปลี่ยนจาก env-flag boolean เป็น live
+        multi-account counts: `line_oa_total/enabled` + `imap_total/
+        enabled/failing`. Frontend แสดง subsystem rows คลิกไปยังหน้า
+        จัดการได้. Lazada column mapping ย้ายไป /import/Lazada เป็น
+        collapsible card — workflow อยู่ที่เดียวกัน
+      - **A3 Composer disabled + mobile responsive**: composer disabled
+        state ได้ `opacity-60 + dashed border + pointer-events-none`
+        เมื่อ archived (เดิมมองไม่ออก). Messages/index.tsx เปลี่ยน
+        `grid-cols-[320px_1fr]` → `md:grid-cols-[320px_1fr]` +
+        responsive show/hide logic. Thread header เพิ่มปุ่ม `←` มี
+        `md:hidden` (mobile only) — onBackToList prop ที่ parent ลบ
+        ?u= จาก URL
+      - **A4 Catalog ↔ Mappings explainer banners**: 2 หน้านี้สำคัญ
+        แต่ไม่มีใครอธิบายว่าใช้คู่กันยังไง. ใหม่: banner ฟ้าบนทั้ง 2 หน้า
+        cross-link กันได้ + workflow steps สำหรับ Catalog ("① Sync →
+        ② Embed All")
+      - **A5 Inline Retry on collapsed /logs row**: เดิม Retry button
+        ซ่อนใน expanded section. ใหม่: Retry icon button (RotateCw)
+        แสดงในแถว collapsed สำหรับ sml_failed rows ที่มี target_id.
+        Outer button → div ที่มี role=button + onKeyDown (Enter/Space)
+        เพราะ HTML ห้าม nested button
+    - **Sprint B — Workflow improvements (7 fixes)**:
+      - **B1 ShopeeImport preflight**: ถ้า /api/settings/shopee-config
+        ตอบ cust_code ว่าง → block file picker + แสดง warning Alert
+        พร้อมปุ่ม "ไปตั้งค่าตอนนี้" → /settings/channels. เดิม upload
+        เริ่มได้แล้ว fail late ตอน confirm
+      - **B2 Mappings empty state CTA**: เพิ่มปุ่ม "ไปยืนยันบิลที่
+        รอตรวจสอบ" → /bills?status=needs_review เพราะ mappings เกิดจาก
+        การยืนยันบิล ไม่ใช่ manual entry
+      - **B3 Tag flow cross-link**: ConversationList tag-filter popover
+        เพิ่ม hint "💡 ติด tag ให้ห้องแชทได้ที่ header ของห้อง" เพื่อโยง
+        2 tag UIs (filter inbox vs attach to thread) เข้าด้วยกัน
+      - **B4 Extract → CreateBill smooth transition**: เพิ่ม toast
+        "โหลด N รายการลงในฟอร์มแล้ว" ระหว่าง dialog swap เพื่อให้
+        admin เห็น data carry-over
+      - **B5 Sidebar hints visible expanded**: เพิ่ม `title=` attribute
+        ที่ link wrapper — hover label → native tooltip แสดง
+        "ตารางจับคู่สินค้า — Item Mapping (raw_name → SML code)".
+        ก่อนหน้านี้ hint โผล่เฉพาะ collapsed mode tooltip
+      - **B6 BillDetail spacing**: outer wrapper `space-y-4` → `space-y-6`
+        — 8 stacked sections เคยแน่นเกินไป
+      - **B7 ChannelDefaults Quick Setup tooltip**: tooltip บน button
+        อธิบาย "ค้นหา AR00001–04 ใน SML แล้วผูกกับ channel ที่ยังว่าง
+        — ปลอดภัย ไม่ทับของเดิม"
+    - **Sprint C — Polish (4 fixes)**:
+      - **C1 Outlook+Shopee preset**: ตรวจแล้ว preset `outlook-shopee`
+        มีอยู่แล้วใน EmailAccounts/AccountDialog (audit อ่าน state เก่า)
+      - **C2 Composer attachment count badge**: header "แนบไป N ไฟล์"
+        + ปุ่ม "ล้างทั้งหมด" เหนือ thumbnail strip. เพราะ paste 5+ รูป
+        เกิน strip width admin ไม่รู้ว่าแนบครบหรือยัง
+      - **C3 Catalog embedding async explainer**: card "กำลัง Embed…"
+        เพิ่มข้อความ "Catalog ใหญ่ ใช้เวลาเป็นนาที · รันใน background
+        ปิดหน้านี้ได้" — กัน admin คิดว่าค้าง
+      - **C4 Conversation freshness indicator**: thread header
+        เปลี่ยนจาก absolute timestamp `30/04 14:32` เป็น relative time
+        "อัปเดตเมื่อสักครู่" via `dayjs.fromNow()`. Tooltip คงข้อความ
+        absolute timestamp ไว้สำหรับ debug
+    - **Verified end-to-end on prod 109**: /api/settings/status returns
+      live counts (line_oa_total: 1, imap_failing: 0, ai_configured:
+      true). All 16 patches built + deployed in single session
 ```
 
 ---
@@ -2121,6 +2196,42 @@ Phase 6 — Web UI Complete
             AccountDialog mark-as-read checkbox in /settings/line-oa.
             Verified end-to-end: SSE token round-trip, hello event arrives,
             heartbeats every 20s, dedup works for self-tab.
+  [x] 6.29 Heuristic Evaluation pass — 16 fixes across all admin pages ✅ (session 19)
+            ⭐ Full audit pass identified 6 critical + 7 high-impact + 4 polish
+            issues across 13 admin pages. Three sprints landed in one session.
+            Sprint A (5 critical):
+              - lib/labels.ts SSOT eliminated 3 different labels for the same
+                bill status (Bills/Dashboard/Logs/Badge now agree).
+              - /settings root rewrite — dropped 2 duplicate cards (user info
+                + system stats), made connection status live + multi-account
+                aware (line_oa_total/enabled, imap_total/enabled/failing).
+                Lazada column mapping moved to /import where it belongs.
+              - Composer disabled visual + Messages mobile responsive (back
+                button, single-pane <md breakpoint).
+              - Catalog ↔ Mappings explainer banners cross-link the
+                two-stage matching pipeline.
+              - /logs sml_failed rows show Retry button at row level (was
+                hidden in expanded section). Refactored outer button → div
+                so the inner Retry button is valid HTML.
+            Sprint B (7 workflow improvements):
+              - ShopeeImport preflight blocks file picker when channel
+                config is missing (was: late-fail at confirm).
+              - Mappings empty state CTA links to /bills?status=needs_review.
+              - Tag-filter popover hints where to attach tags to threads.
+              - Extract → CreateBill toast bridges dialog swap so data
+                carry-over is visible.
+              - Sidebar hints visible in expanded mode via title= attr.
+              - BillDetail space-y-4 → space-y-6 (was cramped).
+              - ChannelDefaults Quick Setup tooltip explains "safe, won't
+                overwrite existing rows".
+            Sprint C (4 polish):
+              - Composer attachment count badge "แนบไป N ไฟล์".
+              - Catalog embedding card explains async + reassures admin.
+              - Conversation header relative time "อัปเดตเมื่อสักครู่".
+              - C1 (Outlook+Shopee preset) verified already shipped.
+            Verified on prod: /api/settings/status returns multi-account
+            counts; all renames consistent across pages.
+
   [x] 6.28 UX polish — surface admin work + reduce debug round-trips ✅ (session 18)
             ⭐ Six-phase admin experience pass on top of the real-time
             inbox shipped in 6.27. Goal: make work-to-do impossible to
@@ -2347,6 +2458,8 @@ Phases:
                 stale-token cron + pending cleanup (6.27, session 17)
               + UX polish — log preview + failure card + sidebar reorg +
                 bill timeline + inline retry + dashboard action cards (6.28, session 18)
+              + heuristic evaluation pass — labels SSOT + /settings live status
+                + mobile responsive + 13 cross-page polish (6.29, session 19)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
@@ -2357,6 +2470,62 @@ Pending (carry-over):
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
   ⏳ LINE Push quota dashboard (free OA = 200/month — Reply API path is free)
   ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
+
+Recent work (session 19 — 2026-04-30):
+  ⭐ ux: 3-sprint heuristic-evaluation pass — labels SSOT, /settings refactor, mobile, polish
+       Goal: act on the audit, not just write it. Three parallel agents
+       audited Bills/Dashboard/Logs + Chat/LINE + Settings/Imports/Catalog
+       and reported 6 critical + 7 high-impact + 4 polish issues. Shipped
+       all 16 fixes in a single session (some — like the Outlook+Shopee
+       preset — turned out to already exist).
+       Sprint A — Critical (5):
+         A1 lib/labels.ts SSOT — central BILL_STATUS_LABEL / SOURCE /
+         TYPE / PAGE_TITLE consumed by Bills, Dashboard, ActionCards,
+         BillStatusBadge, Mappings, Catalog. Eliminated three different
+         labels for the same status that drifted across pages.
+         A2 /settings root rewrite — dropped duplicate user-info card
+         (avatar dropdown already shows it) and duplicate system-stats
+         card (Dashboard owns it). Backend GET /api/settings/status now
+         returns line_oa_total/enabled + imap_total/enabled/failing
+         instead of env-flag booleans. Frontend renders live subsystem
+         rows with click-through to manage pages. Lazada column mapping
+         relocated to /import as a collapsible card so the import
+         workflow lives on one page.
+         A3 Composer disabled visual + Messages mobile responsive —
+         disabled composer now opacity-60 + dashed border + pointer-
+         events-none (previously visually identical to enabled).
+         /messages grid switches to single-pane below md breakpoint;
+         thread header gets ArrowLeft "back to inbox" button (md:hidden).
+         A4 Catalog ↔ Mappings explainer banners cross-link the
+         two-stage matching pipeline so admins finally see the
+         relationship.
+         A5 Inline Retry on collapsed /logs sml_failed rows — Retry
+         icon button now visible at row level (was hidden in expanded
+         body). Refactored outer button → div role=button so nested
+         Retry button is valid HTML.
+       Sprint B — Workflow (7):
+         B1 ShopeeImport preflight — blocks file picker + shows warning
+         Alert when /api/settings/shopee-config has empty cust_code.
+         B2 Mappings empty-state CTA links to /bills?status=needs_review.
+         B3 ConversationList tag-filter popover hints where to attach
+         tags (TagsBar in thread header).
+         B4 Extract → CreateBill toast bridges the dialog swap.
+         B5 Sidebar items show hint via native title= even in expanded
+         mode (was collapsed-only tooltip).
+         B6 BillDetail space-y-4 → space-y-6.
+         B7 ChannelDefaults Quick Setup tooltip explains it's safe.
+       Sprint C — Polish (4):
+         C1 Outlook+Shopee preset verified already shipped.
+         C2 Composer attachment-strip header "แนบไป N ไฟล์" + clear-all.
+         C3 Catalog embedding card "Catalog ใหญ่ ใช้เวลาเป็นนาที — ปิด
+         หน้านี้ได้".
+         C4 Conversation thread-header timestamp uses relative time
+         (dayjs.fromNow()) so admin sees data freshness; tooltip keeps
+         the absolute time for debug.
+       Backend changes:
+         dashboard.go gains lineOARepo dep injection + multi-account
+         live counts in SettingsStatus. Build green, deployed to prod
+         109, /api/settings/status returns multi-account state.
 
 Recent work (session 18 — 2026-04-30):
   ⭐ ux: 6-phase polish — log previews, structured failures, sidebar, timeline, retry, dashboard
@@ -2784,7 +2953,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-30 (session 18)*
+*Last updated: 2026-04-30 (session 19)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*
