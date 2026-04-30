@@ -187,25 +187,43 @@ export function Composer({
         }}
       />
 
-      {/* Attachment preview strip */}
+      {/* Attachment preview strip — count badge avoids "did the paste
+          succeed?" uncertainty when admin pastes 5+ images at once and
+          the strip overflows horizontally. */}
       {attachments.length > 0 && (
-        <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
-          {attachments.map((a) => (
-            <div
-              key={a.id}
-              className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-background"
+        <div className="mb-2">
+          <div className="mb-1 flex items-center justify-between px-1 text-[11px] text-muted-foreground">
+            <span>
+              แนบไป <span className="font-medium text-foreground">{attachments.length}</span>{' '}
+              {attachments.length === 1 ? 'ไฟล์' : 'ไฟล์'}
+            </span>
+            <button
+              type="button"
+              onClick={() => attachments.forEach((a) => removeAttachment(a.id))}
+              className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
             >
-              <img src={a.previewURL} alt={a.file.name} className="h-full w-full object-cover" />
-              <button
-                type="button"
-                onClick={() => removeAttachment(a.id)}
-                className="absolute right-0.5 top-0.5 rounded-full bg-black/60 p-0.5 text-white hover:bg-black/80"
-                title="ลบ"
+              ล้างทั้งหมด
+            </button>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {attachments.map((a) => (
+              <div
+                key={a.id}
+                className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-background"
+                title={a.file.name}
               >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
+                <img src={a.previewURL} alt={a.file.name} className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.id)}
+                  className="absolute right-0.5 top-0.5 rounded-full bg-black/60 p-0.5 text-white hover:bg-black/80"
+                  title="ลบ"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -213,6 +231,12 @@ export function Composer({
         className={cn(
           'flex items-end gap-1 rounded-2xl border border-border bg-background px-2 py-1.5 transition-colors',
           'focus-within:border-primary/40 focus-within:ring-1 focus-within:ring-primary/20',
+          // When the parent disables the composer (archived chat), make the
+          // disabled state actually look disabled — opacity + striped tint
+          // + cursor. The banner above explains why; this makes "you can't
+          // type here" visually unambiguous.
+          disabled &&
+            'pointer-events-none cursor-not-allowed border-dashed bg-muted/30 opacity-60',
         )}
       >
         <div className="flex shrink-0 items-center gap-0.5 self-end pb-0.5">

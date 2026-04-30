@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Archive, ArchiveRestore, Bell, BellOff, Check, Plus, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowLeft, Bell, BellOff, Check, Plus, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import dayjs from 'dayjs'
+import relativeTime from 'dayjs/plugin/relativeTime'
+import 'dayjs/locale/th'
+
+// Plugin loads here are idempotent — already loaded by ConversationList,
+// re-loading here is safe + decoupled (this file would still work if the
+// list component is removed).
+dayjs.extend(relativeTime)
+dayjs.locale('th')
 
 import { Input } from '@/components/ui/input'
 
@@ -23,6 +31,10 @@ interface Props {
   conversation: ChatConversation | null
   onOpenCreateBill: () => void
   onExtractMedia: (messageId: string, kind: string) => void
+  // Mobile-only: parent passes a handler that clears the URL ?u= param so
+  // the conversation list reappears. Rendered as an `ArrowLeft` button in
+  // the thread header (visible at <md breakpoint only).
+  onBackToList?: () => void
 }
 
 // 30s safety-net polling — SSE is the primary delivery mechanism and arrives
@@ -39,6 +51,7 @@ export function MessageThread({
   conversation,
   onOpenCreateBill,
   onExtractMedia,
+  onBackToList,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(true)
@@ -440,6 +453,19 @@ export function MessageThread({
           see "which LINE OA" at a glance without leaving for the inbox list. */}
       <div className="flex h-12 items-center justify-between gap-2 border-b border-border px-3">
         <div className="flex min-w-0 items-center gap-2">
+          {/* Back-to-list button — mobile only. Desktop sees both panes. */}
+          {onBackToList && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onBackToList}
+              className="-ml-1 h-8 w-8 shrink-0 p-0 md:hidden"
+              aria-label="กลับไปยังรายการ"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          )}
           <Avatar className="h-8 w-8 shrink-0">
             {conversation?.picture_url && (
               <AvatarImage src={conversation.picture_url} alt={conversation.display_name} />
@@ -478,8 +504,14 @@ export function MessageThread({
                   : `${lineUserID.slice(0, 18)}…`}
               </span>
               {conversation?.last_message_at && (
-                <span className="text-[10px] text-muted-foreground">
-                  · {dayjs(conversation.last_message_at).format('DD/MM HH:mm')}
+                <span
+                  className="text-[10px] text-muted-foreground"
+                  title={`อัปเดตล่าสุด ${dayjs(conversation.last_message_at).format('DD/MM/YYYY HH:mm:ss')}`}
+                >
+                  {/* Relative time conveys "data freshness" better than an absolute
+                      timestamp does — "เมื่อสักครู่" vs "30/04 14:32" tells the
+                      admin at a glance whether SSE is delivering or not. */}
+                  · อัปเดต{dayjs(conversation.last_message_at).fromNow()}
                 </span>
               )}
             </div>

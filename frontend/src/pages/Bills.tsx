@@ -14,34 +14,35 @@ import {
 import BillTable from '@/components/BillTable'
 import { PageHeader } from '@/components/common/PageHeader'
 import { useBills } from '@/hooks/useBills'
+import {
+  BILL_SOURCE_LABEL,
+  BILL_STATUS_LABEL,
+  BILL_TYPE_LABEL,
+  PAGE_TITLE,
+} from '@/lib/labels'
 
 const PER_PAGE = 20
 const ALL = '__all__'
 
+// Filter options pull labels from lib/labels.ts so Bills, Dashboard, and
+// Logs all show identical status names — no more "ล้มเหลว" vs "ส่ง SML
+// ล้มเหลว" drift.
 const STATUS_OPTIONS = [
   { value: ALL, label: 'ทุกสถานะ' },
-  { value: 'pending', label: 'รอดำเนินการ' },
-  { value: 'needs_review', label: 'รอตรวจสอบ' },
-  { value: 'sent', label: 'SML สำเร็จ' },
-  { value: 'failed', label: 'ล้มเหลว' },
-  { value: 'skipped', label: 'ข้ามแล้ว' },
+  ...['pending', 'needs_review', 'sent', 'failed', 'skipped'].map((s) => ({
+    value: s,
+    label: BILL_STATUS_LABEL[s],
+  })),
 ]
 
 const SOURCE_OPTIONS = [
   { value: ALL, label: 'ทุกช่องทาง' },
-  { value: 'line', label: 'LINE OA' },
-  { value: 'email', label: 'Email' },
-  { value: 'shopee', label: 'Shopee Excel' },
-  { value: 'shopee_email', label: 'Shopee Order' },
-  { value: 'shopee_shipped', label: 'Shopee → ใบสั่งซื้อ/สั่งจอง' },
-  { value: 'lazada', label: 'Lazada' },
-  { value: 'manual', label: 'Manual' },
+  ...Object.entries(BILL_SOURCE_LABEL).map(([value, label]) => ({ value, label })),
 ]
 
 const BILL_TYPE_OPTIONS = [
   { value: ALL, label: 'ทุกประเภท' },
-  { value: 'sale', label: 'บิลขาย' },
-  { value: 'purchase', label: 'บิลซื้อ (PO)' },
+  ...Object.entries(BILL_TYPE_LABEL).map(([value, label]) => ({ value, label })),
 ]
 
 // Valid filter values used to validate URL query string against typos.
@@ -91,7 +92,7 @@ export default function Bills() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="รายการบิล" description="ติดตามและจัดการบิลทั้งหมดในระบบ" />
+      <PageHeader title={PAGE_TITLE.bills} description="ติดตามและจัดการบิลทุกช่องทางในระบบ" />
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative w-full max-w-xs">

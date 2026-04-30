@@ -38,7 +38,10 @@ import {
 import { PageHeader } from '@/components/common/PageHeader'
 import client from '@/api/client'
 import { cn } from '@/lib/utils'
+import { PAGE_TITLE } from '@/lib/labels'
+import { useAuth } from '@/hooks/useAuth'
 import type { BillPreview, ImportConfirmResponse } from '@/types'
+import { LazadaColumnMapping } from './Import/LazadaColumnMapping'
 
 type Step = 'idle' | 'uploading' | 'preview' | 'confirming' | 'result'
 
@@ -77,6 +80,7 @@ function AnomalyBadges({
 }
 
 export default function Import() {
+  const { user } = useAuth()
   const [step, setStep] = useState<Step>('idle')
   const [platform, setPlatform] = useState<'lazada' | 'shopee'>('lazada')
   const [billType, setBillType] = useState<'sale' | 'purchase'>('sale')
@@ -171,9 +175,14 @@ export default function Import() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="นำเข้าบิล — Lazada"
-        description="อัปโหลดไฟล์ Excel เพื่อสร้างบิลเข้าระบบ SML อัตโนมัติ"
+        title={PAGE_TITLE.importLazada}
+        description="อัปโหลดไฟล์ Excel จาก Lazada Seller Center เพื่อสร้างบิลเข้า SML อัตโนมัติ"
       />
+
+      {/* Column mapping editor — collapsible. Lives on the import page (not
+          /settings) so the "set up column names → upload file" flow happens
+          on a single page. Admin only; staff users won't see this card. */}
+      <LazadaColumnMapping platform="lazada" adminOnly={user?.role === 'admin'} />
 
       {(step === 'idle' || step === 'uploading') && (
         <>

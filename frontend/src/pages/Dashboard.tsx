@@ -22,6 +22,7 @@ import { StatCardSkeleton } from '@/components/common/LoadingSkeleton'
 import client from '@/api/client'
 import { useAuthStore } from '@/store/auth'
 import type { DailyInsight, DashboardStats, MappingStats } from '@/types'
+import { BILL_STATUS_LABEL } from '@/lib/labels'
 import { ActionCards } from './Dashboard/ActionCards'
 
 export default function Dashboard() {
@@ -69,9 +70,9 @@ export default function Dashboard() {
 
   const chartData = stats
     ? [
-        { name: 'รอตรวจสอบ', value: awaitingReview, fill: 'hsl(var(--warning))' },
-        { name: 'SML สำเร็จ', value: stats.sml_success, fill: 'hsl(var(--success))' },
-        { name: 'SML ล้มเหลว', value: stats.sml_failed, fill: 'hsl(var(--destructive))' },
+        { name: BILL_STATUS_LABEL.needs_review, value: awaitingReview, fill: 'hsl(var(--warning))' },
+        { name: BILL_STATUS_LABEL.sent, value: stats.sml_success, fill: 'hsl(var(--success))' },
+        { name: BILL_STATUS_LABEL.failed, value: stats.sml_failed, fill: 'hsl(var(--destructive))' },
       ]
     : []
 
@@ -112,19 +113,19 @@ export default function Dashboard() {
               variant="primary"
             />
             <StatsCard
-              label="รอตรวจสอบ"
+              label={BILL_STATUS_LABEL.needs_review}
               value={awaitingReview}
               icon={AlertTriangle}
               variant="warning"
             />
             <StatsCard
-              label="SML สำเร็จ"
+              label={BILL_STATUS_LABEL.sent}
               value={stats?.sml_success ?? 0}
               icon={CheckCircle2}
               variant="success"
             />
             <StatsCard
-              label="SML ล้มเหลว"
+              label={BILL_STATUS_LABEL.failed}
               value={stats?.sml_failed ?? 0}
               icon={AlertTriangle}
               variant="danger"

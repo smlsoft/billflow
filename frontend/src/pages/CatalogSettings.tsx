@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef, useCallback, useMemo, useReducer } from 'react'
+import { Link } from 'react-router-dom'
 import {
   AlertCircle,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -31,6 +33,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { PageHeader } from '@/components/common/PageHeader'
 import api from '@/api/client'
 import { cn } from '@/lib/utils'
+import { PAGE_TITLE } from '@/lib/labels'
 import type { CatalogItem } from '@/types'
 
 interface CatalogStats {
@@ -365,8 +368,8 @@ export default function CatalogSettings() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Catalog สินค้า SML"
-        description="สินค้าจาก SML ใช้สำหรับ Smart Matching อีเมล Shopee + การจับคู่ในบิล"
+        title={PAGE_TITLE.catalog}
+        description="สินค้าจาก SML + embeddings สำหรับ smart matching · Sync จาก SML 248 + Embed All ก่อนใช้งาน"
         actions={
           <>
             <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
@@ -402,6 +405,36 @@ export default function CatalogSettings() {
         }
       />
 
+      {/* Catalog vs Mappings explainer — without this admins assume the two
+          features are the same. Catalog is the master + smart-match
+          backend; Mappings is the human-curated alias table. */}
+      <div className="rounded-lg border border-info/30 bg-info/[0.04] p-3.5 text-sm">
+        <div className="flex items-start gap-2.5">
+          <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-info" strokeWidth={2.25} />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <p className="font-medium text-foreground">หน้านี้คืออะไร?</p>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Master สินค้าใน SML</span> + 1536-dim embeddings
+              สำหรับ Smart Matching (cosine similarity) · ระบบใช้ตอน parse อีเมล Shopee และตอนแนะนำ item code ในบิล
+            </p>
+            <div className="text-[12px] leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Workflow ตั้งค่าครั้งแรก:</span>
+              <span className="ml-1">
+                ① กด <span className="font-medium text-foreground">Sync จาก SML</span> → ② กด{' '}
+                <span className="font-medium text-foreground">Embed All</span> (อาจใช้เวลาหลายนาที — รันใน background)
+              </span>
+            </div>
+            <p className="text-[12px] text-muted-foreground">
+              💡 ต่างจาก{' '}
+              <Link to="/mappings" className="font-medium text-primary hover:underline">
+                ตารางจับคู่สินค้า
+              </Link>{' '}
+              (admin-curated aliases ที่เรียนรู้จากการยืนยันบิล) — ใช้คู่กันแต่คนละขั้นตอน
+            </p>
+          </div>
+        </div>
+      </div>
+
       {message && (
         <div
           className={cn(
@@ -426,9 +459,11 @@ export default function CatalogSettings() {
             <Card className="flex-1 border-primary/30 bg-primary/5">
               <CardContent className="flex items-center gap-3 px-4 py-3">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-primary">กำลัง Embed…</p>
-                  <p className="text-xs text-muted-foreground">auto-refresh ทุก 3 วินาที</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Catalog ใหญ่ ใช้เวลาเป็นนาที · รันใน background ปิดหน้านี้ได้ · auto-refresh ทุก 3 วินาที
+                  </p>
                 </div>
               </CardContent>
             </Card>

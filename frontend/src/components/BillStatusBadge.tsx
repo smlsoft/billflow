@@ -1,18 +1,27 @@
 import { StatusDot } from '@/components/common/StatusDot'
+import { billStatusLabel } from '@/lib/labels'
 import type { BillStatus } from '@/types'
 
-const CONFIG: Record<
-  string,
-  { label: string; variant: 'success' | 'warning' | 'danger' | 'muted' | 'info' | 'primary' }
-> = {
-  pending:      { label: 'รอดำเนินการ', variant: 'info' },
-  needs_review: { label: 'รอตรวจสอบ',   variant: 'warning' },
-  sent:         { label: 'SML สำเร็จ',  variant: 'success' },
-  failed:       { label: 'ล้มเหลว',     variant: 'danger' },
-  skipped:      { label: 'ข้ามแล้ว',    variant: 'muted' },
+// Variant map stays here (UI-only concern); labels come from lib/labels.ts
+// so the badge text matches Bills/Dashboard/Logs everywhere.
+const VARIANT: Record<string, 'success' | 'warning' | 'danger' | 'muted' | 'info' | 'primary'> = {
+  pending:      'info',
+  needs_review: 'warning',
+  confirmed:    'primary',
+  sent:         'success',
+  failed:       'danger',
+  skipped:      'muted',
 }
 
-export default function BillStatusBadge({ status }: { status: BillStatus | string }) {
-  const cfg = CONFIG[status] ?? { label: status, variant: 'muted' as const }
-  return <StatusDot variant={cfg.variant} label={cfg.label} />
+export default function BillStatusBadge({
+  status,
+  short = true,
+}: {
+  status: BillStatus | string
+  // Badges are space-constrained — default to short labels ("ล้มเหลว"
+  // instead of "ส่ง SML ล้มเหลว"). Set short=false in dense detail
+  // contexts where the full phrase fits.
+  short?: boolean
+}) {
+  return <StatusDot variant={VARIANT[status] ?? 'muted'} label={billStatusLabel(status, short)} />
 }

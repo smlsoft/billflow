@@ -123,6 +123,13 @@ export default function ShopeeImport() {
   const [error, setError] = useState('')
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
 
+  // Track config load + ready states separately so preflight UI can render
+  // a missing-config banner BEFORE admin uploads a file. Without this, file
+  // upload silently succeeds → preview works → confirm fails late with a
+  // confusing "config missing" error.
+  const [configLoading, setConfigLoading] = useState(true)
+  const configReady = !!config && !!config.cust_code
+
   useEffect(() => {
     let alive = true
     client
@@ -132,6 +139,9 @@ export default function ShopeeImport() {
       })
       .catch(() => {
         if (alive) setError('โหลด config ไม่ได้')
+      })
+      .finally(() => {
+        if (alive) setConfigLoading(false)
       })
     return () => {
       alive = false
@@ -254,7 +264,29 @@ export default function ShopeeImport() {
 
       {(step === 'idle' || step === 'uploading') && (
         <>
-          {config && (
+          {/* Preflight — block file selection when config is missing.
+              Without this admin uploads a file, sees preview, then confirm
+              fails late with "ยังไม่ได้ตั้งค่าลูกค้า default". */}
+          {!configLoading && !configReady && (
+            <Alert className="border-warning/40 bg-warning/5">
+              <AlertCircle className="h-4 w-4 text-warning" />
+              <AlertTitle>ยังไม่ได้ตั้งค่า Shopee channel</AlertTitle>
+              <AlertDescription className="mt-1 space-y-1.5">
+                <p className="text-sm">
+                  ต้องตั้งค่า <span className="font-medium">ลูกค้า default</span>{' '}
+                  สำหรับ Shopee Excel ก่อน — ระบบจะใช้ AR code นี้กับทุกบิลที่ import เข้ามา
+                </p>
+                <Button asChild size="sm" variant="default" className="mt-2">
+                  <Link to="/settings/channels">
+                    ไปตั้งค่าตอนนี้
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {config && configReady && (
             <Card>
               <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -268,7 +300,7 @@ export default function ShopeeImport() {
                   <span>
                     ลูกค้า:{' '}
                     <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                      {config.cust_code || '— ยังไม่ตั้งค่า'}
+                      {config.cust_code}
                     </code>
                   </span>
                   <span>
@@ -293,6 +325,7 @@ export default function ShopeeImport() {
             className={cn(
               'flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/20 p-10 text-center',
               step === 'uploading' && 'opacity-60',
+              !configReady && 'opacity-40',
             )}
           >
             {step === 'uploading' ? (
@@ -303,12 +336,20 @@ export default function ShopeeImport() {
                 <p className="text-sm font-medium text-foreground">
                   คลิกเพื่อเลือกไฟล์ Excel (.xlsx) จาก Shopee
                 </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  รองรับไฟล์ที่ export จาก Shopee Seller Center ที่มี column: หมายเลขคำสั่งซื้อ, ชื่อสินค้า, SKU, ราคาขาย, จำนวน
+                </p>
                 <Button
                   className="mt-4"
                   onClick={() => fileRef.current?.click()}
-                  disabled={!config}
+                  disabled={!configReady}
+                  title={!configReady ? 'ตั้งค่า channel ก่อน' : undefined}
                 >
-                  {config ? 'เลือกไฟล์ Shopee' : 'กำลังโหลด config…'}
+                  {configLoading
+                    ? 'กำลังโหลด config…'
+                    : configReady
+                      ? 'เลือกไฟล์ Shopee'
+                      : 'รอตั้งค่า channel'}
                 </Button>
               </>
             )}

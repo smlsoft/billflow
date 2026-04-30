@@ -82,7 +82,10 @@ export default function BillDetail() {
   }
 
   return (
-    <div className="space-y-4">
+    // space-y-6 (was 4) — bill detail has 8 stacked sections (header, failure
+    // card, total, items, raw data, artifacts, sml payload, timeline). The
+    // tighter spacing made everything feel cramped on smaller screens.
+    <div className="space-y-6">
       <BillHeader bill={bill} />
 
       {/* Structured failure card — only renders when the bill has a stored

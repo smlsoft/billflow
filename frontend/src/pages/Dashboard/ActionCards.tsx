@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { BILL_STATUS_LABEL } from '@/lib/labels'
 import type { DashboardStats } from '@/types'
 
 interface Props {
@@ -43,17 +44,17 @@ export function ActionCards({ stats, loading }: Props) {
 
   const actions: Action[] = [
     {
-      label: 'บิลรอตรวจ',
+      label: BILL_STATUS_LABEL.needs_review,
       count: awaitingReview,
-      hint: 'pending + needs_review',
+      hint: 'รอดำเนินการ + รอตรวจสอบ',
       icon: Inbox,
       to: '/bills?status=pending',
       tone: 'neutral',
     },
     {
-      label: 'บิลล้มเหลว',
+      label: BILL_STATUS_LABEL.failed,
       count: failed,
-      hint: 'ส่ง SML ไม่สำเร็จ — รอ retry',
+      hint: 'รอ retry หลังแก้ปัญหา',
       icon: AlertOctagon,
       to: '/bills?status=failed',
       tone: 'urgent',

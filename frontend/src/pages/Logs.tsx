@@ -136,10 +136,20 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
           : 'border-border hover:bg-accent/30',
       )}
     >
-      <button
-        type="button"
+      {/* Row is a div not a button so we can nest a Retry <button> inside
+          (HTML doesn't allow button-in-button). Keyboard a11y: Enter/Space
+          toggle expanded, role=button + tabIndex for screen readers. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-start gap-3 px-4 py-3 text-left"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded((v) => !v)
+          }
+        }}
+        className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <span
           className={cn(
@@ -211,39 +221,62 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
           )}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <span className="text-[11px] tabular-nums text-muted-foreground">
-                {relTime(log.created_at)}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="left">
-              {dayjs(log.created_at).format('DD/MM/YYYY HH:mm:ss')}
-            </TooltipContent>
-          </Tooltip>
-          {log.duration_ms != null && (
-            <span
-              className={cn(
-                'font-mono text-[10px] tabular-nums',
-                log.duration_ms > 3000
-                  ? 'text-destructive'
-                  : log.duration_ms > 1000
-                    ? 'text-warning'
-                    : 'text-muted-foreground/70',
-              )}
-            >
-              {log.duration_ms}ms
-            </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Inline retry — visible at row level (not just expanded) on
+              sml_failed rows. Saves the click to expand + the trip to
+              /bills/:id. Stop click bubbling so the row doesn't toggle. */}
+          {canRetry && !expanded && (
+            <Tooltip delayDuration={300}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  className="h-7 w-7 shrink-0 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <RotateCw className={cn('h-3.5 w-3.5', retrying && 'animate-spin')} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                Retry บิลนี้
+              </TooltipContent>
+            </Tooltip>
           )}
-          <ChevronDown
-            className={cn(
-              'h-3.5 w-3.5 text-muted-foreground transition-transform',
-              expanded && 'rotate-180',
+          <div className="flex flex-col items-end gap-0.5 text-right">
+            <Tooltip delayDuration={300}>
+              <TooltipTrigger asChild>
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {relTime(log.created_at)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                {dayjs(log.created_at).format('DD/MM/YYYY HH:mm:ss')}
+              </TooltipContent>
+            </Tooltip>
+            {log.duration_ms != null && (
+              <span
+                className={cn(
+                  'font-mono text-[10px] tabular-nums',
+                  log.duration_ms > 3000
+                    ? 'text-destructive'
+                    : log.duration_ms > 1000
+                      ? 'text-warning'
+                      : 'text-muted-foreground/70',
+                )}
+              >
+                {log.duration_ms}ms
+              </span>
             )}
-          />
+            <ChevronDown
+              className={cn(
+                'h-3.5 w-3.5 text-muted-foreground transition-transform',
+                expanded && 'rotate-180',
+              )}
+            />
+          </div>
         </div>
-      </button>
+      </div>
 
       {expanded && (
         <div className="space-y-3 border-t border-border bg-muted/20 px-4 py-3">

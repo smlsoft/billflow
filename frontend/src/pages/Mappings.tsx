@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Check, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { BookOpen, Check, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +22,7 @@ import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Skeleton } from '@/components/ui/skeleton'
 import client from '@/api/client'
+import { PAGE_TITLE } from '@/lib/labels'
 import type { Mapping, MappingStats } from '@/types'
 
 interface MappingDraft {
@@ -115,9 +117,36 @@ export default function Mappings() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Mapping สินค้า"
-        description="จัดการการจับคู่ชื่อสินค้ากับรหัสใน SML — ระบบจะเรียนรู้ทุกครั้งที่คุณยืนยัน (F1 Learning)"
+        title={PAGE_TITLE.mappings}
+        description="จับคู่ชื่อสินค้าตามที่ลูกค้าเขียน → รหัส SML จริง · ระบบเรียนรู้อัตโนมัติทุกครั้งที่ admin ยืนยันบิล"
       />
+
+      {/* Mappings vs Catalog — admin context. Without this admins assume
+          they're the same thing (both relate "name → SML code") when
+          they actually serve different stages of the matching pipeline. */}
+      <div className="rounded-lg border border-info/30 bg-info/[0.04] p-3.5 text-sm">
+        <div className="flex items-start gap-2.5">
+          <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-info" strokeWidth={2.25} />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <p className="font-medium text-foreground">
+              ตารางนี้คืออะไร?
+            </p>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              เก็บคู่ <span className="font-medium text-foreground">"ชื่อดิบที่ลูกค้าเขียน → รหัสสินค้าใน SML"</span>{' '}
+              ที่ admin เคยยืนยันแล้ว — ครั้งถัดไประบบจะใช้คู่เดิม map ให้อัตโนมัติ
+              (F1 Auto-learn) · เรียนรู้ทุกครั้งที่กด <Link to="/bills?status=needs_review" className="font-medium text-primary hover:underline">"ยืนยันบิล"</Link> ใน{' '}
+              <Link to="/bills" className="font-medium text-primary hover:underline">บิลทั้งหมด</Link>
+            </p>
+            <p className="text-[12px] text-muted-foreground">
+              💡 ต่างจาก{' '}
+              <Link to="/settings/catalog" className="font-medium text-primary hover:underline">
+                สินค้าใน SML
+              </Link>{' '}
+              (catalog) ที่เก็บ master สินค้า + embeddings สำหรับ smart auto-match — ใช้คู่กันแต่คนละขั้นตอน
+            </p>
+          </div>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         {/* Table */}
@@ -159,7 +188,14 @@ export default function Mappings() {
                   <TableCell colSpan={6} className="py-12">
                     <EmptyState
                       title="ยังไม่มี mapping"
-                      description="ระบบจะเรียนรู้เมื่อคุณตรวจสอบบิล หรือเพิ่มเองจากฟอร์มด้านขวา"
+                      description="ระบบจะเรียนรู้อัตโนมัติเมื่อ admin ยืนยันบิลที่รอตรวจสอบ — หรือเพิ่ม mapping เองจากฟอร์มด้านขวา"
+                      action={
+                        <Button asChild variant="outline" size="sm">
+                          <Link to="/bills?status=needs_review">
+                            ไปยืนยันบิลที่รอตรวจสอบ
+                          </Link>
+                        </Button>
+                      }
                     />
                   </TableCell>
                 </TableRow>

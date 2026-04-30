@@ -17,6 +17,7 @@ type DashboardHandler struct {
 	insightRepo          *repository.InsightRepo
 	convRepo             *repository.ChatConversationRepo
 	imapRepo             *repository.ImapAccountRepo
+	lineOARepo           *repository.LineOAAccountRepo
 	insightSvc           *insight.Service
 	lineConfigured       bool
 	imapConfigured       bool
@@ -31,6 +32,7 @@ func NewDashboardHandler(
 	insightRepo *repository.InsightRepo,
 	convRepo *repository.ChatConversationRepo,
 	imapRepo *repository.ImapAccountRepo,
+	lineOARepo *repository.LineOAAccountRepo,
 	insightSvc *insight.Service,
 	log *zap.Logger,
 ) *DashboardHandler {
@@ -39,6 +41,7 @@ func NewDashboardHandler(
 		insightRepo: insightRepo,
 		convRepo:    convRepo,
 		imapRepo:    imapRepo,
+		lineOARepo:  lineOARepo,
 		insightSvc:  insightSvc,
 		log:         log,
 	}
@@ -133,13 +136,52 @@ func (h *DashboardHandler) GenerateInsight(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"insight": text})
 }
 
-// GET /api/settings/status — config status for frontend settings page
+// GET /api/settings/status — live system status for the /settings root page.
+//
+// Returns multi-account aware counts (LINE OA, IMAP) instead of the old
+// env-flag booleans which were misleading once we moved both subsystems
+// from .env into DB tables. Frontend renders one row per subsystem with
+// click-through to the manage page.
 func (h *DashboardHandler) SettingsStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"line_configured":        h.lineConfigured,
-		"imap_configured":        h.imapConfigured,
+	out := gin.H{
+		// SML / AI come from env at boot — no live multi-account state to query.
 		"sml_configured":         h.smlConfigured,
 		"ai_configured":          h.aiConfigured,
 		"auto_confirm_threshold": h.autoConfirmThreshold,
-	})
+	}
+
+	// LINE OA — count enabled vs total. Multi-OA in DB since session 13.
+	if h.lineOARepo != nil {
+		if rows, err := h.lineOARepo.ListAll(); err == nil {
+			enabled := 0
+			for _, r := range rows {
+				if r.Enabled {
+					enabled++
+				}
+			}
+			out["line_oa_total"] = len(rows)
+			out["line_oa_enabled"] = enabled
+		}
+	}
+
+	// IMAP — count total + failing (consecutive_failures > 0). Multi-account
+	// in DB since session 6.
+	if h.imapRepo != nil {
+		if rows, err := h.imapRepo.ListAll(); err == nil {
+			enabled, failing := 0, 0
+			for _, r := range rows {
+				if r.Enabled {
+					enabled++
+					if r.ConsecutiveFailures > 0 {
+						failing++
+					}
+				}
+			}
+			out["imap_total"] = len(rows)
+			out["imap_enabled"] = enabled
+			out["imap_failing"] = failing
+		}
+	}
+
+	c.JSON(http.StatusOK, out)
 }

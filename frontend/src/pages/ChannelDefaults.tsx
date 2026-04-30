@@ -250,11 +250,16 @@ export default function ChannelDefaults() {
                 Quick setup — ตั้งค่าอัตโนมัติจาก placeholder ใน SML
               </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
-                ระบบพบลูกค้า "ลูกค้า จาก AI / Line / Email / Shopee" ใน SML แล้ว
-                — กดปุ่มเดียว setup ทุก channel ที่ยังว่าง
+                ระบบจะค้นหาลูกค้าชื่อ <span className="font-mono text-foreground">"ลูกค้า จาก AI / Line / Email / Shopee"</span>{' '}
+                ใน SML 248 (ปกติ AR00001–04) แล้ว pair เข้าทุก channel ที่ยังไม่ตั้งค่า — ไม่กระทบ row ที่มีค่าอยู่แล้ว
               </div>
             </div>
-            <Button onClick={handleQuickSetup} disabled={quickRunning} size="sm">
+            <Button
+              onClick={handleQuickSetup}
+              disabled={quickRunning}
+              size="sm"
+              title="ค้นหา AR00001–04 ใน SML แล้วผูกกับ channel ที่ยังว่าง — ปลอดภัย ไม่ทับของเดิม"
+            >
               {quickRunning ? 'กำลังตั้งค่า…' : 'ตั้งค่าอัตโนมัติ'}
             </Button>
           </CardContent>

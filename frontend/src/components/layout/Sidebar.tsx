@@ -260,6 +260,11 @@ export default function Sidebar() {
 
                 const linkInner = (active: boolean) => (
                   <span
+                    // title= shows the English/setup-name hint as a native
+                    // browser tooltip even in expanded mode. Cheap way to
+                    // give devs the original feature name without adding
+                    // a separate (?) icon to every nav item.
+                    title={item.hint ? `${item.label} — ${item.hint}` : item.label}
                     className={cn(
                       'group relative flex h-8 items-center gap-2.5 rounded-md px-2 text-sm transition-colors',
                       active

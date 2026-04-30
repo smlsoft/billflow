@@ -300,7 +300,7 @@ func main() {
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
 	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
-	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, insightSvc, logger)
+	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
 	imapConfigured := false
 	if accs, err := imapAccountRepo.ListEnabled(); err == nil && len(accs) > 0 {
 		imapConfigured = true
