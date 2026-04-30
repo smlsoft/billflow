@@ -547,6 +547,12 @@ func main() {
 	replyTokenCleanup := jobs.NewReplyTokenCleanup(db, logger)
 	replyTokenCleanup.Register(c)
 
+	// Daily 9am Bangkok: ping PUBLIC_BASE_URL/health to detect when the
+	// Cloudflare Quick Tunnel URL has rolled (cloudflared restart). Without
+	// this admin only finds out via "ลูกค้าได้รับรูปไม่ครบ" days later.
+	tunnelMon := jobs.NewTunnelDriftMonitor(cfg.PublicBaseURL, lineSvc, logger)
+	tunnelMon.Register(c)
+
 	// Wire processors into the coordinator now that emailH is built, then
 	// boot the multi-account poller. Coordinator reads imap_accounts and
 	// spawns one goroutine per enabled row. Empty list = no polling, no
