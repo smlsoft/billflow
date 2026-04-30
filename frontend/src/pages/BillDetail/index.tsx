@@ -23,11 +23,25 @@ export default function BillDetail() {
   const { bill, loading, retrying, retryError, handleRetry, setBill } =
     useBillData(id)
 
-  // highlightItemId is set when admin clicks "ดู →" in the BillTotal warning
-  // card. The matching BillItemRow scrolls into view + flashes (1.5s).
-  // To re-trigger the effect on second click of the same row, we briefly
-  // null the state before setting it (useState batches but we use timer).
+  // ⚠ All hooks must be declared BEFORE any early return. React tracks hooks
+  // by call order; conditional early returns make the count vary between
+  // renders and trigger error #310 ("Rendered more hooks than previous").
+  // useState + useMemo BOTH live up here. Don't move them below the
+  // `if (loading)` guard.
+
+  // highlightItemId — the BillTotal warning card's "ดู →" link sets this so
+  // the matching BillItemRow scrolls into view + flashes (1.5s). To re-fire
+  // on second click of the same row we briefly null the state in handleJump.
   const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
+
+  // Frontend-side validation against backend retry rules. Memo on `bill`
+  // so BillTotal/BillItemRow don't recompute on unrelated parent renders.
+  // Tolerates bill=null during loading (validateForSML returns no_items).
+  const validation = useMemo(
+    () => (bill ? validateForSML(bill) : { canSend: false, issues: [], firstBlockingItemId: null }),
+    [bill],
+  )
+
   const handleJumpToItem = (id: string | null) => {
     if (!id) return
     setHighlightItemId(null)
@@ -69,12 +83,6 @@ export default function BillDetail() {
     bill.status === 'pending' ||
     bill.status === 'needs_review'
   const canEdit = canSend
-
-  // Frontend-side validation against backend retry rules. Memoize so the
-  // BillTotal + BillItemRow components don't recompute the issues array on
-  // every parent render — items rarely change but parent re-renders often.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const validation = useMemo(() => validateForSML(bill), [bill])
 
   const handleItemUpdated = (updated: BillItem) => {
     setBill((prev) => {
