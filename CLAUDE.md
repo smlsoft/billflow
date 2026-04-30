@@ -1958,6 +1958,65 @@ lucide-react             ← icon set (shadcn default)
     - **Verified end-to-end on prod 109**: /api/settings/status returns
       live counts (line_oa_total: 1, imap_failing: 0, ai_configured:
       true). All 16 patches built + deployed in single session
+
+26. Send-to-SML validation guard + route preview + tunnel drift monitor (session 20 — 2026-04-30)
+    Three patches landed after the session 19 heuristic-eval pass: a
+    validation guard on BillDetail, a route preview chip, and a daily
+    Cloudflare Quick Tunnel drift cron.
+    - **Validation guard** (`BillDetail/utils/validation.ts`):
+      `validateForSML(bill)` mirrors the rules backend retry handler
+      enforces — items.length ≥ 1; every item has non-empty item_code +
+      unit_code; qty > 0; price > 0 (mirrors F2 anomaly block-rules).
+      Returns `{ canSend, issues, firstBlockingItemId }`. Memoized on
+      `bill` in BillDetail/index.tsx so children don't re-validate on
+      unrelated parent renders. Tolerates `bill=null` during loading.
+    - **BillTotal warning card**: when validation fails, Send button is
+      disabled (wrapped in span so Tooltip still fires) + a warning card
+      lists each issue grouped by kind ("3 รายการยังไม่ได้จับคู่") with
+      a "ดู →" link per issue. Click → scroll to first offending row +
+      flash 1.5s ring/tint. handleJumpToItem null-then-id transition
+      ensures clicking the same "ดู" twice in a row re-fires the row's
+      useEffect (otherwise React skips a no-op state update).
+    - **Per-row ⚠ icon** (`BillItemRow.tsx`): new tiny status column
+      (w-6) shows AlertCircle when `rowIssueReason(item)` returns
+      non-empty. Tooltip says exactly which rules the row violates
+      ("ยังไม่ได้ map · ขาด unit_code"). Editing-row variant keeps an
+      empty placeholder cell so column alignment stays stable.
+    - **Route preview chip** (backend extension to GET /api/bills/:id):
+      Response now wraps the bill object with a `preview` field
+      containing `{ channel, bill_type, route, endpoint, doc_format,
+      doc_format_code }` resolved against the live channel_defaults row
+      using the SAME logic as the retry handler (resolveEndpoint +
+      mapSourceToChannel). Frontend renders a small chip below the Send
+      button: "↳ SML 248 · ใบสั่งขาย (saleorder) · doc_no BF-SO-#####".
+      Catches misconfigured channels (e.g. shopee bill that would fall
+      through to sale_reserve because endpoint string mismatch) BEFORE
+      retry, not after. When channel_default row is missing, preview
+      sets `error` field instead of `route` so UI degrades gracefully.
+    - **Hook ordering bug fix**: First version of BillDetail/index.tsx
+      put `useMemo(...)` AFTER `if (loading) return <Skeleton />` early
+      return → React error #310 ("Rendered more hooks than during the
+      previous render"). Fix: hoist all hooks (useState, useMemo) above
+      every early return. Lesson reflected in the comments at the top of
+      BillDetail.
+    - **Cloudflare Quick Tunnel drift monitor** (`internal/jobs/
+      tunnel_drift_monitor.go`): daily cron at `0 2 * * *` UTC (= 9am
+      Bangkok) GETs `$PUBLIC_BASE_URL/health` and pushes a LINE admin
+      alert when the request fails. Why ping the public URL instead of
+      reading /tmp/billflow-tunnel.log: log lives on the host (would
+      need a docker-compose volume mount), and pinging tests the
+      end-to-end DNS → Cloudflare → tunnel → backend path which is
+      what we actually care about. Throttled to 1 push per 24h via
+      sync.Mutex + lastAlerted so prolonged drift doesn't spam the
+      channel. Skips registration entirely when PUBLIC_BASE_URL is
+      empty (dev env). The recovery message inline-includes the exact
+      4-step shell pipeline so the recipient doesn't need to dig
+      through docs to fix it.
+    - **HEAD vs GET gotcha**: Initial smoke test of the new tunnel
+      check used `curl -sI` which sends HEAD — Gin's `r.GET("/health")`
+      doesn't bind HEAD, so it returned 404 and looked like drift had
+      occurred. Tunnel + URL were fine; cron uses `http.MethodGet`.
+      Worth knowing for future debugging.
 ```
 
 ---
@@ -2196,6 +2255,32 @@ Phase 6 — Web UI Complete
             AccountDialog mark-as-read checkbox in /settings/line-oa.
             Verified end-to-end: SSE token round-trip, hello event arrives,
             heartbeats every 20s, dedup works for self-tab.
+  [x] 6.30 Send-to-SML validation guard + route preview + tunnel drift cron ✅ (session 20)
+            ⭐ Three follow-up patches after the heuristic-eval pass.
+            Validation guard (frontend): BillDetail validates items against
+            the same rules the backend retry handler enforces (item_code +
+            unit_code non-empty, qty > 0, price > 0) BEFORE allowing
+            "Send to SML". Disabled button + tooltip + warning card listing
+            each issue + "ดู →" link that scrolls + flashes the offending row.
+            Per-row AlertCircle icon in a new tiny status column with hover
+            tooltip showing the exact reason. Caught at the cheapest point
+            (frontend) instead of via a confusing "failed" bill afterwards.
+            Route preview (backend extension to GET /api/bills/:id): adds
+            preview {channel, route, endpoint, doc_format} resolved against
+            live channel_defaults using the same routing logic as retry.
+            Frontend chip below Send button shows "↳ SML 248 · ใบสั่งขาย ·
+            doc_no BF-SO-#####" so admins catch misconfigured channels
+            BEFORE retry. Graceful when channel_default row is missing.
+            Hook ordering bug fix: First validation patch put useMemo
+            after early return → React error #310 in production. Hoisted
+            all hooks above early returns; comment in source documents
+            the trap for future contributors.
+            Cloudflare Quick Tunnel drift cron (jobs/tunnel_drift_monitor.go):
+            daily 9am Bangkok GETs PUBLIC_BASE_URL/health and pushes a LINE
+            admin alert (with inline recovery commands) when the request
+            fails. Throttled 1 push / 24h. Skips registration when
+            PUBLIC_BASE_URL is unset.
+
   [x] 6.29 Heuristic Evaluation pass — 16 fixes across all admin pages ✅ (session 19)
             ⭐ Full audit pass identified 6 critical + 7 high-impact + 4 polish
             issues across 13 admin pages. Three sprints landed in one session.
@@ -2460,6 +2545,8 @@ Phases:
                 bill timeline + inline retry + dashboard action cards (6.28, session 18)
               + heuristic evaluation pass — labels SSOT + /settings live status
                 + mobile responsive + 13 cross-page polish (6.29, session 19)
+              + Send-to-SML validation guard + route preview chip + Cloudflare
+                Quick Tunnel drift cron (6.30, session 20)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
@@ -2470,6 +2557,77 @@ Pending (carry-over):
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
   ⏳ LINE Push quota dashboard (free OA = 200/month — Reply API path is free)
   ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
+
+Recent work (session 20 — 2026-04-30):
+  ⭐ feat(bill): block Send-to-SML when items are invalid + route preview
+       Prevents the most common admin error pattern: clicking
+       "ส่งไปยัง SML" on a bill with unmapped items, hitting a generic
+       SML rejection, ending up with a confusing "failed" bill that has
+       to be debugged via /logs.
+       Validation rules mirror backend retry handler + F2 anomaly rules:
+       items.length ≥ 1, every item has non-empty item_code + unit_code,
+       qty > 0, price > 0. New utility lib (validation.ts) lifted out so
+       BillTotal + BillItemRow can both consume it.
+       BillTotal: Send button disabled (wrapping span keeps tooltip
+       firing despite raw <button disabled>). Inline warning card lists
+       each issue grouped by kind ("3 รายการยังไม่ได้จับคู่") with a
+       "ดู →" link per issue. Click → scroll + 1.5s flash on the first
+       offending row.
+       Per-row AlertCircle icon in a new w-6 status column. Hover surfaces
+       the exact reason ("ยังไม่ได้ map · ขาด unit_code"). Editing-row
+       variant gets an empty placeholder cell so column alignment stays
+       stable.
+       handleJumpToItem: null-then-id transition forces the row's
+       useEffect to refire when admin clicks the same "ดู →" twice.
+  ⭐ feat(bill): route preview chip surfacing SML routing decisions
+       Backend GET /api/bills/:id wraps the bill in a JSON object that
+       includes a preview field with channel/route/endpoint/doc_format
+       resolved against live channel_defaults — same logic as the retry
+       handler (resolveEndpoint + new mapSourceToChannel helper) so the
+       chip shows what retry will actually do.
+       Frontend chip below Send button: "↳ SML 248 · ใบสั่งขาย
+       (saleorder) · doc_no BF-SO-#####". Catches:
+         1. Misconfigured channel (e.g. shopee bill that would fall
+            through to sale_reserve because endpoint string mismatch)
+         2. Expected doc_no pattern, so admin can spot collisions
+         3. Custom URL when admin set one in /settings/channels
+       Bill type extended (BillRoutePreview interface) — preview only
+       returned by single-bill GET, not list response.
+  ⭐ fix(bill-detail): hoist hooks above early returns to fix React #310
+       First version of the validation patch put useMemo AFTER the
+       `if (loading) return <Skeleton />` early return. On first render
+       loading=true → useMemo never called (hooks count = 1). On second
+       render loading=false → useMemo called (hooks count = 2). React
+       aborts with error #310 ("Rendered more hooks than during the
+       previous render") and the page never renders.
+       Fix: move useState + useMemo to the top of the component, before
+       any early returns. validateForSML now tolerates bill=null with a
+       no-op fallback so the call is safe pre-load. Added a code comment
+       at the hook block explaining the rule for future contributors.
+  ⭐ feat(jobs): daily Cloudflare Quick Tunnel drift monitor
+       When `cloudflared --url http://localhost:8090` restarts (manually
+       or machine reboot), trycloudflare.com hands out a new random URL.
+       PUBLIC_BASE_URL in .env then points at nothing → admins keep
+       sending images that LINE never delivers, with no warning until
+       a customer asks why pictures are missing days later.
+       jobs/tunnel_drift_monitor.go: cron at "0 2 * * *" UTC (= 9am
+       Bangkok, off the hour to stagger from other crons) GETs
+       $PUBLIC_BASE_URL/health and pushes a LINE admin alert when the
+       request errors or returns non-200. Throttled to 1 push / 24h via
+       sync.Mutex + lastAlerted. Recovery message inline-includes the
+       exact 4-step shell pipeline so the recipient can act on it
+       without digging through docs.
+       Skips registration entirely when PUBLIC_BASE_URL is empty (dev
+       env) rather than no-oping every tick.
+       Why ping the public URL instead of reading /tmp/billflow-tunnel.log
+       directly: log lives on the host, not inside the backend container;
+       reading it would require a docker-compose volume mount. Pinging
+       tests the end-to-end DNS → Cloudflare → tunnel → backend path
+       which is what we actually care about.
+       Smoke-test gotcha: initial verification used `curl -sI` (HEAD)
+       which Gin's `r.GET("/health")` doesn't bind, returning 404. Cron
+       uses http.MethodGet so it works correctly. Comment in code
+       documents this for future debugging.
 
 Recent work (session 19 — 2026-04-30):
   ⭐ ux: 3-sprint heuristic-evaluation pass — labels SSOT, /settings refactor, mobile, polish
@@ -2953,7 +3111,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-30 (session 19)*
+*Last updated: 2026-04-30 (session 20)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*
