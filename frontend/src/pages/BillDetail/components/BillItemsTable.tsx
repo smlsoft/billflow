@@ -16,6 +16,10 @@ interface Props {
   onItemUpdated: (updated: BillItem) => void
   onItemDeleted: (itemId: string) => void
   onItemAdded: (item: BillItem) => void
+  // BillTotal's "ดู →" link sets this to the offending item id; the matching
+  // row briefly flashes (1.5s) so admin's eye is drawn to the right place
+  // even when the items list is long.
+  highlightItemId?: string | null
 }
 
 export function BillItemsTable({
@@ -24,6 +28,7 @@ export function BillItemsTable({
   onItemUpdated,
   onItemDeleted,
   onItemAdded,
+  highlightItemId,
 }: Props) {
   const items = bill.items ?? []
 
@@ -39,6 +44,9 @@ export function BillItemsTable({
           <Table>
             <TableHeader>
               <TableRow>
+                {/* Tiny first column for validation status icon — shows ⚠
+                    when the row blocks SML send (missing item_code etc.) */}
+                <TableHead className="w-6 px-1" aria-label="status" />
                 <TableHead className="w-[220px]">ชื่อสินค้า (จาก source)</TableHead>
                 <TableHead>Item Code</TableHead>
                 <TableHead>SML Item Name</TableHead>
@@ -59,12 +67,13 @@ export function BillItemsTable({
                   editable={canEdit}
                   onUpdated={onItemUpdated}
                   onDeleted={onItemDeleted}
+                  highlighted={item.id === highlightItemId}
                 />
               ))}
               {items.length === 0 && (
                 <TableRow>
                   <td
-                    colSpan={canEdit ? 9 : 8}
+                    colSpan={canEdit ? 10 : 9}
                     className="py-8 text-center text-sm text-muted-foreground"
                   >
                     ยังไม่มีรายการสินค้า

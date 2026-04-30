@@ -48,6 +48,22 @@ export interface BillItem {
   candidates?: CatalogMatch[] // top-5 catalog matches for needs_review items
 }
 
+// Preview of which SML route + endpoint + doc_no pattern this bill would
+// hit on retry. Resolved server-side so the BillDetail UI can show a chip
+// "→ saleorder · SML 248 · doc_no BF-SO-#####" before admin clicks Send,
+// catching channel-misconfig errors at the cheapest point.
+export interface BillRoutePreview {
+  channel: string
+  bill_type: string
+  route?: string             // sale_reserve / saleorder / saleinvoice / purchaseorder
+  endpoint?: string          // free-form URL/path the admin set in /settings/channels
+  doc_format?: string        // e.g. "BF-SO" + "YYMM####"
+  doc_format_code?: string   // e.g. "SR", "INV", "PO"
+  // Set when there's no channel_default row yet → preview can't compute
+  // route. Frontend shows a hint linking to /settings/channels.
+  error?: string
+}
+
 export interface Bill {
   id: string
   bill_type: string
@@ -66,6 +82,8 @@ export interface Bill {
   sent_at?: string | null
   // computed in list view
   total_amount?: number | null
+  // Only present in single-bill GET (not in list response).
+  preview?: BillRoutePreview
 }
 
 export interface BillListResponse {

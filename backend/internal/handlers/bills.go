@@ -171,6 +171,13 @@ func (h *BillHandler) List(c *gin.Context) {
 }
 
 // GET /api/bills/:id
+//
+// Response includes a "preview" object showing the SML route + endpoint +
+// doc_no pattern that THIS bill would hit on retry. The preview is purely
+// informational — it surfaces routing decisions in the BillDetail UI so
+// admins catch misconfigured channels (e.g. shopee bill routed to
+// sale_reserve because endpoint string doesn't match keywords) BEFORE
+// they click Send and have to debug a failed bill afterwards.
 func (h *BillHandler) Get(c *gin.Context) {
 	id := c.Param("id")
 	bill, err := h.billRepo.FindByID(id)
@@ -183,7 +190,65 @@ func (h *BillHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
 		return
 	}
+
+	// Resolve which SML route + endpoint + doc_format this bill would use
+	// today. Mirror the channel lookup that retry would do — same key
+	// (channel, bill_type) — but never fail the GET if the row is missing
+	// (e.g. legacy bills from before channel_defaults existed).
+	channel := mapSourceToChannel(bill.Source)
+	preview := gin.H{
+		"channel":   channel,
+		"bill_type": bill.BillType,
+	}
+	if h.channelDefaults != nil {
+		def, _ := h.channelDefaults.Get(channel, bill.BillType)
+		if def != nil {
+			route, urlOverride := resolveEndpoint(def, bill.Source, bill.BillType)
+			preview["route"] = route
+			if urlOverride != "" {
+				preview["endpoint"] = urlOverride
+			}
+			if def.DocPrefix != "" || def.DocRunningFormat != "" {
+				preview["doc_format"] = def.DocPrefix + def.DocRunningFormat
+			}
+			if def.DocFormatCode != "" {
+				preview["doc_format_code"] = def.DocFormatCode
+			}
+		} else {
+			// No channel_default row — admin needs to set one up. Surface
+			// this as a preview-level warning so the UI can render a hint.
+			preview["error"] = "ยังไม่ได้ตั้งค่า channel — ไปที่ /settings/channels"
+		}
+	}
+
+	// Wrap bill + preview in a single response. The bill struct is
+	// preserved unchanged at the top level so existing consumers keep
+	// working without a type migration.
+	billJSON, _ := json.Marshal(bill)
+	out := gin.H{}
+	if err := json.Unmarshal(billJSON, &out); err == nil {
+		out["preview"] = preview
+		c.JSON(http.StatusOK, out)
+		return
+	}
+	// Fallback if marshal/unmarshal hiccups — return the bill alone.
 	c.JSON(http.StatusOK, bill)
+}
+
+// mapSourceToChannel mirrors the same logic the retry handler uses to look
+// up a channel_defaults row. Kept private to this file.
+func mapSourceToChannel(source string) string {
+	switch source {
+	case "shopee_shipped":
+		return "shopee_shipped"
+	case "shopee_email", "shopee":
+		return "shopee"
+	case "lazada":
+		return "lazada"
+	case "email":
+		return "email"
+	}
+	return "line"
 }
 
 // GET /api/bills/:id/timeline

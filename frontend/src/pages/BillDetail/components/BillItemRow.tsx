@@ -1,15 +1,22 @@
-import { useState } from 'react'
-import { Edit, Check, X, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { AlertCircle, Edit, Check, X, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { TableRow, TableCell } from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { cn } from '@/lib/utils'
 import api from '@/api/client'
 import type { BillItem } from '@/types'
 import { useMatchInfo } from '../hooks/useMatchInfo'
 import { scoreStyle } from '../utils/formatters'
+import { rowIssueReason } from '../utils/validation'
 import { MapItemModal } from './MapItemModal'
 
 interface Props {
@@ -18,6 +25,9 @@ interface Props {
   editable: boolean
   onUpdated: (updated: BillItem) => void
   onDeleted: (itemId: string) => void
+  // When true, briefly flash this row (1.5s) so the admin's eye lands on
+  // it. Triggered by the BillTotal warning card's "ดู →" link.
+  highlighted?: boolean
 }
 
 function MatchBadge({ score }: { score: number | null }) {
@@ -42,7 +52,23 @@ function MatchBadge({ score }: { score: number | null }) {
   )
 }
 
-export function BillItemRow({ item, billId, editable, onUpdated, onDeleted }: Props) {
+export function BillItemRow({ item, billId, editable, onUpdated, onDeleted, highlighted }: Props) {
+  // When the parent flips `highlighted` true (admin clicked "ดู →" in the
+  // BillTotal warning card) we scroll this row into view + add a brief tint
+  // ring so the admin's eye lands on the right place. Self-clearing flag.
+  const rowRef = useRef<HTMLTableRowElement>(null)
+  const [flashing, setFlashing] = useState(false)
+  useEffect(() => {
+    if (!highlighted) return
+    rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setFlashing(true)
+    const t = setTimeout(() => setFlashing(false), 1500)
+    return () => clearTimeout(t)
+  }, [highlighted])
+
+  // Per-row validation reason — concatenates each rule the row violates.
+  // Empty string when the row is fine; the indicator cell stays empty.
+  const issueReason = rowIssueReason(item)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showMapModal, setShowMapModal] = useState(false)
@@ -113,7 +139,32 @@ export function BillItemRow({ item, billId, editable, onUpdated, onDeleted }: Pr
   if (!editing) {
     return (
       <>
-        <TableRow>
+        <TableRow
+          ref={rowRef}
+          className={cn(
+            'transition-colors',
+            flashing && 'bg-warning/15 ring-2 ring-warning/40',
+          )}
+        >
+          {/* Validation status cell — ⚠ icon when this row blocks SML send */}
+          <TableCell className="w-6 px-1 text-center align-middle">
+            {issueReason && (
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <AlertCircle
+                      className="h-3.5 w-3.5 text-warning"
+                      strokeWidth={2.25}
+                      aria-label={`ปัญหา: ${issueReason}`}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="text-xs">
+                    {issueReason}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </TableCell>
           <TableCell className="max-w-[280px] break-words">{item.raw_name}</TableCell>
           <TableCell>
             {item.item_code ? (
@@ -205,6 +256,8 @@ export function BillItemRow({ item, billId, editable, onUpdated, onDeleted }: Pr
         />
       )}
       <TableRow className="bg-muted/20">
+        {/* Empty status cell — keeps column alignment with the read-only row */}
+        <TableCell className="w-6 px-1" />
         <TableCell className="max-w-[280px] break-words text-sm text-muted-foreground">
           {item.raw_name}
         </TableCell>
