@@ -104,6 +104,8 @@ export interface DashboardStats {
   sml_failed: number
   total_amount: number
   today_bills: number
+  unread_messages?: number
+  email_inbox_errors?: number
 }
 
 export interface DailyInsight {

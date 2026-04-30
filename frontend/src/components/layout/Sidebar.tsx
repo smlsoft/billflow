@@ -56,6 +56,10 @@ interface NavItem {
   //   "messages" → unread chat conversation count (Phase 3)
   // Boolean true is treated as "bills" for backward compat with existing code.
   hasBadge?: boolean | 'bills' | 'messages'
+  // Optional English/short hint shown beneath the label in the collapsed-mode
+  // tooltip — helps when admins ask dev "เปิด Quick Replies ที่ไหน" since the
+  // visible label is now Thai-first.
+  hint?: string
 }
 
 interface NavGroup {
@@ -63,34 +67,51 @@ interface NavGroup {
   items: NavItem[]
 }
 
+// NAV_GROUPS — ordered by daily-frequency. Top groups (Overview / Bills /
+// Chat) are what staff touch every day; bottom groups (Master Data / System
+// Settings) are setup-once. Within each group, the most-used items lead.
+//
+// Labels lean Thai-first; the `hint` field provides the English/setup name
+// in tooltips so a dev or new admin can connect Thai labels back to the
+// underlying feature.
 const NAV_GROUPS: NavGroup[] = [
   {
     label: 'ภาพรวม',
     items: [
-      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { to: '/bills', label: 'บิลทั้งหมด', icon: FileText, hasBadge: 'bills' },
-      { to: '/messages', label: 'ข้อความลูกค้า', icon: MessageSquare, hasBadge: 'messages' },
+      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, hint: 'หน้าแรก' },
+      { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText, hint: 'Activity Log' },
     ],
   },
   {
-    label: 'นำเข้าข้อมูล',
+    label: 'บิลขาย / ซื้อ',
     items: [
-      { to: '/import', label: 'นำเข้า Lazada', icon: Upload, end: true },
-      { to: '/import/shopee', label: 'นำเข้า Shopee', icon: ShoppingBag },
+      { to: '/bills', label: 'บิลทั้งหมด', icon: FileText, hasBadge: 'bills', hint: 'รวมทุก channel' },
+      { to: '/import', label: 'นำเข้า Lazada', icon: Upload, end: true, hint: 'Excel จาก Lazada' },
+      { to: '/import/shopee', label: 'นำเข้า Shopee', icon: ShoppingBag, hint: 'Excel จาก Shopee' },
     ],
   },
   {
-    label: 'จัดการระบบ',
+    label: 'แชทลูกค้า',
     items: [
-      { to: '/mappings', label: 'Mapping สินค้า', icon: Workflow },
-      { to: '/settings/email', label: 'Email Inboxes', icon: Mail },
-      { to: '/settings/line-oa', label: 'LINE OA Accounts', icon: MessageSquare, end: true },
-      { to: '/settings/quick-replies', label: 'Quick Replies', icon: MessageSquareQuote, end: true },
-      { to: '/settings/chat-tags', label: 'Chat Tags', icon: Tag, end: true },
-      { to: '/settings/channels', label: 'ลูกค้า / ผู้ขาย', icon: Building2 },
-      { to: '/settings/catalog', label: 'Catalog SML', icon: Database },
-      { to: '/logs', label: 'Activity Log', icon: ScrollText },
-      { to: '/settings', label: 'ตั้งค่า', icon: Settings, end: true },
+      { to: '/messages', label: 'ข้อความลูกค้า', icon: MessageSquare, hasBadge: 'messages', hint: 'Inbox รวมทุก OA' },
+      { to: '/settings/line-oa', label: 'บัญชี LINE OA', icon: MessageSquare, end: true, hint: 'LINE OA Accounts' },
+      { to: '/settings/quick-replies', label: 'ข้อความสำเร็จรูป', icon: MessageSquareQuote, end: true, hint: 'Quick Replies' },
+      { to: '/settings/chat-tags', label: 'ป้ายลูกค้า', icon: Tag, end: true, hint: 'Chat Tags' },
+    ],
+  },
+  {
+    label: 'ข้อมูลตั้งต้น',
+    items: [
+      { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
+      { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
+      { to: '/settings/channels', label: 'ลูกค้า / ผู้ขาย default', icon: Building2, hint: 'Channel Defaults (per-channel party_code)' },
+    ],
+  },
+  {
+    label: 'ตั้งค่าระบบ',
+    items: [
+      { to: '/settings/email', label: 'อีเมลรับบิล', icon: Mail, hint: 'IMAP Inboxes' },
+      { to: '/settings', label: 'ตั้งค่าทั่วไป', icon: Settings, end: true, hint: 'General Settings' },
     ],
   },
 ]
@@ -280,7 +301,12 @@ export default function Sidebar() {
                   <Tooltip key={item.to}>
                     <TooltipTrigger asChild>{link}</TooltipTrigger>
                     <TooltipContent side="right" className="text-xs">
-                      {item.label}
+                      <div className="font-medium">{item.label}</div>
+                      {item.hint && (
+                        <div className="mt-0.5 text-[10px] text-muted-foreground">
+                          {item.hint}
+                        </div>
+                      )}
                     </TooltipContent>
                   </Tooltip>
                 )

@@ -186,6 +186,25 @@ func (h *BillHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, bill)
 }
 
+// GET /api/bills/:id/timeline
+//
+// Returns every audit_log row whose target_id matches this bill, oldest
+// first. The BillDetail page renders these as a vertical activity feed so
+// admin can answer "ทำไมบิลนี้ถึงเป็นแบบนี้" without leaving the page.
+func (h *BillHandler) Timeline(c *gin.Context) {
+	id := c.Param("id")
+	if h.auditRepo == nil {
+		c.JSON(http.StatusOK, gin.H{"data": []any{}})
+		return
+	}
+	rows, err := h.auditRepo.ListByTarget(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
 // POST /api/bills/:id/retry
 // Routes to one of three SML clients based on bill.Source / bill.BillType:
 //
@@ -307,7 +326,8 @@ func (h *BillHandler) retrySaleReserve(c *gin.Context, bill *models.Bill) {
 	start := time.Now()
 	result, err := h.smlClient.CreateSaleReserve(req)
 	if err != nil {
-		h.recordFailure(c, id, bill.Source, reqJSON, err, start, "SaleReserve")
+		// SaleReserve has no client-side doc_no — SML 213 generates BS… on success.
+		h.recordFailure(c, id, bill.Source, reqJSON, err, start, "SaleReserve", "")
 		return
 	}
 
@@ -391,7 +411,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill) {
 		default:
 			errMsg = fmt.Sprintf("HTTP %d", statusCode)
 		}
-		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "SaleOrder")
+		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "SaleOrder", reqDocNo)
 		return
 	}
 
@@ -495,7 +515,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 		default:
 			errMsg = fmt.Sprintf("HTTP %d", statusCode)
 		}
-		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "SaleInvoice")
+		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "SaleInvoice", reqDocNo)
 		return
 	}
 
@@ -574,7 +594,7 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
 		default:
 			errMsg = fmt.Sprintf("HTTP %d", statusCode)
 		}
-		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "PurchaseOrder")
+		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "PurchaseOrder", reqDocNo)
 		return
 	}
 
@@ -687,9 +707,33 @@ func (h *BillHandler) lookupChannelDefault(channel, billType string) (*models.Ch
 	return def, nil
 }
 
-func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON []byte, err error, start time.Time, route string) {
-	errMsg := err.Error()
-	respJSON, _ := json.Marshal(map[string]string{"error": errMsg})
+// failureDetail is the JSON shape persisted to bills.error_msg when an SML
+// retry fails. Storing structured data instead of a plain string lets the
+// BillDetail UI render route + attempted doc_no + monospace error
+// separately, and lets admin copy the raw error text to share with dev
+// without other UI clutter.
+//
+// For backwards compat: the frontend tries JSON.parse first; if it fails
+// (i.e. an old plain-text error_msg from before this change) it falls back
+// to displaying the string verbatim.
+type failureDetail struct {
+	Route          string `json:"route"`            // SaleReserve / SaleOrder / SaleInvoice / PurchaseOrder
+	DocNoAttempted string `json:"doc_no_attempted"` // empty for SaleReserve (SML generates)
+	Error          string `json:"error"`
+	OccurredAt     string `json:"occurred_at"` // RFC3339
+}
+
+func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON []byte, err error, start time.Time, route, docNoAttempted string) {
+	rawErr := err.Error()
+	fail := failureDetail{
+		Route:          route,
+		DocNoAttempted: docNoAttempted,
+		Error:          rawErr,
+		OccurredAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	errMsgJSON, _ := json.Marshal(fail)
+	errMsg := string(errMsgJSON)
+	respJSON, _ := json.Marshal(map[string]string{"error": rawErr})
 	_ = h.billRepo.UpdateStatus(id, "failed", nil, respJSON, &errMsg)
 	h.log.Error("Retry: SML failed", zap.String("bill", id), zap.String("route", route), zap.Error(err))
 	if h.auditRepo != nil {

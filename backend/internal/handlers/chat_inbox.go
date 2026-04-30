@@ -365,6 +365,7 @@ func (h *ChatInboxHandler) SendReply(c *gin.Context) {
 				"line_user_id":    lineUserID,
 				"message_id":      m.ID,
 				"delivery_method": method,
+				"text_preview":    preview(text, 100),
 			},
 		})
 	}
@@ -563,6 +564,7 @@ func (h *ChatInboxHandler) SendMedia(c *gin.Context) {
 			Detail: map[string]interface{}{
 				"line_user_id":    lineUserID,
 				"message_id":      m.ID,
+				"filename":        mediaRow.Filename,
 				"size_bytes":      mediaRow.SizeBytes,
 				"content_type":    mediaRow.ContentType,
 				"delivery_method": method,

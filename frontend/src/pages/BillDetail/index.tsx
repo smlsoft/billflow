@@ -7,8 +7,10 @@ import type { BillItem } from '@/types'
 
 import { useBillData } from './hooks/useBillData'
 import { BillHeader } from './components/BillHeader'
+import { BillFailureCard } from './components/BillFailureCard'
 import { BillTotal } from './components/BillTotal'
 import { BillItemsTable } from './components/BillItemsTable'
+import { BillTimeline } from './components/BillTimeline'
 import { RawDataCard } from './components/RawDataCard'
 import { ArtifactList } from './components/ArtifactList'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
@@ -81,11 +83,14 @@ export default function BillDetail() {
 
   return (
     <div className="space-y-4">
-      <BillHeader
-        bill={bill}
-        errorMsg={bill.error_msg}
-        retryError={retryError}
-      />
+      <BillHeader bill={bill} />
+
+      {/* Structured failure card — only renders when the bill has a stored
+          error or there's a fresh retry error. Replaces the previous
+          inline red text under BillHeader; admin can copy + send to dev. */}
+      {(bill.error_msg || retryError) && (
+        <BillFailureCard errorMsg={bill.error_msg} retryError={retryError} />
+      )}
 
       <BillTotal
         bill={bill}
@@ -118,6 +123,10 @@ export default function BillDetail() {
         smlPayload={bill.sml_payload}
         smlResponse={bill.sml_response}
       />
+
+      {/* Activity timeline for this bill — answers "ทำไมบิลนี้ถึงเป็นแบบนี้"
+          without leaving the page. Joins audit_logs ON target_id = bill.id. */}
+      <BillTimeline billId={bill.id} />
     </div>
   )
 }

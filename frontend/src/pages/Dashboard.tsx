@@ -22,6 +22,7 @@ import { StatCardSkeleton } from '@/components/common/LoadingSkeleton'
 import client from '@/api/client'
 import { useAuthStore } from '@/store/auth'
 import type { DailyInsight, DashboardStats, MappingStats } from '@/types'
+import { ActionCards } from './Dashboard/ActionCards'
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -88,6 +89,11 @@ export default function Dashboard() {
           )
         }
       />
+
+      {/* "ต้อง action" row — quick links to whatever is waiting on the admin
+          today. Failed bills + email inbox errors get an urgent accent + a
+          pulsing dot so they're hard to ignore. */}
+      <ActionCards stats={stats} loading={loading} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {loading ? (

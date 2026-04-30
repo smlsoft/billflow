@@ -10,8 +10,6 @@ import { SOURCE_LABELS } from '../utils/formatters'
 
 interface Props {
   bill: Bill
-  errorMsg?: string | null
-  retryError?: string | null
 }
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -25,7 +23,7 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-export function BillHeader({ bill, errorMsg, retryError }: Props) {
+export function BillHeader({ bill }: Props) {
   const navigate = useNavigate()
   const rawData = bill.raw_data as Record<string, unknown> | null
   const isPurchase = bill.bill_type === 'purchase'
@@ -94,16 +92,9 @@ export function BillHeader({ bill, errorMsg, retryError }: Props) {
             )}
           </div>
 
-          {errorMsg && (
-            <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {errorMsg}
-            </div>
-          )}
-          {retryError && (
-            <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {retryError}
-            </div>
-          )}
+          {/* Failure details moved to BillFailureCard (rendered alongside this
+              header by the parent) — gives the error room to breathe + a
+              copy button without cluttering the meta grid. */}
         </CardContent>
       </Card>
     </div>

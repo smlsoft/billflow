@@ -115,3 +115,42 @@ func (r *AuditLogRepo) List(f models.AuditLogFilter) ([]models.AuditLog, int, er
 	}
 	return logs, total, rows.Err()
 }
+
+// ListByTarget returns audit_log rows whose target_id matches, oldest-first.
+// Used by the BillDetail timeline view to show every event tied to one bill
+// (created → confirmed → SML send → retried → ...). Caps at 200 rows so a
+// pathological bill with many retries doesn't blow up the response.
+func (r *AuditLogRepo) ListByTarget(targetID string) ([]models.AuditLog, error) {
+	rows, err := r.db.Query(
+		`SELECT id, user_id, action, target_id, source, level, duration_ms,
+		        trace_id, detail, created_at
+		 FROM audit_logs
+		 WHERE target_id = $1
+		 ORDER BY created_at ASC
+		 LIMIT 200`,
+		targetID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("audit list by target: %w", err)
+	}
+	defer rows.Close()
+
+	var out []models.AuditLog
+	for rows.Next() {
+		var l models.AuditLog
+		var source, traceID sql.NullString
+		var detailRaw []byte
+		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.TargetID,
+			&source, &l.Level, &l.DurationMs, &traceID,
+			&detailRaw, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		l.Source = source.String
+		l.TraceID = traceID.String
+		if detailRaw != nil {
+			l.Detail = json.RawMessage(detailRaw)
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}

@@ -305,6 +305,17 @@ func (h *LineHandler) processMessage(ctx context.Context, event lineEvent, svc *
 			"kind":         inserted.Kind,
 			"message_id":   inserted.ID,
 		}
+		// Add a content snippet so /logs shows what the customer actually
+		// said (was previously message_id only — useless for at-a-glance).
+		switch inserted.Kind {
+		case models.ChatKindText:
+			detail["text_preview"] = textPreview(inserted.TextContent, 100)
+		case models.ChatKindImage, models.ChatKindFile, models.ChatKindAudio:
+			if inserted.Media != nil {
+				detail["filename"] = inserted.Media.Filename
+				detail["size_bytes"] = inserted.Media.SizeBytes
+			}
+		}
 		if oa != nil {
 			detail["line_oa_id"] = oa.ID
 			detail["line_oa_name"] = oa.Name
@@ -316,6 +327,16 @@ func (h *LineHandler) processMessage(ctx context.Context, event lineEvent, svc *
 			Detail: detail,
 		})
 	}
+}
+
+// textPreview truncates s to n runes plus a single ellipsis. Rune-aware so
+// Thai characters don't get cut mid-codepoint.
+func textPreview(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func (h *LineHandler) insertText(userID, text, lineMsgID string, ts int64) *models.ChatMessage {
@@ -367,9 +388,13 @@ func (h *LineHandler) insertMedia(userID string, msg *lineMessage, ts int64, svc
 		return nil
 	}
 
-	if _, err := h.mediaRepo.Save(m.ID, filename, contentType, data); err != nil {
+	mediaRow, err := h.mediaRepo.Save(m.ID, filename, contentType, data)
+	if err != nil {
 		h.logger.Error("save chat media",
 			zap.String("msg_id", m.ID), zap.Error(err))
+	} else {
+		// Attach so the audit-log preview can include filename + size.
+		m.Media = mediaRow
 	}
 	return m
 }

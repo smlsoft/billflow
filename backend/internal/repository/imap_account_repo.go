@@ -52,6 +52,21 @@ func scanImapAccount(s interface{ Scan(...any) error }) (*models.IMAPAccount, er
 	return a, nil
 }
 
+// CountFailing returns how many enabled inboxes have at least one
+// consecutive failure since their last successful poll. Used by the
+// Dashboard "ต้อง action" widget to surface email problems at a glance.
+func (r *ImapAccountRepo) CountFailing() (int, error) {
+	var n int
+	err := r.db.QueryRow(
+		`SELECT COUNT(*) FROM imap_accounts
+		 WHERE enabled = TRUE AND consecutive_failures > 0`,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count failing imap_accounts: %w", err)
+	}
+	return n, nil
+}
+
 func (r *ImapAccountRepo) ListAll() ([]*models.IMAPAccount, error) {
 	rows, err := r.db.Query(`SELECT ` + imapSelectCols + ` FROM imap_accounts ORDER BY created_at`)
 	if err != nil {

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Search } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -44,12 +44,32 @@ const BILL_TYPE_OPTIONS = [
   { value: 'purchase', label: 'บิลซื้อ (PO)' },
 ]
 
+// Valid filter values used to validate URL query string against typos.
+const VALID_STATUSES = STATUS_OPTIONS.map((o) => o.value)
+const VALID_SOURCES = SOURCE_OPTIONS.map((o) => o.value)
+const VALID_BILL_TYPES = BILL_TYPE_OPTIONS.map((o) => o.value)
+
+function readURLFilter(params: URLSearchParams, key: string, valid: string[]): string {
+  const v = params.get(key) ?? ''
+  return v && valid.includes(v) ? v : ALL
+}
+
 export default function Bills() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  // Seed filters from the URL so deep-links from the Dashboard ("บิลล้มเหลว"
+  // shortcut → /bills?status=failed) land pre-filtered. After that, filters
+  // are local state — admin can change them without bouncing the URL.
   const [page, setPage] = useState(1)
-  const [status, setStatus] = useState<string>(ALL)
-  const [source, setSource] = useState<string>(ALL)
-  const [billType, setBillType] = useState<string>(ALL)
+  const [status, setStatus] = useState<string>(() =>
+    readURLFilter(searchParams, 'status', VALID_STATUSES),
+  )
+  const [source, setSource] = useState<string>(() =>
+    readURLFilter(searchParams, 'source', VALID_SOURCES),
+  )
+  const [billType, setBillType] = useState<string>(() =>
+    readURLFilter(searchParams, 'bill_type', VALID_BILL_TYPES),
+  )
   const [search, setSearch] = useState('')
 
   const { data, loading } = useBills({

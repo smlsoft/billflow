@@ -16,6 +16,7 @@ type DashboardHandler struct {
 	billRepo             *repository.BillRepo
 	insightRepo          *repository.InsightRepo
 	convRepo             *repository.ChatConversationRepo
+	imapRepo             *repository.ImapAccountRepo
 	insightSvc           *insight.Service
 	lineConfigured       bool
 	imapConfigured       bool
@@ -29,6 +30,7 @@ func NewDashboardHandler(
 	billRepo *repository.BillRepo,
 	insightRepo *repository.InsightRepo,
 	convRepo *repository.ChatConversationRepo,
+	imapRepo *repository.ImapAccountRepo,
 	insightSvc *insight.Service,
 	log *zap.Logger,
 ) *DashboardHandler {
@@ -36,6 +38,7 @@ func NewDashboardHandler(
 		billRepo:    billRepo,
 		insightRepo: insightRepo,
 		convRepo:    convRepo,
+		imapRepo:    imapRepo,
 		insightSvc:  insightSvc,
 		log:         log,
 	}
@@ -71,6 +74,13 @@ func (h *DashboardHandler) Stats(c *gin.Context) {
 	if h.convRepo != nil {
 		if unread, err := h.convRepo.UnreadCount(); err == nil {
 			out["unread_messages"] = unread
+		}
+	}
+	// Email-inbox health — surfaces "1 inbox มีปัญหา" on the dashboard
+	// without admin needing to open /settings/email to check status.
+	if h.imapRepo != nil {
+		if failing, err := h.imapRepo.CountFailing(); err == nil {
+			out["email_inbox_errors"] = failing
 		}
 	}
 	c.JSON(http.StatusOK, out)
