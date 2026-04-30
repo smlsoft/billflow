@@ -1829,6 +1829,60 @@ lucide-react             ← icon set (shadcn default)
       reading จาก events-store. 4 states (connecting/live/reconnecting/
       offline) + tooltip ภาษาไทย + animate-pulse ตอน reconnecting.
       Visible ทุกหน้า admin login จึงรู้สถานะ real-time ทุกที่
+
+24. UX polish — 6-phase admin experience pass (session 18 — 2026-04-30)
+    หลัง real-time inbox ลื่นแล้ว session 18 มุ่ง surface "งานที่ admin
+    ต้องทำ" ในที่ที่ตามองเห็นทันที + ลด round-trip ไปมาในการ debug
+    ปัญหาบิลล้มเหลว
+    - **Logs preview** (Phase 1): line_message_received + line_admin_reply
+      detail เพิ่ม `text_preview` (100 chars rune-aware) + filename/size
+      สำหรับ media. Frontend summarize() แสดง `"สวัสดีครับ ราคา..."`
+      ตรงๆ + chip "ฟรี"/"Push" บน outgoing rows. **ก่อน**: เห็นแค่
+      message_id ดิบ — ต้องเปิด /messages เพื่อรู้ว่าใครพูดอะไร
+    - **Bill failure card** (Phase 2): bills.go recordFailure เปลี่ยน
+      error_msg เป็น JSON `{route, doc_no_attempted, error, occurred_at}`.
+      Frontend BillFailureCard component — AlertCircle + route badge
+      (SaleOrder/SaleInvoice/...) + monospace `<pre>` block + copy button
+      ที่ assemble multi-line block (route + doc_no + timestamp + error)
+      สำหรับส่ง dev. ลบ inline red text ออกจาก BillHeader. **Backwards
+      compat**: parse JSON; legacy plain-text fall back to displaying as-is
+    - **Sidebar reorg 5 groups** (Phase 3): เดิม "จัดการระบบ" มี 9 รายการ
+      ผสมกัน. ใหม่:
+      ภาพรวม / บิลขาย-ซื้อ / แชทลูกค้า / ข้อมูลตั้งต้น / ตั้งค่าระบบ
+      Labels Thai-first; new optional `hint` field shows English/setup
+      name in collapsed-mode tooltip (e.g. "ตารางจับคู่สินค้า" → tooltip
+      shows "Item Mapping (raw_name → SML code)") เพื่อให้ admin/dev
+      โยง Thai labels กลับไปยัง feature เดิม. Activity Log ขึ้นไปอยู่
+      "ภาพรวม" — admin เปิดดูตอนมีปัญหา ไม่ใช่ตั้งค่า
+    - **Bill Timeline** (Phase 4): GET /api/bills/:id/timeline →
+      audit_logs WHERE target_id ASC, cap 200. Frontend BillTimeline
+      vertical rail + tone-colored dots + relative time + summary.
+      **Reuses ACTION_META + summarize()** ผ่าน `lib/audit-log-meta.ts`
+      (extracted shared module) ดังนั้น /logs และ timeline render
+      สอดคล้องกันโดยอัตโนมัติเมื่อเพิ่ม action ใหม่. ไม่ต้องไป /logs
+      grep bill_id อีกแล้ว
+    - **Inline retry on /logs** (Phase 5): expanded sml_failed row
+      แสดงปุ่ม "🔄 Retry บิลนี้" ติดกับ error label. POST ไป /api/bills/
+      :id/retry → toast result → refresh page logs ปัจจุบัน. ไม่ต้องไป
+      /bills/:id แล้วกดอีกที
+    - **Dashboard "ต้อง action" widget** (Phase 6): backend extends
+      /api/dashboard/stats ด้วย `email_inbox_errors`
+      (imap_accounts.consecutive_failures > 0 count). Frontend ActionCards
+      บน Dashboard — 4 click-through cards (บิลรอตรวจ / บิลล้มเหลว /
+      ข้อความใหม่ / Email มีปัญหา). Failed + email-error → urgent accent
+      (red number + animate-pulse dot) ตอน count > 0. Bills.tsx parse
+      ?status=/?source=/?bill_type= จาก URL on mount → dashboard shortcuts
+      ลง pre-filtered. ลด "เปิดแล้วต้องไปคลิกแต่ละเมนูเอง"
+    - **UI polish guidelines applied**:
+      - Lucide icons เท่านั้นใน UI หลัก (emoji เก็บไว้สำหรับ semantic
+        markers ใน /logs ACTION_META)
+      - HSL token colors ทุกจุด (`bg-destructive/[0.03]`, `text-success`)
+      - Typography hierarchy: text-[10px] meta → text-[11px] hint →
+        text-xs body → text-sm label → text-2xl count
+      - `tabular-nums` สำหรับ counts ทุกที่
+      - `animate-pulse` เฉพาะ urgent dots — ไม่ใช้กับ neutral
+      - micro-interaction: `hover:-translate-y-0.5` บน ActionCards +
+        ArrowUpRight เคลื่อนตาม hover
 ```
 
 ---
@@ -2067,6 +2121,36 @@ Phase 6 — Web UI Complete
             AccountDialog mark-as-read checkbox in /settings/line-oa.
             Verified end-to-end: SSE token round-trip, hello event arrives,
             heartbeats every 20s, dedup works for self-tab.
+  [x] 6.28 UX polish — surface admin work + reduce debug round-trips ✅ (session 18)
+            ⭐ Six-phase admin experience pass on top of the real-time
+            inbox shipped in 6.27. Goal: make work-to-do impossible to
+            miss + cut clicks for common debug flows.
+            Phase 1 — /logs preview: line_message_received + line_admin_
+            reply detail include text_preview (rune-aware); media events
+            include filename + size_bytes. Frontend summarize() shows
+            quoted text, media as "filename (123 KB)", and a Reply/Push
+            chip on outgoing rows. No more raw message_ids.
+            Phase 2 — Bill failure card: bills.go recordFailure stores
+            error_msg as JSON {route, doc_no_attempted, error,
+            occurred_at}. Frontend BillFailureCard with monospace error
+            block + multi-line copy button (assembles route+doc_no+
+            timestamp+error for dev triage). Backwards-compat: legacy
+            plain-text rows still render verbatim.
+            Phase 3 — Sidebar reorg into 5 domain groups (Overview /
+            Bills / Chat / Master Data / System) with Thai-first labels
+            + English hint tooltips. Activity Log moves to Overview.
+            Phase 4 — Bill Timeline: GET /api/bills/:id/timeline + new
+            BillTimeline component on BillDetail. Reuses ACTION_META +
+            summarize() via extracted lib/audit-log-meta.ts so /logs
+            and the timeline stay aligned.
+            Phase 5 — Inline retry on /logs sml_failed rows. POST to
+            /api/bills/:id/retry without leaving the page.
+            Phase 6 — Dashboard "ต้อง action" widget: 4 ActionCards
+            (บิลรอตรวจ / บิลล้มเหลว / ข้อความใหม่ / Email มีปัญหา) with
+            urgent red accent + pulse dot when count > 0. Backend
+            ImapAccountRepo.CountFailing surfaces email_inbox_errors.
+            Bills.tsx reads ?status=/?source=/?bill_type= from URL so
+            dashboard shortcuts land pre-filtered.
 
 Phase 7 — Background Jobs
   [x] 7.1 Cron 08:00 daily insight + LINE notify (F4) ✅
@@ -2261,6 +2345,8 @@ Phases:
               + audit log coverage + UX consistency + tag filter in inbox (6.26, session 16)
               + real-time SSE + connection indicator + LINE markAsRead +
                 stale-token cron + pending cleanup (6.27, session 17)
+              + UX polish — log preview + failure card + sidebar reorg +
+                bill timeline + inline retry + dashboard action cards (6.28, session 18)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
@@ -2271,6 +2357,73 @@ Pending (carry-over):
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
   ⏳ LINE Push quota dashboard (free OA = 200/month — Reply API path is free)
   ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
+
+Recent work (session 18 — 2026-04-30):
+  ⭐ ux: 6-phase polish — log previews, structured failures, sidebar, timeline, retry, dashboard
+       Goal: surface "admin work to do" where the eye lands first, and cut
+       round-trips for common debug flows. No new features, all pure UX.
+       Phase 1 — /logs preview shows what was actually said:
+         backend line_message_received + line_admin_reply detail now include
+         text_preview (rune-aware 100 chars); media events get filename +
+         size_bytes. Frontend summarize() renders quoted text and "filename
+         (123 KB)". Reply/Push chip on outgoing rows shows delivery method
+         without expanding. No more raw message_ids.
+       Phase 2 — Bill SML failure card on BillDetail:
+         bills.go recordFailure now takes a doc_no_attempted argument and
+         persists error_msg as JSON {route, doc_no_attempted, error,
+         occurred_at}. Backwards-compat: frontend tries JSON.parse, falls
+         back to plain string for legacy rows. New BillFailureCard component
+         with AlertCircle header + route badge (SaleOrder / SaleInvoice /
+         PurchaseOrder / SaleReserve) + monospace pre block + copy button
+         that writes a multi-line block (route + doc_no + timestamp + error)
+         tailored for sending to dev. Removes the old inline red text from
+         BillHeader so the error has room to breathe.
+       Phase 3 — Sidebar reorg into 5 domain groups:
+         Old "จัดการระบบ" group had 9 mixed items (mappings + email + chat
+         configs + parties + catalog + logs + settings). New grouping by
+         daily-frequency:
+           ภาพรวม         → Dashboard, ประวัติการทำงาน
+           บิลขาย/ซื้อ     → บิลทั้งหมด + Lazada + Shopee imports
+           แชทลูกค้า      → Inbox + LINE OA + Quick Replies + Chat Tags
+           ข้อมูลตั้งต้น   → Mappings + Catalog + Channel defaults
+           ตั้งค่าระบบ     → Email Inboxes + General settings
+         Labels are Thai-first with new optional `hint` field shown in the
+         collapsed-mode tooltip (English/setup name) so admin/devs can map
+         Thai labels back to underlying features.
+       Phase 4 — Bill Timeline on BillDetail:
+         GET /api/bills/:id/timeline → audit_logs WHERE target_id ASC,
+         capped 200. New BillTimeline component renders a vertical rail
+         with tone-colored dots, action label + emoji + relative time, and
+         optional summary. Reuses ACTION_META + summarize() — extracted to
+         lib/audit-log-meta.ts so /logs and the timeline stay in sync.
+         Answers "ทำไมบิลนี้ถึงเป็นแบบนี้" without leaving the page.
+       Phase 5 — Inline Retry on /logs sml_failed rows:
+         Expanded row shows "🔄 Retry บิลนี้" button next to the error
+         label. POSTs to /api/bills/:id/retry, toasts the result, refreshes
+         the current page of logs. Saves the round-trip through /bills/:id.
+       Phase 6 — Dashboard "ต้อง action" widget:
+         Backend extends /api/dashboard/stats with email_inbox_errors
+         (count of enabled imap_accounts with consecutive_failures > 0)
+         via new ImapAccountRepo.CountFailing.
+         Frontend ActionCards row at top of Dashboard: 4 click-through
+         cards (บิลรอตรวจ / บิลล้มเหลว / ข้อความใหม่ / Email มีปัญหา).
+         Failed + email-error cards get urgent accent (red number + pulsing
+         dot) when count > 0; quiet cards (count=0) fade muted.
+         Bills.tsx reads ?status=/?source=/?bill_type= from URL on mount
+         so the dashboard shortcuts land pre-filtered.
+       UI polish standards applied throughout:
+         - Lucide icons only in main UI (emoji reserved for /logs ACTION_META
+           semantic markers)
+         - HSL token colors throughout (bg-destructive/[0.03], text-success,
+           border-border) — never raw colors
+         - Typography hierarchy: text-[10px] meta → text-[11px] hint →
+           text-xs body → text-sm label → text-2xl count
+         - tabular-nums on every count
+         - animate-pulse only on urgent dots
+         - micro-interactions: hover:-translate-y-0.5 on ActionCards +
+           ArrowUpRight that translates on hover
+       Verified end-to-end on prod 109: timeline endpoint returns events,
+       stats endpoint returns email_inbox_errors, all 6 phases visible.
 
 Recent work (session 17 — 2026-04-29):
   ⭐ chat: real-time inbox via SSE + production-grade polish
@@ -2631,7 +2784,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-29 (session 17)*
+*Last updated: 2026-04-30 (session 18)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*
