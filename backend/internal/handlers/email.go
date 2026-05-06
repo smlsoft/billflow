@@ -588,9 +588,16 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		return fmt.Errorf("create shopee_email bill: %w", err)
 	}
 
-	// Save the email HTML body + envelope as a downloadable artifact.
-	h.saveEmailArtifacts(bill.ID, "email_html", "shopee-order.html", "text/html; charset=utf-8",
-		[]byte(bodyText), subject, from, messageID)
+	// Save the email body as artifact. Prefer the rich HTML MIME part (bodyHTML)
+	// so the bill detail viewer renders it as a proper email. Fall back to plain
+	// text when no HTML part exists.
+	if bodyHTML != "" {
+		h.saveEmailArtifacts(bill.ID, "email_html", "shopee-order.html", "text/html; charset=utf-8",
+			[]byte(bodyHTML), subject, from, messageID)
+	} else {
+		h.saveEmailArtifacts(bill.ID, "email_text", "shopee-order.txt", "text/plain; charset=utf-8",
+			[]byte(bodyText), subject, from, messageID)
+	}
 
 	// Insert bill items with candidates
 	for _, iwc := range itemsWithCandidates {

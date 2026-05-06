@@ -21,6 +21,8 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Skeleton } from '@/components/ui/skeleton'
+
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 import client from '@/api/client'
 import { PAGE_TITLE } from '@/lib/labels'
 import type { Mapping, MappingStats } from '@/types'
@@ -331,7 +333,7 @@ export default function Mappings() {
                   <Label htmlFor="m-raw">ชื่อดิบ</Label>
                   <Input
                     id="m-raw"
-                    placeholder="ชื่อสินค้าจาก LINE / Email"
+                    placeholder={PHASE >= 2 ? "ชื่อสินค้าจาก LINE / Email" : "ชื่อสินค้าจาก Email"}
                     value={newMapping.raw_name}
                     onChange={(e) =>
                       setNewMapping((p) => ({ ...p, raw_name: e.target.value }))

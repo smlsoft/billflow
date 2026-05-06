@@ -59,6 +59,16 @@ interface LogsResponse {
 }
 
 const ALL = '__all__'
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
+// Action keys that belong to Phase 2+ (LINE chat, chat tags, etc.)
+const PHASE2_ACTIONS = new Set([
+  'line_admin_reply', 'line_admin_send_media', 'line_conversation_status',
+  'line_message_received', 'line_oa_created', 'line_oa_updated', 'line_oa_deleted',
+  'chat_phone_saved', 'chat_note_created', 'chat_note_updated', 'chat_note_deleted',
+  'chat_tag_created', 'chat_tag_updated', 'chat_tag_deleted', 'chat_conv_tags_set',
+  'chat_quick_reply_created', 'chat_quick_reply_updated', 'chat_quick_reply_deleted',
+])
 
 
 function relTime(iso: string): string {
@@ -502,12 +512,12 @@ export default function Logs() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>ทั้งหมด</SelectItem>
-                  <SelectItem value="line">LINE</SelectItem>
+                  {PHASE >= 2 && <SelectItem value="line">LINE</SelectItem>}
                   <SelectItem value="email">Email</SelectItem>
                   <SelectItem value="shopee_email">Shopee Email</SelectItem>
                   <SelectItem value="shopee_shipped">Shopee Shipped</SelectItem>
-                  <SelectItem value="shopee_excel">Shopee Excel</SelectItem>
-                  <SelectItem value="lazada">Lazada</SelectItem>
+                  {PHASE >= 2 && <SelectItem value="shopee_excel">Shopee Excel</SelectItem>}
+                  {PHASE >= 2 && <SelectItem value="lazada">Lazada</SelectItem>}
                   <SelectItem value="sml">SML</SelectItem>
                   <SelectItem value="catalog">Catalog</SelectItem>
                   <SelectItem value="channel_defaults">Settings</SelectItem>
@@ -523,11 +533,13 @@ export default function Logs() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>ทั้งหมด</SelectItem>
-                  {Object.entries(ACTION_META).map(([key, meta]) => (
-                    <SelectItem key={key} value={key}>
-                      {meta.emoji} {meta.label}
-                    </SelectItem>
-                  ))}
+                  {Object.entries(ACTION_META)
+                    .filter(([key]) => PHASE >= 2 || !PHASE2_ACTIONS.has(key))
+                    .map(([key, meta]) => (
+                      <SelectItem key={key} value={key}>
+                        {meta.emoji} {meta.label}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>

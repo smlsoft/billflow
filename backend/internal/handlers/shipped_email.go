@@ -190,10 +190,16 @@ func (h *EmailHandler) processOneShippedOrder(
 	}
 
 	// Save original email body as artifact on the first order only to avoid
-	// storing N copies of the same email.
+	// storing N copies of the same email. Prefer HTML body (renders nicely in
+	// the bill detail viewer) and fall back to plain text when HTML is absent.
 	if count == 0 {
-		h.saveEmailArtifacts(bill.ID, "email_text", "shopee-shipped.txt", "text/plain; charset=utf-8",
-			[]byte(bodyText), subject, from, messageID)
+		if bodyHTML != "" {
+			h.saveEmailArtifacts(bill.ID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8",
+				[]byte(bodyHTML), subject, from, messageID)
+		} else {
+			h.saveEmailArtifacts(bill.ID, "email_text", "shopee-shipped.txt", "text/plain; charset=utf-8",
+				[]byte(bodyText), subject, from, messageID)
+		}
 	}
 
 	for _, iwc := range itemsWithCandidates {

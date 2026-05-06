@@ -317,6 +317,15 @@ func (h *BillHandler) Retry(c *gin.Context) {
 		return
 	}
 
+	// Persist remark on the bill for all routes (not just purchase).
+	// retryPurchaseOrder also calls UpdateRemark with its own value — that's
+	// fine because req.Remark is the same string both times.
+	if req.Remark != "" {
+		if err := h.billRepo.UpdateRemark(id, req.Remark); err != nil {
+			h.log.Warn("UpdateRemark failed", zap.Error(err))
+		}
+	}
+
 	// Look up channel default once; pass to retry handlers + use to decide
 	// which SML endpoint to dispatch to. The URL override (if admin typed one)
 	// is threaded down to the client via context.

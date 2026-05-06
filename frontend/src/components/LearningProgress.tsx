@@ -50,15 +50,15 @@ export default function LearningProgress({ stats }: { stats: MappingStats }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <ProgressRow
-          label="จับคู่อัตโนมัติ"
-          value={stats.auto_confirmed}
-          total={stats.total}
+          label="AI เรียนรู้แล้ว"
+          value={stats.auto_confirmed ?? 0}
+          total={stats.total ?? 0}
           variant="success"
         />
         <ProgressRow
-          label="รอตรวจสอบ"
-          value={stats.needs_review}
-          total={stats.total}
+          label="Admin map เอง"
+          value={stats.needs_review ?? 0}
+          total={stats.total ?? 0}
           variant="warning"
         />
       </CardContent>

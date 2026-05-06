@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
 import {
   AlertOctagon,
+  AlertTriangle,
   ArrowUpRight,
-  Inbox,
+  Clock,
   Mail,
   MessageSquare,
   type LucideIcon,
@@ -43,19 +44,28 @@ interface Action {
 //   urgent  — red accent + animate-pulse on the dot when count > 0
 //             (used for failures: bill failed, email inbox down)
 export function ActionCards({ stats, loading }: Props) {
-  const awaitingReview = (stats?.pending ?? 0) + (stats?.needs_review ?? 0)
+  const pending = stats?.pending ?? 0
+  const needsReview = stats?.needs_review ?? 0
   const failed = stats?.sml_failed ?? 0
   const unread = stats?.unread_messages ?? 0
   const emailErrors = stats?.email_inbox_errors ?? 0
 
   const actions: Action[] = [
     {
-      label: BILL_STATUS_LABEL.needs_review,
-      count: awaitingReview,
-      hint: 'รอดำเนินการ + รอตรวจสอบ',
-      icon: Inbox,
+      label: BILL_STATUS_LABEL.pending,
+      count: pending,
+      hint: 'รอส่ง SML',
+      icon: Clock,
       to: '/bills?status=pending',
       tone: 'neutral',
+    },
+    {
+      label: BILL_STATUS_LABEL.needs_review,
+      count: needsReview,
+      hint: 'AI map สินค้าไม่ได้ — ต้องแก้ก่อนส่ง SML',
+      icon: AlertTriangle,
+      to: '/bills?status=needs_review',
+      tone: needsReview > 0 ? 'urgent' : 'neutral',
     },
     {
       label: BILL_STATUS_LABEL.failed,

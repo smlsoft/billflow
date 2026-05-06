@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { toast } from 'sonner'
 import { getBill, retryBill } from '@/hooks/useBills'
 import type { Bill } from '@/types'
 
@@ -36,8 +37,14 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
         await retryBill(id, body)
         const updated = await getBill(id)
         setBill(updated)
+        toast.success('ส่ง SML สำเร็จ', {
+          description: updated?.sml_doc_no ? `Doc: ${updated.sml_doc_no}` : undefined,
+        })
       } catch {
         setRetryError('Retry ล้มเหลว — กรุณาลองใหม่อีกครั้ง')
+        toast.error('ส่ง SML ไม่สำเร็จ', {
+          description: 'ดูรายละเอียดในการ์ด Error ด้านบน',
+        })
       } finally {
         setRetrying(false)
       }

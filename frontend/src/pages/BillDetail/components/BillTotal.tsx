@@ -120,11 +120,11 @@ export function BillTotal({
                 </Tooltip>
               </TooltipProvider>
 
-              {/* Route preview — small chip below button so admin sees
-                  exactly which SML endpoint will be hit + the doc_no
-                  pattern. Catches misconfigured channels before send. */}
-              {enabled && expectedRoute && (
-                <div className="text-right text-[10px] tabular-nums text-muted-foreground">
+              {/* Route preview — always visible when send area is shown so
+                  admin can see the routing even before validation passes.
+                  Dimmed when button is disabled to signal "preview only". */}
+              {canShowSendButton && expectedRoute && (
+                <div className={cn("text-right text-[10px] tabular-nums text-muted-foreground", !enabled && "opacity-50")}>
                   ↳{' '}
                   <span className="font-medium text-foreground">
                     {ROUTE_LABEL[expectedRoute] ?? expectedRoute}

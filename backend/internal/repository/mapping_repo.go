@@ -115,6 +115,11 @@ func (r *MappingRepo) Stats() (map[string]interface{}, error) {
 	stats["total"] = total
 	stats["ai_learned"] = aiLearned
 	stats["manual"] = manual
+	// auto_confirmed = ai_learned mappings (system learned from feedback)
+	// needs_review = manual mappings (admin had to map manually)
+	// Both share the same denominator (total mappings) for consistent %-bars
+	stats["auto_confirmed"] = aiLearned
+	stats["needs_review"] = manual
 
 	var feedbackCount int
 	_ = r.db.QueryRow(`SELECT COUNT(*) FROM mapping_feedback`).Scan(&feedbackCount)

@@ -23,6 +23,7 @@ import {
 
 const PER_PAGE = 20
 const ALL = '__all__'
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
 // Filter options pull labels from lib/labels.ts so Bills, Dashboard, and
 // Logs all show identical status names — no more "ล้มเหลว" vs "ส่ง SML
@@ -35,10 +36,18 @@ const STATUS_OPTIONS = [
   })),
 ]
 
-const SOURCE_OPTIONS = [
-  { value: ALL, label: 'ทุกช่องทาง' },
-  ...Object.entries(BILL_SOURCE_LABEL).map(([value, label]) => ({ value, label })),
-]
+const SOURCE_OPTIONS =
+  PHASE < 2
+    ? [
+        { value: ALL, label: 'ทุกช่องทาง' },
+        { value: 'email', label: BILL_SOURCE_LABEL.email },
+        { value: 'shopee_email', label: BILL_SOURCE_LABEL.shopee_email },
+        { value: 'shopee_shipped', label: BILL_SOURCE_LABEL.shopee_shipped },
+      ]
+    : [
+        { value: ALL, label: 'ทุกช่องทาง' },
+        ...Object.entries(BILL_SOURCE_LABEL).map(([value, label]) => ({ value, label })),
+      ]
 
 const BILL_TYPE_OPTIONS = [
   { value: ALL, label: 'ทุกประเภท' },

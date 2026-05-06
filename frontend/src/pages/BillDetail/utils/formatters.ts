@@ -53,6 +53,11 @@ export const KIND_META: Record<
     label: 'Email HTML body',
     desc: 'เนื้ออีเมลฉบับเต็ม (HTML) เปิดในเบราว์เซอร์แล้วเห็นรูปสินค้า/ราคา/หมายเลขคำสั่งซื้อแบบที่ต้นทางส่งมา',
   },
+  email_text: {
+    icon: '📧',
+    label: 'Email body',
+    desc: 'เนื้ออีเมลต้นฉบับ',
+  },
   email_envelope: {
     icon: '📨',
     label: 'Email envelope',

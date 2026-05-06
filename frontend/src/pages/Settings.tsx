@@ -18,6 +18,8 @@ import client from '@/api/client'
 import { cn } from '@/lib/utils'
 import { PAGE_TITLE } from '@/lib/labels'
 
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
 // Live multi-account aware status — returned by GET /api/settings/status.
 // LINE/IMAP fields are optional because they only exist when those repos
 // are wired (always true in production).
@@ -163,8 +165,8 @@ export default function Settings() {
           <CardTitle className="text-sm font-semibold">การเชื่อมต่อภายนอก</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 px-2 pb-3 pt-0">
-          {/* LINE OA — multi-account aware. Click-through to /settings/line-oa */}
-          {lineOA ? (
+          {/* LINE OA — hidden in Phase 1 (VITE_PHASE < 2) */}
+          {PHASE >= 2 && (lineOA ? (
             <SubsystemRow
               icon={MessageSquare}
               label="LINE OA"
@@ -177,7 +179,7 @@ export default function Settings() {
             <SubsystemRowSkeleton icon={MessageSquare} label="LINE OA" />
           ) : (
             <SubsystemRow icon={MessageSquare} label="LINE OA" status="—" tone="unknown" />
-          )}
+          ))}
 
           {/* Email inboxes — multi-account aware. Failing count surfaces here. */}
           {imap ? (
@@ -240,7 +242,7 @@ export default function Settings() {
       {/* Pre-deploy notice — let admin know /settings shows live state, not config */}
       <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
         <CheckCircle2 className="h-3 w-3" />
-        BillFlow v0.2.0 · ดู status สด · ตั้งค่าจริงในแต่ละหน้าย่อย (LINE OA / Email / Channels / Catalog)
+        BillFlow v0.2.0 · ดู status สด · ตั้งค่าจริงในแต่ละหน้าย่อย (Email / Channels / Catalog)
       </p>
     </div>
   )
