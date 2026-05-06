@@ -41,7 +41,10 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_PHASE: ${VITE_PHASE:-99}
     container_name: billflow-frontend
     ports:
       - "3010:80"

@@ -46,6 +46,11 @@ import { useUIStore } from '@/lib/ui-store'
 import { cn } from '@/lib/utils'
 import client from '@/api/client'
 
+// VITE_PHASE controls which nav items are visible.
+//   1  = Phase 1 only (Email → PO) — hides LINE chat, Shopee/Lazada import
+//   99 = all features (default when unset)
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
 interface NavItem {
   to: string
   label: string
@@ -60,6 +65,9 @@ interface NavItem {
   // tooltip — helps when admins ask dev "เปิด Quick Replies ที่ไหน" since the
   // visible label is now Thai-first.
   hint?: string
+  // minPhase — hide this item when VITE_PHASE < minPhase.
+  // Omit (or set to 1) for items that belong to Phase 1.
+  minPhase?: number
 }
 
 interface NavGroup {
@@ -74,6 +82,9 @@ interface NavGroup {
 // Labels lean Thai-first; the `hint` field provides the English/setup name
 // in tooltips so a dev or new admin can connect Thai labels back to the
 // underlying feature.
+//
+// minPhase: items without minPhase (or minPhase=1) always show.
+//           items with minPhase=2 are hidden when VITE_PHASE=1.
 const NAV_GROUPS: NavGroup[] = [
   {
     label: 'ภาพรวม',
@@ -83,20 +94,20 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'บิลขาย / ซื้อ',
+    label: 'บิลซื้อ',
     items: [
       { to: '/bills', label: 'บิลทั้งหมด', icon: FileText, hasBadge: 'bills', hint: 'รวมทุก channel' },
-      { to: '/import', label: 'นำเข้า Lazada', icon: Upload, end: true, hint: 'Excel จาก Lazada' },
-      { to: '/import/shopee', label: 'นำเข้า Shopee', icon: ShoppingBag, hint: 'Excel จาก Shopee' },
+      { to: '/import', label: 'นำเข้า Lazada', icon: Upload, end: true, hint: 'Excel จาก Lazada', minPhase: 2 },
+      { to: '/import/shopee', label: 'นำเข้า Shopee', icon: ShoppingBag, hint: 'Excel จาก Shopee', minPhase: 2 },
     ],
   },
   {
     label: 'แชทลูกค้า',
     items: [
-      { to: '/messages', label: 'ข้อความลูกค้า', icon: MessageSquare, hasBadge: 'messages', hint: 'Inbox รวมทุก OA' },
-      { to: '/settings/line-oa', label: 'บัญชี LINE OA', icon: MessageSquare, end: true, hint: 'LINE OA Accounts' },
-      { to: '/settings/quick-replies', label: 'ข้อความสำเร็จรูป', icon: MessageSquareQuote, end: true, hint: 'Quick Replies' },
-      { to: '/settings/chat-tags', label: 'ป้ายลูกค้า', icon: Tag, end: true, hint: 'Chat Tags' },
+      { to: '/messages', label: 'ข้อความลูกค้า', icon: MessageSquare, hasBadge: 'messages', hint: 'Inbox รวมทุก OA', minPhase: 2 },
+      { to: '/settings/line-oa', label: 'บัญชี LINE OA', icon: MessageSquare, end: true, hint: 'LINE OA Accounts', minPhase: 2 },
+      { to: '/settings/quick-replies', label: 'ข้อความสำเร็จรูป', icon: MessageSquareQuote, end: true, hint: 'Quick Replies', minPhase: 2 },
+      { to: '/settings/chat-tags', label: 'ป้ายลูกค้า', icon: Tag, end: true, hint: 'Chat Tags', minPhase: 2 },
     ],
   },
   {
@@ -104,7 +115,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
       { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
-      { to: '/settings/channels', label: 'ลูกค้า / ผู้ขาย default', icon: Building2, hint: 'Channel Defaults (per-channel party_code)' },
+      { to: '/settings/channels', label: 'ผู้ขาย default', icon: Building2, hint: 'Channel Defaults (per-channel party_code)' },
     ],
   },
   {
@@ -237,7 +248,10 @@ export default function Sidebar() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto p-2">
-          {NAV_GROUPS.map((group, gi) => (
+          {NAV_GROUPS
+            .map((group) => ({ ...group, items: group.items.filter((i) => !i.minPhase || PHASE >= i.minPhase) }))
+            .filter((group) => group.items.length > 0)
+            .map((group, gi) => (
             <div key={group.label} className={cn('flex flex-col gap-0.5', gi > 0 && 'mt-4')}>
               {!collapsed && (
                 <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">

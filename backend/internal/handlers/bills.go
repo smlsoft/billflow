@@ -276,6 +276,14 @@ func (h *BillHandler) Timeline(c *gin.Context) {
 //	line / email / lazada / manual (sale)  → smlClient.CreateSaleReserve  (SML 213 JSON-RPC)
 //	shopee / shopee_email           (sale) → saleOrderClient.CreateSaleOrder (SML 248 saleorder — ใบสั่งขาย)
 //	shopee_shipped              (purchase) → poClient.CreatePurchaseOrder (SML 248 purchaseorder)
+// RetryRequest is the optional POST body for POST /api/bills/:id/retry.
+// For purchase bills: party_code overrides channel_defaults.party_code and
+// remark is stored on the bill + forwarded to SML.
+type RetryRequest struct {
+	PartyCode string `json:"party_code"`
+	Remark    string `json:"remark"`
+}
+
 func (h *BillHandler) Retry(c *gin.Context) {
 	id := c.Param("id")
 	bill, err := h.billRepo.FindByID(id)
@@ -290,6 +298,10 @@ func (h *BillHandler) Retry(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "only failed/pending/needs_review bills can be sent"})
 		return
 	}
+
+	// Parse optional request body (party_code / remark overrides for purchase bills)
+	var req RetryRequest
+	_ = c.ShouldBindJSON(&req)
 
 	// Verify all items mapped — required regardless of route
 	allMapped := true
@@ -314,7 +326,7 @@ func (h *BillHandler) Retry(c *gin.Context) {
 
 	switch kind {
 	case "purchaseorder":
-		h.retryPurchaseOrder(c, bill)
+		h.retryPurchaseOrder(c, bill, req.PartyCode, req.Remark)
 	case "saleinvoice":
 		h.retrySaleInvoice(c, bill)
 	case "saleorder":
@@ -596,7 +608,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 }
 
 // ─── Route 3: SML 248 purchaseorder REST (shopee_shipped) ────────────────────
-func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
+func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, partyCodeOverride, remark string) {
 	id := bill.ID
 	if h.poClient == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "purchaseorder client not configured"})
@@ -632,6 +644,9 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
 	}
 	cfg := h.shopeePurchaseConfig()
 	cfg.CustCode = def.PartyCode
+	if partyCodeOverride != "" {
+		cfg.CustCode = partyCodeOverride
+	}
 	if def.DocFormatCode != "" {
 		cfg.DocFormat = def.DocFormatCode
 	}
@@ -642,8 +657,12 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate doc_no: " + err.Error()})
 		return
 	}
+	// Persist remark before SML call so it's available even on failure
+	if remark != "" {
+		_ = h.billRepo.UpdateRemark(id, remark)
+	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, items, cfg)
+	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, items, cfg, remark)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()

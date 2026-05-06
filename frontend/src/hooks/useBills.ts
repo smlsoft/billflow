@@ -50,6 +50,9 @@ export async function getBill(id: string): Promise<Bill> {
   return res.data
 }
 
-export async function retryBill(id: string): Promise<void> {
-  await client.post(`/api/bills/${id}/retry`)
+export async function retryBill(
+  id: string,
+  body?: { party_code?: string; remark?: string },
+): Promise<void> {
+  await client.post(`/api/bills/${id}/retry`, body ?? {})
 }

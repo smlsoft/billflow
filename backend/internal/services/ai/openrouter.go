@@ -38,6 +38,16 @@ type ExtractedBill struct {
 	Confidence    float64         `json:"confidence"`
 }
 
+// ExtractedOrder is one Shopee order from a multi-order payment-confirmation email.
+type ExtractedOrder struct {
+	OrderID     string          `json:"order_id"`
+	SellerName  string          `json:"seller_name"`
+	Items       []ExtractedItem `json:"items"`
+	TotalAmount *float64        `json:"total_amount"`
+	DocDate     string          `json:"doc_date"`
+	Confidence  float64         `json:"confidence"`
+}
+
 type ExtractedItem struct {
 	RawName string   `json:"raw_name"`
 	Qty     float64  `json:"qty"`
@@ -127,6 +137,44 @@ func (c *Client) ExtractPDF(base64Data string) (*ExtractedBill, error) {
 			URL: "data:application/pdf;base64," + base64Data,
 		}},
 	})
+}
+
+// ExtractOrders parses a Shopee payment-confirmation email body and returns
+// one ExtractedOrder per order_id found. Falls back to a single-order slice
+// wrapping ExtractText output if AI returns non-array JSON.
+func (c *Client) ExtractOrders(text string) ([]ExtractedOrder, error) {
+	reqBody := openRouterRequest{
+		Model: c.model,
+		Messages: []message{
+			{Role: "user", Content: []contentPart{
+				{Type: "text", Text: ExtractShopeeOrdersPrompt},
+				{Type: "text", Text: text},
+			}},
+		},
+	}
+
+	body, err := c.doRequest(reqBody)
+	if err != nil {
+		// Retry with fallback model
+		reqBody.Model = c.fallbackModel
+		body, err = c.doRequest(reqBody)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var orders []ExtractedOrder
+	if jsonErr := json.Unmarshal([]byte(body), &orders); jsonErr == nil && len(orders) > 0 {
+		return orders, nil
+	}
+
+	// AI might have returned a single object — wrap it
+	var single ExtractedOrder
+	if jsonErr := json.Unmarshal([]byte(body), &single); jsonErr == nil && single.OrderID != "" {
+		return []ExtractedOrder{single}, nil
+	}
+
+	return nil, fmt.Errorf("ExtractOrders: could not parse AI response as order array: %s", body)
 }
 
 // TranscribeAudio calls OpenRouter Whisper endpoint and returns transcribed text

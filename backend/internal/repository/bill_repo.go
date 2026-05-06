@@ -87,12 +87,12 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	err := r.db.QueryRow(
 		`SELECT id, bill_type, source, status, raw_data, sml_doc_no,
 		        sml_payload, sml_response, ai_confidence, anomalies,
-		        error_msg, created_by, created_at, sent_at
+		        error_msg, created_by, created_at, sent_at, remark
 		 FROM bills WHERE id = $1`, id,
 	).Scan(
 		&b.ID, &b.BillType, &b.Source, &b.Status, &b.RawData,
 		&b.SMLDocNo, &smlPayloadRaw, &smlResponseRaw, &b.AIConfidence,
-		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt,
+		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt, &b.Remark,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -372,6 +372,11 @@ func (r *BillRepo) UpdateAnomalies(id string, anomalies []models.Anomaly) error 
 // UpdateSMLPayload saves the payload that was sent to SML
 func (r *BillRepo) UpdateSMLPayload(id string, payload json.RawMessage) error {
 	_, err := r.db.Exec(`UPDATE bills SET sml_payload = $1 WHERE id = $2`, payload, id)
+	return err
+}
+
+func (r *BillRepo) UpdateRemark(id, remark string) error {
+	_, err := r.db.Exec(`UPDATE bills SET remark = $1 WHERE id = $2`, remark, id)
 	return err
 }
 

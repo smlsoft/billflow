@@ -42,3 +42,37 @@ const InsightPrompt = `
 
 // SalesSystemPrompt was removed in session 13 along with the AI chatbot.
 // LINE conversations are now human-to-human via the /messages inbox.
+
+// ExtractShopeeOrdersPrompt extracts multiple orders from a single Shopee
+// payment-confirmation email. Each Shopee seller = one order block. Returns
+// a JSON array — one element per order_id found in the email body.
+const ExtractShopeeOrdersPrompt = `
+คุณเป็น AI ที่ช่วย extract ข้อมูลจาก email ยืนยันการชำระเงิน Shopee
+ตอบเป็น JSON array เท่านั้น ห้ามมีข้อความอื่น ห้ามมี markdown
+
+output format:
+[
+  {
+    "order_id": "#260504XXXXXX",
+    "seller_name": "ชื่อร้าน",
+    "items": [
+      {
+        "raw_name": string,
+        "qty": number,
+        "unit": string,
+        "price": number | null
+      }
+    ],
+    "total_amount": number | null,
+    "doc_date": "YYYY-MM-DD",
+    "confidence": number
+  }
+]
+
+กฎสำคัญ:
+- แต่ละ order_id = 1 คำสั่งซื้อแยกกัน ดูจาก "หมายเลขคำสั่งซื้อ #XXXXX" หรือ block ของแต่ละร้าน
+- ถ้าหา order_id ไม่พบให้ใส่ "#unknown"
+- doc_date ดูจากวันที่ในข้อความ รูปแบบ YYYY-MM-DD ถ้าไม่พบใส่ ""
+- price คือราคาต่อหน่วย ถ้าไม่ชัดให้ใส่ null
+- ถ้าข้อมูลไม่ชัดเจนให้ confidence ต่ำ (< 0.5)
+`

@@ -90,6 +90,12 @@ export function BillHeader({ bill }: Props) {
                 value={`${Math.round(bill.ai_confidence * 100)}%`}
               />
             )}
+            {bill.remark && (
+              <InfoRow
+                label="หมายเหตุ"
+                value={bill.remark}
+              />
+            )}
           </div>
 
           {/* Failure details moved to BillFailureCard (rendered alongside this

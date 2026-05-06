@@ -8,6 +8,7 @@ export interface UseBillDataReturn {
   retrying: boolean
   retryError: string | null
   handleRetry: () => Promise<void>
+  handleRetryWithOverride: (partyCode: string, remark: string) => Promise<void>
   setBill: React.Dispatch<React.SetStateAction<Bill | null>>
 }
 
@@ -26,20 +27,31 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
       .finally(() => setLoading(false))
   }, [id])
 
-  const handleRetry = useCallback(async () => {
-    if (!id) return
-    setRetrying(true)
-    setRetryError(null)
-    try {
-      await retryBill(id)
-      const updated = await getBill(id)
-      setBill(updated)
-    } catch {
-      setRetryError('Retry ล้มเหลว — กรุณาลองใหม่อีกครั้ง')
-    } finally {
-      setRetrying(false)
-    }
-  }, [id])
+  const doRetry = useCallback(
+    async (body?: { party_code?: string; remark?: string }) => {
+      if (!id) return
+      setRetrying(true)
+      setRetryError(null)
+      try {
+        await retryBill(id, body)
+        const updated = await getBill(id)
+        setBill(updated)
+      } catch {
+        setRetryError('Retry ล้มเหลว — กรุณาลองใหม่อีกครั้ง')
+      } finally {
+        setRetrying(false)
+      }
+    },
+    [id],
+  )
 
-  return { bill, loading, retrying, retryError, handleRetry, setBill }
+  const handleRetry = useCallback(() => doRetry(), [doRetry])
+
+  const handleRetryWithOverride = useCallback(
+    (partyCode: string, remark: string) =>
+      doRetry({ party_code: partyCode || undefined, remark: remark || undefined }),
+    [doRetry],
+  )
+
+  return { bill, loading, retrying, retryError, handleRetry, handleRetryWithOverride, setBill }
 }

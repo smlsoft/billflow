@@ -22,6 +22,7 @@ type Bill struct {
 	CreatedAt    time.Time       `json:"created_at"`
 	SentAt       *time.Time      `json:"sent_at,omitempty"`
 	TotalAmount  *float64        `json:"total_amount,omitempty"`
+	Remark       string          `json:"remark"`
 	Items        []BillItem      `json:"items,omitempty"`
 }
 

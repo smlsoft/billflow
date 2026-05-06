@@ -15,12 +15,13 @@ import { BillTimeline } from './components/BillTimeline'
 import { RawDataCard } from './components/RawDataCard'
 import { ArtifactList } from './components/ArtifactList'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
+import { SendPurchaseDialog } from './components/SendPurchaseDialog'
 import { validateForSML } from './utils/validation'
 
 export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { bill, loading, retrying, retryError, handleRetry, setBill } =
+  const { bill, loading, retrying, retryError, handleRetry, handleRetryWithOverride, setBill } =
     useBillData(id)
 
   // ⚠ All hooks must be declared BEFORE any early return. React tracks hooks
@@ -33,6 +34,10 @@ export default function BillDetail() {
   // the matching BillItemRow scrolls into view + flashes (1.5s). To re-fire
   // on second click of the same row we briefly null the state in handleJump.
   const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
+
+  // sendDialogOpen — purchase bills show a dialog (supplier picker + remark)
+  // before the actual retry call, so admin can override party_code and add a note.
+  const [sendDialogOpen, setSendDialogOpen] = useState(false)
 
   // Frontend-side validation against backend retry rules. Memo on `bill`
   // so BillTotal/BillItemRow don't recompute on unrelated parent renders.
@@ -48,6 +53,20 @@ export default function BillDetail() {
     // Defer to next tick so the row's useEffect sees null → id transition
     // even if the previous highlight was the same id.
     setTimeout(() => setHighlightItemId(id), 0)
+  }
+
+  // For purchase bills, open the supplier+remark dialog instead of retrying directly.
+  const handleSendClick = () => {
+    if (bill?.bill_type === 'purchase') {
+      setSendDialogOpen(true)
+    } else {
+      handleRetry()
+    }
+  }
+
+  const handlePurchaseConfirm = async (partyCode: string, remark: string) => {
+    setSendDialogOpen(false)
+    await handleRetryWithOverride(partyCode, remark)
   }
 
   if (loading) {
@@ -128,13 +147,21 @@ export default function BillDetail() {
         bill={bill}
         total={total}
         retrying={retrying}
-        onRetry={handleRetry}
+        onRetry={handleSendClick}
         validation={validation}
         onJumpToItem={handleJumpToItem}
         expectedRoute={bill.preview?.route}
         expectedEndpoint={bill.preview?.endpoint}
         expectedDocFormat={bill.preview?.doc_format}
       />
+
+      {bill.bill_type === 'purchase' && (
+        <SendPurchaseDialog
+          open={sendDialogOpen}
+          onConfirm={handlePurchaseConfirm}
+          onCancel={() => setSendDialogOpen(false)}
+        />
+      )}
 
       <BillItemsTable
         bill={bill}

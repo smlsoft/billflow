@@ -59,6 +59,8 @@ export function RawDataCard({ data, items }: Props) {
   const msgID = get('email_message_id')
   const orderID = get('shopee_order_id') || get('order_id')
   const status = get('status')
+  const bodyHTML = get('body_html')
+  const bodyText = get('body_text')
 
   return (
     <Card>
@@ -87,6 +89,28 @@ export function RawDataCard({ data, items }: Props) {
           <FieldRow icon="🏷️" label="สถานะ Shopee" value={status} />
           <FieldRow icon="🆔" label="Message ID" value={msgID} mono />
         </div>
+
+        {(bodyHTML || bodyText) && (
+          <details className="mt-4 border-t border-border pt-4">
+            <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
+              📄 เนื้อหาอีเมล (คลิกเพื่อดู)
+            </summary>
+            <div className="mt-2 overflow-hidden rounded-md border border-border">
+              {bodyHTML ? (
+                <iframe
+                  sandbox=""
+                  srcDoc={bodyHTML}
+                  className="h-[500px] w-full"
+                  title="email body"
+                />
+              ) : (
+                <pre className="max-h-[400px] overflow-auto p-3 text-xs whitespace-pre-wrap">
+                  {bodyText}
+                </pre>
+              )}
+            </div>
+          </details>
+        )}
 
         {/* Items recap */}
         {items && items.length > 0 && (

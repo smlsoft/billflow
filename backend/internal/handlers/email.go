@@ -436,7 +436,7 @@ func (h *EmailHandler) adminNotify(msg string) {
 //  3. Creates a bill with source='shopee_email'
 //     - status='needs_review' if any item has low confidence
 //     - status='pending' if all items are high confidence (and sends to SML)
-func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, messageID string) error {
+func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML, messageID string) error {
 	traceID := fmt.Sprintf("shopee-email-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 

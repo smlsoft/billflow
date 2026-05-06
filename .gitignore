@@ -31,3 +31,4 @@ backend/server
 
 # Ad-hoc local scripts / scratch notes
 delete_bills.md
+deploy.sh

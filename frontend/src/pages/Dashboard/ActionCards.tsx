@@ -12,6 +12,10 @@ import { cn } from '@/lib/utils'
 import { BILL_STATUS_LABEL } from '@/lib/labels'
 import type { DashboardStats } from '@/types'
 
+// VITE_PHASE mirrors the same constant in Sidebar.tsx.
+// 1 = Phase 1 only, 99 = all features (default).
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
 interface Props {
   stats: DashboardStats | null
   loading: boolean
@@ -25,6 +29,8 @@ interface Action {
   to: string
   // tone — drives the accent on the count + ring on hover
   tone: 'neutral' | 'urgent'
+  // minPhase — hide this card when VITE_PHASE < minPhase
+  minPhase?: number
 }
 
 // ActionCards is the "ต้อง action" row at the top of the Dashboard.
@@ -66,6 +72,7 @@ export function ActionCards({ stats, loading }: Props) {
       icon: MessageSquare,
       to: '/messages',
       tone: 'neutral',
+      minPhase: 2,
     },
     {
       label: 'Email มีปัญหา',
@@ -77,9 +84,14 @@ export function ActionCards({ stats, loading }: Props) {
     },
   ]
 
+  const visibleActions = actions.filter((a) => !a.minPhase || PHASE >= a.minPhase)
+
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      {actions.map((a) => (
+    <div className={cn(
+      'grid gap-3',
+      visibleActions.length === 3 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2 sm:grid-cols-4',
+    )}>
+      {visibleActions.map((a) => (
         <ActionCard key={a.label} {...a} loading={loading} />
       ))}
     </div>

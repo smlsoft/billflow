@@ -107,6 +107,7 @@ type PurchaseOrderPayload struct {
 	TransferAmount float64               `json:"tranfer_amount"` // typo intentional
 	Details        []PurchaseOrderDetail `json:"details"`
 	PayDetails     []interface{}         `json:"paydetails"`
+	Remark         string                `json:"remark,omitempty"`
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────
@@ -247,6 +248,7 @@ func BuildPurchaseOrderPayload(
 	docDate string,
 	items []POItem,
 	cfg PurchaseOrderConfig,
+	remark string,
 ) PurchaseOrderPayload {
 	var details []PurchaseOrderDetail
 	var totalValue, totalVAT, totalExc float64
@@ -334,5 +336,6 @@ func BuildPurchaseOrderPayload(
 		TransferAmount: 0,
 		Details:        details,
 		PayDetails:     []interface{}{},
+		Remark:         remark,
 	}
 }

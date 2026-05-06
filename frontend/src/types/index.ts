@@ -84,6 +84,7 @@ export interface Bill {
   total_amount?: number | null
   // Only present in single-bill GET (not in list response).
   preview?: BillRoutePreview
+  remark?: string
 }
 
 export interface BillListResponse {

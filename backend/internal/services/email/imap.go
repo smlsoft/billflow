@@ -21,7 +21,9 @@ import (
 type AttachmentProcessor func(data []byte, mimeType, filename, messageID, subject, fromAddr string) error
 
 // ShopeeBodyProcessor is called when an email from a Shopee domain is detected.
-type ShopeeBodyProcessor func(subject, from, bodyText, messageID string) error
+// bodyText is the plain-text part (sent to AI); bodyHTML is the original HTML
+// (stored in raw_data for display in BillDetail).
+type ShopeeBodyProcessor func(subject, from, bodyText, bodyHTML, messageID string) error
 
 // PollConfig holds everything one IMAP poll cycle needs.
 // Re-built per cycle from the account's current DB state, so admin edits
@@ -281,9 +283,12 @@ func dispatch(
 			)
 			return false
 		}
-		bodyText := extractBodyText(bodyBytes)
+		plainText, bodyHTML := extractBodyParts(bodyBytes)
+		if plainText == "" {
+			plainText = bodyHTML
+		}
 		if isShippedSubject(envelope.Subject) && p.ShopeeShipped != nil {
-			if err := p.ShopeeShipped(envelope.Subject, fromAddr, bodyText, messageID); err != nil {
+			if err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID); err != nil {
 				logger.Warn("imap_shopee_shipped_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
 				return false
@@ -291,7 +296,7 @@ func dispatch(
 			return true
 		}
 		if p.ShopeeOrder != nil {
-			if err := p.ShopeeOrder(envelope.Subject, fromAddr, bodyText, messageID); err != nil {
+			if err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID); err != nil {
 				logger.Warn("imap_shopee_order_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
 				return false
@@ -450,15 +455,16 @@ func isSupportedAttachment(mimeType, filename string) bool {
 	return false
 }
 
-// extractBodyText pulls the best text content from a raw RFC 2822 message.
-// Tries text/html first (richer content), falls back to text/plain.
-func extractBodyText(rawMsg []byte) string {
+// extractBodyParts pulls plain text and HTML from a raw RFC 2822 message.
+// Returns (plainText, htmlBody) separately so callers can send plain to AI
+// and store HTML for display. Gmail truncates text/html for long emails with
+// "[ข้อความตัดทอน]" — plain text part is always complete.
+func extractBodyParts(rawMsg []byte) (plainText, htmlBody string) {
 	mr, err := gomail.CreateReader(bytes.NewReader(rawMsg))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
-	var htmlBody, plainBody string
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
@@ -475,22 +481,28 @@ func extractBodyText(rawMsg []byte) string {
 				continue
 			}
 			switch mimeType {
+			case "text/plain":
+				if plainText == "" {
+					plainText = string(data)
+				}
 			case "text/html":
 				if htmlBody == "" {
 					htmlBody = string(data)
 				}
-			case "text/plain":
-				if plainBody == "" {
-					plainBody = string(data)
-				}
 			}
 		}
 	}
+	return plainText, htmlBody
+}
 
-	if htmlBody != "" {
-		return htmlBody
+// extractBodyText returns the best single text for AI processing:
+// prefers plain text (complete), falls back to HTML if no plain part.
+func extractBodyText(rawMsg []byte) string {
+	plain, html := extractBodyParts(rawMsg)
+	if plain != "" {
+		return plain
 	}
-	return plainBody
+	return html
 }
 
 // imapNewTraceID generates a random 12-char hex trace ID for poll cycles.
