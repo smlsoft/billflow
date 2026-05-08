@@ -106,7 +106,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'ภาพรวม',
     items: [
-      { to: '/setup', label: 'เริ่มต้นใช้งาน', icon: ClipboardCheck, hint: 'Setup Center' },
+      { to: '/setup', label: 'เริ่มต้นใช้งาน', icon: ClipboardCheck, hint: 'ตรวจความพร้อมร้าน' },
       { to: '/dashboard', label: 'ภาพรวม', icon: LayoutDashboard, hint: 'งานวันนี้' },
       { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText, hint: 'Activity Log' },
     ],
@@ -152,7 +152,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
       { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
-      { to: '/settings/ai-usage', label: 'AI Control Center', icon: Bot, hint: 'Token / Cost / Model' },
+      { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot, hint: 'ค่าใช้จ่าย / รุ่น AI' },
       { to: '/settings/instance', label: 'การเชื่อมต่อระบบ', icon: Settings2, hint: 'SML / OpenRouter / ร้านนี้' },
       { to: '/settings', label: 'ตั้งค่าทั่วไป', icon: Settings, end: true, hint: 'General Settings', minPhase: 2 },
     ],

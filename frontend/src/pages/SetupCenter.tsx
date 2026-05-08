@@ -217,7 +217,7 @@ export default function SetupCenter() {
     <div className="space-y-5">
       <PageHeader
         title="เริ่มต้นใช้งาน"
-        description="ศูนย์ตรวจความพร้อมร้าน, UAT และข้อมูลทดสอบก่อนส่งให้ลูกค้าใช้งาน"
+        description="ตรวจความพร้อมร้านและจัดการข้อมูลทดสอบก่อนเริ่มใช้งานจริง"
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={load} disabled={loading}>
@@ -226,7 +226,7 @@ export default function SetupCenter() {
             </Button>
             <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
               <RotateCcw className="h-4 w-4" />
-              Reset UAT
+              ล้างข้อมูลทดสอบ
             </Button>
           </div>
         }
@@ -255,7 +255,7 @@ export default function SetupCenter() {
                 <div className="mt-2 flex flex-wrap gap-1">
                   {(status.pending_restart_settings ?? []).slice(0, 4).map((key) => (
                     <Badge key={key} variant="outline" className="h-5 px-1.5 text-[10px] text-warning">
-                      รอ restart: {key}
+                      รอเริ่มใช้ค่าใหม่: {key}
                     </Badge>
                   ))}
                 </div>
@@ -277,13 +277,13 @@ export default function SetupCenter() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Instance นี้</CardTitle>
+            <CardTitle className="text-sm font-semibold">ร้านนี้</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-xs">
             <InfoRow label="ร้าน" value={status?.system?.instance_name ?? 'BillFlow'} />
             <InfoRow label="รหัสร้าน" value={status?.system?.instance_slug ?? 'default'} />
-            <InfoRow label="SML DB" value={status?.system?.sml_database ?? '-'} />
-            <InfoRow label="Model" value={status?.system?.openrouter_model ?? '-'} />
+            <InfoRow label="ฐานข้อมูล SML" value={status?.system?.sml_database ?? '-'} />
+            <InfoRow label="AI ที่ใช้งาน" value={status?.system?.openrouter_model ?? '-'} />
           </CardContent>
         </Card>
       </div>
@@ -350,7 +350,7 @@ export default function SetupCenter() {
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-sm font-semibold">
                 <History className="h-4 w-4" />
-                UAT Snapshot
+                สรุปข้อมูลทดสอบ
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-xs">
@@ -360,10 +360,10 @@ export default function SetupCenter() {
                 <StatTile label="ขายสินค้าฯ" value={n(docs?.saleinvoice)} />
               </div>
               <Separator />
-              <InfoRow label="Shopee import runs" value={n(imports?.shopee_runs)} />
-              <InfoRow label="Import running / failed" value={`${n(imports?.shopee_running)} / ${n(imports?.shopee_failed)}`} />
-              <InfoRow label="Email dedup keys" value={n(imports?.email_dedup_keys)} />
-              <InfoRow label="Activity logs" value={n(imports?.audit_logs)} />
+              <InfoRow label="รอบนำเข้า Shopee" value={n(imports?.shopee_runs)} />
+              <InfoRow label="กำลังนำเข้า / ไม่สำเร็จ" value={`${n(imports?.shopee_running)} / ${n(imports?.shopee_failed)}`} />
+              <InfoRow label="อีเมลที่เคยอ่านแล้ว" value={n(imports?.email_dedup_keys)} />
+              <InfoRow label="ประวัติการทำงาน" value={n(imports?.audit_logs)} />
             </CardContent>
           </Card>
 
@@ -371,13 +371,13 @@ export default function SetupCenter() {
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-sm font-semibold">
                 <Upload className="h-4 w-4" />
-                Last Activity
+                การทำงานล่าสุด
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-xs">
-              <InfoRow label="Catalog sync" value={fmtDate(status?.system?.last_catalog_sync)} />
-              <InfoRow label="Email poll" value={fmtDate(status?.system?.last_email_poll)} />
-              <InfoRow label="Shopee import" value={fmtDate(status?.system?.last_import_run)} />
+              <InfoRow label="ดึงสินค้า SML" value={fmtDate(status?.system?.last_catalog_sync)} />
+              <InfoRow label="อ่านอีเมลล่าสุด" value={fmtDate(status?.system?.last_email_poll)} />
+              <InfoRow label="นำเข้า Shopee ล่าสุด" value={fmtDate(status?.system?.last_import_run)} />
             </CardContent>
           </Card>
         </div>
@@ -437,16 +437,16 @@ function ResetDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-destructive">
             <ShieldAlert className="h-5 w-5" />
-            Reset ข้อมูลทดสอบ UAT
+            ล้างข้อมูลทดสอบ
           </DialogTitle>
           <DialogDescription className="leading-relaxed">
-            ล้าง bills, bill items, artifacts, Shopee import runs และ activity logs แต่จะเก็บ settings, catalog, mappings และ AI usage logs ไว้
+            ล้างเอกสาร, รายการสินค้าในเอกสาร, ไฟล์แนบ, รอบนำเข้า Shopee และประวัติการทำงาน แต่จะเก็บการตั้งค่า, สินค้าใน SML, ตารางจับคู่สินค้า และประวัติการใช้ AI ไว้
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="rounded-md border border-destructive/20 bg-destructive/[0.04] p-3 text-xs leading-relaxed text-destructive">
-            ใช้เฉพาะช่วง demo/UAT เท่านั้น ถ้าเคยส่งเข้า SML จริงแล้ว ไม่ควรรีเซ็ตเลขรันเอกสารเพราะอาจทำให้ doc_no ซ้ำกับ SML
+            ใช้เฉพาะช่วงทดสอบหรือเมื่อต้องการเริ่มทดสอบใหม่ ถ้าเคยส่งเข้า SML จริงแล้ว ไม่ควรรีเซ็ตเลขรันเอกสารเพราะอาจทำให้เลขเอกสารซ้ำกับ SML
           </div>
 
           <div className="space-y-3 rounded-md border border-border/70 p-3">
@@ -468,8 +468,8 @@ function ResetDialog({
                 className="mt-0.5"
               />
               <span>
-                <span className="block font-medium">ล้าง email dedup keys</span>
-                <span className="text-muted-foreground">เปิดเมื่ออยากให้ระบบอ่านอีเมลเก่าใน lookback window ซ้ำได้</span>
+                <span className="block font-medium">ล้างประวัติอีเมลที่เคยอ่านแล้ว</span>
+                <span className="text-muted-foreground">เปิดเมื่ออยากให้ระบบอ่านอีเมลเก่าในช่วงเวลาย้อนหลังซ้ำได้</span>
               </span>
             </label>
           </div>

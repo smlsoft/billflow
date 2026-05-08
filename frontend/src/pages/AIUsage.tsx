@@ -227,8 +227,8 @@ export default function AIUsage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="AI Control Center"
-        description="ดู token, model, feature และค่าใช้จ่ายประมาณการของ AI ใน BillFlow"
+        title="การใช้งาน AI"
+        description="ดูจำนวนการใช้งาน รุ่น AI งานที่เรียกใช้ และค่าใช้จ่ายประมาณการของ BillFlow"
         actions={
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />

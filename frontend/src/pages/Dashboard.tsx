@@ -89,7 +89,7 @@ export default function Dashboard() {
               <div>
                 <p className="text-sm font-semibold">ระบบยังตั้งค่าไม่ครบ</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  พร้อมแล้ว {setupStatus.ready_count}/{setupStatus.total_count} ขั้น กรุณาตรวจ Setup Center ก่อนเริ่มรับบิลจริง
+                  พร้อมแล้ว {setupStatus.ready_count}/{setupStatus.total_count} ขั้น กรุณาตรวจหน้าเริ่มต้นใช้งานก่อนเริ่มรับบิลจริง
                 </p>
               </div>
             </div>

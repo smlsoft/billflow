@@ -476,7 +476,7 @@ export default function ChannelDefaults() {
                     setEditing(r)
                     setEditOpen(true)
                   }}
-                  title={PHASE < 2 ? 'แก้ไขปลายทาง SML, doc format, prefix และเลขรัน' : 'แก้ไข endpoint, ลูกค้า, doc format, prefix และเลขรัน'}
+                  title={PHASE < 2 ? 'แก้ไขปลายทาง SML, รหัสเอกสาร, prefix และเลขรัน' : 'แก้ไขปลายทาง API, ลูกค้า, รหัสเอกสาร, prefix และเลขรัน'}
                 >
                   <Pencil className="h-3.5 w-3.5" />
                   {PHASE < 2 ? 'ตั้งค่า' : r.party_code ? 'แก้ไข' : 'ตั้งค่า'}

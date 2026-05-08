@@ -66,7 +66,7 @@ const NAV_ITEMS: Array<{
   { to: '/import', label: 'Lazada Excel', icon: Upload, minPhase: 2 },
   { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow },
   { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database },
-  { to: '/settings/ai-usage', label: 'AI Control Center', icon: Bot },
+  { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot },
   { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText },
   { to: '/settings', label: 'ตั้งค่า', icon: Settings },
 ]

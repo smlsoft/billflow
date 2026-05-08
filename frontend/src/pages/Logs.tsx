@@ -284,7 +284,7 @@ function LogExpandedSummary({
       {log.action === 'sml_sent' && (
         <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
           <Database className="h-3.5 w-3.5" />
-          <span>ดู payload/response เต็มได้ใน raw JSON หรือในหน้ารายละเอียดบิล</span>
+          <span>ดูข้อมูลที่ส่งและผลตอบกลับฉบับเต็มได้ในหน้ารายละเอียดบิล</span>
         </div>
       )}
     </div>

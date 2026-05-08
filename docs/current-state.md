@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-08 19:55 +07
+> Updated: 2026-05-08 20:15 +07
 > Source of truth checked: local code/migrations, `docker compose` on `192.168.2.109`, production `/health`, production PostgreSQL schema, and active Cloudflare Quick Tunnel checks.
 
 ## Latest Handoff For New Chat
@@ -15,17 +15,18 @@
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
 - Instance/port registry อยู่ที่ [deploy-instances.md](deploy-instances.md). ใช้ไฟล์นี้เป็น source of truth เมื่อต้องจำ port/tunnel ของแต่ละร้าน.
-- `/setup` ถูกยกระดับเป็น Demo/UAT Setup Center:
-  - แสดง readiness ของ SML, channel routes, email, catalog, AI
-  - แสดง instance summary, SML DB, model, last catalog sync/email poll/import
+- `/setup` ถูกยกระดับเป็นหน้าเริ่มต้นใช้งาน:
+  - แสดงความพร้อมของ SML, เส้นทางเอกสาร, email, สินค้าใน SML, AI
+  - แสดงชื่อร้าน, ฐานข้อมูล SML, AI ที่ใช้งาน, เวลาดึงสินค้า/อ่านอีเมล/นำเข้าล่าสุด
   - แสดงจำนวนเอกสารค้างแยกซื้อ/ขาย/saleinvoice และจำนวน import/log
-  - มีปุ่ม `Reset UAT` สำหรับ admin ล้าง bills/import runs/logs โดยไม่แตะ settings/catalog/mappings/AI usage
-  - option reset doc counters และ email dedup ต้องเลือกเอง เพราะมีความเสี่ยง doc_no ซ้ำหรืออ่านอีเมลเก่าซ้ำ
-- BillFlow main deploy แล้วและทดสอบ Reset UAT จริงแล้ว:
+  - มีปุ่ม `ล้างข้อมูลทดสอบ` สำหรับ admin ล้าง bills/import runs/logs โดยไม่แตะ settings/catalog/mappings/AI usage
+  - ตัวเลือกรีเซ็ตเลขรันเอกสารและล้างประวัติอีเมลที่เคยอ่านแล้วต้องเลือกเอง เพราะมีความเสี่ยง doc_no ซ้ำหรืออ่านอีเมลเก่าซ้ำ
+- BillFlow main deploy แล้วและทดสอบล้างข้อมูลทดสอบจริงแล้ว:
   - bills/import runs ถูกล้างเป็น 0
   - audit logs เหลือ 1 รายการจาก action reset เอง
   - doc counters ไม่ถูก reset
-  - email dedup keys ไม่ถูกล้าง
+  - ประวัติอีเมลที่เคยอ่านแล้วไม่ถูกล้าง
+- UI wording pass ล่าสุดเปลี่ยนคำเทคนิคในหน้าหลักให้เป็นภาษาพนักงานทั่วไปแล้ว เช่น `Reset UAT` → `ล้างข้อมูลทดสอบ`, `UAT Snapshot` → `สรุปข้อมูลทดสอบ`, `AI Control Center` → `การใช้งาน AI`.
 - Sidebar ล่าสุดแยก `งานฝั่งซื้อ` และ `งานฝั่งขาย` แล้ว:
   - งานฝั่งซื้อ: `ใบสั่งซื้อ`
   - งานฝั่งขาย: `ใบสั่งขาย`, `ขายสินค้าและบริการ`
@@ -90,10 +91,10 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Shopee shipped email | Routes to purchase bill and SML 248 `purchaseorder`. |
 | Bill Retry | 4-way dispatch: `sale_reserve`, `saleorder`, `saleinvoice`, `purchaseorder`, selected by source/bill type plus `channel_defaults.endpoint`. Phase 1 purchase send uses the Bill Detail confirmation dialog for supplier, warehouse, shelf, VAT, document time, branch/sale code, and remark. |
 | Bulk SML send | `/bills`, `/sales-orders`, and `/sale-invoices` have `ส่ง SML ทั้งหมด` for `pending` documents. It loads a preview, validates each bill, skips invalid rows, and sends ready bills one-by-one using shared dialog values. |
-| Setup Center | `/setup` is the demo hardening hub. It checks blocking setup steps, shows instance/system counters, and provides an admin-only Reset UAT dialog that preserves settings/catalog/mappings/AI usage by default. |
+| หน้าเริ่มต้นใช้งาน | `/setup` checks required setup steps, shows shop/system counters, and provides an admin-only test-data reset dialog that preserves settings/catalog/mappings/AI usage by default. |
 | Sidebar navigation | Sidebar groups document work by purchase/sale: `งานฝั่งซื้อ` and `งานฝั่งขาย`. Badges are per-document-route queue counts, not global pending count. |
-| Bill detail | Shows route preview, blocks send when item validation fails, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML payload/response before raw JSON. |
-| Logs | `/logs` shows action-specific summaries. Expanding a row shows key facts first (bill, doc_no, route, trace, error) and keeps raw JSON as a secondary debug view. |
+| Bill detail | Shows route preview, blocks send when item validation fails, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML request/response before raw JSON. |
+| Logs | `/logs` shows action-specific summaries. Expanding a row shows key facts first (bill, doc_no, route, trace, error) and keeps raw JSON as a secondary technical view. |
 | Catalog | SML 248 catalog sync, CSV import, product create, per-row refresh/delete, embeddings, and in-memory cosine index. |
 | SSE | `/api/admin/events` streams inbox/admin events with HMAC token from `/api/admin/events/token`. |
 | Background jobs | Daily insight, daily backup, disk monitor, LINE token checker, hourly reply-token cleanup, daily Cloudflare tunnel drift monitor, IMAP coordinator. |

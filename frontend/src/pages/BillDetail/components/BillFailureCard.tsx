@@ -126,7 +126,7 @@ export function BillFailureCard({ errorMsg, retryError }: Props) {
             size="sm"
             onClick={handleCopy}
             className="h-7 shrink-0 gap-1 px-2 text-[11px]"
-            title="คัดลอกข้อความ error สำหรับส่งให้ dev"
+            title="คัดลอกข้อความ error สำหรับส่งให้ทีมดูแลระบบ"
           >
             {copied ? (
               <Check className="h-3 w-3 text-success" />
@@ -157,7 +157,7 @@ export function BillFailureCard({ errorMsg, retryError }: Props) {
 
         {/* Footer hint — sets expectations: copy → fix → retry */}
         <p className="text-[11px] text-muted-foreground">
-          ส่ง error นี้ให้ dev เพื่อแก้ไข แล้วกด{' '}
+          ส่ง error นี้ให้ทีมดูแลระบบเพื่อแก้ไข แล้วกด{' '}
           <span className="font-medium text-foreground">Retry</span> อีกครั้งเมื่อแก้แล้ว
         </p>
       </CardContent>
