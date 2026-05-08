@@ -20,8 +20,8 @@ type SaleOrderConfig struct {
 	Provider   string
 	ConfigFile string
 	Database   string
-	DocFormat  string  // e.g. "SR"
-	CustCode   string  // customer code (set per-call from channel_defaults)
+	DocFormat  string // e.g. "SR"
+	CustCode   string // customer code (set per-call from channel_defaults)
 	SaleCode   string
 	BranchCode string
 	WHCode     string
@@ -89,6 +89,8 @@ type SaleOrderPayload struct {
 	DocNo          string          `json:"doc_no"` // required (non-empty), client-generated
 	DocDate        string          `json:"doc_date"`
 	DocTime        string          `json:"doc_time"`
+	DocRef         string          `json:"doc_ref,omitempty"`
+	DocRefDate     string          `json:"doc_ref_date,omitempty"`
 	DocFormatCode  string          `json:"doc_format_code"`
 	CustCode       string          `json:"cust_code"`
 	SaleCode       string          `json:"sale_code"`
@@ -104,6 +106,7 @@ type SaleOrderPayload struct {
 	TotalAfterVAT  float64         `json:"total_after_vat"`
 	TotalAmount    float64         `json:"total_amount"`
 	Items          []SaleOrderItem `json:"items"`
+	Remark         string          `json:"remark,omitempty"`
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────
@@ -230,8 +233,8 @@ func (c *SaleOrderClient) CreateSaleOrder(payload SaleOrderPayload, urlOverride 
 
 // SOItem is one parsed line item from an upstream source (Shopee Excel, etc.)
 type SOItem struct {
-	ItemCode  string  // resolved SML code (post-mapping)
-	ItemName  string  // human-readable name (for SML display)
+	ItemCode  string // resolved SML code (post-mapping)
+	ItemName  string // human-readable name (for SML display)
 	Qty       float64
 	Price     float64 // per-unit price
 	UnitCode  string  // resolved unit; falls back to cfg.UnitCode if empty
@@ -244,8 +247,11 @@ type SOItem struct {
 func BuildSaleOrderPayload(
 	docNo string,
 	docDate string,
+	docRef string,
+	docRefDate string,
 	items []SOItem,
 	cfg SaleOrderConfig,
+	remark string,
 ) SaleOrderPayload {
 	var lineItems []SaleOrderItem
 	var totalValue, totalVAT, totalExc float64
@@ -313,6 +319,8 @@ func BuildSaleOrderPayload(
 		DocNo:          docNo,
 		DocDate:        docDate,
 		DocTime:        cfg.DocTime,
+		DocRef:         docRef,
+		DocRefDate:     docRefDate,
 		DocFormatCode:  cfg.DocFormat,
 		CustCode:       cfg.CustCode,
 		SaleCode:       cfg.SaleCode,
@@ -328,5 +336,6 @@ func BuildSaleOrderPayload(
 		TotalAfterVAT:  totalAfterVAT,
 		TotalAmount:    totalAmount,
 		Items:          lineItems,
+		Remark:         remark,
 	}
 }

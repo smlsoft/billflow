@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"billflow/internal/config"
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/catalog"
@@ -27,6 +28,8 @@ type CatalogHandler struct {
 	catalogRepo   *repository.SMLCatalogRepo
 	productClient *sml.ProductClient
 	auditRepo     *repository.AuditLogRepo
+	appSettings   *repository.AppSettingsRepo
+	cfg           *config.Config
 	logger        *zap.Logger
 	threshold     float64 // auto-confirm threshold
 }
@@ -38,6 +41,8 @@ func NewCatalogHandler(
 	repo *repository.SMLCatalogRepo,
 	productClient *sml.ProductClient,
 	auditRepo *repository.AuditLogRepo,
+	appSettings *repository.AppSettingsRepo,
+	cfg *config.Config,
 	threshold float64,
 	logger *zap.Logger,
 ) *CatalogHandler {
@@ -48,6 +53,8 @@ func NewCatalogHandler(
 		catalogRepo:   repo,
 		productClient: productClient,
 		auditRepo:     auditRepo,
+		appSettings:   appSettings,
+		cfg:           cfg,
 		threshold:     threshold,
 		logger:        logger,
 	}
@@ -58,7 +65,7 @@ func (h *CatalogHandler) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "50"))
 	status := c.Query("status") // "pending" | "done" | "error" | ""
-	q := c.Query("q")          // free-text search on item_code / item_name
+	q := c.Query("q")           // free-text search on item_code / item_name
 	if page < 1 {
 		page = 1
 	}
@@ -99,6 +106,9 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 
 // POST /api/catalog/sync  — sync from SML REST API
 func (h *CatalogHandler) SyncFromAPI(c *gin.Context) {
+	if h.hasPendingRestart(c) {
+		return
+	}
 	count, err := h.catalogSvc.SyncFromAPI()
 	if err != nil {
 		h.logger.Error("catalog sync", zap.Error(err))
@@ -111,6 +121,26 @@ func (h *CatalogHandler) SyncFromAPI(c *gin.Context) {
 		h.logger.Warn("catalog: reload index after sync", zap.Error(err))
 	}
 	c.JSON(http.StatusOK, gin.H{"synced": count, "message": fmt.Sprintf("synced %d items from SML", count)})
+}
+
+func (h *CatalogHandler) hasPendingRestart(c *gin.Context) bool {
+	if h.appSettings == nil || h.cfg == nil {
+		return false
+	}
+	pending, keys, err := h.appSettings.PendingRestart(h.cfg)
+	if err != nil {
+		h.logger.Warn("catalog: check pending restart", zap.Error(err))
+		return false
+	}
+	if !pending {
+		return false
+	}
+	c.JSON(http.StatusConflict, gin.H{
+		"error":                    "มีการเปลี่ยนค่า SML/AI ที่ยังไม่ได้เริ่มใช้ กรุณากดรีสตาร์ท backend ในหน้าการเชื่อมต่อระบบก่อน Sync สินค้า",
+		"pending_restart":          true,
+		"pending_restart_settings": keys,
+	})
+	return true
 }
 
 // POST /api/catalog/:code/refresh — refresh a single row from SML 248
@@ -241,17 +271,49 @@ func (h *CatalogHandler) EmbedOne(c *gin.Context) {
 
 // POST /api/catalog/embed-all  — background embed all pending items
 func (h *CatalogHandler) EmbedAll(c *gin.Context) {
-	if !h.embSvc.IsConfigured() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "GEMINI_API_KEY not configured"})
+	started, err := h.StartEmbedAll("manual")
+	if err != nil {
+		if errors.Is(err, errCatalogEmbedNotConfigured) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "GEMINI_API_KEY not configured"})
+			return
+		}
+		if errors.Is(err, errCatalogEmbedAlreadyRunning) {
+			c.JSON(http.StatusConflict, gin.H{"error": "embedding already running"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if h.catalogSvc.IsEmbedRunning() {
-		c.JSON(http.StatusConflict, gin.H{"error": "embedding already running"})
+	if !started {
+		c.JSON(http.StatusOK, gin.H{"message": "no pending items"})
 		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"message": "embedding started in background"})
+}
+
+var (
+	errCatalogEmbedNotConfigured  = errors.New("embedding service not configured")
+	errCatalogEmbedAlreadyRunning = errors.New("embedding already running")
+)
+
+func (h *CatalogHandler) StartEmbedAll(reason string) (bool, error) {
+	if !h.embSvc.IsConfigured() {
+		return false, errCatalogEmbedNotConfigured
+	}
+	if h.catalogSvc.IsEmbedRunning() {
+		return false, errCatalogEmbedAlreadyRunning
+	}
+	pending, err := h.catalogRepo.CountPending()
+	if err != nil {
+		return false, err
+	}
+	if pending == 0 {
+		return false, nil
 	}
 
 	// Run in background goroutine
 	go func() {
+		h.logger.Info("catalog: embed-all started", zap.String("reason", reason), zap.Int("pending", pending))
 		done, errs, err := h.catalogSvc.EmbedAllPending(h.embSvc)
 		if err != nil {
 			h.logger.Error("catalog: embed-all background", zap.Error(err))
@@ -262,8 +324,7 @@ func (h *CatalogHandler) EmbedAll(c *gin.Context) {
 		}
 		h.logger.Info("catalog: embed-all done", zap.Int("done", done), zap.Int("errors", errs))
 	}()
-
-	c.JSON(http.StatusAccepted, gin.H{"message": "embedding started in background"})
+	return true, nil
 }
 
 // POST /api/catalog/reload-index  — manually reload in-memory index
@@ -339,12 +400,12 @@ func (h *CatalogHandler) GetOne(c *gin.Context) {
 // createProductRequest is the body the frontend sends. It's a compact "quick
 // form" — only the minimum required for SML to accept the product.
 type createProductRequest struct {
-	Code     string  `json:"code" binding:"required"`     // SML item code (user-supplied)
-	Name     string  `json:"name" binding:"required"`     // Product name (Thai or English)
-	UnitCode string  `json:"unit_code" binding:"required"` // e.g. "ชิ้น", "ถุง"
-	Price    float64 `json:"price"`                       // per-unit selling price (>= 0)
-	WHCode   string  `json:"wh_code,omitempty"`           // optional default warehouse
-	ShelfCode string `json:"shelf_code,omitempty"`        // optional default shelf
+	Code      string  `json:"code" binding:"required"`      // SML item code (user-supplied)
+	Name      string  `json:"name" binding:"required"`      // Product name (Thai or English)
+	UnitCode  string  `json:"unit_code" binding:"required"` // e.g. "ชิ้น", "ถุง"
+	Price     float64 `json:"price"`                        // per-unit selling price (>= 0)
+	WHCode    string  `json:"wh_code,omitempty"`            // optional default warehouse
+	ShelfCode string  `json:"shelf_code,omitempty"`         // optional default shelf
 }
 
 // POST /api/catalog/products — quick-create a product in SML and sync to local catalog.
@@ -384,8 +445,8 @@ func (h *CatalogHandler) CreateProduct(c *gin.Context) {
 	existing, _ := h.catalogRepo.GetOne(req.Code)
 	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
-			"error":   "product code already exists",
-			"code":    req.Code,
+			"error":    "product code already exists",
+			"code":     req.Code,
 			"existing": existing,
 		})
 		return
@@ -394,13 +455,13 @@ func (h *CatalogHandler) CreateProduct(c *gin.Context) {
 	// 2. Build SML payload — defaults pulled from the request example
 	priceStr := strconv.FormatFloat(req.Price, 'f', -1, 64)
 	smlReq := sml.CreateProductRequest{
-		Code:         req.Code,
-		Name:         req.Name,
-		TaxType:      0, // VAT แยกนอก (matches Shopee saleinvoice default)
-		ItemType:     0, // สินค้าทั่วไป
-		UnitType:     1,
-		UnitCost:     req.UnitCode,
-		UnitStandard: req.UnitCode,
+		Code:          req.Code,
+		Name:          req.Name,
+		TaxType:       0, // VAT แยกนอก (matches Shopee saleinvoice default)
+		ItemType:      0, // สินค้าทั่วไป
+		UnitType:      1,
+		UnitCost:      req.UnitCode,
+		UnitStandard:  req.UnitCode,
 		PurchasePoint: 0,
 		Units: []sml.ProductUnit{
 			{UnitCode: req.UnitCode, UnitName: req.UnitCode, StandValue: 1, DivideValue: 1},
@@ -483,12 +544,12 @@ func (h *CatalogHandler) CreateProduct(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"code":      finalCode,
-		"name":      req.Name,
-		"unit_code": req.UnitCode,
-		"wh_code":   whCode,
+		"code":       finalCode,
+		"name":       req.Name,
+		"unit_code":  req.UnitCode,
+		"wh_code":    whCode,
 		"shelf_code": shelfCode,
-		"message":   "product created and queued for embedding",
+		"message":    "product created and queued for embedding",
 	})
 }
 

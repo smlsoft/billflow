@@ -19,7 +19,7 @@ export default function Topbar({ onOpenPalette }: TopbarProps) {
   const crumbs = useCrumbs()
 
   return (
-    <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur-md">
+    <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-3 border-b border-border/70 bg-background/85 px-4 backdrop-blur-md">
       {crumbs.length > 0 && (
         <Breadcrumb>
           <BreadcrumbList>
@@ -46,7 +46,7 @@ export default function Topbar({ onOpenPalette }: TopbarProps) {
       <div className="ml-auto flex items-center gap-2">
         <button
           type="button"
-          className="hidden h-8 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
+          className="hidden h-8 items-center gap-2 rounded-full border border-border bg-card px-3 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-accent/70 hover:text-foreground md:flex"
           onClick={onOpenPalette}
           aria-label="เปิดค้นหา"
         >

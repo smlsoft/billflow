@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BookOpen, Check, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { BookOpen, Check, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +21,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Skeleton } from '@/components/ui/skeleton'
+import { MapItemModal } from '@/pages/BillDetail/components/MapItemModal'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 import client from '@/api/client'
@@ -44,6 +45,7 @@ export default function Mappings() {
   const [newMapping, setNewMapping] = useState<MappingDraft>(emptyDraft)
   const [adding, setAdding] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [showAddMapModal, setShowAddMapModal] = useState(false)
 
   const fetchAll = async () => {
     setLoading(true)
@@ -120,7 +122,7 @@ export default function Mappings() {
     <div className="space-y-6">
       <PageHeader
         title={PAGE_TITLE.mappings}
-        description="จับคู่ชื่อสินค้าตามที่ลูกค้าเขียน → รหัส SML จริง · ระบบเรียนรู้อัตโนมัติทุกครั้งที่ admin ยืนยันบิล"
+        description="ความจำกลางสำหรับจับคู่ชื่อสินค้าจากทุกช่องทางกับรหัสสินค้าใน SML"
       />
 
       {/* Mappings vs Catalog — admin context. Without this admins assume
@@ -134,17 +136,19 @@ export default function Mappings() {
               ตารางนี้คืออะไร?
             </p>
             <p className="text-[13px] leading-relaxed text-muted-foreground">
-              เก็บคู่ <span className="font-medium text-foreground">"ชื่อดิบที่ลูกค้าเขียน → รหัสสินค้าใน SML"</span>{' '}
-              ที่ admin เคยยืนยันแล้ว — ครั้งถัดไประบบจะใช้คู่เดิม map ให้อัตโนมัติ
-              (F1 Auto-learn) · เรียนรู้ทุกครั้งที่กด <Link to="/bills?status=needs_review" className="font-medium text-primary hover:underline">"ยืนยันบิล"</Link> ใน{' '}
-              <Link to="/bills" className="font-medium text-primary hover:underline">บิลทั้งหมด</Link>
+              เก็บคู่ <span className="font-medium text-foreground">"ชื่อสินค้าจากเอกสารนำเข้า → รหัสสินค้าใน SML"</span>{' '}
+              ที่ผู้ใช้เคยยืนยันแล้ว ใช้ร่วมกันทั้งฝั่งซื้อและฝั่งขาย เพื่อให้เอกสารรอบถัดไปจับคู่สินค้าได้แม่นขึ้น
+              และเรียนรู้ทุกครั้งที่แก้สินค้าใน{' '}
+              <Link to="/bills" className="font-medium text-primary hover:underline">ใบสั่งซื้อ</Link>
+              {' '}หรือ{' '}
+              <Link to="/sales-orders" className="font-medium text-primary hover:underline">ใบสั่งขาย</Link>
             </p>
             <p className="text-[12px] text-muted-foreground">
-              💡 ต่างจาก{' '}
+              ต่างจาก{' '}
               <Link to="/settings/catalog" className="font-medium text-primary hover:underline">
                 สินค้าใน SML
               </Link>{' '}
-              (catalog) ที่เก็บ master สินค้า + embeddings สำหรับ smart auto-match — ใช้คู่กันแต่คนละขั้นตอน
+              ที่เป็นรายการสินค้าหลักทั้งหมดจาก SML — ตารางนี้คือความจำจากการตรวจเอกสาร ส่วนสินค้าใน SML คือฐานข้อมูลสินค้าอ้างอิง
             </p>
           </div>
         </div>
@@ -160,7 +164,7 @@ export default function Mappings() {
                   ชื่อดิบ
                 </TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Item Code
+                  รหัสสินค้า
                 </TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   หน่วย
@@ -257,7 +261,7 @@ export default function Mappings() {
                               : ''
                           }
                         >
-                          {m.source === 'ai_learned' ? 'AI เรียนรู้' : 'manual'}
+                          {m.source === 'ai_learned' ? 'ระบบเรียนรู้' : 'เพิ่มเอง'}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-center text-xs tabular-nums text-muted-foreground">
@@ -324,7 +328,7 @@ export default function Mappings() {
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-sm font-semibold">
                 <Plus className="h-4 w-4" />
-                เพิ่ม Mapping ใหม่
+                เพิ่มคู่จับคู่ใหม่
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -342,17 +346,28 @@ export default function Mappings() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="m-code">Item Code (SML)</Label>
-                  <Input
-                    id="m-code"
-                    placeholder="เช่น CEM001"
-                    className="font-mono"
-                    value={newMapping.item_code}
-                    onChange={(e) =>
-                      setNewMapping((p) => ({ ...p, item_code: e.target.value }))
-                    }
-                    required
-                  />
+                  <Label htmlFor="m-code">รหัสสินค้าใน SML</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="m-code"
+                      placeholder="เลือกจากสินค้าใน SML"
+                      className="font-mono"
+                      value={newMapping.item_code}
+                      onChange={(e) =>
+                        setNewMapping((p) => ({ ...p, item_code: e.target.value }))
+                      }
+                      required
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0"
+                      onClick={() => setShowAddMapModal(true)}
+                    >
+                      <Search className="h-4 w-4" />
+                      เลือกจาก SML
+                    </Button>
+                  </div>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="m-unit">หน่วย</Label>
@@ -367,7 +382,7 @@ export default function Mappings() {
                   />
                 </div>
                 <Button type="submit" disabled={adding} className="w-full">
-                  {adding ? 'กำลังเพิ่ม…' : 'เพิ่ม Mapping'}
+                  {adding ? 'กำลังเพิ่ม…' : 'เพิ่มคู่จับคู่'}
                 </Button>
               </form>
             </CardContent>
@@ -380,11 +395,24 @@ export default function Mappings() {
       <ConfirmDialog
         open={deleteId !== null}
         onOpenChange={(o) => !o && setDeleteId(null)}
-        title="ลบ mapping นี้?"
-        description="หลังลบแล้วระบบจะไม่ใช้ mapping นี้อีก แต่จะกลับมาเรียนรู้ใหม่หากคุณ map ซ้ำในบิลใดบิลหนึ่ง"
+        title="ลบคู่จับคู่นี้?"
+        description="หลังลบแล้วระบบจะไม่ใช้คู่นี้อีก แต่จะเรียนรู้ใหม่ได้เมื่อคุณแก้สินค้าในบิลครั้งถัดไป"
         variant="destructive"
         confirmLabel="ลบ"
         onConfirm={handleDelete}
+      />
+
+      <MapItemModal
+        open={showAddMapModal}
+        rawName={newMapping.raw_name || 'ค้นหาสินค้าใน SML'}
+        currentCode={newMapping.item_code}
+        currentUnit={newMapping.unit_code}
+        currentPrice={0}
+        onPick={(code, unit) => {
+          setNewMapping((p) => ({ ...p, item_code: code, unit_code: unit || p.unit_code }))
+          setShowAddMapModal(false)
+        }}
+        onClose={() => setShowAddMapModal(false)}
       />
     </div>
   )

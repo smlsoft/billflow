@@ -15,21 +15,22 @@ import (
 // Most fields mirror InvoiceConfig — the only differences are DocFormat (defaults
 // to "PO") and CustCode (semantically the supplier code on a PO).
 type PurchaseOrderConfig struct {
-	BaseURL    string
-	GUID       string
-	Provider   string
-	ConfigFile string
-	Database   string
-	DocFormat  string  // e.g. "PO"
-	CustCode   string  // supplier code on a PO
-	SaleCode   string
-	BranchCode string
-	WHCode     string
-	ShelfCode  string
-	UnitCode   string
-	VATType    int
-	VATRate    float64
-	DocTime    string
+	BaseURL      string
+	GUID         string
+	Provider     string
+	ConfigFile   string
+	Database     string
+	DocFormat    string // e.g. "PO"
+	CustCode     string // supplier code on a PO
+	SupplierName string
+	SaleCode     string
+	BranchCode   string
+	WHCode       string
+	ShelfCode    string
+	UnitCode     string
+	VATType      int
+	VATRate      float64
+	DocTime      string
 }
 
 // PurchaseOrderClient is the REST client for SML purchaseorder API.
@@ -64,6 +65,7 @@ func (c *PurchaseOrderClient) headers() map[string]string {
 // accepts the same per-line shape as saleinvoice). If SML rejects any field
 // for purchase orders we'll iterate based on actual error responses.
 type PurchaseOrderDetail struct {
+	DocRef           string  `json:"doc_ref,omitempty"`
 	ItemCode         string  `json:"item_code"`
 	ItemName         string  `json:"item_name,omitempty"`
 	LineNumber       int     `json:"line_number"`
@@ -71,6 +73,8 @@ type PurchaseOrderDetail struct {
 	UnitCode         string  `json:"unit_code"`
 	WHCode           string  `json:"wh_code"`
 	ShelfCode        string  `json:"shelf_code"`
+	WHCode2          string  `json:"wh_code_2,omitempty"`
+	ShelfCode2       string  `json:"shelf_code_2,omitempty"`
 	Qty              float64 `json:"qty"`
 	Price            float64 `json:"price"`
 	PriceExcludeVAT  float64 `json:"price_exclude_vat"`
@@ -85,12 +89,23 @@ type PurchaseOrderDetail struct {
 // PurchaseOrderPayload is the body for POST /SMLJavaRESTService/v3/api/purchaseorder
 type PurchaseOrderPayload struct {
 	DocNo          string                `json:"doc_no,omitempty"` // empty → SML generates
+	ApproveStatus  int                   `json:"approve_status"`
+	NotApprove1    int                   `json:"not_approve_1"`
+	UserApprove    string                `json:"user_approve"`
+	UserRequest    string                `json:"user_request"`
 	DocDate        string                `json:"doc_date"`
 	DocTime        string                `json:"doc_time"`
+	DocRef         string                `json:"doc_ref,omitempty"`
+	DocRefDate     string                `json:"doc_ref_date,omitempty"`
 	DocFormatCode  string                `json:"doc_format_code"`
 	CustCode       string                `json:"cust_code"` // supplier on a PO
+	SupplierName   string                `json:"supplier_name,omitempty"`
 	SaleCode       string                `json:"sale_code"`
-	BranchCode     string                `json:"branch_code,omitempty"`
+	BranchCode     string                `json:"branch_code"`
+	WHCode         string                `json:"wh_code,omitempty"`
+	ShelfCode      string                `json:"shelf_code,omitempty"`
+	WHFrom         string                `json:"wh_from,omitempty"`
+	LocationFrom   string                `json:"location_from,omitempty"`
 	BuyType        int                   `json:"buy_type"` // 0 (PO equivalent of sale_type)
 	VATType        int                   `json:"vat_type"`
 	VATRate        float64               `json:"vat_rate"`
@@ -105,7 +120,7 @@ type PurchaseOrderPayload struct {
 	ChqAmount      float64               `json:"chq_amount"`
 	CreditAmount   float64               `json:"credit_amount"`
 	TransferAmount float64               `json:"tranfer_amount"` // typo intentional
-	Details        []PurchaseOrderDetail `json:"details"`
+	Items          []PurchaseOrderDetail `json:"items"`
 	PayDetails     []interface{}         `json:"paydetails"`
 	Remark         string                `json:"remark,omitempty"`
 }
@@ -170,7 +185,7 @@ func (c *PurchaseOrderClient) CreatePurchaseOrder(payload PurchaseOrderPayload, 
 			c.logger.Info("sml_purchaseorder_request",
 				zap.String("url", url),
 				zap.String("doc_date", payload.DocDate),
-				zap.Int("items_count", len(payload.Details)),
+				zap.Int("items_count", len(payload.Items)),
 				zap.Int("attempt", attempt+1),
 			)
 		}
@@ -232,13 +247,13 @@ func (c *PurchaseOrderClient) CreatePurchaseOrder(payload PurchaseOrderPayload, 
 
 // POItem is one parsed line item from an upstream source (Shopee email, etc.)
 type POItem struct {
-	ItemCode string  // resolved SML code (post-mapping)
-	ItemName string  // human-readable name (for SML display)
-	Qty      float64
-	Price    float64 // per-unit price
-	UnitCode string  // resolved unit (post-mapping); falls back to cfg.UnitCode if empty
-	WHCode   string  // resolved warehouse; falls back to cfg.WHCode if empty
-	ShelfCode string // resolved shelf; falls back to cfg.ShelfCode if empty
+	ItemCode  string // resolved SML code (post-mapping)
+	ItemName  string // human-readable name (for SML display)
+	Qty       float64
+	Price     float64 // per-unit price
+	UnitCode  string  // resolved unit (post-mapping); falls back to cfg.UnitCode if empty
+	WHCode    string  // resolved warehouse; falls back to cfg.WHCode if empty
+	ShelfCode string  // resolved shelf; falls back to cfg.ShelfCode if empty
 }
 
 // BuildPurchaseOrderPayload mirrors BuildInvoicePayload structure.
@@ -246,6 +261,8 @@ type POItem struct {
 func BuildPurchaseOrderPayload(
 	docNo string,
 	docDate string,
+	docRef string,
+	docRefDate string,
 	items []POItem,
 	cfg PurchaseOrderConfig,
 	remark string,
@@ -273,6 +290,7 @@ func BuildPurchaseOrderPayload(
 		totalExc += v.SumAmountExclVAT
 
 		details = append(details, PurchaseOrderDetail{
+			DocRef:           docRef,
 			ItemCode:         item.ItemCode,
 			ItemName:         item.ItemName,
 			LineNumber:       i,
@@ -280,6 +298,8 @@ func BuildPurchaseOrderPayload(
 			UnitCode:         unit,
 			WHCode:           wh,
 			ShelfCode:        shelf,
+			WHCode2:          wh,
+			ShelfCode2:       wh,
 			Qty:              item.Qty,
 			Price:            round2(item.Price),
 			PriceExcludeVAT:  roundN(v.PriceExcludeVAT, 4),
@@ -314,12 +334,23 @@ func BuildPurchaseOrderPayload(
 
 	return PurchaseOrderPayload{
 		DocNo:          docNo,
+		ApproveStatus:  0,
+		NotApprove1:    0,
+		UserApprove:    "",
+		UserRequest:    "",
 		DocDate:        docDate,
 		DocTime:        cfg.DocTime,
+		DocRef:         docRef,
+		DocRefDate:     docRefDate,
 		DocFormatCode:  cfg.DocFormat,
 		CustCode:       cfg.CustCode,
+		SupplierName:   cfg.SupplierName,
 		SaleCode:       cfg.SaleCode,
 		BranchCode:     cfg.BranchCode,
+		WHCode:         cfg.WHCode,
+		ShelfCode:      cfg.ShelfCode,
+		WHFrom:         cfg.WHCode,
+		LocationFrom:   cfg.ShelfCode,
 		BuyType:        0,
 		VATType:        cfg.VATType,
 		VATRate:        cfg.VATRate,
@@ -334,7 +365,7 @@ func BuildPurchaseOrderPayload(
 		ChqAmount:      0,
 		CreditAmount:   0,
 		TransferAmount: 0,
-		Details:        details,
+		Items:          details,
 		PayDetails:     []interface{}{},
 		Remark:         remark,
 	}

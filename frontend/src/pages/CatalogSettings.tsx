@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, useMemo, useReducer } from 'r
 import { Link } from 'react-router-dom'
 import {
   AlertCircle,
+  AlertTriangle,
   BookOpen,
   ChevronLeft,
   ChevronRight,
@@ -50,6 +51,11 @@ interface ListResponse {
   total: number
   page: number
   per_page: number
+}
+
+interface InstanceSettingsStatus {
+  pending_restart?: boolean
+  pending_restart_settings?: string[]
 }
 
 type StatusFilter = '' | 'pending' | 'done' | 'error'
@@ -133,17 +139,17 @@ function StatChip({
   variant?: 'success' | 'warning' | 'danger' | 'primary' | 'muted'
 }) {
   const styles: Record<typeof variant, string> = {
-    success: 'border-success/30 bg-success/5 text-success',
-    warning: 'border-warning/30 bg-warning/5 text-warning',
-    danger: 'border-destructive/30 bg-destructive/5 text-destructive',
-    primary: 'border-primary/30 bg-primary/5 text-primary',
+    success: 'border-success/25 bg-success/5 text-success',
+    warning: 'border-warning/25 bg-warning/5 text-warning',
+    danger: 'border-destructive/25 bg-destructive/5 text-destructive',
+    primary: 'border-primary/25 bg-primary/5 text-primary',
     muted: 'border-border bg-card text-foreground',
   }
   return (
-    <Card className={cn('flex-1', styles[variant])}>
-      <CardContent className="px-4 py-3">
-        <p className="text-xl font-semibold tabular-nums">{value}</p>
-        <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <Card className={cn('min-w-[150px] flex-1 shadow-none', styles[variant])}>
+      <CardContent className="flex items-baseline justify-between gap-3 px-3 py-2.5">
+        <p className="text-lg font-semibold tabular-nums leading-none">{value}</p>
+        <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           {label}
         </p>
       </CardContent>
@@ -159,6 +165,8 @@ export default function CatalogSettings() {
   const [syncing, setSyncing] = useState(false)
   const [embedding, setEmbedding] = useState(false)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
+  const [pendingRestart, setPendingRestart] = useState(false)
+  const [pendingRestartKeys, setPendingRestartKeys] = useState<string[]>([])
   const [draft, setDraft] = useState('')
   const [params, setParams] = useReducer(
     (_prev: FetchParams, next: Partial<FetchParams> & { reset?: boolean }) => {
@@ -182,6 +190,20 @@ export default function CatalogSettings() {
     return res.data
   }, [])
 
+  const fetchInstanceStatus = useCallback(async () => {
+    try {
+      const res = await api.get<InstanceSettingsStatus>('/api/settings/instance')
+      const pending = !!res.data.pending_restart
+      setPendingRestart(pending)
+      setPendingRestartKeys(res.data.pending_restart_settings ?? [])
+      return pending
+    } catch {
+      setPendingRestart(false)
+      setPendingRestartKeys([])
+      return false
+    }
+  }, [])
+
   const fetchItems = useCallback(async (p: FetchParams) => {
     setLoading(true)
     try {
@@ -202,7 +224,8 @@ export default function CatalogSettings() {
 
   useEffect(() => {
     fetchStats()
-  }, [fetchStats])
+    fetchInstanceStatus()
+  }, [fetchStats, fetchInstanceStatus])
 
   useEffect(() => {
     if (stats?.embed_running) {
@@ -245,6 +268,11 @@ export default function CatalogSettings() {
   }
 
   async function handleSync() {
+    const hasPendingRestart = await fetchInstanceStatus()
+    if (hasPendingRestart) {
+      notify('มีการเปลี่ยนค่า SML ที่ยังไม่ได้รีสตาร์ท กรุณาไปที่การเชื่อมต่อระบบก่อน Sync', false)
+      return
+    }
     setSyncing(true)
     try {
       const res = await api.post<{ synced: number }>('/api/catalog/sync')
@@ -252,8 +280,12 @@ export default function CatalogSettings() {
       fetchStats()
       fetchItems(params)
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
-      notify(msg ?? 'Sync ล้มเหลว', false)
+      const msg = (e as { response?: { data?: { error?: string; pending_restart?: boolean; pending_restart_settings?: string[] } } })?.response?.data
+      if (msg?.pending_restart) {
+        setPendingRestart(true)
+        setPendingRestartKeys(msg.pending_restart_settings ?? [])
+      }
+      notify(msg?.error ?? 'Sync ล้มเหลว', false)
     } finally {
       setSyncing(false)
     }
@@ -360,26 +392,26 @@ export default function CatalogSettings() {
 
   const tabs: Array<{ key: StatusFilter; label: string; count?: number }> = [
     { key: '', label: 'ทั้งหมด', count: stats?.total },
-    { key: 'done', label: 'Embedded', count: stats?.embedded },
-    { key: 'pending', label: 'Pending', count: stats?.pending },
-    { key: 'error', label: 'Error', count: stats?.error },
+    { key: 'done', label: 'พร้อมจับคู่', count: stats?.embedded },
+    { key: 'pending', label: 'รอเตรียมข้อมูล', count: stats?.pending },
+    { key: 'error', label: 'มีปัญหา', count: stats?.error },
   ]
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <PageHeader
         title={PAGE_TITLE.catalog}
-        description="สินค้าจาก SML + embeddings สำหรับ smart matching · Sync จาก SML 248 + Embed All ก่อนใช้งาน"
+        description="รายการสินค้าจาก SML ที่ใช้จับคู่กับชื่อสินค้าจากอีเมล Shopee"
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
+            <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing || pendingRestart}>
               <RotateCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
-              {syncing ? 'กำลัง Sync…' : 'Sync จาก SML'}
+              {pendingRestart ? 'รอรีสตาร์ท SML' : syncing ? 'กำลังซิงก์…' : 'ซิงก์สินค้า'}
             </Button>
             <Button asChild variant="outline" size="sm">
               <label className="cursor-pointer">
                 <Upload className="h-3.5 w-3.5" />
-                Import CSV
+                นำเข้า CSV
                 <input
                   ref={fileRef}
                   type="file"
@@ -395,33 +427,64 @@ export default function CatalogSettings() {
               ) : (
                 <Sparkles className="h-3.5 w-3.5" />
               )}
-              {isEmbedBusy ? 'กำลัง Embed…' : 'Embed All Pending'}
+              {isEmbedBusy ? 'กำลังเตรียมข้อมูล…' : 'สร้างข้อมูลจับคู่'}
             </Button>
             <Button variant="outline" size="sm" onClick={handleReload}>
               <RefreshCcw className="h-3.5 w-3.5" />
-              Reload Index
+              โหลดรายการใหม่
             </Button>
           </>
         }
       />
 
+      {pendingRestart && (
+        <div className="rounded-lg border border-warning/35 bg-warning/[0.07] p-3 text-sm">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-foreground">ยัง Sync สินค้าไม่ได้ เพราะมีค่า SML ที่รอรีสตาร์ท</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                ไปที่ <Link to="/settings/instance" className="font-medium text-primary hover:underline">การเชื่อมต่อระบบ</Link> แล้วกด “รีสตาร์ทและใช้ค่าทันที” ก่อน เพื่อให้ BillFlow ใช้ headers ชุดล่าสุด
+              </p>
+              {pendingRestartKeys.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {pendingRestartKeys.map((key) => (
+                    <Badge key={key} variant="outline" className="h-5 px-1.5 text-[10px]">
+                      {key}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Catalog vs Mappings explainer — without this admins assume the two
           features are the same. Catalog is the master + smart-match
           backend; Mappings is the human-curated alias table. */}
-      <div className="rounded-lg border border-info/30 bg-info/[0.04] p-3.5 text-sm">
-        <div className="flex items-start gap-2.5">
+      <details className="group rounded-lg border border-info/25 bg-info/[0.035] text-sm">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-2.5">
+          <span className="inline-flex min-w-0 items-center gap-2.5">
+            <BookOpen className="h-4 w-4 shrink-0 text-info" strokeWidth={2.25} />
+            <span className="font-medium text-foreground">Catalog คือฐานสินค้า SML สำหรับจับคู่กับชื่อจากอีเมล Shopee</span>
+          </span>
+          <span className="text-[11px] text-primary group-open:hidden">รายละเอียด</span>
+          <span className="hidden text-[11px] text-muted-foreground group-open:inline">ย่อ</span>
+        </summary>
+        <div className="border-t border-info/15 px-3.5 py-3">
+          <div className="flex items-start gap-2.5">
           <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-info" strokeWidth={2.25} />
           <div className="min-w-0 flex-1 space-y-1.5">
-            <p className="font-medium text-foreground">หน้านี้คืออะไร?</p>
             <p className="text-[13px] leading-relaxed text-muted-foreground">
-              <span className="font-medium text-foreground">Master สินค้าใน SML</span> + 1536-dim embeddings
-              สำหรับ Smart Matching (cosine similarity) · ระบบใช้ตอน parse อีเมล Shopee และตอนแนะนำ item code ในบิล
+              <span className="font-medium text-foreground">รายการสินค้าจาก SML</span>
+              ที่ BillFlow ใช้เทียบกับชื่อสินค้าจากอีเมล Shopee และแนะนำรหัสสินค้าในหน้าบิล
             </p>
             <div className="text-[12px] leading-relaxed text-muted-foreground">
-              <span className="font-medium text-foreground">Workflow ตั้งค่าครั้งแรก:</span>
+              <span className="font-medium text-foreground">เริ่มใช้งานครั้งแรก:</span>
               <span className="ml-1">
-                ① กด <span className="font-medium text-foreground">Sync จาก SML</span> → ② กด{' '}
-                <span className="font-medium text-foreground">Embed All</span> (อาจใช้เวลาหลายนาที — รันใน background)
+                ① กด <span className="font-medium text-foreground">ซิงก์สินค้า</span> → ② กด{' '}
+                <span className="font-medium text-foreground">สร้างข้อมูลจับคู่</span> (อาจใช้เวลาหลายนาที)
               </span>
             </div>
             <p className="text-[12px] text-muted-foreground">
@@ -429,10 +492,15 @@ export default function CatalogSettings() {
               <Link to="/mappings" className="font-medium text-primary hover:underline">
                 ตารางจับคู่สินค้า
               </Link>{' '}
-              (admin-curated aliases ที่เรียนรู้จากการยืนยันบิล) — ใช้คู่กันแต่คนละขั้นตอน
+              ที่เก็บชื่อสินค้าที่เคยแก้แล้ว — ใช้คู่กันแต่คนละขั้นตอน
             </p>
           </div>
         </div>
+        </div>
+      </details>
+
+      <div className="rounded-lg border border-info/20 bg-info/[0.035] px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+        ถ้าระบบถูก deploy หรือ restart ระหว่างสร้างข้อมูลจับคู่ งานที่ทำแล้วจะไม่หาย และ backend จะเริ่มทำต่อจากรายการที่ยังรออยู่ให้อัตโนมัติหลังกลับมาออนไลน์
       </div>
 
       {message && (
@@ -450,39 +518,39 @@ export default function CatalogSettings() {
       )}
 
       {stats && (
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">
           <StatChip label="สินค้าทั้งหมด" value={stats.total.toLocaleString()} variant="primary" />
-          <StatChip label="Embedded" value={stats.embedded.toLocaleString()} variant="success" />
-          <StatChip label="Pending" value={stats.pending.toLocaleString()} variant="warning" />
-          <StatChip label="Index Size" value={stats.index_size.toLocaleString()} variant="primary" />
+          <StatChip label="พร้อมจับคู่" value={stats.embedded.toLocaleString()} variant="success" />
+          <StatChip label="รอเตรียมข้อมูล" value={stats.pending.toLocaleString()} variant="warning" />
+          <StatChip label="โหลดไว้ใช้งาน" value={stats.index_size.toLocaleString()} variant="primary" />
           {stats.embed_running ? (
             <Card className="flex-1 border-primary/30 bg-primary/5">
               <CardContent className="flex items-center gap-3 px-4 py-3">
                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-primary">กำลัง Embed…</p>
+                  <p className="text-sm font-medium text-primary">กำลังเตรียมข้อมูลจับคู่…</p>
                   <p className="text-[11px] text-muted-foreground">
-                    Catalog ใหญ่ ใช้เวลาเป็นนาที · รันใน background ปิดหน้านี้ได้ · auto-refresh ทุก 3 วินาที
+                    รายการสินค้าเยอะ อาจใช้เวลาหลายนาที · ปิดหน้านี้ได้ · ระบบอัปเดตสถานะให้เอง
                   </p>
                 </div>
               </CardContent>
             </Card>
           ) : stats.error > 0 ? (
-            <StatChip label="Error" value={stats.error.toLocaleString()} variant="danger" />
+            <StatChip label="มีปัญหา" value={stats.error.toLocaleString()} variant="danger" />
           ) : null}
         </div>
       )}
 
       {stats && stats.total > 0 && (
-        <Card>
-          <CardContent className="space-y-2 p-4">
-            <div className="flex items-baseline justify-between text-sm">
-              <span className="font-medium text-foreground">Embedding Progress</span>
+        <Card className="shadow-none">
+          <CardContent className="space-y-2 px-3 py-2.5">
+            <div className="flex items-baseline justify-between text-xs">
+              <span className="font-medium text-foreground">ความพร้อมในการจับคู่</span>
               <span className="tabular-nums text-muted-foreground">
                 {stats.embedded.toLocaleString()} / {stats.total.toLocaleString()} ({pct}%)
               </span>
             </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div
                 className="h-full rounded-full bg-success transition-all"
                 style={{ width: `${pct}%` }}
@@ -565,13 +633,13 @@ export default function CatalogSettings() {
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40">
-              <TableHead className="w-[140px]">Item Code</TableHead>
+              <TableHead className="w-[140px]">รหัสสินค้า</TableHead>
               <TableHead>ชื่อสินค้า</TableHead>
               <TableHead className="w-[80px]">หน่วย</TableHead>
               <TableHead className="w-[100px] text-right">ราคา</TableHead>
               <TableHead className="w-[120px]">สถานะ</TableHead>
-              <TableHead className="w-[120px]">Embedded At</TableHead>
-              <TableHead className="w-[200px] text-right">Action</TableHead>
+              <TableHead className="w-[120px]">เตรียมข้อมูลเมื่อ</TableHead>
+              <TableHead className="w-[200px] text-right">จัดการ</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -595,27 +663,27 @@ export default function CatalogSettings() {
               </TableRow>
             ) : (
               items.map((item) => (
-                <TableRow key={item.item_code}>
-                  <TableCell className="font-mono text-xs font-medium">
+                <TableRow key={item.item_code} className="h-12">
+                  <TableCell className="py-2 font-mono text-xs font-medium">
                     {item.item_code}
                   </TableCell>
-                  <TableCell>
-                    <div className="text-sm">{item.item_name}</div>
+                  <TableCell className="py-2">
+                    <div className="line-clamp-2 text-sm leading-5">{item.item_name}</div>
                     {item.item_name2 && (
-                      <div className="mt-0.5 text-xs text-muted-foreground">
+                      <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
                         {item.item_name2}
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
+                  <TableCell className="py-2 text-xs text-muted-foreground">
                     {item.unit_code || '—'}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="py-2 text-right tabular-nums">
                     {item.sale_price != null
                       ? `฿${item.sale_price.toLocaleString()}`
                       : '—'}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="py-2">
                     <Badge
                       variant="secondary"
                       className={cn(
@@ -627,15 +695,19 @@ export default function CatalogSettings() {
                           'bg-destructive/15 text-destructive hover:bg-destructive/20',
                       )}
                     >
-                      {item.embedding_status === 'done' ? '✓ done' : item.embedding_status}
+                      {item.embedding_status === 'done'
+                        ? 'พร้อมจับคู่'
+                        : item.embedding_status === 'pending'
+                          ? 'รอเตรียมข้อมูล'
+                          : 'มีปัญหา'}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-xs tabular-nums text-muted-foreground">
+                  <TableCell className="py-2 text-xs tabular-nums text-muted-foreground">
                     {item.embedded_at
                       ? new Date(item.embedded_at).toLocaleDateString('th-TH')
                       : '—'}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="py-2 text-right">
                     <div className="flex items-center justify-end gap-1">
                       {item.embedding_status !== 'done' && (
                         <Button
@@ -644,7 +716,7 @@ export default function CatalogSettings() {
                           className="h-7 px-2 text-xs"
                           onClick={() => handleEmbedOne(item.item_code)}
                         >
-                          Embed
+                          เตรียมข้อมูล
                         </Button>
                       )}
                       <Button

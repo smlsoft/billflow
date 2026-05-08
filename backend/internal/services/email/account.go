@@ -28,6 +28,7 @@ type AccountPoller struct {
 
 	mu      sync.Mutex
 	running bool
+	pollMu  sync.Mutex
 }
 
 // alertThrottle — minimum gap between LINE admin notifications per account
@@ -128,10 +129,25 @@ func (p *AccountPoller) run(ctx context.Context) {
 // PollNow runs one cycle immediately, ignoring the interval. Used by the
 // "poll-now" admin button. Returns the result for the caller to surface.
 func (p *AccountPoller) PollNow(ctx context.Context) PollResult {
-	return p.pollCycle(ctx)
+	if !p.pollMu.TryLock() {
+		err := fmt.Errorf("poll already running")
+		p.logger.Info("imap_poll_skipped_busy")
+		return PollResult{Err: err}
+	}
+	defer p.pollMu.Unlock()
+	return p.pollCycleLocked(ctx)
 }
 
 func (p *AccountPoller) pollCycle(ctx context.Context) PollResult {
+	if !p.pollMu.TryLock() {
+		p.logger.Info("imap_poll_skipped_busy")
+		return PollResult{}
+	}
+	defer p.pollMu.Unlock()
+	return p.pollCycleLocked(ctx)
+}
+
+func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 	account, err := p.repo.GetByID(p.accountID)
 	if err != nil {
 		p.logger.Error("imap_poller_load_failed", zap.Error(err))
@@ -156,6 +172,8 @@ func (p *AccountPoller) pollCycle(ctx context.Context) PollResult {
 	errMsg := ""
 	if res.Err != nil {
 		errMsg = res.Err.Error()
+	} else if len(res.ProcessWarnings) > 0 {
+		errMsg = strings.Join(res.ProcessWarnings, "\n")
 	}
 	if updateErr := p.repo.UpdatePollStatus(account.ID, res.Status(), errMsg, res.Processed); updateErr != nil {
 		p.logger.Warn("imap_poller_status_update_failed", zap.Error(updateErr))

@@ -1,222 +1,275 @@
-# BillFlow Phase 1 — คู่มือการใช้งาน
+# BillFlow Phase 1 — คู่มือใช้งานบิลซื้อ Shopee
 
-> ระบบดึง Email สร้างใบสั่งซื้อ (Purchase Order) อัตโนมัติ
+> อัปเดตล่าสุด: 2026-05-07
+> Scope ปัจจุบัน: ดึงอีเมล Shopee ฝั่งบิลซื้อ, ตรวจรายการ, จับคู่สินค้า, และส่งเข้า SML `purchaseorder`
 
 ---
 
-## Phase 1 ทำอะไรได้บ้าง?
+## Phase 1 ทำอะไรได้แล้ว
 
-| ความสามารถ | รายละเอียด |
+| ความสามารถ | สถานะ | หมายเหตุ |
+|---|---:|---|
+| ดึงอีเมล Shopee ผ่าน IMAP | ✅ | ตั้งค่าที่ `/settings/email` |
+| แยกอีเมล Shopee shipped/payment เป็นบิลซื้อ | ✅ | source เป็น `shopee_shipped` |
+| เก็บหลักฐานต้นทาง | ✅ | HTML body และ envelope JSON ดูได้จากหน้าบิล |
+| สร้างบิลซื้อและรายการสินค้า | ✅ | เปิดดูที่ `/bills` และ `/bills/:id` |
+| จับคู่สินค้า SML | ✅ | เลือกจาก catalog หรือสร้างสินค้าใหม่ |
+| เลือกผู้ขาย/คลัง/ภาษีก่อนส่ง | ✅ | ทำใน dialog “ยืนยันการส่งใบสั่งซื้อไปยัง SML” |
+| ส่งเข้า SML Purchase Order | ✅ | `POST /SMLJavaRESTService/v3/api/purchaseorder` |
+| ดู log และ payload ย้อนหลัง | ✅ | `/logs` และ section “ข้อมูลการส่งเข้า SML” ในหน้าบิล |
+
+---
+
+## เมนูที่ใช้ใน Phase 1
+
+| เมนู | ใช้ทำอะไร |
 |---|---|
-| ดึง Email อัตโนมัติ | ดึง Email จาก inbox ตาม subject / ผู้ส่งที่กำหนด ทุก 5 นาที |
-| AI อ่าน Email | สกัดรายการสินค้า, จำนวน, ราคา, ผู้ขาย จาก body และ attachment (PDF, รูป) |
-| จับคู่สินค้า | AI จับคู่ชื่อสินค้าจาก Email กับรหัสสินค้าใน SML Master |
-| สร้างสินค้าใหม่ inline | ถ้าไม่พบใน SML สามารถสร้างสินค้าใหม่จากหน้าบิลได้ทันที |
-| ตรวจสอบก่อนส่ง | Admin ตรวจสอบ แก้ไขรายการ และยืนยันก่อนส่งเข้า SML |
-| ส่งใบสั่งซื้อ SML | สร้าง Purchase Order ใน SML ERP ผ่าน REST API อัตโนมัติ |
-| Retry อัตโนมัติ | กรณีส่งไม่สำเร็จ กด Retry ได้จากหน้าบิล |
+| `/dashboard` ภาพรวม | ดูสถานะงานวันนี้, งานรอตรวจ, งานผิดพลาด |
+| `/bills` บิลซื้อ Shopee | รายการบิลที่ระบบดึงจากอีเมล |
+| `/bills/:id` รายละเอียดบิล | ตรวจสินค้า, จับคู่, ส่งเข้า SML, ดู payload/response |
+| `/mappings` ตารางจับคู่สินค้า | ดู/เพิ่ม/แก้ mapping ชื่อสินค้าจากอีเมลกับรหัส SML |
+| `/settings/catalog` สินค้าใน SML | ค้นหา, sync, สร้างสินค้าใหม่ |
+| `/settings/email` อีเมลรับบิล | ตั้งค่า IMAP inbox และกด poll ทดสอบ |
+| `/settings/channels` เส้นทาง SML บิลซื้อ Shopee | ตั้งค่า API path, `doc_format_code`, และรูปแบบเลขเอกสาร |
+| `/settings/instance` การเชื่อมต่อระบบ | ตั้งค่า SML/OpenRouter ระดับ instance |
+| `/logs` ประวัติการทำงาน | ตรวจย้อนหลังว่าดึงอีเมล/สร้างบิล/ส่ง SML สำเร็จหรือไม่ |
 
 ---
 
-## หน้าต่างๆ ในระบบ
+## Flow ใช้งานจริง
 
-```
-Dashboard        → ภาพรวมบิลวันนี้ — รอตรวจสอบ / ล้มเหลว / Email มีปัญหา
-บิลทั้งหมด       → รายการบิลทั้งหมด (filter ตามสถานะ / source)
-บิลรายการ        → แก้ไข รายการ / ราคา / ผู้ขาย + ส่ง SML
-ตารางจับคู่สินค้า → ดู/จัดการ mapping ชื่อสินค้า ↔ รหัส SML
-สินค้าใน SML     → catalog สินค้าทั้งหมดจาก SML (ค้นหา, sync, embed)
-ผู้ขาย default    → ตั้งค่า Supplier default ต่อ channel (email / shopee_shipped)
-อีเมลรับบิล      → จัดการ IMAP inbox (เพิ่ม / แก้ไข / ทดสอบ)
-ตั้งค่าทั่วไป     → สถานะระบบ (AI / Email / SML)
-ประวัติการทำงาน  → audit log ทุก action ในระบบ
-```
-
----
-
-## การตั้งค่าครั้งแรก
-
-### 1. เพิ่ม Email Inbox
-
-1. เข้าเมนู **ตั้งค่าระบบ → อีเมลรับบิล**
-2. กด **เพิ่ม Inbox ใหม่**
-3. กรอกข้อมูล:
-
-| ฟิลด์ | ตัวอย่าง | หมายเหตุ |
-|---|---|---|
-| ชื่อ Inbox | "อีเมลจัดซื้อ" | ชื่อสำหรับ admin |
-| Host | `imap.gmail.com` | หรือ `imap-mail.outlook.com` |
-| Port | `993` | TLS/SSL เสมอ |
-| Username | `purchase@company.com` | |
-| Password | App Password | ดูหมายเหตุด้านล่าง |
-| Mailbox | `INBOX` | หรือ folder ที่ต้องการ |
-| กรอง subject | `ใบสั่งซื้อ, PO-` | คั่นด้วยคอมม่า |
-| กรอง ผู้ส่ง | `supplier@example.com` | ว่างไว้ = ทุกคน |
-| Channel | `general` | สำหรับ PO ทั่วไป |
-| ดึงย้อนหลัง | `30` วัน | 1–90 วัน |
-| Interval | `300` วินาที | ขั้นต่ำ 5 นาที |
-
-4. กด **ทดสอบการเชื่อมต่อ** ก่อนบันทึก
-5. กด **บันทึก** — ระบบเริ่มดึง Email ทันที
-
-> **Gmail App Password:** ต้องเปิด 2-Step Verification ก่อน → ไปที่  
-> myaccount.google.com → Security → App passwords → สร้างใหม่ → copy มาวาง  
-> ห้ามใช้รหัสผ่านจริง — Gmail จะ block
-
-> **Outlook:** ใช้ `imap-mail.outlook.com:993` + App Password เช่นกัน
-
----
-
-### 2. ตั้งค่า Supplier Default
-
-ระบบต้องรู้ว่า Supplier (ผู้ขาย) default ของแต่ละ channel คือใคร ก่อนส่ง SML
-
-1. เข้าเมนู **ข้อมูลตั้งต้น → ผู้ขาย default**
-2. กด **ตั้งค่าอัตโนมัติ** (Quick Setup) → ระบบจะดึงรายชื่อ Supplier จาก SML ให้เลือก
-3. หรือกด **แก้ไข** ต่อ channel แล้วเลือก Supplier จาก dropdown
-
-> ถ้ายังไม่ตั้งค่า → ปุ่ม "ส่งไปยัง SML" จะ error ทันที
-
----
-
-### 3. Sync สินค้าจาก SML
-
-เพื่อให้ AI จับคู่สินค้าได้แม่นยำ ควร sync catalog จาก SML ก่อน
-
-1. เข้าเมนู **ข้อมูลตั้งต้น → สินค้าใน SML**
-2. กด **Sync จาก SML** → ดึงสินค้าทั้งหมดจาก SML เข้าระบบ
-3. กด **Embed All** → สร้าง AI embedding (ใช้เวลาเป็นนาที ปิดหน้าได้)
-
-> หลัง Embed เสร็จ AI จะจับคู่ชื่อสินค้าได้แม่นยำขึ้นมาก
-
----
-
-## Workflow หลัก
-
-```
-Email เข้า inbox
-      ↓
-ระบบดึงอัตโนมัติ (ทุก 5 นาที)
-      ↓
-AI อ่าน body / PDF / รูปภาพ
-      ↓
-สร้างบิล status = "รอตรวจสอบ"
-      ↓
-Admin เปิด /bills → คลิกบิล
-      ↓
-ตรวจสอบ แก้ไขรายการ / ราคา / ผู้ขาย
-      ↓ (ถ้า AI จับคู่สินค้าไม่ได้)
-กด Map บนรายการ → เลือกรหัสสินค้า SML
-หรือ กด "+ สร้างสินค้าใหม่" ถ้ายังไม่มีใน SML
-      ↓
-กด "ส่งไปยัง SML"
-      ↓
-SML สร้าง Purchase Order ✓
+```text
+Shopee email เข้า inbox
+  ↓
+BillFlow poll IMAP
+  ↓
+แยกอีเมลเป็น Shopee purchase bill
+  ↓
+AI/extractor อ่านเลขคำสั่งซื้อ, วันที่, รายการสินค้า, จำนวน, ราคา
+  ↓
+สร้างบิลและเก็บ artifact ต้นทาง
+  ↓
+Admin เปิดหน้าบิล
+  ↓
+ตรวจสินค้าและจับคู่กับ SML catalog
+  ↓
+กดส่งเข้า SML
+  ↓
+เลือกผู้ขาย, คลัง, พื้นที่เก็บ, ภาษี, เวลาเอกสาร, หมายเหตุ
+  ↓
+BillFlow ส่ง SML purchaseorder
+  ↓
+SML สร้างเอกสาร PO และ BillFlow บันทึก payload/response/log
 ```
 
 ---
 
-## สถานะบิล
+## ตั้งค่าก่อนทดสอบ
 
-| สถานะ | ความหมาย | ต้องทำอะไร |
-|---|---|---|
-| รอดำเนินการ | AI ดึงมาแล้ว รอ admin ตรวจ | เปิดบิล ตรวจสอบ ส่ง SML |
-| รอตรวจสอบ | มีสินค้าที่ AI จับคู่ไม่ได้ หรือข้อมูลผิดปกติ | Map สินค้า แล้วส่ง |
-| ส่งแล้ว | SML รับบิลเรียบร้อย | ไม่ต้องทำอะไร |
-| ล้มเหลว | SML ตอบ error | แก้ปัญหา แล้วกด Retry |
-| ข้าม | บิลซ้ำ หรือ admin ข้ามไป | — |
+### 1. อีเมลรับบิล
 
----
+เข้า `/settings/email`
 
-## การจับคู่สินค้า (Catalog Matching)
+ค่าที่ควรตรวจ:
 
-### วิธี AI จับคู่
+| ค่า | ต้องเป็นอย่างไร |
+|---|---|
+| Host/Port | IMAP server ถูกต้อง เช่น Gmail `imap.gmail.com:993` |
+| Username/Password | ใช้ App Password ไม่ใช้รหัสผ่านจริง |
+| Mailbox | `INBOX` หรือ folder ที่ Shopee ส่งเข้า |
+| Channel | `shopee` หรือค่าที่ระบบ route ไป Shopee shipped ได้ |
+| Filter subjects | มี keyword ของอีเมล Shopee ที่ต้องการดูด |
+| Enabled | เปิดใช้งาน |
+| Poll interval | ขั้นต่ำ 300 วินาที |
 
-1. **Exact match** — ชื่อตรงกัน 100% → map อัตโนมัติ
-2. **Fuzzy match** — คล้ายกัน ≥ 85% → map อัตโนมัติ
-3. **คล้ายกัน 60–84%** → status "รอตรวจสอบ" ต้อง confirm
-4. **ไม่พบ** → admin เลือก หรือสร้างสินค้าใหม่ใน SML
+หลังแก้ให้กด `ทดสอบการเชื่อมต่อ` หรือ `Poll ตอนนี้`
 
-### ระบบเรียนรู้ (F1)
+### 2. เส้นทาง SML บิลซื้อ Shopee
 
-เมื่อ admin confirm การ map → ระบบบันทึกไว้ → ครั้งต่อไปสินค้าเดียวกันจะ map อัตโนมัติ  
-ดูความคืบหน้าได้ที่ **ตารางจับคู่สินค้า → Learning Progress**
+เข้า `/settings/channels`
 
----
+Phase 1 ให้หน้านี้เหลือเฉพาะค่าของ channel:
 
-## การสร้างสินค้าใหม่ใน SML
+| ค่า | ตัวอย่าง |
+|---|---|
+| API ที่ส่งเข้า SML | `/SMLJavaRESTService/v3/api/purchaseorder` |
+| `doc_format_code` | `PO` |
+| เลขเอกสาร / doc_no format | เช่น prefix `BF-PO`, running `YYMM####` |
 
-ถ้าสินค้าใน Email ยังไม่มีใน SML:
+ค่าเอกสารต่อบิล เช่น ผู้ขาย, คลัง, ภาษี ไม่ได้ตั้งที่หน้านี้แล้ว ให้เลือกใน dialog ตอนส่งจากหน้าบิล
 
-1. เปิดบิล → คลิกรายการที่ยังไม่ได้ map
-2. กด **+ สร้างสินค้าใหม่**
-3. กรอก: รหัสสินค้า, ชื่อ, หน่วย, ราคา
-4. กด **สร้างใน SML** → ระบบสร้างสินค้าใน SML และ map ให้อัตโนมัติ
+### 3. สินค้าใน SML
 
----
+เข้า `/settings/catalog`
 
-## Troubleshoot เบื้องต้น
+ควรทำก่อนเริ่มทดสอบ:
 
-### Email ไม่เข้าระบบ
-
-1. เข้า **อีเมลรับบิล** → ดูคอลัมน์ "สถานะล่าสุด"
-2. ถ้า error → กด **Poll ตอนนี้** เพื่อดู error message
-3. ตรวจสอบ: App Password ถูกต้อง, IMAP เปิดอยู่ใน Gmail settings
-4. Gmail: ต้องไปที่ Gmail Settings → See all settings → Forwarding and POP/IMAP → Enable IMAP
-
-### บิล status "ล้มเหลว"
-
-1. เปิดบิล → ดู Error card (กล่องแดง) — ระบุ route และ error message
-2. สาเหตุบ่อย:
-   - `party_code` ไม่ถูกต้อง → แก้ที่ **ผู้ขาย default**
-   - สินค้าไม่ครบ (`item_code` ว่าง) → Map สินค้าก่อน
-   - SML server ไม่ตอบสนอง → รอแล้ว Retry
-3. กด **Retry** หลังแก้ปัญหา
-
-### สินค้า map ผิด
-
-1. เปิดบิล → คลิกรายการ → กด **แก้ไข**
-2. เลือก item_code ที่ถูกต้องจาก dropdown
-3. กดบันทึก → ระบบจำสำหรับครั้งต่อไป
-
-### Dashboard แสดง "Email มีปัญหา"
-
-- มี inbox ที่ poll ล้มเหลวติดต่อกัน 3 ครั้งขึ้นไป
-- เข้า **อีเมลรับบิล** → ดู error → แก้แล้วกด Poll
+1. กด sync สินค้าจาก SML
+2. ตรวจว่าสินค้าที่ใช้ทดสอบค้นหาเจอ
+3. ถ้าไม่เจอ ให้สร้างสินค้าใหม่จากหน้าบิลหรือหน้า catalog
 
 ---
 
-## การเปิด Feature เพิ่มเติม (Phase ถัดไป)
+## Dialog ส่งเข้า SML
 
-ระบบ BillFlow รองรับ Phase ถัดไปโดยไม่ต้อง deploy ใหม่ เพียงแก้ค่า `VITE_PHASE` ใน `.env`:
+เปิดบิล แล้วกดส่งเข้า SML ระบบจะแสดง dialog “ยืนยันการส่งใบสั่งซื้อไปยัง SML”
 
-```bash
-# Phase 1 — Email → PO อัตโนมัติ (ปัจจุบัน)
-VITE_PHASE=1
+| Field | บังคับ | ค่าเริ่มต้น/พฤติกรรม |
+|---|---:|---|
+| ผู้ขาย | ✅ | เลือก supplier จาก SML |
+| คลัง | ✅ | user ต้องระบุเอง |
+| พื้นที่เก็บ | ✅ | user ต้องระบุเอง |
+| ประเภทภาษี | ✅ | ต้องเลือก เช่น แยกนอก/รวมใน/อัตรา 0 |
+| อัตราภาษี | ✅ | default `7` |
+| เวลาเอกสาร | ✅ | default เป็นเวลาปัจจุบัน |
+| Branch code | ❌ | ถ้าว่าง ส่ง `""` |
+| Sale code | ❌ | ถ้าว่าง ส่ง `""` |
+| หมายเหตุ | ❌ | ส่งเข้า `remark` และเก็บในบิล |
 
-# Phase 2+ — เปิดทุก feature (LINE chat, Shopee, Lazada)
-VITE_PHASE=99
+---
+
+## SML Purchase Order Endpoint
+
+BillFlow ส่งบิลซื้อ Shopee ไปที่:
+
+```text
+POST http://192.168.2.248:8080/SMLJavaRESTService/v3/api/purchaseorder
 ```
 
-แล้ว rebuild frontend:
+Headers ที่ backend ใช้จริง:
 
-```bash
-docker compose build frontend
-docker compose up -d frontend
+```http
+guid: smlx
+provider: SMLGOH
+configFileName: SMLConfigSMLGOH.xml
+databaseName: SML1_2026
+Content-Type: application/json; charset=utf-8
 ```
 
+Payload สำคัญ:
+
+| Field | ที่มา |
+|---|---|
+| `doc_no` | BillFlow doc counter |
+| `doc_format_code` | `/settings/channels` |
+| `doc_ref` | เลขคำสั่งซื้อ Shopee เช่น `#2604306XDKEKW1` |
+| `doc_ref_date` | วันที่เอกสารจาก Shopee |
+| `cust_code` | ผู้ขายที่ user เลือก |
+| `supplier_name` | ชื่อผู้ขายที่ user เลือก |
+| `branch_code` | จาก dialog, ถ้าว่างส่ง `""` |
+| `sale_code` | จาก dialog, ถ้าว่างส่ง `""` |
+| `wh_code`, `wh_from` | คลังจาก dialog |
+| `shelf_code`, `location_from` | พื้นที่เก็บจาก dialog |
+| `vat_type`, `vat_rate` | จาก dialog |
+| `items[].item_code` | สินค้า SML ที่จับคู่แล้ว |
+| `items[].wh_code`, `items[].shelf_code` | คลัง/พื้นที่เก็บของ line item |
+| `items[].wh_code_2`, `items[].shelf_code_2` | ส่งตามรูปแบบที่ทดสอบกับ SML |
+| `user_request` | `""` ใน Phase 1 |
+
 ---
 
-## ข้อมูลการเชื่อมต่อ
+## การตรวจผลหลังส่ง
 
-| ระบบ | ที่อยู่ | หมายเหตุ |
-|---|---|---|
-| BillFlow Admin UI | `http://192.168.2.109:3010` | เปิดจาก browser ในวง LAN |
-| BillFlow API | `http://192.168.2.109:8090` | backend |
-| SML ERP | `http://192.168.2.213:3248` | (LAN only) |
-| PostgreSQL | `192.168.2.109:5438` | DB ของ BillFlow |
+ใน BillFlow:
+
+1. เปิดหน้าบิล
+2. ดูหัวข้อ “ข้อมูลการส่งเข้า SML”
+3. ตรวจ summary:
+   - เลขเอกสาร SML
+   - อ้างอิง Shopee
+   - ผู้ขาย / คู่ค้า
+   - คลัง / พื้นที่เก็บ
+   - ภาษี
+   - จำนวนรายการ
+   - ยอดสุทธิ
+4. ถ้าต้อง debug field ให้เปิด “ข้อมูลที่ส่งไป SML” และ “ผลตอบกลับจาก SML”
+
+ใน SML database:
+
+```sql
+select * from ic_trans where doc_no = '<DOC_NO>';
+select * from ic_trans_detail where doc_no = '<DOC_NO>';
+```
+
+ควรตรวจ:
+
+| Table | Field |
+|---|---|
+| `ic_trans` | `doc_no`, `doc_ref`, `doc_ref_date`, `cust_code`, `branch_code`, `vat_type`, `vat_rate`, totals |
+| `ic_trans_detail` | `item_code`, `item_name`, `unit_code`, `qty`, `price`, `wh_code`, `shelf_code`, totals |
 
 ---
 
-*BillFlow Phase 1 — ระบบดึง Email สร้างบิลซื้ออัตโนมัติ*  
-*สอบถามทีม Dev: bos.catdog@gmail.com*
+## ประวัติการทำงาน
+
+เข้า `/logs`
+
+ใช้ดู:
+
+- อีเมลถูกดึงเข้ามาเมื่อไร
+- ระบบสร้างบิลแล้วหรือยัง
+- mapping / product create เกิดเมื่อไร
+- ส่ง SML สำเร็จหรือ error อะไร
+- trace id สำหรับตามปัญหา
+
+กด expand log เพื่อดูข้อมูลสำคัญก่อน raw JSON เช่น:
+
+- บิล
+- เลขเอกสาร SML
+- route
+- วิธีส่ง
+- error
+- trace
+
+---
+
+## Troubleshooting
+
+### ส่ง SML ไม่ได้
+
+ตรวจตามลำดับ:
+
+1. ทุก item มี `item_code` และ `unit_code`
+2. จำนวนและราคามากกว่า 0
+3. เลือกผู้ขายแล้ว
+4. กรอกคลังและพื้นที่เก็บแล้ว
+5. เลือกประเภทภาษีและอัตราภาษีแล้ว
+6. `/settings/channels` endpoint เป็น purchaseorder
+7. SML server `192.168.2.248:8080` เปิดอยู่
+8. ดู `/logs` แล้ว expand row `ส่ง SML ล้มเหลว`
+
+### อีเมลไม่เข้า
+
+1. เข้า `/settings/email`
+2. ดูสถานะล่าสุดของ inbox
+3. กด Poll ตอนนี้
+4. ตรวจ App Password / IMAP enabled / subject filter
+5. ดู `/logs` ว่ามี `รับอีเมล Shopee Shipped` หรือไม่
+
+### สินค้าจับคู่ผิด
+
+1. เปิดบิล
+2. ไปที่ตารางรายการสินค้า
+3. กดจัดการ/เลือกสินค้า
+4. เลือกสินค้าจาก SML catalog
+5. บันทึก mapping เพื่อให้ครั้งต่อไปเรียนรู้
+
+---
+
+## ขอบเขตที่ยังไม่ใช่ Phase 1
+
+Phase 1 ยังไม่เน้น:
+
+- LINE OA chat/bill flow
+- Shopee Excel sale flow
+- Lazada
+- Multi-tenant platform
+- Approval workflow หลายระดับ
+
+ฟีเจอร์เหล่านี้ยังมี code บางส่วนอยู่ แต่ UI ฝั่ง Phase 1 ควรซ่อนหรือไม่ใช้ในการทดสอบลูกค้า
+
+---
+
+## ไฟล์ checklist
+
+ใช้ไฟล์ [phase1-test-checklist.md](phase1-test-checklist.md) เป็นรายการตรวจทีละข้อก่อน demo/test ลูกค้า

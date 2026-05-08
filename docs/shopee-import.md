@@ -1,14 +1,15 @@
 # Shopee Excel Import — การทำงาน
 
-> อัพเดตล่าสุด: 2026-04-24  
-> สถานะ: ✅ Deployed — SML 248 (192.168.2.248) API confirmed working
+> อัพเดตล่าสุด: 2026-05-06
+> สถานะ: ✅ Deployed — SML 248 (`192.168.2.248`) configured on server
 
 ---
 
 ## ภาพรวม
 
-พนักงานนำ Excel export จาก Shopee Seller Center มา upload ที่ `/import/shopee`  
-ระบบ parse orders → ตรวจ duplicate → แสดง preview → พนักงาน confirm → ส่งสร้าง saleinvoice ใน SML 248 ทีละ order
+พนักงานนำ Excel export จาก Shopee Seller Center มา upload ที่ `/import/shopee`
+ระบบ parse orders → ตรวจ duplicate → แสดง preview → พนักงาน confirm → สร้าง bills ใน BillFlow แล้วให้ admin ตรวจ/Retry ส่งเข้า SML 248
+default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` ใช้ได้เมื่อ admin ตั้ง `channel_defaults.endpoint` ให้ชี้ `/SMLJavaRESTService/saleinvoice/v4`
 
 ---
 
@@ -26,18 +27,9 @@
   │   GET /api/settings/shopee-config
   │   ← config pre-filled จาก env vars
   │
-  ├── 2. Config Dialog popup
-  │   ┌─────────────────────────────────┐
-  │   │  cust_code    (รหัสลูกค้า SML)  │
-  │   │  sale_code    (รหัสพนักงานขาย)  │
-  │   │  wh_code      (รหัสคลัง)        │
-  │   │  shelf_code   (รหัสชั้นวาง)     │
-  │   │  unit_code    (หน่วย fallback)   │
-  │   │  vat_type     (0/1/2)           │
-  │   │  vat_rate     (7)               │
-  │   │  doc_time     (09:00)           │
-  │   └─────────────────────────────────┘
-  │   กด "ยืนยัน" → file picker เปิด
+  ├── 2. Preflight config
+  │   - ต้องมี channel_defaults สำหรับ Shopee sale ก่อน
+  │   - UI block file picker ถ้า config ยังไม่พร้อม
   │
   ├── 3. เลือกไฟล์ .xlsx จาก Shopee Seller Center
   │
@@ -65,12 +57,13 @@
       - GET /SMLJavaRESTService/v3/api/product/{sku}
         → flat response: start_sale_unit/wh/shelf
         → data=null ถ้าไม่พบ SKU → ใช้ config defaults
-      - BuildInvoicePayload (คำนวณ VAT)
-      - POST /SMLJavaRESTService/restapi/saleinvoice (retry max 3)
-      - บันทึก bill ลง DB (status='sent' หรือ 'failed')
+      - บันทึก bill + items ลง DB พร้อม candidates/artifacts
+      - ยังไม่ส่ง SML ทันที
+      - admin เปิด bill → route preview → Retry
+      - Retry default: POST /SMLJavaRESTService/v3/api/saleorder
             │
             ▼
-      แสดง results: สำเร็จ X / ล้มเหลว Y + error list
+      แสดง results: created / skipped / failed
 ```
 
 ---
@@ -127,11 +120,14 @@ Headers (ทุก request):
   databaseName:     SHOPEE_SML_DATABASE    (SML1_2026)
 ```
 
-**Config ที่ใช้งานจริง (confirmed 2026-04-24):**
+**Config บน server ที่ตรวจเมื่อ 2026-05-06:**
 ```bash
-guid=smlx  provider=SMLGOH  configFileName=SMLConfigSMLGOH.xml  databaseName=SML1_2026
-doc_format=INV  cust_code=AR00004  wh_code=WH-01  shelf_code=SH-01
+SHOPEE_SML_URL=http://192.168.2.248:8080
+SHOPEE_SML_DOC_FORMAT=INV
+SHIPPED_SML_DOC_FORMAT=PO
 ```
+
+ค่า `party_code`, endpoint, doc prefix/running format, WH/Shelf/VAT override อยู่ใน `channel_defaults` และจัดการผ่าน `/settings/channels`
 
 **ทดสอบ connection:**
 ```bash
@@ -176,7 +172,7 @@ Response fields ที่ใช้ (priority):
 
 ถ้า data=null → ใช้ค่า config defaults (WHCode, ShelfCode, UnitCode จาก env)
 
-⚠️ **SHOPEE_SML_UNIT_CODE ต้องไม่ว่าง** — SML reject เมื่อ `unit_code=""`  
+⚠️ **SHOPEE_SML_UNIT_CODE ต้องไม่ว่าง** — SML reject เมื่อ `unit_code=""`
 ตั้ง fallback เช่น `SHOPEE_SML_UNIT_CODE=ถุง`
 
 ---
@@ -191,7 +187,30 @@ Response fields ที่ใช้ (priority):
 
 ---
 
-## Saleinvoice Payload
+## Saleorder Payload (default retry route)
+
+Shopee sale bills ส่งผ่าน `saleorder_client.go` โดย default endpoint เป็น SML 248 `v3/api/saleorder` และใช้ `items` array
+
+```json
+{
+  "doc_no": "BF-SO2605xxxx",
+  "doc_format_code": "INV",
+  "doc_date": "2026-05-06",
+  "cust_code": "AR00004",
+  "items": [
+    {
+      "item_code": "CON-01000",
+      "unit_code": "ถุง",
+      "wh_code": "WH-01",
+      "shelf_code": "SH-01",
+      "qty": 2,
+      "price": 100
+    }
+  ]
+}
+```
+
+## Saleinvoice Payload (v4 endpoint)
 
 ```json
 {
@@ -218,6 +237,7 @@ Response fields ที่ใช้ (priority):
 ⚠️ หมายเหตุสำคัญ:
 - key ต้องเป็น **`"details"`** ไม่ใช่ `"items"`
 - `is_permium` เป็น **int** (0/1) ไม่ใช่ bool — typo ตาม SML API จริง
+- ใช้ path `POST /SMLJavaRESTService/saleinvoice/v4` เมื่อ `channel_defaults.endpoint` มีคำว่า `saleinvoice`
 - ไม่มี `qty` field แยก (ราคาคำนวณไว้ใน `price_exclude_vat` และ `sum_amount_exclude_vat`)
 
 ---
@@ -251,6 +271,7 @@ docker run --rm postgres:16-alpine psql \
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `backend/internal/handlers/shopee_import.go` | GetConfig, Preview, Confirm handlers |
-| `backend/internal/services/sml/saleinvoice_client.go` | REST client สำหรับ SML 248 |
+| `backend/internal/services/sml/saleorder_client.go` | REST client default สำหรับ Shopee sale |
+| `backend/internal/services/sml/saleinvoice_client.go` | REST client สำหรับ `POST /SMLJavaRESTService/saleinvoice/v4` |
 | `frontend/src/pages/ShopeeImport.tsx` | UI page + config dialog + preview table |
 | `backend/cmd/server/main.go` | routes: shopee-config, shopee/preview, shopee/confirm |

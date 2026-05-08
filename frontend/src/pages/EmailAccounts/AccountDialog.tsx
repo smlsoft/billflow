@@ -47,6 +47,8 @@ import { TagInput } from '@/components/common/TagInput'
 import client from '@/api/client'
 import { cn } from '@/lib/utils'
 
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
 export interface IMAPAccount {
   id: string
   name: string
@@ -97,7 +99,20 @@ const DEFAULTS: FormState = {
 }
 
 const SHOPEE_DEFAULT_DOMAINS = ['shopee.co.th', 'mail.shopee.co.th', 'noreply.shopee.co.th']
-const SHOPEE_DEFAULT_SUBJECTS = ['คำสั่งซื้อ', 'ถูกจัดส่งแล้ว', 'ยืนยันการชำระเงิน']
+const SHOPEE_DEFAULT_SUBJECTS = ['ถูกจัดส่งแล้ว', 'ยืนยันการชำระเงินคำสั่งซื้อหมายเลข']
+
+function newAccountDefaults(): FormState {
+  if (PHASE < 2) {
+    return {
+      ...DEFAULTS,
+      name: 'Shopee Inbox',
+      channel: 'shopee',
+      shopee_domains: SHOPEE_DEFAULT_DOMAINS,
+      filter_subjects: SHOPEE_DEFAULT_SUBJECTS,
+    }
+  }
+  return DEFAULTS
+}
 
 // ─── Provider/preset guides ──────────────────────────────────────────────────
 
@@ -293,7 +308,7 @@ function PresetCard({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-all',
+        'flex min-h-[86px] flex-col items-start gap-1 rounded-md border p-2.5 text-left transition-all',
         selected
           ? 'border-primary bg-primary/5 shadow-sm'
           : 'border-border hover:border-primary/40 hover:bg-accent/40',
@@ -301,7 +316,7 @@ function PresetCard({
     >
       <Icon
         className={cn(
-          'h-5 w-5',
+          'h-4 w-4',
           selected ? 'text-primary' : 'text-muted-foreground',
         )}
       />
@@ -324,7 +339,7 @@ function arrayToCSV(a: string[]): string {
 }
 
 function fromAccount(a: IMAPAccount | null): FormState {
-  if (!a) return DEFAULTS
+  if (!a) return newAccountDefaults()
   return {
     name: a.name,
     host: a.host,
@@ -372,7 +387,7 @@ function SectionHeader({
   subtitle?: string
 }) {
   return (
-    <div className="flex items-center gap-2 border-b border-border/60 pb-2">
+    <div className="flex items-center gap-2 border-b border-border/60 pb-1.5">
       <Icon className="h-4 w-4 text-primary" />
       <div>
         <h4 className="text-sm font-semibold leading-none">{title}</h4>
@@ -498,7 +513,7 @@ export function AccountDialog({
         toast.success('บันทึกแล้ว')
       } else {
         await client.post('/api/settings/imap-accounts', body)
-        toast.success('เพิ่ม inbox สำเร็จ')
+        toast.success('เพิ่มกล่องเมลสำเร็จ')
       }
       onSaved()
       onOpenChange(false)
@@ -511,26 +526,31 @@ export function AccountDialog({
   }
 
   const isShopee = form.channel === 'shopee'
+  const visiblePresets = PHASE < 2
+    ? PRESETS.filter((p) => p.id === 'gmail-shopee' || p.id === 'outlook-shopee' || p.id === 'custom')
+    : PRESETS
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="grid max-h-[92vh] max-w-4xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
         <DialogHeader>
-          <DialogTitle>{editing ? 'แก้ไข Inbox' : 'เพิ่ม Inbox ใหม่'}</DialogTitle>
+          <DialogTitle>{editing ? 'แก้ไขกล่องเมล' : 'เพิ่มกล่องเมลใหม่'}</DialogTitle>
           <DialogDescription>
-            ตั้งค่า IMAP สำหรับดึงอีเมลเข้าระบบ — Poll interval ขั้นต่ำ 5 นาที (Gmail rate limit)
+            {PHASE < 2
+              ? 'ตั้งค่ากล่องเมลที่รับอีเมล Shopee เพื่อสร้างบิลซื้ออัตโนมัติ'
+              : 'ตั้งค่าอีเมลสำหรับดึงบิลเข้า BillFlow — ดึงอีเมลได้ถี่สุดทุก 5 นาที'}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6">
+        <div className="-mx-6 space-y-4 overflow-y-auto px-6 py-1">
           {/* Preset cards — only on Add, not Edit */}
           {!editing && (
             <div className="space-y-2">
               <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                เลือก preset เพื่อเริ่มต้นด่วน
+                เลือกรูปแบบเพื่อเริ่มต้นด่วน
               </Label>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {PRESETS.map((p) => (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {visiblePresets.map((p) => (
                   <PresetCard
                     key={p.id}
                     preset={p}
@@ -543,49 +563,59 @@ export function AccountDialog({
           )}
 
           {/* ─── Section: การเชื่อมต่อ ─── */}
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             <SectionHeader
               icon={Plug}
               title="การเชื่อมต่อ"
-              subtitle="IMAP server + ข้อมูล login"
+              subtitle="เซิร์ฟเวอร์อีเมลและข้อมูลเข้าสู่ระบบ"
             />
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               <div className="space-y-1">
-                <Label htmlFor="ac-name">ชื่อ inbox</Label>
+                <Label htmlFor="ac-name">ชื่อกล่องเมล</Label>
                 <Input
                   id="ac-name"
                   value={form.name}
                   onChange={(e) => set('name', e.target.value)}
-                  placeholder="เช่น Main inbox / Shopee orders"
+                  placeholder="เช่น Shopee Inbox"
                 />
-                <Hint>ชื่อภายในสำหรับแยกแยะ inbox — จะแสดงในตาราง</Hint>
+                <Hint>ชื่อภายในสำหรับแยกกล่องเมล — จะแสดงในตาราง</Hint>
               </div>
-              <div className="space-y-1">
-                <Label>Channel (ประเภทการ route อีเมล)</Label>
-                <Select
-                  value={form.channel}
-                  onValueChange={(v) => set('channel', v as FormState['channel'])}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="general">General — PDF / รูป / Excel แนบ</SelectItem>
-                    <SelectItem value="shopee">Shopee — Order + Shipped</SelectItem>
-                    <SelectItem value="lazada">Lazada — (กำลังพัฒนา)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Hint>
-                  เลือก <b>Shopee</b> ถ้าเป็น inbox สำหรับร้านค้า Shopee, <b>General</b>{' '}
-                  สำหรับอีเมลที่มี PDF/Excel แนบ (เช่น vendor)
-                </Hint>
-              </div>
+              {PHASE < 2 ? (
+                <div className="space-y-1">
+                  <Label>ประเภทอีเมล</Label>
+                  <div className="flex h-10 items-center rounded-md border border-warning/30 bg-warning/5 px-3 text-sm font-medium text-foreground">
+                    Shopee — ออเดอร์และบิลซื้อ
+                  </div>
+                  <Hint>Phase 1 ใช้เฉพาะอีเมล Shopee เพื่อสร้างบิลซื้อ</Hint>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <Label>ประเภทอีเมล</Label>
+                  <Select
+                    value={form.channel}
+                    onValueChange={(v) => set('channel', v as FormState['channel'])}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="general">ไฟล์แนบทั่วไป — PDF / รูป / Excel</SelectItem>
+                      <SelectItem value="shopee">Shopee — ออเดอร์และบิลซื้อ</SelectItem>
+                      <SelectItem value="lazada">Lazada — (กำลังพัฒนา)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Hint>
+                    เลือก <b>Shopee</b> ถ้าเป็นกล่องเมลสำหรับร้านค้า Shopee, <b>ไฟล์แนบทั่วไป</b>{' '}
+                    สำหรับอีเมลที่มี PDF/Excel แนบ
+                  </Hint>
+                </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-2.5">
               <div className="col-span-2 space-y-1">
-                <Label htmlFor="ac-host">IMAP Host</Label>
+                  <Label htmlFor="ac-host">เซิร์ฟเวอร์อีเมล</Label>
                 <Input
                   id="ac-host"
                   value={form.host}
@@ -597,7 +627,7 @@ export function AccountDialog({
                 </Hint>
               </div>
               <div className="space-y-1">
-                <Label htmlFor="ac-port">Port</Label>
+                <Label htmlFor="ac-port">พอร์ต</Label>
                 <Input
                   id="ac-port"
                   type="number"
@@ -608,9 +638,9 @@ export function AccountDialog({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               <div className="space-y-1">
-                <Label htmlFor="ac-user">Username (อีเมล)</Label>
+                <Label htmlFor="ac-user">อีเมล</Label>
                 <Input
                   id="ac-user"
                   value={form.username}
@@ -618,12 +648,12 @@ export function AccountDialog({
                   placeholder="billing@company.com"
                   autoComplete="off"
                 />
-                <Hint>อีเมลที่ใช้ login เข้า IMAP</Hint>
+                <Hint>บัญชีอีเมลที่ BillFlow จะใช้ดึงข้อความ</Hint>
               </div>
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="ac-pwd">
-                    Password
+                    รหัสผ่าน
                     {editing && (
                       <span className="ml-1 text-xs font-normal text-muted-foreground">
                         (เว้นว่างถ้าไม่เปลี่ยน)
@@ -646,7 +676,7 @@ export function AccountDialog({
                     type="button"
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                     onClick={() => setShowPwd((p) => !p)}
-                    aria-label={showPwd ? 'ซ่อน password' : 'แสดง password'}
+                    aria-label={showPwd ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
                   >
                     {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
@@ -657,15 +687,17 @@ export function AccountDialog({
           </div>
 
           {/* ─── Section: ตำแหน่งอีเมล ─── */}
-          <div className="space-y-3">
-            <SectionHeader
-              icon={ClipboardList}
-              title="ตำแหน่งอีเมลและการกรอง"
-              subtitle="folder ไหน + กรองอย่างไรก่อนเข้าระบบ"
-            />
+          <details className="group space-y-2.5 rounded-md border border-border/70 p-3" open>
+            <summary className="list-none">
+              <SectionHeader
+                icon={ClipboardList}
+                title="เลือกอีเมลที่จะดึง"
+                subtitle="เลือกโฟลเดอร์และคำที่ใช้คัดอีเมลก่อนเข้าระบบ"
+              />
+            </summary>
 
             <div className="space-y-1">
-              <Label>Mailbox folder</Label>
+              <Label>โฟลเดอร์อีเมล</Label>
               <div className="flex gap-2">
                 {folders.length > 0 ? (
                   <Select value={form.mailbox} onValueChange={(v) => set('mailbox', v)}>
@@ -703,61 +735,62 @@ export function AccountDialog({
                 </Button>
               </div>
               <Hint>
-                ปกติใช้ <code>INBOX</code> — ถ้ามี filter rule ใน Gmail/Outlook
-                แยกอีเมลไป folder เฉพาะ ให้กด "โหลดรายการ" แล้วเลือก folder
+                ปกติใช้ <code>INBOX</code>. ถ้าตั้งกฎแยกอีเมล Shopee ไว้ในโฟลเดอร์อื่น ให้กดโหลดรายการแล้วเลือกโฟลเดอร์นั้น
               </Hint>
             </div>
 
             <div className="space-y-1">
-              <Label>Filter From</Label>
+              <Label>กรองผู้ส่ง</Label>
               <TagInput
                 value={form.filter_from}
                 onChange={(v) => set('filter_from', v)}
-                placeholder="เพิ่มอีเมลผู้ส่งแล้วกด Enter (ถ้าไม่ระบุ = ทุกคน)"
+                placeholder="เพิ่มอีเมลหรือโดเมนผู้ส่ง แล้วกด Enter"
               />
               <Hint>
-                ดึงเฉพาะอีเมลจากผู้ส่งเหล่านี้ — <b>ปล่อยว่าง = รับจากทุกคน</b>{' '}
-                (ระบบใช้ contains: <code>vendor@company.com</code> match
-                อีเมลใด ๆ ที่มีคำนี้)
+                ปล่อยว่างได้ เพราะส่วน Shopee ด้านล่างมีรายการผู้ส่งที่ยอมรับอยู่แล้ว
               </Hint>
             </div>
 
             <div className="space-y-1">
-              <Label>Filter Subjects (keyword ใน subject)</Label>
+              <Label>กรองหัวข้ออีเมล</Label>
               <TagInput
                 value={form.filter_subjects}
                 onChange={(v) => set('filter_subjects', v)}
-                placeholder="พิมพ์ keyword เช่น PO, ใบสั่งซื้อ, ถูกจัดส่งแล้ว"
+                placeholder="เช่น คำสั่งซื้อ, ถูกจัดส่งแล้ว, ยืนยันการชำระเงิน"
                 lower
               />
-              <Hint>
-                ดึงเฉพาะอีเมลที่ subject <b>มีคำใดคำหนึ่ง</b> ในรายการ —
-                ปล่อยว่าง = รับทุก subject. ระบบใช้ contains ไม่ต้องเป๊ะ.
+      <Hint>
+                Phase 1 แนะนำให้ใช้เฉพาะ <code>ถูกจัดส่งแล้ว</code> และ{' '}
+                <code>ยืนยันการชำระเงินคำสั่งซื้อหมายเลข</code>. อย่าใส่คำกว้าง ๆ เช่น{' '}
+                <code>ใบสั่งซื้อสินค้า เลขที่</code> เพราะจะดึงอีเมล PO ทั่วไปเข้ามาแล้ว AI อ่านไม่เจอรายการสินค้า
               </Hint>
             </div>
-          </div>
+          </details>
 
           {/* ─── Section: Shopee config ─── */}
-          <div
+          <details
+            open={isShopee}
             className={cn(
-              'space-y-3 rounded-lg border p-4 transition-opacity',
+              'group space-y-2.5 rounded-md border p-3 transition-opacity',
               isShopee
                 ? 'border-warning/30 bg-warning/5'
                 : 'border-border bg-muted/20 opacity-60',
             )}
           >
-            <SectionHeader
-              icon={ShoppingBag}
-              title="Shopee — config เฉพาะ"
-              subtitle={
-                isShopee
-                  ? 'กำหนด domain ของ Shopee เพื่อกันอีเมลปลอม'
-                  : 'ส่วนนี้ใช้เฉพาะ channel = Shopee — เลือกด้านบนเพื่อเปิดใช้งาน'
-              }
-            />
+            <summary className="list-none">
+              <SectionHeader
+                icon={ShoppingBag}
+                title="Shopee — ตั้งค่าเฉพาะ"
+                subtitle={
+                  isShopee
+                    ? 'กำหนดผู้ส่งของ Shopee เพื่อกันอีเมลปลอม'
+                    : 'ส่วนนี้ใช้เฉพาะประเภท Shopee — เลือกด้านบนเพื่อเปิดใช้งาน'
+                }
+              />
+            </summary>
 
             <div className="space-y-1">
-              <Label>ผู้ส่งที่ยอมรับ (Shopee senders)</Label>
+              <Label>ผู้ส่ง Shopee ที่ยอมรับ</Label>
               <TagInput
                 value={form.shopee_domains}
                 onChange={(v) => set('shopee_domains', v)}
@@ -770,27 +803,25 @@ export function AccountDialog({
                 className={cn(!isShopee && 'pointer-events-none')}
               />
               <Hint>
-                ใส่ได้ทั้ง <b>domain</b> (เช่น <code>shopee.co.th</code>) หรือ{' '}
-                <b>อีเมลเต็ม</b> (เช่น <code>forwarder@gmail.com</code>) — ระบบจะรับเฉพาะอีเมล
-                ที่ส่งจาก domain/อีเมลในรายการเท่านั้น (กันอีเมลปลอม). Default 3 ค่า:{' '}
-                <code>shopee.co.th</code>, <code>mail.shopee.co.th</code>,{' '}
-                <code>noreply.shopee.co.th</code>. ใช้อีเมลเต็มเมื่อมีคน <i>fwd</i> อีเมล
-                Shopee เข้ามาจากที่อยู่อื่น
+                BillFlow จะรับเฉพาะอีเมลจากโดเมนหรืออีเมลในรายการนี้ เพื่อกันอีเมลปลอม.
+                ถ้ามีการ forward จากอีเมลอื่น ให้เพิ่มอีเมลผู้ forward เข้าไปได้
               </Hint>
             </div>
-          </div>
+          </details>
 
           {/* ─── Section: ตารางเวลา ─── */}
-          <div className="space-y-3">
-            <SectionHeader
-              icon={Clock}
-              title="ตารางเวลาและสถานะ"
-              subtitle="ดึงย้อนหลังกี่วัน + ดึงทุกกี่นาที"
-            />
+          <details className="group space-y-2.5 rounded-md border border-border/70 p-3" open>
+            <summary className="list-none">
+              <SectionHeader
+                icon={Clock}
+                title="รอบการดึงอีเมล"
+                subtitle="กำหนดช่วงย้อนหลังและความถี่ในการตรวจอีเมล"
+              />
+            </summary>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-2.5">
               <div className="space-y-1">
-                <Label htmlFor="ac-lookback">Lookback (วัน)</Label>
+                <Label htmlFor="ac-lookback">ดึงย้อนหลัง (วัน)</Label>
                 <Input
                   id="ac-lookback"
                   type="number"
@@ -804,7 +835,7 @@ export function AccountDialog({
                 </Hint>
               </div>
               <div className="space-y-1">
-                <Label htmlFor="ac-interval">Poll interval (นาที)</Label>
+                <Label htmlFor="ac-interval">ดึงทุกกี่นาที</Label>
                 <Input
                   id="ac-interval"
                   type="number"
@@ -815,10 +846,10 @@ export function AccountDialog({
                 <Hint>
                   {form.poll_interval_minutes < 5 ? (
                     <span className="text-destructive">
-                      ⚠️ ขั้นต่ำ 5 นาที (Gmail rate limit)
+                      ขั้นต่ำ 5 นาที
                     </span>
                   ) : (
-                    'ดึงอีเมลทุกกี่นาที — แนะนำ 5'
+                    'แนะนำ 5 นาที'
                   )}
                 </Hint>
               </div>
@@ -830,13 +861,13 @@ export function AccountDialog({
                     onCheckedChange={(c) => set('enabled', c)}
                   />
                   <span className="ml-2 text-sm text-muted-foreground">
-                    {form.enabled ? 'ใช้งาน' : 'ปิด (ไม่ poll)'}
+                    {form.enabled ? 'ใช้งาน' : 'ปิดชั่วคราว'}
                   </span>
                 </div>
-                <Hint>ปิดเพื่อหยุดดึงชั่วคราวโดยไม่ลบ inbox</Hint>
+                <Hint>ปิดเพื่อหยุดดึงชั่วคราวโดยไม่ลบกล่องเมล</Hint>
               </div>
             </div>
-          </div>
+          </details>
 
           {/* ─── Test result ─── */}
           {testResult && (
@@ -861,7 +892,7 @@ export function AccountDialog({
           )}
         </div>
 
-        <DialogFooter className="gap-2 sm:justify-between">
+        <DialogFooter className="gap-2 border-t pt-3 sm:justify-between">
           <Button variant="outline" onClick={handleTest} disabled={testing || saving}>
             {testing ? (
               <Loader2 className="h-4 w-4 animate-spin" />

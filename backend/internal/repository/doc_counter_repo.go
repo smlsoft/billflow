@@ -59,6 +59,17 @@ func (r *DocCounterRepo) NextSeq(prefix, period string) (int, error) {
 //
 // Both prefix and format default to safe values when blank: "BF" and "YYMM####".
 func (r *DocCounterRepo) GenerateDocNo(prefix, format string, now time.Time) (string, error) {
+	return r.renderDocNo(prefix, format, now, true)
+}
+
+// PeekDocNo renders the next doc_no without incrementing/reserving the
+// sequence. It is for UI preview only; GenerateDocNo remains the source of
+// truth when sending.
+func (r *DocCounterRepo) PeekDocNo(prefix, format string, now time.Time) (string, error) {
+	return r.renderDocNo(prefix, format, now, false)
+}
+
+func (r *DocCounterRepo) renderDocNo(prefix, format string, now time.Time, increment bool) (string, error) {
 	if prefix == "" {
 		prefix = "BF"
 	}
@@ -83,9 +94,23 @@ func (r *DocCounterRepo) GenerateDocNo(prefix, format string, now time.Time) (st
 		period = "_"
 	}
 
-	seq, err := r.NextSeq(prefix, period)
-	if err != nil {
-		return "", err
+	seq := 1
+	if increment {
+		var err error
+		seq, err = r.NextSeq(prefix, period)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		var lastUsed int
+		err := r.db.QueryRow(
+			`SELECT last_used_seq FROM doc_counters WHERE prefix = $1 AND period = $2`,
+			prefix, period,
+		).Scan(&lastUsed)
+		if err != nil && err != sql.ErrNoRows {
+			return "", fmt.Errorf("doc counter peek: %w", err)
+		}
+		seq = lastUsed + 1
 	}
 
 	// Count contiguous # block to determine pad width. Default to 4 if absent.

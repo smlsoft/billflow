@@ -1,15 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Edit, Check, X, Trash2 } from 'lucide-react'
+import { AlertCircle, Check, Edit, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { TableRow, TableCell } from '@/components/ui/table'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { cn } from '@/lib/utils'
 import api from '@/api/client'
@@ -28,14 +22,15 @@ interface Props {
   // When true, briefly flash this row (1.5s) so the admin's eye lands on
   // it. Triggered by the BillTotal warning card's "ดู →" link.
   highlighted?: boolean
+  rawNameLabel?: string
 }
 
 function MatchBadge({ score }: { score: number | null }) {
   const s = scoreStyle(score)
   const tooltip =
     score == null
-      ? 'รหัสนี้ไม่อยู่ใน top-5 catalog candidates ที่ระบบหาให้ — น่าจะแก้ผ่าน MapItemModal'
-      : `ความใกล้เคียงกับ catalog (จาก embedding cosine similarity): ${s.label}`
+      ? 'รายการนี้ถูกเลือกหรือพิมพ์เอง'
+      : `ความใกล้เคียงกับสินค้าใน SML: ${s.label}`
   return (
     <span
       title={tooltip}
@@ -52,7 +47,25 @@ function MatchBadge({ score }: { score: number | null }) {
   )
 }
 
-export function BillItemRow({ item, billId, editable, onUpdated, onDeleted, highlighted }: Props) {
+function IssueBadge({ reason }: { reason: string }) {
+  if (!reason) return null
+  return (
+    <span className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
+      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+      <span className="break-words">{reason}</span>
+    </span>
+  )
+}
+
+export function BillItemRow({
+  item,
+  billId,
+  editable,
+  onUpdated,
+  onDeleted,
+  highlighted,
+  rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
+}: Props) {
   // When the parent flips `highlighted` true (admin clicked "ดู →" in the
   // BillTotal warning card) we scroll this row into view + add a brief tint
   // ring so the admin's eye lands on the right place. Self-clearing flag.
@@ -146,26 +159,18 @@ export function BillItemRow({ item, billId, editable, onUpdated, onDeleted, high
             flashing && 'bg-warning/15 ring-2 ring-warning/40',
           )}
         >
-          {/* Validation status cell — ⚠ icon when this row blocks SML send */}
-          <TableCell className="w-6 px-1 text-center align-middle">
-            {issueReason && (
-              <TooltipProvider delayDuration={150}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <AlertCircle
-                      className="h-3.5 w-3.5 text-warning"
-                      strokeWidth={2.25}
-                      aria-label={`ปัญหา: ${issueReason}`}
-                    />
-                  </TooltipTrigger>
-                  <TooltipContent side="right" className="text-xs">
-                    {issueReason}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+          <TableCell className="max-w-[360px] align-top">
+            <div className="break-words text-sm leading-6 text-foreground">
+              {item.raw_name}
+            </div>
+            {item.source_sku && (
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                SKU Shopee: <code className="font-mono">{item.source_sku}</code>
+                {!item.item_code && <span className="text-warning"> · ยังไม่พบในสินค้า SML</span>}
+              </div>
             )}
+            <IssueBadge reason={issueReason} />
           </TableCell>
-          <TableCell className="max-w-[280px] break-words">{item.raw_name}</TableCell>
           <TableCell>
             {item.item_code ? (
               <code className="font-mono text-xs text-foreground">{item.item_code}</code>
@@ -173,7 +178,7 @@ export function BillItemRow({ item, billId, editable, onUpdated, onDeleted, high
               <span className="text-muted-foreground">—</span>
             )}
           </TableCell>
-          <TableCell className="max-w-[260px] break-words text-sm">
+          <TableCell className="max-w-[300px] break-words text-sm">
             <span className={matchInfo.itemName ? 'text-foreground' : 'text-muted-foreground'}>
               {matchInfo.itemName ?? '—'}
             </span>
@@ -188,9 +193,9 @@ export function BillItemRow({ item, billId, editable, onUpdated, onDeleted, high
             {priceMismatch && (
               <div
                 className="text-[11px] text-amber-700 mt-0.5"
-                title={`Catalog ราคา ฿${catalogPrice.toLocaleString()} — ต่างจากบิล ${Math.round((Math.abs(billPrice - catalogPrice) / catalogPrice) * 100)}%`}
+                title={`ราคาใน SML ฿${catalogPrice.toLocaleString()} — ต่างจากบิล ${Math.round((Math.abs(billPrice - catalogPrice) / catalogPrice) * 100)}%`}
               >
-                ⚠ catalog ฿{catalogPrice.toLocaleString()}
+                ราคา SML ฿{catalogPrice.toLocaleString()}
               </div>
             )}
           </TableCell>
@@ -210,7 +215,7 @@ export function BillItemRow({ item, billId, editable, onUpdated, onDeleted, high
                 }}
               >
                 <Edit className="h-3.5 w-3.5" />
-                แก้ไข
+                {item.item_code ? 'แก้ไข' : 'จับคู่'}
               </Button>
               <Button
                 type="button"
@@ -249,90 +254,114 @@ export function BillItemRow({ item, billId, editable, onUpdated, onDeleted, high
           currentCode={draft.item_code}
           currentUnit={draft.unit_code}
           currentPrice={Number(draft.price) || 0}
+          rawNameLabel={rawNameLabel}
           onPick={(code, unit) =>
             setDraft((d) => ({ ...d, item_code: code, unit_code: unit || d.unit_code }))
           }
           onClose={() => setShowMapModal(false)}
         />
       )}
-      <TableRow className="bg-muted/20">
-        {/* Empty status cell — keeps column alignment with the read-only row */}
-        <TableCell className="w-6 px-1" />
-        <TableCell className="max-w-[280px] break-words text-sm text-muted-foreground">
-          {item.raw_name}
-        </TableCell>
-        <TableCell>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 min-w-[140px] justify-start font-mono text-xs"
-            onClick={() => setShowMapModal(true)}
-            title="เปิดเพื่อค้นหาหรือสร้างสินค้าใหม่"
-          >
-            {draft.item_code ? (
-              draft.item_code
-            ) : (
-              <span className="text-muted-foreground font-sans">เลือกสินค้า...</span>
-            )}
-          </Button>
-        </TableCell>
-        <TableCell className="text-sm text-muted-foreground">
-          {matchInfo.itemName ?? '—'}
-        </TableCell>
-        <TableCell className="text-center">
-          <MatchBadge score={matchInfo.score} />
-        </TableCell>
-        <TableCell className="text-right">
-          <Input
-            type="number"
-            step="any"
-            value={draft.qty}
-            onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
-            className="h-8 w-20 text-right"
-          />
-        </TableCell>
-        <TableCell>
-          <Input
-            value={draft.unit_code}
-            onChange={(e) => setDraft((d) => ({ ...d, unit_code: e.target.value }))}
-            className="h-8 w-20"
-          />
-        </TableCell>
-        <TableCell className="text-right">
-          <Input
-            type="number"
-            step="any"
-            value={draft.price}
-            onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
-            className="h-8 w-24 text-right"
-          />
-        </TableCell>
-        <TableCell className="text-right tabular-nums font-medium">
-          ฿{(Number(draft.qty || 0) * Number(draft.price || 0)).toLocaleString()}
-        </TableCell>
-        <TableCell className="text-center whitespace-nowrap">
-          <Button
-            type="button"
-            size="sm"
-            className="h-7 px-2"
-            disabled={saving}
-            onClick={handleSave}
-          >
-            <Check className="h-3.5 w-3.5" />
-            {saving ? '...' : 'บันทึก'}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2"
-            disabled={saving}
-            onClick={() => setEditing(false)}
-          >
-            <X className="h-3.5 w-3.5" />
-            ยกเลิก
-          </Button>
+      <TableRow className="bg-muted/20 hover:bg-muted/20">
+        <TableCell colSpan={9} className="p-3">
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="grid gap-4 xl:grid-cols-[minmax(260px,1fr)_minmax(360px,1.15fr)_420px]">
+              <div className="space-y-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {rawNameLabel}
+                </p>
+                <p className="break-words text-sm font-medium leading-6 text-foreground">
+                  {item.raw_name}
+                </p>
+                <IssueBadge reason={issueReason} />
+              </div>
+
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    สินค้าใน SML
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full justify-start gap-2 px-3 text-left"
+                    onClick={() => setShowMapModal(true)}
+                    title="เปิดเพื่อค้นหาหรือสร้างสินค้าใหม่"
+                  >
+                    <span className="font-mono text-xs">
+                      {draft.item_code || 'เลือกสินค้า'}
+                    </span>
+                    {matchInfo.itemName && (
+                      <span className="truncate text-sm font-normal text-muted-foreground">
+                        {matchInfo.itemName}
+                      </span>
+                    )}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <MatchBadge score={matchInfo.score} />
+                  <span className="text-xs text-muted-foreground">
+                    ระบบจะจดจำคู่จับคู่นี้หลังบันทึก
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <label className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">จำนวน</span>
+                  <Input
+                    type="number"
+                    step="any"
+                    value={draft.qty}
+                    onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+                    className="h-10 text-right"
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">หน่วย</span>
+                  <Input
+                    value={draft.unit_code}
+                    onChange={(e) => setDraft((d) => ({ ...d, unit_code: e.target.value }))}
+                    className="h-10"
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">ราคา</span>
+                  <Input
+                    type="number"
+                    step="any"
+                    value={draft.price}
+                    onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+                    className="h-10 text-right"
+                  />
+                </label>
+                <div className="col-span-3 flex items-center justify-between rounded-md bg-muted/50 px-3 py-2">
+                  <span className="text-xs font-medium text-muted-foreground">รวมรายการนี้</span>
+                  <span className="tabular-nums text-sm font-semibold text-foreground">
+                    ฿{(Number(draft.qty || 0) * Number(draft.price || 0)).toLocaleString()}
+                  </span>
+                </div>
+                <div className="col-span-3 flex justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={saving}
+                    onClick={() => setEditing(false)}
+                  >
+                    <X className="h-4 w-4" />
+                    ยกเลิก
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={saving}
+                    onClick={handleSave}
+                  >
+                    <Check className="h-4 w-4" />
+                    {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
         </TableCell>
       </TableRow>
     </>

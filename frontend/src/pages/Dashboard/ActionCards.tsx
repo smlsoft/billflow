@@ -1,16 +1,16 @@
 import { Link } from 'react-router-dom'
 import {
   AlertOctagon,
-  AlertTriangle,
   ArrowUpRight,
-  Clock,
+  FileText,
   Mail,
   MessageSquare,
+  ShoppingBag,
   type LucideIcon,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { BILL_STATUS_LABEL } from '@/lib/labels'
+import { ENABLE_SALES_ORDERS } from '@/lib/featureFlags'
 import type { DashboardStats } from '@/types'
 
 // VITE_PHASE mirrors the same constant in Sidebar.tsx.
@@ -32,6 +32,7 @@ interface Action {
   tone: 'neutral' | 'urgent'
   // minPhase — hide this card when VITE_PHASE < minPhase
   minPhase?: number
+  enabled?: boolean
 }
 
 // ActionCards is the "ต้อง action" row at the top of the Dashboard.
@@ -44,35 +45,39 @@ interface Action {
 //   urgent  — red accent + animate-pulse on the dot when count > 0
 //             (used for failures: bill failed, email inbox down)
 export function ActionCards({ stats, loading }: Props) {
-  const pending = stats?.pending ?? 0
-  const needsReview = stats?.needs_review ?? 0
-  const failed = stats?.sml_failed ?? 0
+  const purchasePending = stats?.purchase_pending ?? 0
+  const purchaseNeedsReview = stats?.purchase_needs_review ?? 0
+  const purchaseFailed = stats?.purchase_failed ?? 0
+  const salesPending = stats?.sales_pending ?? 0
+  const salesNeedsReview = stats?.sales_needs_review ?? 0
+  const salesFailed = stats?.sales_failed ?? 0
   const unread = stats?.unread_messages ?? 0
   const emailErrors = stats?.email_inbox_errors ?? 0
 
   const actions: Action[] = [
     {
-      label: BILL_STATUS_LABEL.pending,
-      count: pending,
-      hint: 'รอส่ง SML',
-      icon: Clock,
-      to: '/bills?status=pending',
+      label: 'ใบสั่งซื้อ',
+      count: purchasePending + purchaseNeedsReview,
+      hint: `${purchaseNeedsReview} ต้องตรวจ · ${purchasePending} พร้อมส่ง`,
+      icon: FileText,
+      to: purchaseNeedsReview > 0 ? '/bills?status=needs_review' : '/bills?status=pending',
       tone: 'neutral',
     },
     {
-      label: BILL_STATUS_LABEL.needs_review,
-      count: needsReview,
-      hint: 'AI map สินค้าไม่ได้ — ต้องแก้ก่อนส่ง SML',
-      icon: AlertTriangle,
-      to: '/bills?status=needs_review',
-      tone: needsReview > 0 ? 'urgent' : 'neutral',
+      label: 'ใบสั่งขาย',
+      count: salesPending + salesNeedsReview,
+      hint: `${salesNeedsReview} ต้องตรวจ · ${salesPending} พร้อมส่ง`,
+      icon: ShoppingBag,
+      to: salesNeedsReview > 0 ? '/sales-orders?status=needs_review' : '/sales-orders?status=pending',
+      tone: salesNeedsReview > 0 ? 'urgent' : 'neutral',
+      enabled: ENABLE_SALES_ORDERS,
     },
     {
-      label: BILL_STATUS_LABEL.failed,
-      count: failed,
-      hint: 'รอ retry หลังแก้ปัญหา',
+      label: 'ส่ง SML ไม่สำเร็จ',
+      count: purchaseFailed + salesFailed,
+      hint: `${purchaseFailed} ซื้อ · ${salesFailed} ขาย`,
       icon: AlertOctagon,
-      to: '/bills?status=failed',
+      to: ENABLE_SALES_ORDERS && salesFailed > 0 ? '/sales-orders?status=failed' : '/bills?status=failed',
       tone: 'urgent',
     },
     {
@@ -85,21 +90,21 @@ export function ActionCards({ stats, loading }: Props) {
       minPhase: 2,
     },
     {
-      label: 'Email มีปัญหา',
+      label: 'อีเมลต้องดู',
       count: emailErrors,
-      hint: 'inbox ที่ poll fail',
+      hint: 'ดึงเมลได้ แต่สร้างบิลไม่ครบ',
       icon: Mail,
       to: '/settings/email',
       tone: 'urgent',
     },
   ]
 
-  const visibleActions = actions.filter((a) => !a.minPhase || PHASE >= a.minPhase)
+  const visibleActions = actions.filter((a) => a.enabled !== false && (!a.minPhase || PHASE >= a.minPhase))
 
   return (
     <div className={cn(
       'grid gap-3',
-      visibleActions.length === 3 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2 sm:grid-cols-4',
+      visibleActions.length === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2',
     )}>
       {visibleActions.map((a) => (
         <ActionCard key={a.label} {...a} loading={loading} />
@@ -124,8 +129,8 @@ function ActionCard({
     <Link
       to={to}
       className={cn(
-        'group relative flex flex-col gap-2 rounded-lg border bg-card p-4 transition-all',
-        'hover:-translate-y-0.5 hover:shadow-sm',
+        'group relative flex min-h-[112px] flex-col gap-2 rounded-xl border bg-background/70 p-4 transition-all',
+        'hover:-translate-y-0.5 hover:bg-card hover:shadow-sm',
         isUrgent
           ? 'border-destructive/30 hover:border-destructive/50'
           : 'border-border hover:border-foreground/15',

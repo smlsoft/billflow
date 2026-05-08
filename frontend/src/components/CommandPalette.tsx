@@ -2,9 +2,12 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Database,
+  Bot,
+  ClipboardCheck,
   FileText,
   LayoutDashboard,
   LogOut,
+  Mail,
   Moon,
   PanelLeftClose,
   ScrollText,
@@ -30,24 +33,41 @@ import client from '@/api/client'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/lib/theme'
 import { useUIStore } from '@/lib/ui-store'
+import { billSourceLabel, billStatusLabel } from '@/lib/labels'
+import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
 import type { Bill } from '@/types'
+
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
 interface RecentBill {
   id: string
+  bill_type: string
+  document_route?: string
   sml_doc_no?: string | null
   source: string
   status: string
   created_at: string
 }
 
-const NAV_ITEMS: Array<{ to: string; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/bills', label: 'บิลทั้งหมด', icon: FileText },
-  { to: '/import', label: 'นำเข้า Lazada', icon: Upload },
-  { to: '/import/shopee', label: 'นำเข้า Shopee', icon: ShoppingBag },
-  { to: '/mappings', label: 'Mapping สินค้า', icon: Workflow },
-  { to: '/settings/catalog', label: 'Catalog SML', icon: Database },
-  { to: '/logs', label: 'Activity Log', icon: ScrollText },
+const NAV_ITEMS: Array<{
+  to: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  minPhase?: number
+  enabled?: boolean
+}> = [
+  { to: '/setup', label: 'เริ่มต้นใช้งาน', icon: ClipboardCheck },
+  { to: '/dashboard', label: 'ภาพรวม', icon: LayoutDashboard },
+  { to: '/bills', label: 'ใบสั่งซื้อ', icon: FileText },
+  { to: '/sales-orders', label: 'ใบสั่งขาย', icon: ShoppingBag, enabled: ENABLE_SALES_ORDERS },
+  { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, enabled: ENABLE_SALES_ORDERS },
+  { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail },
+  { to: '/import/shopee', label: 'Shopee Excel', icon: Upload, enabled: ENABLE_SHOPEE_EXCEL },
+  { to: '/import', label: 'Lazada Excel', icon: Upload, minPhase: 2 },
+  { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow },
+  { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database },
+  { to: '/settings/ai-usage', label: 'AI Control Center', icon: Bot },
+  { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText },
   { to: '/settings', label: 'ตั้งค่า', icon: Settings },
 ]
 
@@ -79,6 +99,7 @@ export function CommandPalette({
         setRecent(
           (r.data.data ?? []).map((b) => ({
             id: b.id,
+            bill_type: b.bill_type,
             sml_doc_no: b.sml_doc_no,
             source: b.source,
             status: b.status,
@@ -105,6 +126,7 @@ export function CommandPalette({
           setSearched(
             (r.data.data ?? []).map((b) => ({
               id: b.id,
+              bill_type: b.bill_type,
               sml_doc_no: b.sml_doc_no,
               source: b.source,
               status: b.status,
@@ -132,10 +154,10 @@ export function CommandPalette({
   const generateInsight = async () => {
     close()
     const { toast } = await import('sonner')
-    const id = toast.loading('กำลังสร้าง AI Insight…')
+    const id = toast.loading('กำลังสร้างสรุปรายวัน…')
     try {
       await client.post('/api/dashboard/insights/generate')
-      toast.success('สร้าง Insight สำเร็จ', { id })
+      toast.success('สร้างสรุปรายวันสำเร็จ', { id })
     } catch {
       toast.error('ไม่สามารถสร้างได้', { id })
     }
@@ -160,7 +182,7 @@ export function CommandPalette({
         <CommandEmpty>ไม่พบรายการ</CommandEmpty>
 
         <CommandGroup heading="ไปหน้า">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter((item) => item.enabled !== false && (!item.minPhase || PHASE >= item.minPhase)).map((item) => {
             const Icon = item.icon
             return (
               <CommandItem
@@ -178,10 +200,10 @@ export function CommandPalette({
         <CommandSeparator />
 
         <CommandGroup heading="คำสั่ง">
-          {isAdmin && (
+          {PHASE >= 2 && isAdmin && (
             <CommandItem value="cmd insight" onSelect={generateInsight}>
               <Sparkles className="h-4 w-4" />
-              <span>สร้าง AI Insight วันนี้</span>
+              <span>สร้างสรุปรายวัน</span>
             </CommandItem>
           )}
           <CommandItem
@@ -212,7 +234,7 @@ export function CommandPalette({
             }}
           >
             <PanelLeftClose className="h-4 w-4" />
-            <span>ยุบ / ขยาย sidebar</span>
+            <span>ยุบ / ขยายเมนู</span>
             <CommandShortcut>[</CommandShortcut>
           </CommandItem>
           <CommandItem value="cmd logout" onSelect={handleLogout}>
@@ -227,21 +249,29 @@ export function CommandPalette({
             <CommandGroup
               heading={query.trim().length >= 2 ? 'ผลค้นหาบิล' : 'บิลล่าสุด'}
             >
-              {billsToShow.map((b) => (
-                <CommandItem
-                  key={b.id}
-                  value={`bill ${b.sml_doc_no ?? ''} ${b.id} ${b.source}`}
-                  onSelect={() => go(`/bills/${b.id}`)}
-                >
-                  <Search className="h-4 w-4" />
-                  <span className="font-mono text-xs">
-                    {b.sml_doc_no ?? b.id.slice(0, 8) + '…'}
-                  </span>
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    {b.source} · {b.status}
-                  </span>
-                </CommandItem>
-              ))}
+              {billsToShow.map((b) => {
+                const detailPath =
+                  b.bill_type !== 'sale'
+                    ? `/bills/${b.id}`
+                    : b.document_route === 'saleinvoice'
+                      ? `/sale-invoices/${b.id}`
+                      : `/sales-orders/${b.id}`
+                return (
+                  <CommandItem
+                    key={b.id}
+                    value={`bill ${b.sml_doc_no ?? ''} ${b.id} ${b.source}`}
+                    onSelect={() => go(detailPath)}
+                  >
+                    <Search className="h-4 w-4" />
+                    <span className="font-mono text-xs">
+                      {b.sml_doc_no ?? b.id.slice(0, 8) + '…'}
+                    </span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {billSourceLabel(b.source)} · {billStatusLabel(b.status, true)}
+                    </span>
+                  </CommandItem>
+                )
+              })}
             </CommandGroup>
           </>
         )}

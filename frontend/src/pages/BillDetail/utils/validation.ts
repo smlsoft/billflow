@@ -31,19 +31,19 @@ export interface ValidationResult {
 
 const ISSUE_LABEL: Record<IssueKind, string> = {
   no_items: 'ยังไม่มีรายการในบิล — เพิ่มอย่างน้อย 1 รายการก่อน',
-  unmapped_item_code: 'ยังไม่ได้จับคู่กับสินค้าใน SML (item_code ว่าง)',
-  unmapped_unit_code: 'ยังไม่ได้ตั้งหน่วย (unit_code ว่าง)',
-  qty_zero: 'จำนวน (qty) ต้องมากกว่า 0',
-  price_zero: 'ราคา (price) ต้องมากกว่า 0',
+  unmapped_item_code: 'ยังไม่ได้จับคู่กับสินค้าใน SML',
+  unmapped_unit_code: 'ยังไม่ได้ตั้งหน่วย',
+  qty_zero: 'จำนวนต้องมากกว่า 0',
+  price_zero: 'ราคาต้องมากกว่า 0',
 }
 
 // Per-issue copy used inline on the row tooltip (shorter than ISSUE_LABEL
 // so it fits as hover text without truncation).
 const ISSUE_TOOLTIP: Record<IssueKind, string> = {
   no_items: '',
-  unmapped_item_code: 'ยังไม่ได้ map กับสินค้า SML',
-  unmapped_unit_code: 'ขาด unit_code',
-  qty_zero: 'qty ≤ 0',
+  unmapped_item_code: 'ยังไม่ได้จับคู่สินค้า',
+  unmapped_unit_code: 'ยังไม่ได้ตั้งหน่วย',
+  qty_zero: 'จำนวนต้องมากกว่า 0',
   price_zero: 'ราคา ≤ 0',
 }
 
@@ -57,7 +57,7 @@ export function issueLabel(kind: IssueKind): string {
 export function rowIssueReason(item: BillItem): string {
   const reasons: string[] = []
   if (!item.item_code || item.item_code.trim() === '') {
-    reasons.push(ISSUE_TOOLTIP.unmapped_item_code)
+    reasons.push(item.source_sku ? `SKU Shopee ${item.source_sku} ยังไม่พบในสินค้า SML` : ISSUE_TOOLTIP.unmapped_item_code)
   }
   if (!item.unit_code || item.unit_code.trim() === '') {
     reasons.push(ISSUE_TOOLTIP.unmapped_unit_code)

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Building2,
+  Bot,
   ChevronsLeft,
   ChevronsRight,
+  ClipboardCheck,
   Database,
   FileText,
   LayoutDashboard,
@@ -13,6 +15,7 @@ import {
   MessageSquareQuote,
   ScrollText,
   Settings,
+  Settings2,
   ShoppingBag,
   Tag,
   Upload,
@@ -44,6 +47,7 @@ import { ThemeToggle } from '@/components/common/ThemeToggle'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/lib/ui-store'
 import { cn } from '@/lib/utils'
+import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
 import client from '@/api/client'
 
 // VITE_PHASE controls which nav items are visible.
@@ -57,10 +61,10 @@ interface NavItem {
   icon: LucideIcon
   end?: boolean
   // hasBadge identifies which counter feeds the badge:
-  //   "bills"    → pending bill count (existing)
+  //   document queues are counted per menu, not as one global pending count
   //   "messages" → unread chat conversation count (Phase 3)
   // Boolean true is treated as "bills" for backward compat with existing code.
-  hasBadge?: boolean | 'bills' | 'messages'
+  hasBadge?: boolean | 'bills' | 'purchase' | 'saleorder' | 'saleinvoice' | 'messages'
   // Optional English/short hint shown beneath the label in the collapsed-mode
   // tooltip — helps when admins ask dev "เปิด Quick Replies ที่ไหน" since the
   // visible label is now Thai-first.
@@ -68,11 +72,24 @@ interface NavItem {
   // minPhase — hide this item when VITE_PHASE < minPhase.
   // Omit (or set to 1) for items that belong to Phase 1.
   minPhase?: number
+  enabled?: boolean
 }
 
 interface NavGroup {
   label: string
   items: NavItem[]
+}
+
+async function countDocumentQueue(base: Record<string, string>) {
+  const statuses = ['pending', 'needs_review', 'failed']
+  const results = await Promise.all(
+    statuses.map(async (status) => {
+      const params = new URLSearchParams({ ...base, status, page: '1', per_page: '1' })
+      const res = await client.get<{ total: number }>(`/api/bills?${params}`)
+      return res.data.total ?? 0
+    }),
+  )
+  return results.reduce((sum, n) => sum + n, 0)
 }
 
 // NAV_GROUPS — ordered by daily-frequency. Top groups (Overview / Bills /
@@ -89,16 +106,30 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'ภาพรวม',
     items: [
-      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, hint: 'หน้าแรก' },
+      { to: '/setup', label: 'เริ่มต้นใช้งาน', icon: ClipboardCheck, hint: 'Setup Center' },
+      { to: '/dashboard', label: 'ภาพรวม', icon: LayoutDashboard, hint: 'งานวันนี้' },
       { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText, hint: 'Activity Log' },
     ],
   },
   {
-    label: 'บิลซื้อ',
+    label: 'งานฝั่งซื้อ',
     items: [
-      { to: '/bills', label: 'บิลทั้งหมด', icon: FileText, hasBadge: 'bills', hint: 'รวมทุก channel' },
-      { to: '/import', label: 'นำเข้า Lazada', icon: Upload, end: true, hint: 'Excel จาก Lazada', minPhase: 2 },
-      { to: '/import/shopee', label: 'นำเข้า Shopee', icon: ShoppingBag, hint: 'Excel จาก Shopee', minPhase: 2 },
+      { to: '/bills', label: 'ใบสั่งซื้อ', icon: FileText, hasBadge: 'purchase', hint: 'Email → ซื้อ -> ใบสั่งซื้อ' },
+    ],
+  },
+  {
+    label: 'งานฝั่งขาย',
+    items: [
+      { to: '/sales-orders', label: 'ใบสั่งขาย', icon: ShoppingBag, hasBadge: 'saleorder', hint: 'Shopee Excel → ขาย -> ใบสั่งขาย', enabled: ENABLE_SALES_ORDERS },
+      { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, hasBadge: 'saleinvoice', hint: 'Shopee Excel → ขาย -> ขายสินค้าและบริการ', enabled: ENABLE_SALES_ORDERS },
+    ],
+  },
+  {
+    label: 'ช่องทางรับข้อมูล',
+    items: [
+      { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail, hint: 'Email → ใบสั่งซื้อ' },
+      { to: '/import/shopee', label: 'Shopee Excel', icon: Upload, hint: 'นำเข้า Excel จาก Shopee', enabled: ENABLE_SHOPEE_EXCEL },
+      { to: '/import', label: 'Lazada Excel', icon: Upload, end: true, hint: 'Excel จาก Lazada', minPhase: 2 },
     ],
   },
   {
@@ -111,18 +142,19 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'ข้อมูลตั้งต้น',
+    label: 'ตั้งค่า',
     items: [
+      {
+        to: '/settings/channels',
+        label: 'เส้นทางเอกสาร SML',
+        icon: Building2,
+        hint: 'Document Routing',
+      },
       { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
       { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
-      { to: '/settings/channels', label: 'ผู้ขาย default', icon: Building2, hint: 'Channel Defaults (per-channel party_code)' },
-    ],
-  },
-  {
-    label: 'ตั้งค่าระบบ',
-    items: [
-      { to: '/settings/email', label: 'อีเมลรับบิล', icon: Mail, hint: 'IMAP Inboxes' },
-      { to: '/settings', label: 'ตั้งค่าทั่วไป', icon: Settings, end: true, hint: 'General Settings' },
+      { to: '/settings/ai-usage', label: 'AI Control Center', icon: Bot, hint: 'Token / Cost / Model' },
+      { to: '/settings/instance', label: 'การเชื่อมต่อระบบ', icon: Settings2, hint: 'SML / OpenRouter / ร้านนี้' },
+      { to: '/settings', label: 'ตั้งค่าทั่วไป', icon: Settings, end: true, hint: 'General Settings', minPhase: 2 },
     ],
   },
 ]
@@ -138,11 +170,11 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const collapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggle = useUIStore((s) => s.toggleSidebar)
-  const [pendingCount, setPendingCount] = useState(0)
+  const [queueCounts, setQueueCounts] = useState({ purchase: 0, saleorder: 0, saleinvoice: 0 })
   const [unreadMessages, setUnreadMessages] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Bills pending count + unread messages. SSE pushes unread changes
+  // Document queue counts + unread messages. SSE pushes unread changes
   // (UnreadChanged event) so the badge updates instantly when admin opens
   // a thread or a customer messages in. The 60s poll exists as a safety
   // net to refresh pending count (which has no SSE source) and to recover
@@ -152,11 +184,14 @@ export default function Sidebar() {
       return
     }
     try {
-      const res = await client.get<{ pending: number; unread_messages?: number }>(
-        '/api/dashboard/stats',
-      )
-      setPendingCount(res.data.pending ?? 0)
-      setUnreadMessages(res.data.unread_messages ?? 0)
+      const [stats, purchase, saleorder, saleinvoice] = await Promise.all([
+        client.get<{ unread_messages?: number }>('/api/dashboard/stats'),
+        countDocumentQueue({ source: 'shopee_shipped', bill_type: 'purchase' }),
+        countDocumentQueue({ source: 'shopee', bill_type: 'sale', document_route: 'saleorder' }),
+        countDocumentQueue({ source: 'shopee', bill_type: 'sale', document_route: 'saleinvoice' }),
+      ])
+      setQueueCounts({ purchase, saleorder, saleinvoice })
+      setUnreadMessages(stats.data.unread_messages ?? 0)
     } catch {
       /* silent */
     }
@@ -231,14 +266,14 @@ export default function Sidebar() {
       >
         {/* Logo */}
         <div className={cn('flex h-14 items-center gap-2 px-3', collapsed && 'justify-center px-0')}>
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
             <FileText className="h-4 w-4" strokeWidth={2.25} />
           </div>
           {!collapsed && (
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold leading-tight">BillFlow</div>
-              <div className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
-                AI Bill Processing
+              <div className="truncate text-[10px] text-muted-foreground">
+                Review Desk
               </div>
             </div>
           )}
@@ -249,7 +284,10 @@ export default function Sidebar() {
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto p-2">
           {NAV_GROUPS
-            .map((group) => ({ ...group, items: group.items.filter((i) => !i.minPhase || PHASE >= i.minPhase) }))
+            .map((group) => ({
+              ...group,
+              items: group.items.filter((i) => i.enabled !== false && (!i.minPhase || PHASE >= i.minPhase)),
+            }))
             .filter((group) => group.items.length > 0)
             .map((group, gi) => (
             <div key={group.label} className={cn('flex flex-col gap-0.5', gi > 0 && 'mt-4')}>
@@ -267,8 +305,14 @@ export default function Sidebar() {
                 const badgeCount =
                   badgeKind === 'messages'
                     ? unreadMessages
-                    : badgeKind === 'bills'
-                      ? pendingCount
+                    : badgeKind === 'purchase'
+                      ? queueCounts.purchase
+                      : badgeKind === 'saleorder'
+                        ? queueCounts.saleorder
+                        : badgeKind === 'saleinvoice'
+                          ? queueCounts.saleinvoice
+                          : badgeKind === 'bills'
+                            ? queueCounts.purchase
                       : 0
                 const showBadge = !!badgeKind && badgeCount > 0
 
@@ -282,8 +326,8 @@ export default function Sidebar() {
                     className={cn(
                       'group relative flex h-8 items-center gap-2.5 rounded-md px-2 text-sm transition-colors',
                       active
-                        ? 'bg-accent text-accent-foreground font-medium'
-                        : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
+                        ? 'bg-primary/10 text-primary font-semibold'
+                        : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground',
                       collapsed && 'justify-center px-0',
                     )}
                   >
@@ -340,9 +384,11 @@ export default function Sidebar() {
             events-store; tooltip explains what each state means. Hidden
             when sidebar collapsed — the dot still shows so admins notice
             'reconnecting' / 'offline'. */}
-        <div className={cn('px-2 py-1.5', collapsed ? 'flex justify-center' : '')}>
-          <ConnectionDot collapsed={collapsed} />
-        </div>
+        {PHASE >= 2 && (
+          <div className={cn('px-2 py-1.5', collapsed ? 'flex justify-center' : '')}>
+            <ConnectionDot collapsed={collapsed} />
+          </div>
+        )}
 
         {/* Collapse toggle */}
         <div className="px-2 py-2">
@@ -418,7 +464,7 @@ const STATE_META: Record<EventsConnectionState, { label: string; cls: string; ti
     tip: 'กำลังเปิดการเชื่อมต่อ real-time',
   },
   live: {
-    label: 'Live',
+    label: 'เชื่อมต่อแล้ว',
     cls: 'bg-success',
     tip: 'รับข้อความ real-time แล้ว — ไม่ต้องรีเฟรช',
   },
@@ -428,7 +474,7 @@ const STATE_META: Record<EventsConnectionState, { label: string; cls: string; ti
     tip: 'การเชื่อมต่อหลุด — ระบบกำลังลองใหม่ (ระหว่างนี้จะใช้ polling สำรอง)',
   },
   offline: {
-    label: 'Offline',
+    label: 'ออฟไลน์',
     cls: 'bg-destructive',
     tip: 'ขาดการเชื่อมต่อ real-time — ใช้ polling สำรอง (อัปเดตทุก 60 วินาที)',
   },

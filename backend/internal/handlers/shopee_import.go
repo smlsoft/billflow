@@ -3,10 +3,12 @@ package handlers
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,7 +24,6 @@ import (
 	"billflow/internal/repository"
 	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
-	"billflow/internal/services/sml"
 )
 
 // ShopeeImportHandler handles Shopee Excel import.
@@ -34,12 +35,14 @@ import (
 // email orders). This unifies all manual-confirm flows.
 type ShopeeImportHandler struct {
 	billRepo        *repository.BillRepo
+	mappingRepo     *repository.MappingRepo
 	auditRepo       *repository.AuditLogRepo
 	cfg             *config.Config
 	channelDefaults *repository.ChannelDefaultRepo
 	catalogSvc      *catalog.SMLCatalogService
 	embSvc          *catalog.EmbeddingService
 	catalogIdx      *catalog.CatalogIndex
+	catalogRepo     *repository.SMLCatalogRepo
 	artifactSvc     *artifact.Service
 	logger          *zap.Logger
 
@@ -60,22 +63,26 @@ const pendingUploadTTL = 30 * time.Minute
 
 func NewShopeeImportHandler(
 	billRepo *repository.BillRepo,
+	mappingRepo *repository.MappingRepo,
 	auditRepo *repository.AuditLogRepo,
 	cfg *config.Config,
 	channelDefaults *repository.ChannelDefaultRepo,
 	catalogSvc *catalog.SMLCatalogService,
 	embSvc *catalog.EmbeddingService,
 	catalogIdx *catalog.CatalogIndex,
+	catalogRepo *repository.SMLCatalogRepo,
 	logger *zap.Logger,
 ) *ShopeeImportHandler {
 	h := &ShopeeImportHandler{
 		billRepo:        billRepo,
+		mappingRepo:     mappingRepo,
 		auditRepo:       auditRepo,
 		cfg:             cfg,
 		channelDefaults: channelDefaults,
 		catalogSvc:      catalogSvc,
 		embSvc:          embSvc,
 		catalogIdx:      catalogIdx,
+		catalogRepo:     catalogRepo,
 		logger:          logger,
 	}
 	go h.gcPendingUploads()
@@ -113,13 +120,21 @@ func (h *ShopeeImportHandler) gcPendingUploads() {
 // Matching uses strings.Contains so partial header names work
 // even when Shopee adds English translations like "หมายเลขคำสั่งซื้อ (Order No.)"
 var shopeeColCandidates = map[string][]string{
-	"order_id":     {"หมายเลขคำสั่งซื้อ"},
-	"status":       {"สถานะการสั่งซื้อ"},
-	"order_date":   {"วันที่สั่งซื้อ", "วันที่ทำการสั่งซื้อ", "Order Creation Date", "Order Date"},
-	"product_name": {"ชื่อสินค้า"},
-	"sku":          {"เลขอ้างอิง SKU", "SKU Reference No."},
-	"price":        {"ราคาขาย"},
-	"qty":          {"จำนวน"},
+	"order_id":        {"หมายเลขคำสั่งซื้อ"},
+	"status":          {"สถานะการสั่งซื้อ"},
+	"buyer_username":  {"ชื่อผู้ใช้ (ผู้ซื้อ)", "ชื่อผู้ใช้", "Buyer Username"},
+	"order_date":      {"วันที่สั่งซื้อ", "วันที่ทำการสั่งซื้อ", "Order Creation Date", "Order Date"},
+	"payment_time":    {"เวลาการชำระสินค้า", "เวลาชำระสินค้า", "Paid Time"},
+	"payment_channel": {"ช่องทางการชำระเงิน"},
+	"tracking_no":     {"หมายเลขติดตามพัสดุ", "Tracking Number"},
+	"product_name":    {"ชื่อสินค้า"},
+	"option_name":     {"ชื่อตัวเลือก", "Variation Name"},
+	"sku":             {"เลขอ้างอิง SKU", "SKU Reference No."},
+	"price":           {"ราคาขาย"},
+	"qty":             {"จำนวน"},
+	"paid_amount":     {"ยอดชำระเงิน"},
+	"order_total":     {"จำนวนเงินทั้งหมด", "Order Total"},
+	"shipping_amount": {"ค่าจัดส่งที่ชำระโดยผู้ซื้อ"},
 }
 
 var excludeStatuses = map[string]bool{
@@ -137,6 +152,7 @@ type ShopeeConfigRequest struct {
 	ConfigFile string  `json:"config_file_name"`
 	Database   string  `json:"database_name"`
 	DocFormat  string  `json:"doc_format_code"`
+	Endpoint   string  `json:"endpoint"`
 	CustCode   string  `json:"cust_code"`
 	SaleCode   string  `json:"sale_code"`
 	BranchCode string  `json:"branch_code"`
@@ -148,25 +164,66 @@ type ShopeeConfigRequest struct {
 	DocTime    string  `json:"doc_time"`
 }
 
+// ShopeeExcelItem is one parsed Shopee Excel line. SKU is optional in real
+// Seller Center exports; when it is missing RawName becomes the matching key.
+type ShopeeExcelItem struct {
+	SKU         string  `json:"sku"`
+	ProductName string  `json:"product_name"`
+	OptionName  string  `json:"option_name,omitempty"`
+	RawName     string  `json:"raw_name"`
+	Price       float64 `json:"price"`
+	Qty         float64 `json:"qty"`
+	NoSKU       bool    `json:"no_sku,omitempty"`
+}
+
 // ShopeeOrder is one parsed Shopee order (returned in preview).
 type ShopeeOrder struct {
-	OrderID   string                `json:"order_id"`
-	DocDate   string                `json:"doc_date"`
-	Status    string                `json:"status"`
-	Items     []sml.ShopeeOrderItem `json:"items"`
-	ItemCount int                   `json:"item_count"`
-	TotalQty  float64               `json:"total_qty"`
+	OrderID          string            `json:"order_id"`
+	DocDate          string            `json:"doc_date"`
+	OrderDateTime    string            `json:"order_datetime,omitempty"`
+	PaymentTime      string            `json:"payment_time,omitempty"`
+	PaymentChannel   string            `json:"payment_channel,omitempty"`
+	BuyerUsername    string            `json:"buyer_username,omitempty"`
+	TrackingNo       string            `json:"tracking_no,omitempty"`
+	Status           string            `json:"status"`
+	Items            []ShopeeExcelItem `json:"items"`
+	ItemCount        int               `json:"item_count"`
+	TotalQty         float64           `json:"total_qty"`
+	PaidAmount       float64           `json:"paid_amount,omitempty"`
+	OrderTotalAmount float64           `json:"order_total_amount,omitempty"`
+	ItemGrossAmount  float64           `json:"item_gross_amount,omitempty"`
+	LinePaidAmount   float64           `json:"line_paid_amount,omitempty"`
+	ShippingAmount   float64           `json:"shipping_amount,omitempty"`
+	DiscountAmount   float64           `json:"discount_amount,omitempty"`
+	NoSKUItemCount   int               `json:"no_sku_item_count,omitempty"`
+	HasNoSKU         bool              `json:"has_no_sku,omitempty"`
+	MultiLine        bool              `json:"multi_line,omitempty"`
+	AmountMismatch   bool              `json:"amount_mismatch,omitempty"`
+	ExistingBillID   string            `json:"existing_bill_id,omitempty"`
 	// preview-only
 	Duplicate bool `json:"duplicate"`
 }
 
+type ShopeeImportPreflight struct {
+	NewOrders            int `json:"new_orders"`
+	DuplicateOrders      int `json:"duplicate_orders"`
+	SkippedRows          int `json:"skipped_rows"`
+	NoSKUOrders          int `json:"no_sku_orders"`
+	NoSKUItems           int `json:"no_sku_items"`
+	MultiItemOrders      int `json:"multi_item_orders"`
+	AmountMismatchOrders int `json:"amount_mismatch_orders"`
+}
+
 // PreviewResponse is returned from POST /api/import/shopee/preview
 type PreviewResponse struct {
-	Orders         []ShopeeOrder `json:"orders"`
-	Warnings       []string      `json:"warnings"`
-	TotalOrders    int           `json:"total_orders"`
-	DuplicateCount int           `json:"duplicate_count"`
-	SkippedCount   int           `json:"skipped_count"`
+	Orders         []ShopeeOrder         `json:"orders"`
+	Warnings       []string              `json:"warnings"`
+	TotalOrders    int                   `json:"total_orders"`
+	NewCount       int                   `json:"new_count"`
+	DuplicateCount int                   `json:"duplicate_count"`
+	SkippedCount   int                   `json:"skipped_count"`
+	ImportRunID    string                `json:"import_run_id,omitempty"`
+	Preflight      ShopeeImportPreflight `json:"preflight"`
 	// FileToken — SHA-256 of the uploaded .xlsx, returned so Confirm
 	// can re-attach the same bytes as an artifact to every bill it
 	// creates. Empty when artifact storage is disabled.
@@ -175,10 +232,11 @@ type PreviewResponse struct {
 
 // ConfirmRequest is sent by the frontend for POST /api/import/shopee/confirm
 type ConfirmRequest struct {
-	Config    ShopeeConfigRequest `json:"config"`
-	OrderIDs  []string            `json:"order_ids"` // only these order IDs will be processed
-	Orders    []ShopeeOrder       `json:"orders"`    // full parsed order data
-	FileToken string              `json:"file_token,omitempty"` // returned by Preview, used for artifact archiving
+	Config      ShopeeConfigRequest `json:"config"`
+	OrderIDs    []string            `json:"order_ids"`            // only these order IDs will be processed
+	Orders      []ShopeeOrder       `json:"orders"`               // full parsed order data
+	FileToken   string              `json:"file_token,omitempty"` // returned by Preview, used for artifact archiving
+	ImportRunID string              `json:"import_run_id,omitempty"`
 }
 
 // ConfirmResult is one processed order result.
@@ -188,6 +246,25 @@ type ConfirmResult struct {
 	DocNo   string `json:"doc_no,omitempty"`
 	Message string `json:"message,omitempty"`
 	BillID  string `json:"bill_id,omitempty"`
+}
+
+type ImportRunSummary struct {
+	ID              string          `json:"id"`
+	Filename        string          `json:"filename"`
+	FileSHA256      string          `json:"file_sha256,omitempty"`
+	PeriodStart     string          `json:"period_start,omitempty"`
+	PeriodEnd       string          `json:"period_end,omitempty"`
+	TotalOrders     int             `json:"total_orders"`
+	NewOrders       int             `json:"new_orders"`
+	DuplicateOrders int             `json:"duplicate_orders"`
+	SkippedOrders   int             `json:"skipped_orders"`
+	WarningCount    int             `json:"warning_count"`
+	CreatedCount    int             `json:"created_count"`
+	FailedCount     int             `json:"failed_count"`
+	Status          string          `json:"status"`
+	Detail          json.RawMessage `json:"detail,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	ConfirmedAt     *time.Time      `json:"confirmed_at,omitempty"`
 }
 
 // ─── GET /api/settings/shopee-config ─────────────────────────────────────────
@@ -203,9 +280,11 @@ func (h *ShopeeImportHandler) GetConfig(c *gin.Context) {
 	vatType := h.cfg.ShopeeSMLVATType
 	vatRate := h.cfg.ShopeeSMLVATRate
 	docFormat := h.cfg.ShopeeSMLDocFormat
+	endpoint := ""
 	if h.channelDefaults != nil {
 		if def, _ := h.channelDefaults.Get("shopee", "sale"); def != nil {
 			custCode = def.PartyCode
+			endpoint = def.Endpoint
 			if def.WHCode != "" {
 				whCode = def.WHCode
 			}
@@ -230,6 +309,7 @@ func (h *ShopeeImportHandler) GetConfig(c *gin.Context) {
 		ConfigFile: h.cfg.ShopeeSMLConfigFile,
 		Database:   h.cfg.ShopeeSMLDatabase,
 		DocFormat:  docFormat,
+		Endpoint:   endpoint,
 		CustCode:   custCode,
 		SaleCode:   h.cfg.ShopeeSMLSaleCode,
 		BranchCode: h.cfg.ShopeeSMLBranchCode,
@@ -240,6 +320,66 @@ func (h *ShopeeImportHandler) GetConfig(c *gin.Context) {
 		VATRate:    vatRate,
 		DocTime:    h.cfg.ShopeeSMLDocTime,
 	})
+}
+
+// ListRuns returns recent Shopee Excel import sessions so admins can see
+// duplicate-safe re-imports and what each preview/confirm produced.
+func (h *ShopeeImportHandler) ListRuns(c *gin.Context) {
+	limit := 8
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
+			limit = n
+		}
+	}
+	rows, err := h.billRepo.DB().Query(
+		`SELECT id::text, filename, file_sha256,
+		        COALESCE(period_start::text, ''), COALESCE(period_end::text, ''),
+		        total_orders, new_orders, duplicate_orders, skipped_orders,
+		        warning_count, created_count, failed_count, status, detail,
+		        created_at, confirmed_at
+		   FROM import_runs
+		  WHERE source = 'shopee'
+		  ORDER BY created_at DESC
+		  LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดประวัติ import ไม่ได้"})
+		return
+	}
+	defer rows.Close()
+
+	runs := []ImportRunSummary{}
+	for rows.Next() {
+		var run ImportRunSummary
+		if err := rows.Scan(
+			&run.ID,
+			&run.Filename,
+			&run.FileSHA256,
+			&run.PeriodStart,
+			&run.PeriodEnd,
+			&run.TotalOrders,
+			&run.NewOrders,
+			&run.DuplicateOrders,
+			&run.SkippedOrders,
+			&run.WarningCount,
+			&run.CreatedCount,
+			&run.FailedCount,
+			&run.Status,
+			&run.Detail,
+			&run.CreatedAt,
+			&run.ConfirmedAt,
+		); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "อ่านประวัติ import ไม่ได้"})
+			return
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "อ่านประวัติ import ไม่ได้"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"runs": runs})
 }
 
 // ─── POST /api/import/shopee/preview ─────────────────────────────────────────
@@ -272,7 +412,7 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 		return
 	}
 
-	orders, warnings, err := parseShopeeExcel(bytes.NewReader(rawBytes))
+	orders, warnings, skippedCount, err := parseShopeeExcel(bytes.NewReader(rawBytes))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -294,12 +434,14 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 	// Mark duplicates (orders already in DB)
 	dupCount := 0
 	for i := range orders {
-		exists, _ := h.existsShopeeOrder(orders[i].OrderID)
-		if exists {
+		if billID, exists, _ := h.findShopeeOrderBillID(orders[i].OrderID); exists {
 			orders[i].Duplicate = true
+			orders[i].ExistingBillID = billID
 			dupCount++
 		}
 	}
+	preflight := buildShopeePreflight(orders, skippedCount, dupCount)
+	importRunID := h.createShopeeImportRun(c, fileHeader.Filename, fileToken, orders, warnings, preflight)
 
 	if h.auditRepo != nil {
 		traceID := c.GetString("trace_id")
@@ -317,6 +459,8 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 				"filename":        fileHeader.Filename,
 				"total_orders":    len(orders),
 				"duplicate_count": dupCount,
+				"skipped_count":   skippedCount,
+				"import_run_id":   importRunID,
 			},
 		})
 	}
@@ -325,7 +469,11 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 		Orders:         orders,
 		Warnings:       warnings,
 		TotalOrders:    len(orders),
+		NewCount:       len(orders) - dupCount,
 		DuplicateCount: dupCount,
+		SkippedCount:   skippedCount,
+		ImportRunID:    importRunID,
+		Preflight:      preflight,
 		FileToken:      fileToken,
 	})
 }
@@ -344,6 +492,8 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 	for _, id := range req.OrderIDs {
 		selectedSet[id] = true
 	}
+	documentRoute := shopeeImportRoute(req.Config)
+	destinationName := shopeeImportDocumentName(req.Config)
 
 	// Default unit code from the request config; used as a fallback when
 	// catalog matching doesn't pick a specific unit.
@@ -358,6 +508,11 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 
 	const topK = 5
 	const highConfThreshold = 0.85
+	type matchResolution struct {
+		learned *models.Mapping
+		matches []models.CatalogMatch
+	}
+	resolutionCache := map[string]matchResolution{}
 
 	// Pull the original .xlsx bytes once so we can attach the same artifact
 	// to every bill the import creates. May be nil when artifact service is
@@ -382,16 +537,17 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		if !selectedSet[order.OrderID] {
 			continue
 		}
-		if exists, _ := h.existsShopeeOrder(order.OrderID); exists {
+		if billID, exists, _ := h.findShopeeOrderBillID(order.OrderID); exists {
 			results = append(results, ConfirmResult{
 				OrderID: order.OrderID,
 				Success: false,
+				BillID:  billID,
 				Message: "order นี้มีอยู่ในระบบแล้ว (ข้าม)",
 			})
 			continue
 		}
 
-		// Catalog match each item BEFORE creating the bill so we know the
+		// Resolve each item BEFORE creating the bill so we know the
 		// final status (pending vs needs_review).
 		type itemEnriched struct {
 			item       models.BillItem
@@ -401,27 +557,56 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		allHigh := true
 
 		for _, it := range order.Items {
-			var matches []models.CatalogMatch
-			if h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
-				if emb, err := h.embSvc.EmbedText(it.ProductName); err == nil {
-					matches = h.catalogIdx.Search(emb, topK)
+			rawName := shopeeItemRawName(it.ProductName, it.OptionName, it.RawName)
+			resolved, ok := resolutionCache[rawName]
+			if !ok {
+				if h.mappingRepo != nil {
+					if m, err := h.mappingRepo.FindByRawName(rawName); err == nil {
+						resolved.learned = m
+					} else {
+						h.logger.Warn("shopee_excel: lookup mapping failed",
+							zap.String("raw_name", rawName),
+							zap.Error(err))
+					}
 				}
+				if resolved.learned == nil && h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
+					if emb, err := h.embSvc.EmbedText(rawName); err == nil {
+						resolved.matches = h.catalogIdx.Search(emb, topK)
+					} else {
+						h.logger.Warn("shopee_excel: embedding lookup failed",
+							zap.String("raw_name", rawName),
+							zap.Error(err))
+					}
+				}
+				if resolved.learned == nil && len(resolved.matches) == 0 && h.catalogSvc != nil {
+					resolved.matches, _ = h.catalogSvc.SearchByText(rawName, topK)
+				}
+				resolutionCache[rawName] = resolved
 			}
-			if len(matches) == 0 && h.catalogSvc != nil {
-				matches, _ = h.catalogSvc.SearchByText(it.ProductName, topK)
-			}
+			matches := resolved.matches
 
 			price := it.Price
 			bi := models.BillItem{
-				RawName: it.ProductName,
-				Qty:     it.Qty,
-				Price:   &price,
+				RawName:   rawName,
+				SourceSKU: it.SKU,
+				Qty:       it.Qty,
+				Price:     &price,
 			}
 
-			// Priority: catalog top score ≥ 0.85 wins; else use Excel SKU
-			// as best guess (mapped=false), keeps existing behaviour for
-			// sellers whose Shopee SKUs already equal their SML codes.
+			// Priority:
+			// 1. Human/F1 mapping from /mappings. This is the user's source
+			//    of truth and must win over Shopee SKU guesses.
+			// 2. High-confidence catalog match.
+			// 3. Excel SKU only when it exists in SML catalog. Otherwise keep
+			//    it as source_sku, not item_code, so Shopee SKU cannot masquerade
+			//    as an SML product code.
 			switch {
+			case resolved.learned != nil:
+				bi.ItemCode = &resolved.learned.ItemCode
+				bi.UnitCode = &resolved.learned.UnitCode
+				bi.MappingID = &resolved.learned.ID
+				bi.Mapped = true
+				_ = h.mappingRepo.IncrementUsage(resolved.learned.ID)
 			case len(matches) > 0 && matches[0].Score >= highConfThreshold:
 				bi.ItemCode = &matches[0].ItemCode
 				unit := matches[0].UnitCode
@@ -431,12 +616,19 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 				bi.UnitCode = &unit
 				bi.Mapped = true
 			case it.SKU != "":
-				sku := it.SKU
-				bi.ItemCode = &sku
-				unit := defaultUnit
-				bi.UnitCode = &unit
-				bi.Mapped = false
-				allHigh = false
+				if cat := h.lookupCatalogItem(it.SKU); cat != nil {
+					code := cat.ItemCode
+					unit := cat.UnitCode
+					if unit == "" {
+						unit = defaultUnit
+					}
+					bi.ItemCode = &code
+					bi.UnitCode = &unit
+					bi.Mapped = true
+				} else {
+					bi.Mapped = false
+					allHigh = false
+				}
 			default:
 				if len(matches) > 0 {
 					bi.ItemCode = &matches[0].ItemCode
@@ -460,25 +652,57 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 
 		aiConf := 1.0
 		rawData, _ := json.Marshal(map[string]interface{}{
-			"flow":            "shopee_excel",
-			"shopee_order_id": order.OrderID,
-			"order_id":        order.OrderID,
-			"doc_date":        order.DocDate,
-			"status":          order.Status,
+			"flow":               "shopee_excel",
+			"shopee_order_id":    order.OrderID,
+			"order_id":           order.OrderID,
+			"doc_date":           order.DocDate,
+			"order_datetime":     order.OrderDateTime,
+			"payment_time":       order.PaymentTime,
+			"payment_channel":    order.PaymentChannel,
+			"customer_name":      order.BuyerUsername,
+			"buyer_username":     order.BuyerUsername,
+			"tracking_no":        order.TrackingNo,
+			"status":             order.Status,
+			"item_count":         order.ItemCount,
+			"total_qty":          order.TotalQty,
+			"paid_total_amount":  order.PaidAmount,
+			"order_total_amount": order.OrderTotalAmount,
+			"item_gross_amount":  order.ItemGrossAmount,
+			"line_paid_amount":   order.LinePaidAmount,
+			"shipping_amount":    order.ShippingAmount,
+			"discount_amount":    order.DiscountAmount,
+			"has_no_sku":         order.HasNoSKU,
+			"no_sku_item_count":  order.NoSKUItemCount,
+			"amount_mismatch":    order.AmountMismatch,
+			"multi_line":         order.MultiLine,
+			"import_run_id":      req.ImportRunID,
+			"document_route":     documentRoute,
+			"sml_destination":    destinationName,
 		})
 		bill := &models.Bill{
-			BillType:     "sale",
-			Source:       "shopee",
-			Status:       status,
-			AIConfidence: &aiConf,
-			RawData:      rawData,
-			SMLOrderID:   order.OrderID,
+			BillType:      "sale",
+			Source:        "shopee",
+			Status:        status,
+			DocumentRoute: documentRoute,
+			AIConfidence:  &aiConf,
+			RawData:       rawData,
+			SMLOrderID:    order.OrderID,
 		}
 		if userID != nil {
 			bill.CreatedBy = userID
 		}
 		if err := h.billRepo.Create(bill); err != nil {
 			h.logger.Error("create bill", zap.String("order_id", order.OrderID), zap.Error(err))
+			if isDuplicateShopeeBillError(err) {
+				billID, _, _ := h.findShopeeOrderBillID(order.OrderID)
+				results = append(results, ConfirmResult{
+					OrderID: order.OrderID,
+					Success: false,
+					BillID:  billID,
+					Message: "order นี้ถูกสร้างไปแล้วระหว่างนำเข้า (ข้าม)",
+				})
+				continue
+			}
 			results = append(results, ConfirmResult{
 				OrderID: order.OrderID,
 				Success: false,
@@ -547,7 +771,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			OrderID: order.OrderID,
 			Success: true,
 			BillID:  bill.ID,
-			Message: fmt.Sprintf("สร้างบิลแล้ว (status=%s) — รอตรวจสอบใน /bills", status),
+			Message: fmt.Sprintf("สร้าง%sแล้ว (status=%s) — รอตรวจสอบใน /sales-orders", destinationName, status),
 		})
 		h.logger.Info("shopee_excel: bill created",
 			zap.String("order_id", order.OrderID),
@@ -579,32 +803,33 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			},
 		})
 	}
+	h.finishShopeeImportRun(req.ImportRunID, successCount, len(results)-successCount, "confirmed")
 
 	c.JSON(http.StatusOK, gin.H{
 		"results":       results,
 		"success_count": successCount,
 		"fail_count":    len(results) - successCount,
 		"total":         len(results),
-		"message":       "บิลถูกสร้างแล้ว — กรุณาเข้าไปตรวจสอบและกดยืนยันส่งใน /bills",
+		"message":       destinationName + "ถูกสร้างแล้ว — กรุณาเข้าไปตรวจสอบและกดยืนยันส่งใน /sales-orders",
 	})
 }
 
 // ─── Excel Parser ─────────────────────────────────────────────────────────────
 
-func parseShopeeExcel(src interface{ Read([]byte) (int, error) }) ([]ShopeeOrder, []string, error) {
+func parseShopeeExcel(src interface{ Read([]byte) (int, error) }) ([]ShopeeOrder, []string, int, error) {
 	f, err := excelize.OpenReader(src)
 	if err != nil {
-		return nil, nil, fmt.Errorf("เปิดไฟล์ Excel ไม่ได้: %w", err)
+		return nil, nil, 0, fmt.Errorf("เปิดไฟล์ Excel ไม่ได้: %w", err)
 	}
 	defer f.Close()
 
 	sheetName := f.GetSheetName(0)
 	rows, err := f.GetRows(sheetName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("อ่าน sheet ไม่ได้: %w", err)
+		return nil, nil, 0, fmt.Errorf("อ่าน sheet ไม่ได้: %w", err)
 	}
 	if len(rows) < 2 {
-		return nil, nil, fmt.Errorf("ไฟล์ว่างหรือไม่มีข้อมูล")
+		return nil, nil, 0, fmt.Errorf("ไฟล์ว่างหรือไม่มีข้อมูล")
 	}
 
 	// Find header row: first row that contains an order_id candidate keyword
@@ -645,10 +870,10 @@ foundHeader:
 	}
 
 	// Check required columns
-	required := []string{"order_id", "status", "order_date", "sku", "price", "qty"}
+	required := []string{"order_id", "status", "order_date", "product_name", "price", "qty"}
 	for _, f := range required {
 		if _, ok := colIdx[f]; !ok {
-			return nil, nil, fmt.Errorf("ไม่พบ column '%s' ในไฟล์ — columns ที่พบ: %s",
+			return nil, nil, 0, fmt.Errorf("ไม่พบ column '%s' ในไฟล์ — columns ที่พบ: %s",
 				f, strings.Join(headerRow[:min(len(headerRow), 15)], ", "))
 		}
 	}
@@ -656,7 +881,8 @@ foundHeader:
 	warnings := []string{} // initialize as empty slice (never nil) to avoid JSON null
 	orderMap := map[string]*ShopeeOrder{}
 	orderKeys := []string{} // preserve insertion order
-	skuMissingOrders := map[string]bool{}
+	noSKUOrderIDs := map[string]bool{}
+	noSKUItemCount := 0
 	skippedCount := 0
 
 	for _, row := range rows[headerRowIdx+1:] {
@@ -676,40 +902,46 @@ foundHeader:
 		}
 
 		// Parse date
-		docDate := cellStr(row, colIdx["order_date"])
-		if len(docDate) >= 10 {
-			docDate = docDate[:10]
+		orderDateTime := cellStr(row, colIdx["order_date"])
+		docDate := orderDateTime
+		if len(orderDateTime) >= 10 {
+			docDate = orderDateTime[:10]
 		} else {
 			docDate = time.Now().Format("2006-01-02")
 		}
 
 		if _, exists := orderMap[orderID]; !exists {
 			orderMap[orderID] = &ShopeeOrder{
-				OrderID: orderID,
-				DocDate: docDate,
-				Status:  status,
-				Items:   []sml.ShopeeOrderItem{},
+				OrderID:        orderID,
+				DocDate:        docDate,
+				OrderDateTime:  orderDateTime,
+				PaymentTime:    optionalCell(row, colIdx, "payment_time"),
+				PaymentChannel: optionalCell(row, colIdx, "payment_channel"),
+				BuyerUsername:  optionalCell(row, colIdx, "buyer_username"),
+				TrackingNo:     optionalCell(row, colIdx, "tracking_no"),
+				Status:         status,
+				Items:          []ShopeeExcelItem{},
 			}
 			orderKeys = append(orderKeys, orderID)
 		}
-
-		sku := cellStr(row, colIdx["sku"])
-		productName := ""
-		if idx, ok := colIdx["product_name"]; ok {
-			productName = cellStr(row, idx)
+		orderMap[orderID].LinePaidAmount += optionalCellFloat(row, colIdx, "paid_amount")
+		if v := optionalCellFloat(row, colIdx, "order_total"); v > 0 {
+			orderMap[orderID].OrderTotalAmount = v
+		}
+		if v := optionalCellFloat(row, colIdx, "shipping_amount"); v > 0 {
+			orderMap[orderID].ShippingAmount = v
 		}
 
-		if sku == "" || strings.EqualFold(sku, "nan") {
-			if !skuMissingOrders[orderID] {
-				skuMissingOrders[orderID] = true
-				shortName := productName
-				if len(shortName) > 40 {
-					shortName = shortName[:40]
-				}
-				warnings = append(warnings,
-					fmt.Sprintf("Order %s: ไม่มีรหัส SKU สำหรับ \"%s\" — กรุณากำหนด SKU ใน Shopee Seller Center", orderID, shortName))
-			}
-			continue
+		sku := optionalCell(row, colIdx, "sku")
+		productName := cellStr(row, colIdx["product_name"])
+		optionName := optionalCell(row, colIdx, "option_name")
+		rawName := shopeeItemRawName(productName, optionName, "")
+		noSKU := sku == "" || strings.EqualFold(sku, "nan")
+		if noSKU {
+			noSKUOrderIDs[orderID] = true
+			noSKUItemCount++
+			orderMap[orderID].HasNoSKU = true
+			orderMap[orderID].NoSKUItemCount++
 		}
 
 		price := cellFloat(row, colIdx["price"])
@@ -718,12 +950,16 @@ foundHeader:
 			qty = 1
 		}
 
-		orderMap[orderID].Items = append(orderMap[orderID].Items, sml.ShopeeOrderItem{
+		orderMap[orderID].Items = append(orderMap[orderID].Items, ShopeeExcelItem{
 			SKU:         sku,
 			ProductName: productName,
+			OptionName:  optionName,
+			RawName:     rawName,
 			Price:       price,
 			Qty:         qty,
+			NoSKU:       noSKU,
 		})
+		orderMap[orderID].ItemGrossAmount += price * qty
 	}
 
 	// Build result list in original order, skip orders with no items
@@ -731,34 +967,223 @@ foundHeader:
 	for _, id := range orderKeys {
 		o := orderMap[id]
 		if len(o.Items) == 0 {
-			if !skuMissingOrders[id] {
-				warnings = append(warnings, fmt.Sprintf("Order %s: ไม่มีสินค้า — ข้ามไป", id))
-			}
+			warnings = append(warnings, fmt.Sprintf("Order %s: ไม่มีสินค้า — ข้ามไป", id))
 			continue
 		}
 		o.ItemCount = len(o.Items)
 		for _, it := range o.Items {
 			o.TotalQty += it.Qty
 		}
+		o.MultiLine = len(o.Items) > 1
+		if o.OrderTotalAmount > 0 {
+			o.PaidAmount = o.OrderTotalAmount
+		} else {
+			o.PaidAmount = o.LinePaidAmount
+		}
+		o.DiscountAmount = roundFloat(o.ItemGrossAmount+o.ShippingAmount-o.PaidAmount, 2)
+		o.AmountMismatch = o.PaidAmount > 0 && math.Abs(o.ItemGrossAmount-o.PaidAmount) > 0.01
 		orders = append(orders, *o)
 	}
 
+	if noSKUItemCount > 0 {
+		warnings = append(warnings,
+			fmt.Sprintf("พบ %d รายการสินค้าใน %d order ที่ไม่มี SKU — ระบบจะใช้ชื่อสินค้า + ตัวเลือกสินค้าในการจับคู่แทน", noSKUItemCount, len(noSKUOrderIDs)))
+	}
 	if skippedCount > 0 {
 		warnings = append([]string{fmt.Sprintf("กรอง %d แถว (สถานะ: ที่ต้องจัดส่ง, ยกเลิกแล้ว)", skippedCount)}, warnings...)
 	}
 
-	return orders, warnings, nil
+	return orders, warnings, skippedCount, nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func (h *ShopeeImportHandler) existsShopeeOrder(orderID string) (bool, error) {
-	var count int
+	_, exists, err := h.findShopeeOrderBillID(orderID)
+	return exists, err
+}
+
+func (h *ShopeeImportHandler) findShopeeOrderBillID(orderID string) (string, bool, error) {
+	if strings.TrimSpace(orderID) == "" {
+		return "", false, nil
+	}
+	var id string
 	err := h.billRepo.DB().QueryRow(
-		`SELECT COUNT(*) FROM bills WHERE source='shopee' AND raw_data->>'order_id' = $1`,
+		`SELECT id::text
+		   FROM bills
+		  WHERE source = 'shopee'
+		    AND (raw_data->>'order_id' = $1 OR sml_order_id = $1)
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
 		orderID,
-	).Scan(&count)
-	return count > 0, err
+	).Scan(&id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+func buildShopeePreflight(orders []ShopeeOrder, skippedCount, duplicateCount int) ShopeeImportPreflight {
+	p := ShopeeImportPreflight{
+		NewOrders:       len(orders) - duplicateCount,
+		DuplicateOrders: duplicateCount,
+		SkippedRows:     skippedCount,
+	}
+	for _, o := range orders {
+		if o.HasNoSKU {
+			p.NoSKUOrders++
+			p.NoSKUItems += o.NoSKUItemCount
+		}
+		if o.MultiLine {
+			p.MultiItemOrders++
+		}
+		if o.AmountMismatch {
+			p.AmountMismatchOrders++
+		}
+	}
+	if p.NewOrders < 0 {
+		p.NewOrders = 0
+	}
+	return p
+}
+
+func (h *ShopeeImportHandler) createShopeeImportRun(c *gin.Context, filename, fileToken string, orders []ShopeeOrder, warnings []string, preflight ShopeeImportPreflight) string {
+	if h == nil || h.billRepo == nil {
+		return ""
+	}
+	var userID interface{}
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = uid
+	}
+	var periodStart, periodEnd interface{}
+	for _, o := range orders {
+		t, err := time.Parse("2006-01-02", o.DocDate)
+		if err != nil {
+			continue
+		}
+		if periodStart == nil || t.Before(periodStart.(time.Time)) {
+			periodStart = t
+		}
+		if periodEnd == nil || t.After(periodEnd.(time.Time)) {
+			periodEnd = t
+		}
+	}
+	detail, _ := json.Marshal(map[string]interface{}{
+		"preflight": preflight,
+		"warnings":  warnings,
+	})
+	var id string
+	err := h.billRepo.DB().QueryRow(
+		`INSERT INTO import_runs
+		   (source, filename, file_sha256, period_start, period_end,
+		    total_orders, new_orders, duplicate_orders, skipped_orders,
+		    warning_count, status, detail, created_by)
+		 VALUES
+		   ('shopee', $1, $2, $3, $4, $5, $6, $7, $8, $9, 'preview', $10, $11)
+		 RETURNING id::text`,
+		filename,
+		fileToken,
+		periodStart,
+		periodEnd,
+		len(orders),
+		preflight.NewOrders,
+		preflight.DuplicateOrders,
+		preflight.SkippedRows,
+		len(warnings),
+		detail,
+		userID,
+	).Scan(&id)
+	if err != nil {
+		h.logger.Warn("shopee_excel: create import run failed", zap.Error(err))
+		return ""
+	}
+	return id
+}
+
+func (h *ShopeeImportHandler) finishShopeeImportRun(id string, createdCount, failedCount int, status string) {
+	if h == nil || h.billRepo == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	if status == "" {
+		status = "confirmed"
+	}
+	if _, err := h.billRepo.DB().Exec(
+		`UPDATE import_runs
+		    SET created_count = $2,
+		        failed_count = $3,
+		        status = $4,
+		        confirmed_at = NOW()
+		  WHERE id = $1`,
+		id,
+		createdCount,
+		failedCount,
+		status,
+	); err != nil {
+		h.logger.Warn("shopee_excel: update import run failed", zap.String("import_run_id", id), zap.Error(err))
+	}
+}
+
+func isDuplicateShopeeBillError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bills_shopee_order_id_unique") ||
+		(strings.Contains(msg, "duplicate key") && strings.Contains(msg, "order_id"))
+}
+
+func shopeeItemRawName(productName, optionName, rawName string) string {
+	rawName = strings.TrimSpace(rawName)
+	if rawName != "" {
+		return rawName
+	}
+	productName = strings.TrimSpace(productName)
+	optionName = strings.TrimSpace(optionName)
+	if productName == "" {
+		return optionName
+	}
+	if optionName == "" || optionName == "-" {
+		return productName
+	}
+	return productName + " / " + optionName
+}
+
+func shopeeImportDocumentName(cfg ShopeeConfigRequest) string {
+	if shopeeImportRoute(cfg) == "saleinvoice" {
+		return "เอกสารขายสินค้าและบริการ"
+	}
+	return "ใบสั่งขาย"
+}
+
+func shopeeImportRoute(cfg ShopeeConfigRequest) string {
+	route := strings.ToLower(strings.TrimSpace(cfg.Endpoint + " " + cfg.DocFormat))
+	if strings.Contains(route, "saleinvoice") || strings.Contains(route, " si") || strings.TrimSpace(strings.ToUpper(cfg.DocFormat)) == "SI" {
+		return "saleinvoice"
+	}
+	return "saleorder"
+}
+
+func (h *ShopeeImportHandler) lookupCatalogItem(code string) *models.CatalogItem {
+	code = strings.TrimSpace(code)
+	if code == "" || h.catalogRepo == nil {
+		return nil
+	}
+	item, err := h.catalogRepo.GetOne(code)
+	if err != nil {
+		h.logger.Warn("shopee_excel: catalog sku lookup failed",
+			zap.String("sku", code),
+			zap.Error(err))
+		return nil
+	}
+	return item
+}
+
+func roundFloat(v float64, digits int) float64 {
+	pow := math.Pow(10, float64(digits))
+	return math.Round(v*pow) / pow
 }
 
 func cellStr(row []string, idx int) string {
@@ -772,6 +1197,13 @@ func cellStr(row []string, idx int) string {
 	return ""
 }
 
+func optionalCell(row []string, colIdx map[string]int, key string) string {
+	if idx, ok := colIdx[key]; ok {
+		return cellStr(row, idx)
+	}
+	return ""
+}
+
 func cellFloat(row []string, idx int) float64 {
 	s := cellStr(row, idx)
 	if s == "" {
@@ -781,6 +1213,13 @@ func cellFloat(row []string, idx int) float64 {
 	s = strings.ReplaceAll(s, ",", "")
 	f, _ := strconv.ParseFloat(s, 64)
 	return f
+}
+
+func optionalCellFloat(row []string, colIdx map[string]int, key string) float64 {
+	if idx, ok := colIdx[key]; ok {
+		return cellFloat(row, idx)
+	}
+	return 0
 }
 
 func strPtr(s string) *string { return &s }

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Search, Plus, ArrowLeft, X } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Plus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
   DialogContent,
@@ -12,7 +13,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import api from '@/api/client'
 import type { CatalogMatch } from '@/types'
-import { scoreBorderClass } from '../utils/formatters'
+import { scoreBorderClass, scoreStyle } from '../utils/formatters'
 
 interface Props {
   open: boolean
@@ -20,8 +21,37 @@ interface Props {
   currentCode: string
   currentUnit: string
   currentPrice: number
+  rawNameLabel?: string
   onPick: (code: string, unitCode: string) => void
   onClose: () => void
+}
+
+function ScorePill({ score, recommended = false }: { score: number; recommended?: boolean }) {
+  const pct = Math.round(score * 100)
+  const s = scoreStyle(score)
+  return (
+    <div className="flex min-w-[92px] flex-col items-end gap-1">
+      <span
+        className={cn(
+          'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold tabular-nums',
+          s.bg,
+          s.color,
+        )}
+      >
+        {recommended && <CheckCircle2 className="h-3.5 w-3.5" />}
+        {pct}%
+      </span>
+      <div className="h-1 w-20 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn(
+            'h-full rounded-full',
+            score >= 0.85 ? 'bg-success' : score >= 0.6 ? 'bg-warning' : 'bg-destructive',
+          )}
+          style={{ width: `${Math.max(4, Math.min(100, pct))}%` }}
+        />
+      </div>
+    </div>
+  )
 }
 
 export function MapItemModal({
@@ -30,6 +60,7 @@ export function MapItemModal({
   currentCode,
   currentUnit,
   currentPrice,
+  rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
   onPick,
   onClose,
 }: Props) {
@@ -103,42 +134,46 @@ export function MapItemModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="grid max-h-[90vh] max-w-3xl grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Search className="h-4 w-4 text-muted-foreground" />
-            เลือกสินค้าจาก SML Catalog
+            เลือกสินค้าจาก SML
           </DialogTitle>
         </DialogHeader>
 
         {/* Raw name context */}
-        <div className="rounded-md bg-muted/40 px-3 py-2 text-sm">
-          <div className="text-xs text-muted-foreground mb-1">ชื่อสินค้า (raw):</div>
-          <div className="font-medium break-words">{rawName}</div>
+        <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">{rawNameLabel}</div>
+          <div className="line-clamp-2 break-words font-medium leading-5">{rawName}</div>
           {currentCode && (
-            <div className="mt-1 text-xs text-muted-foreground">
-              ปัจจุบัน:{' '}
+            <div className="mt-1.5 text-xs text-muted-foreground">
+              เลือกไว้ตอนนี้:{' '}
               <code className="text-foreground font-mono">{currentCode}</code>
               {' '}({currentUnit || '—'})
             </div>
           )}
         </div>
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as 'search' | 'create')}>
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setTab(v as 'search' | 'create')}
+          className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]"
+        >
           <TabsList className="w-full">
             <TabsTrigger value="search" className="flex-1 gap-1.5">
-              <Search className="h-3.5 w-3.5" /> ค้นหา
+              <Search className="h-3.5 w-3.5" /> ค้นหาจาก SML
             </TabsTrigger>
             <TabsTrigger value="create" className="flex-1 gap-1.5">
-              <Plus className="h-3.5 w-3.5" /> สร้างสินค้าใหม่
+              <Plus className="h-3.5 w-3.5" /> เพิ่มสินค้าใหม่
             </TabsTrigger>
           </TabsList>
 
           {/* ── Search tab ─────────────────────────────────────────────────── */}
-          <TabsContent value="search" className="space-y-3 mt-3">
+          <TabsContent value="search" className="mt-3 grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-2.5">
             <Input
               autoFocus
-              placeholder="ค้นหาด้วยชื่อสินค้า..."
+              placeholder="ค้นหาด้วยชื่อหรือรหัสสินค้า"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -150,14 +185,23 @@ export function MapItemModal({
               <p className="text-sm text-destructive">{searchError}</p>
             )}
 
+            {!searching && results.length > 0 && (
+              <div className="rounded-md bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+                รายการแรกคือคำแนะนำหลัก ส่วนรายการคะแนนต่ำเป็นตัวเลือกสำรอง
+              </div>
+            )}
+
             {!searching && results.length === 0 && query.trim().length >= 2 && (
               <div className="rounded-md bg-muted/40 py-6 text-center text-sm text-muted-foreground">
                 ไม่พบสินค้าที่ตรง
               </div>
             )}
 
-            <div className="flex flex-col gap-2">
-              {results.map((r) => (
+            <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1">
+              {results.map((r, index) => {
+                const recommended = index === 0 && r.score >= 0.75
+                const lowScore = r.score < 0.6
+                return (
                 <button
                   key={r.item_code}
                   type="button"
@@ -166,21 +210,45 @@ export function MapItemModal({
                     onClose()
                   }}
                   className={cn(
-                    'w-full text-left rounded-md border-2 bg-background px-3 py-2',
-                    'hover:bg-muted/50 transition-colors cursor-pointer',
-                    scoreBorderClass(r.score),
+                    'w-full rounded-md border bg-background px-3 py-2 text-left',
+                    'cursor-pointer transition-colors hover:bg-muted/40',
+                    recommended && 'border-success/60 bg-success/[0.04]',
+                    !recommended && lowScore && 'border-border/80',
+                    !recommended && !lowScore && scoreBorderClass(r.score),
                   )}
                 >
-                  <div className="font-semibold text-sm font-mono">{r.item_code}</div>
-                  <div className="text-sm text-muted-foreground mt-0.5">{r.item_name}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    หน่วย: {r.unit_code || '—'} · score: {(r.score * 100).toFixed(0)}%
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-sm font-semibold text-foreground">
+                          {r.item_code}
+                        </span>
+                        {recommended && (
+                          <Badge className="h-5 bg-success text-[10px] text-success-foreground">
+                            แนะนำ
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                          หน่วย {r.unit_code || '—'}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 line-clamp-2 break-words text-sm leading-5 text-foreground">
+                        {r.item_name}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <ScorePill score={r.score} recommended={recommended} />
+                      <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                        เลือก
+                      </span>
+                    </div>
                   </div>
                 </button>
-              ))}
+                )
+              })}
             </div>
 
-            <div className="flex items-center justify-between border-t pt-3">
+            <div className="flex items-center justify-between border-t pt-2">
               <span className="text-sm text-muted-foreground">ไม่เจอที่ตรง?</span>
               <Button
                 type="button"
@@ -191,22 +259,22 @@ export function MapItemModal({
                 }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                สร้างสินค้าใหม่
+                เพิ่มสินค้าใหม่
               </Button>
             </div>
           </TabsContent>
 
           {/* ── Create tab ─────────────────────────────────────────────────── */}
-          <TabsContent value="create" className="space-y-3 mt-3">
+          <TabsContent value="create" className="mt-3 space-y-3 overflow-y-auto pr-1">
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <label className="text-sm text-muted-foreground">
-                  รหัสสินค้า (Item Code) <span className="text-destructive">*</span>
+                  รหัสสินค้า <span className="text-destructive">*</span>
                 </label>
                 <Input
                   autoFocus
                   value={form.code}
-                  placeholder="เช่น CON-99001 หรือ INGU-VIT-30ML"
+                  placeholder="เช่น BF-99001 หรือ INGU-VIT-30ML"
                   onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
                 />
               </div>
@@ -269,7 +337,7 @@ export function MapItemModal({
                 }
                 onClick={handleCreate}
               >
-                {creating ? 'กำลังสร้าง...' : 'สร้างและเลือกสินค้านี้'}
+                {creating ? 'กำลังเพิ่ม...' : 'เพิ่มและเลือกสินค้านี้'}
               </Button>
             </div>
           </TabsContent>

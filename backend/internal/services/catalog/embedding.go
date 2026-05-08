@@ -36,8 +36,11 @@ type indexedItem struct {
 // -------------------------------------------------------------------
 
 type EmbeddingService struct {
-	apiKey string
-	client *http.Client
+	apiKey      string
+	client      *http.Client
+	usageLogger interface {
+		Log(models.AIUsageEntry) error
+	}
 }
 
 func NewEmbeddingService(apiKey string) *EmbeddingService {
@@ -45,6 +48,13 @@ func NewEmbeddingService(apiKey string) *EmbeddingService {
 		apiKey: apiKey,
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+func (e *EmbeddingService) WithUsageLogger(logger interface {
+	Log(models.AIUsageEntry) error
+}) *EmbeddingService {
+	e.usageLogger = logger
+	return e
 }
 
 func (e *EmbeddingService) IsConfigured() bool {
@@ -56,6 +66,7 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 	if !e.IsConfigured() {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
+	start := time.Now()
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"model": EmbeddingModel,
@@ -71,12 +82,22 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 
 	resp, err := e.client.Do(req)
 	if err != nil {
+		e.logUsage(models.AIUsageEntry{
+			Provider: "openrouter", Model: EmbeddingModel, Feature: "catalog_embed",
+			Operation: "embed_text", Status: "error", Error: err.Error(),
+			DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+		})
 		return nil, fmt.Errorf("openrouter embedding call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		e.logUsage(models.AIUsageEntry{
+			Provider: "openrouter", Model: EmbeddingModel, Feature: "catalog_embed",
+			Operation: "embed_text", Status: "error", Error: fmt.Sprintf("status %d", resp.StatusCode),
+			DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+		})
 		return nil, fmt.Errorf("openrouter embedding %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -84,6 +105,10 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 		Data []struct {
 			Embedding []float64 `json:"embedding"`
 		} `json:"data"`
+		Usage *struct {
+			PromptTokens int `json:"prompt_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage,omitempty"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal embedding response: %w", err)
@@ -91,8 +116,44 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 	if len(result.Data) == 0 || len(result.Data[0].Embedding) == 0 {
 		return nil, fmt.Errorf("empty embedding in response")
 	}
+	inputTokens := estimateTokens(text)
+	totalTokens := inputTokens
+	if result.Usage != nil {
+		if result.Usage.PromptTokens > 0 {
+			inputTokens = result.Usage.PromptTokens
+		}
+		if result.Usage.TotalTokens > 0 {
+			totalTokens = result.Usage.TotalTokens
+		}
+	}
+	e.logUsage(models.AIUsageEntry{
+		Provider: "openrouter", Model: EmbeddingModel, Feature: "catalog_embed",
+		Operation: "embed_text", Status: "success", InputTokens: inputTokens,
+		TotalTokens: totalTokens, EstimatedCostUSD: estimateEmbeddingCostUSD(inputTokens),
+		DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+	})
 	return result.Data[0].Embedding, nil
 }
+
+func (e *EmbeddingService) logUsage(entry models.AIUsageEntry) {
+	if e.usageLogger == nil {
+		return
+	}
+	_ = e.usageLogger.Log(entry)
+}
+
+func estimateTokens(text string) int {
+	if len(text) == 0 {
+		return 0
+	}
+	return (len(text) + 3) / 4
+}
+
+func estimateEmbeddingCostUSD(inputTokens int) float64 {
+	return (float64(inputTokens) / 1_000_000) * 0.02
+}
+
+func intPtr(v int) *int { return &v }
 
 // -------------------------------------------------------------------
 // Cosine Similarity

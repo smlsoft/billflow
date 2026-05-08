@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -25,6 +26,28 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 		return fmt.Errorf("catalog service not configured")
 	}
 
+	if messageID != "" {
+		var count int
+		_ = h.billRepo.DB().QueryRow(
+			`SELECT
+			   (SELECT COUNT(*) FROM bills
+			     WHERE source='shopee_shipped'
+			       AND raw_data->>'email_message_id' = $1) +
+			   (SELECT COUNT(*) FROM processed_email_keys
+			     WHERE source='shopee_shipped'
+			       AND message_id = $1
+			       AND order_id = '')`,
+			messageID,
+		).Scan(&count)
+		if count > 0 {
+			h.logger.Info("shopee_shipped: skipping duplicate email before AI",
+				zap.String("message_id", messageID),
+				zap.Int("existing_bills", count),
+			)
+			return nil
+		}
+	}
+
 	// bodyText is already plain text (extractBodyText prefers text/plain).
 	// htmlToText is a no-op when input has no HTML tags, so it's safe to call.
 	plainText := htmlToText(bodyText)
@@ -34,6 +57,9 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	if err != nil || len(orders) == 0 {
 		h.logger.Warn("shopee_shipped: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
+		if err == nil {
+			return fmt.Errorf("AI extract shopee_shipped: empty orders")
+		}
 		return fmt.Errorf("AI extract shopee_shipped: %w", err)
 	}
 
@@ -47,11 +73,13 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 
 	createdCount := 0
 	skippedCount := 0
+	failedCount := 0
 	for _, order := range orders {
 		created, err := h.processOneShippedOrder(
 			order, subject, from, bodyText, bodyHTML, messageID, fallbackPrices, traceID, startTime,
 		)
 		if err != nil {
+			failedCount++
 			h.logger.Warn("shopee_shipped: order processing failed",
 				zap.String("order_id", order.OrderID), zap.Error(err))
 		}
@@ -66,7 +94,11 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 		zap.String("trace_id", traceID),
 		zap.Int("created", createdCount),
 		zap.Int("skipped", skippedCount),
+		zap.Int("failed", failedCount),
 	)
+	if messageID != "" && failedCount == 0 {
+		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+	}
 	return nil
 }
 
@@ -79,18 +111,47 @@ func (h *EmailHandler) processOneShippedOrder(
 	traceID string,
 	startTime time.Time,
 ) (bool, error) {
-	orderID := order.OrderID
-	if orderID == "" {
-		orderID = "#unknown"
+	orderID := strings.TrimSpace(order.OrderID)
+	if orderID == "" || strings.EqualFold(orderID, "#unknown") {
+		h.logger.Warn("shopee_shipped: skipping order without order_id",
+			zap.String("message_id", messageID),
+			zap.String("subject", subject),
+		)
+		return false, nil
+	}
+
+	validItems := make([]ai.ExtractedItem, 0, len(order.Items))
+	for _, extItem := range order.Items {
+		extItem.RawName = strings.TrimSpace(extItem.RawName)
+		if extItem.RawName == "" || extItem.Qty <= 0 {
+			continue
+		}
+		validItems = append(validItems, extItem)
+	}
+	if len(validItems) == 0 {
+		h.logger.Warn("shopee_shipped: skipping order without usable items",
+			zap.String("message_id", messageID),
+			zap.String("order_id", orderID),
+			zap.String("subject", subject),
+		)
+		if messageID != "" {
+			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
+		}
+		return false, nil
 	}
 
 	// Dedup: skip if a bill with the same (email_message_id, order_id) already exists.
 	var count int
 	_ = h.billRepo.DB().QueryRow(
-		`SELECT COUNT(*) FROM bills
-		 WHERE source='shopee_shipped'
-		   AND raw_data->>'email_message_id' = $1
-		   AND raw_data->>'order_id' = $2`,
+		`SELECT
+		   (SELECT COUNT(*) FROM bills
+		     WHERE source='shopee_shipped'
+		       AND raw_data->>'email_message_id' = $1
+		       AND raw_data->>'order_id' = $2) +
+		   (SELECT COUNT(*) FROM processed_email_keys
+		     WHERE source='shopee_shipped'
+		       AND message_id = $1
+		       AND order_id = $2)`,
 		messageID, orderID,
 	).Scan(&count)
 	if count > 0 {
@@ -112,7 +173,7 @@ func (h *EmailHandler) processOneShippedOrder(
 	var itemsWithCandidates []itemWithCandidates
 	allHighConfidence := true
 
-	for i, extItem := range order.Items {
+	for i, extItem := range validItems {
 		var matches []models.CatalogMatch
 
 		if h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
@@ -164,6 +225,7 @@ func (h *EmailHandler) processOneShippedOrder(
 		"email_message_id": messageID,
 		"order_id":         orderID,
 		"seller_name":      order.SellerName,
+		"items":            validItems,
 		"flow":             "shopee_shipped",
 		"doc_date":         docDate,
 		"body_text":        bodyText,
@@ -188,6 +250,7 @@ func (h *EmailHandler) processOneShippedOrder(
 	if err := h.billRepo.Create(bill); err != nil {
 		return false, fmt.Errorf("create shopee_shipped bill: %w", err)
 	}
+	_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
 
 	// Save original email body as artifact on the first order only to avoid
 	// storing N copies of the same email. Prefer HTML body (renders nicely in

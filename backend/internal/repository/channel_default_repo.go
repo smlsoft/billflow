@@ -19,6 +19,7 @@ const channelDefaultCols = `
   channel, bill_type, party_code, party_name, party_phone,
   party_address, party_tax_id, doc_format_code, endpoint,
   doc_prefix, doc_running_format,
+  branch_code, sale_code, unit_code, doc_time,
   wh_code, shelf_code, vat_type, vat_rate,
   updated_by, updated_at
 `
@@ -30,6 +31,7 @@ func scanChannelDefault(s interface{ Scan(...any) error }) (*models.ChannelDefau
 		&d.Channel, &d.BillType, &d.PartyCode, &d.PartyName, &d.PartyPhone,
 		&d.PartyAddress, &d.PartyTaxID, &d.DocFormatCode, &d.Endpoint,
 		&d.DocPrefix, &d.DocRunningFormat,
+		&d.BranchCode, &d.SaleCode, &d.UnitCode, &d.DocTime,
 		&d.WHCode, &d.ShelfCode, &d.VATType, &d.VATRate,
 		&updatedBy, &d.UpdatedAt,
 	)
@@ -91,9 +93,10 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   channel, bill_type, party_code, party_name, party_phone,
 		   party_address, party_tax_id, doc_format_code, endpoint,
 		   doc_prefix, doc_running_format,
+		   branch_code, sale_code, unit_code, doc_time,
 		   wh_code, shelf_code, vat_type, vat_rate,
 		   updated_by, updated_at
-		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW())
+		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20, NOW())
 		 ON CONFLICT (channel, bill_type) DO UPDATE SET
 		   party_code = EXCLUDED.party_code,
 		   party_name = EXCLUDED.party_name,
@@ -104,6 +107,10 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   endpoint = EXCLUDED.endpoint,
 		   doc_prefix = EXCLUDED.doc_prefix,
 		   doc_running_format = EXCLUDED.doc_running_format,
+		   branch_code = EXCLUDED.branch_code,
+		   sale_code = EXCLUDED.sale_code,
+		   unit_code = EXCLUDED.unit_code,
+		   doc_time = EXCLUDED.doc_time,
 		   wh_code = EXCLUDED.wh_code,
 		   shelf_code = EXCLUDED.shelf_code,
 		   vat_type = EXCLUDED.vat_type,
@@ -113,6 +120,7 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		d.Channel, d.BillType, d.PartyCode, d.PartyName, d.PartyPhone,
 		d.PartyAddress, d.PartyTaxID, d.DocFormatCode, d.Endpoint,
 		d.DocPrefix, d.DocRunningFormat,
+		d.BranchCode, d.SaleCode, d.UnitCode, d.DocTime,
 		d.WHCode, d.ShelfCode, d.VATType, d.VATRate,
 		ub,
 	)

@@ -16,11 +16,11 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <div className={cn('mb-6 space-y-2', className)}>
+    <div className={cn('mb-5 space-y-2', className)}>
       {breadcrumb && <div className="text-xs">{breadcrumb}</div>}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground lg:text-[28px]">
             {title}
           </h1>
           {description && (

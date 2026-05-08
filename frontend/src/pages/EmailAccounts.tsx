@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import axios from 'axios'
 import {
   AlertCircle,
   ChevronDown,
@@ -38,6 +39,8 @@ import { cn } from '@/lib/utils'
 import type { IMAPAccount } from '@/pages/EmailAccounts/AccountDialog'
 import { AccountDialog } from '@/pages/EmailAccounts/AccountDialog'
 
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
 interface IMAPAccountFull extends IMAPAccount {
   last_polled_at?: string | null
   last_poll_status?: string | null
@@ -47,7 +50,7 @@ interface IMAPAccountFull extends IMAPAccount {
 }
 
 const CHANNEL_META: Record<string, { label: string; cls: string }> = {
-  general: { label: 'General', cls: 'bg-secondary text-secondary-foreground' },
+  general: { label: 'ไฟล์แนบทั่วไป', cls: 'bg-secondary text-secondary-foreground' },
   shopee:  { label: 'Shopee',  cls: 'bg-warning/15 text-warning hover:bg-warning/20' },
   lazada:  { label: 'Lazada',  cls: 'bg-info/15 text-info hover:bg-info/20' },
 }
@@ -62,7 +65,7 @@ function HelpBanner() {
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-info/10">
           <Info className="h-4 w-4 text-info" />
-          <span>BillFlow ดึงอีเมลแบบไหน + เลือก channel ยังไง</span>
+          <span>BillFlow ดึงอีเมลแบบไหน</span>
           <ChevronDown
             className={cn(
               'ml-auto h-4 w-4 text-muted-foreground transition-transform',
@@ -73,48 +76,49 @@ function HelpBanner() {
         <CollapsibleContent>
           <CardContent className="space-y-3 border-t border-info/20 px-4 pt-3 text-sm">
             <p className="text-muted-foreground">
-              ระบบดึงอีเมลจาก inbox ที่คุณเพิ่มไว้ มาสร้างบิลอัตโนมัติ —
-              ทุก inbox มี <b>channel</b> กำหนดว่าจะ route อีเมลไปทาง flow ไหน:
+              ระบบจะอ่านอีเมลจากกล่องที่เพิ่มไว้ แล้วสร้างบิลให้อัตโนมัติ.
+              สำหรับ Phase 1 ให้ใช้กล่องเมลที่รับอีเมลจาก Shopee เป็นหลัก:
             </p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className={cn('grid grid-cols-1 gap-3', PHASE >= 2 && 'sm:grid-cols-2')}>
               <div className="rounded-md border border-border bg-card p-3">
                 <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
                   <ShoppingBag className="h-4 w-4 text-warning" />
-                  Channel: <span className="text-warning">Shopee</span>
+                  กล่องเมล Shopee
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  สำหรับ Gmail/Outlook ที่มีอีเมลจาก Shopee — ระบบจะแยก:
+                  สำหรับ Gmail/Outlook ที่มีอีเมลจาก Shopee — Phase 1 ใช้สร้างบิลซื้อจากอีเมล:
                 </p>
                 <ul className="mt-1.5 space-y-0.5 pl-4 text-xs">
                   <li className="list-disc">
-                    Subject "<b>คำสั่งซื้อ #...</b>" → บิลขาย (saleinvoice)
+                    Subject "<b>ถูกจัดส่งแล้ว</b>" หรือ "<b>ยืนยันการชำระเงิน</b>" → บิลซื้อ
                   </li>
                   <li className="list-disc">
-                    Subject "<b>ถูกจัดส่งแล้ว</b>" หรือ "<b>ยืนยันการชำระเงิน</b>" →
-                    ใบสั่งซื้อ/สั่งจอง (PO)
+                    บิลที่สร้างแล้วจะไปตรวจต่อที่หน้า <b>ใบสั่งซื้อ</b>
                   </li>
                 </ul>
               </div>
-              <div className="rounded-md border border-border bg-card p-3">
-                <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                  <FileText className="h-4 w-4 text-info" />
-                  Channel: <span className="text-info">General</span>
+              {PHASE >= 2 && (
+                <div className="rounded-md border border-border bg-card p-3">
+                  <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                    <FileText className="h-4 w-4 text-info" />
+                    กล่องเมลไฟล์แนบทั่วไป
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    สำหรับ PDF / Excel แนบจากผู้ขายทั่วไป ใช้ใน Phase ถัดไป
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5 pl-4 text-xs">
+                    <li className="list-disc">
+                      ระบบอ่านข้อมูลจากไฟล์แนบแล้วสร้างบิล
+                    </li>
+                    <li className="list-disc">
+                      รองรับ .pdf, .jpg, .png, .xls, .xlsx
+                    </li>
+                  </ul>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  สำหรับ inbox ที่มี PDF / Excel แนบ (เช่น email vendor)
-                </p>
-                <ul className="mt-1.5 space-y-0.5 pl-4 text-xs">
-                  <li className="list-disc">
-                    AI extract ข้อมูลจาก PDF → สร้างบิล
-                  </li>
-                  <li className="list-disc">
-                    รองรับ .pdf, .jpg, .png, .xls, .xlsx
-                  </li>
-                </ul>
-              </div>
+              )}
             </div>
             <div className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
-              ⚠️ Gmail ต้องใช้ <b>App Password</b> (16 หลัก) ไม่ใช่ password จริง —
+              Gmail ต้องใช้ <b>App Password</b> (16 หลัก) ไม่ใช่ password จริง —
               ในฟอร์มเพิ่ม inbox มีปุ่ม "วิธีรับ App Password" ข้างช่อง Password
             </div>
           </CardContent>
@@ -127,6 +131,7 @@ function HelpBanner() {
 function statusVariant(s?: string | null): 'success' | 'warning' | 'danger' | 'muted' {
   if (!s) return 'muted'
   if (s === 'ok') return 'success'
+  if (s === 'warning') return 'warning'
   return 'danger'
 }
 
@@ -134,6 +139,7 @@ function statusLabel(s?: string | null): string {
   if (!s) return 'ยังไม่ poll'
   switch (s) {
     case 'ok': return 'สำเร็จ'
+    case 'warning': return 'มีคำเตือน'
     case 'connect_failed': return 'เชื่อมต่อไม่ได้'
     case 'auth_failed': return 'รหัสผ่านผิด'
     case 'select_failed': return 'folder ไม่มี'
@@ -141,6 +147,21 @@ function statusLabel(s?: string | null): string {
     case 'fetch_failed': return 'fetch ผิดพลาด'
     default: return s
   }
+}
+
+function friendlyPollError(error?: string | null): string {
+  if (!error) return ''
+  const lower = error.toLowerCase()
+  if (lower.includes('empty items')) {
+    return 'มีอีเมลที่ผ่านคำกรองหัวข้อเข้ามา แต่ไม่ใช่รูปแบบบิลซื้อ Shopee ที่ระบบอ่านได้ แนะนำให้กดแก้ไขกล่องเมล แล้วเหลือคำกรองเฉพาะ "ถูกจัดส่งแล้ว" และ "ยืนยันการชำระเงินคำสั่งซื้อหมายเลข"'
+  }
+  if (lower.includes('empty orders')) {
+    return 'มีอีเมลที่ผ่านคำกรองหัวข้อเข้ามา แต่ไม่พบเลขคำสั่งซื้อ Shopee แนะนำให้ตรวจคำกรองหัวข้อในกล่องเมลนี้'
+  }
+  if (lower.includes('openrouter') || lower.includes('credit') || lower.includes('quota')) {
+    return 'ระบบ AI ยังประมวลผลไม่ได้ กรุณาตรวจเครดิตหรือการเชื่อมต่อ OpenRouter'
+  }
+  return error
 }
 
 export default function EmailAccounts() {
@@ -155,7 +176,7 @@ export default function EmailAccounts() {
       const res = await client.get<{ data: IMAPAccountFull[] }>('/api/settings/imap-accounts')
       setAccounts(res.data.data ?? [])
     } catch {
-      toast.error('โหลดรายการ inbox ไม่สำเร็จ')
+      toast.error('โหลดรายการอีเมลไม่สำเร็จ')
     } finally {
       setLoading(false)
     }
@@ -179,7 +200,7 @@ export default function EmailAccounts() {
   }
 
   const handlePollNow = async (a: IMAPAccountFull) => {
-    const id = toast.loading(`Poll ${a.name}…`)
+    const id = toast.loading(`กำลังดึงอีเมล ${a.name}…`)
     try {
       const res = await client.post<{
         status: string
@@ -187,19 +208,32 @@ export default function EmailAccounts() {
         processed: number
         duration_ms: number
         error?: string
-      }>(`/api/settings/imap-accounts/${a.id}/poll`)
+      }>(`/api/settings/imap-accounts/${a.id}/poll`, undefined, {
+        timeout: 180000,
+      })
       const r = res.data
       if (r.status === 'ok') {
         toast.success(
-          `Poll เสร็จ ${r.processed}/${r.messages_found} ราย (${r.duration_ms} ms)`,
+          `ดึงเสร็จ ${r.processed}/${r.messages_found} ราย (${r.duration_ms} ms)`,
           { id },
         )
       } else {
-        toast.error(`Poll fail: ${r.error || r.status}`, { id })
+        toast.error(`ดึงอีเมลไม่สำเร็จ: ${r.error || r.status}`, { id })
       }
       fetchAll()
-    } catch {
-      toast.error('Poll ไม่สำเร็จ', { id })
+    } catch (e) {
+      if (axios.isAxiosError(e) && e.code === 'ECONNABORTED') {
+        toast.warning(
+          'คำสั่งดึงอีเมลใช้เวลานาน ระบบอาจยังทำงานต่ออยู่ ให้รอสักครู่แล้วรีเฟรชสถานะ',
+          { id },
+        )
+        fetchAll()
+        return
+      }
+      const msg = axios.isAxiosError(e)
+        ? e.response?.data?.error || e.message
+        : ''
+      toast.error(`ดึงอีเมลไม่สำเร็จ${msg ? `: ${msg}` : ''}`, { id })
     }
   }
 
@@ -217,29 +251,58 @@ export default function EmailAccounts() {
   const headerActions = (
     <Button size="sm" onClick={handleAdd}>
       <Plus className="h-4 w-4" />
-      เพิ่ม Inbox
+      เพิ่มกล่องเมล
     </Button>
   )
+
+  const warningAccounts = accounts.filter((a) => a.last_poll_status === 'warning' && a.last_poll_error)
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Email Inboxes"
-        description="ดึงอีเมลจากหลาย mailbox มาสร้างบิลอัตโนมัติ — แก้ config ได้โดยไม่ต้อง deploy"
+        title="กล่องอีเมลรับบิล"
+        description="กล่องเมลที่ใช้ดึงอีเมล Shopee และสร้างบิลซื้ออัตโนมัติ"
         actions={headerActions}
       />
 
       <HelpBanner />
 
+      {!loading && warningAccounts.length > 0 && (
+        <div className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm text-warning">
+          <div className="flex items-start gap-2 font-medium">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>มีอีเมลที่ดึงได้ แต่สร้างบิลไม่สำเร็จ</span>
+          </div>
+          {warningAccounts.map((a) => (
+            <div key={a.id} className="ml-6 rounded border border-warning/20 bg-background/60 px-2.5 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-medium text-foreground">{a.name}</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => handleEdit(a)}
+                >
+                  แก้คำกรอง
+                </Button>
+              </div>
+              <p className="mt-1 line-clamp-3 break-words text-xs text-muted-foreground">
+                {friendlyPollError(a.last_poll_error)}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
       {!loading && accounts.length === 0 ? (
         <EmptyState
           icon={Mail}
-          title="ยังไม่มี inbox"
-          description="เพิ่ม inbox แรกเพื่อเริ่มดึงบิลจากอีเมล (ถ้าเคยตั้ง .env IMAP_* ไว้ — copy ค่ามาใส่ที่นี่ครั้งเดียว แล้ว .env เหล่านั้นจะไม่ถูกใช้อีก)"
+          title="ยังไม่มีกล่องเมล"
+          description="เพิ่มกล่องเมล Shopee เพื่อเริ่มดึงอีเมลและสร้างบิลซื้ออัตโนมัติ"
           action={
             <Button onClick={handleAdd}>
               <Plus className="h-4 w-4" />
-              เพิ่ม Inbox แรก
+              เพิ่มกล่องเมลแรก
             </Button>
           }
         />
@@ -248,7 +311,7 @@ export default function EmailAccounts() {
           <DataTable<IMAPAccountFull>
             data={accounts}
             loading={loading}
-            empty="ยังไม่มี inbox"
+            empty="ยังไม่มีกล่องเมล"
             columns={[
               {
                 key: 'name',
@@ -262,7 +325,7 @@ export default function EmailAccounts() {
               },
               {
                 key: 'channel',
-                header: 'Channel',
+                header: 'ประเภท',
                 cell: (a) => {
                   const meta = CHANNEL_META[a.channel] ?? CHANNEL_META.general
                   return (
@@ -302,7 +365,7 @@ export default function EmailAccounts() {
               },
               {
                 key: 'last_poll',
-                header: 'Last poll',
+                header: 'ดึงล่าสุด',
                 cell: (a) =>
                   a.last_polled_at ? (
                     <span className="text-xs tabular-nums text-muted-foreground">
@@ -314,7 +377,7 @@ export default function EmailAccounts() {
               },
               {
                 key: 'msgs',
-                header: 'Msgs',
+                header: 'สร้างบิล',
                 headerClassName: 'text-right',
                 className: 'text-right',
                 cell: (a) =>
@@ -326,7 +389,7 @@ export default function EmailAccounts() {
               },
               {
                 key: 'interval',
-                header: 'Interval',
+                header: 'รอบดึง',
                 cell: (a) => (
                   <span className="text-xs tabular-nums text-muted-foreground">
                     {Math.round(a.poll_interval_seconds / 60)} นาที
@@ -352,7 +415,7 @@ export default function EmailAccounts() {
                           <PlayCircle className="h-3.5 w-3.5" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>Poll ทันที</TooltipContent>
+                      <TooltipContent>ดึงอีเมลตอนนี้</TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -392,7 +455,7 @@ export default function EmailAccounts() {
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>
-            มี inbox ที่ poll fail ≥ 3 ครั้งติด — admin ได้รับ LINE notify แล้ว
+            มีกล่องเมลที่ดึงไม่สำเร็จ 3 ครั้งติด — ผู้ดูแลได้รับ LINE แจ้งเตือนแล้ว
             กรุณาแก้ password หรือ host ให้ถูกต้อง
           </span>
         </div>

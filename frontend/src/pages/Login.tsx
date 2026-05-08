@@ -60,7 +60,7 @@ export default function Login() {
             <FileText className="h-6 w-6" strokeWidth={2.25} />
           </div>
           <CardTitle className="text-2xl">BillFlow</CardTitle>
-          <CardDescription>AI-powered bill processing system</CardDescription>
+          <CardDescription>ระบบจัดการใบสั่งซื้อจากอีเมลเข้า SML</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -103,7 +103,7 @@ export default function Login() {
           </form>
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
-            BillFlow v0.2.0
+            Phase 1 · Shopee Purchase Bill
           </p>
         </CardContent>
       </Card>

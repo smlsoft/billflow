@@ -72,7 +72,7 @@ export function AddItemForm({ billId, onAdded }: Props) {
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-2">
             <Input
-              placeholder="ชื่อสินค้า (raw)"
+              placeholder="ชื่อสินค้าจากต้นทาง"
               value={draft.raw_name}
               onChange={(e) => setDraft((d) => ({ ...d, raw_name: e.target.value }))}
               autoFocus
@@ -80,7 +80,7 @@ export function AddItemForm({ billId, onAdded }: Props) {
               className="h-8 text-sm"
             />
             <Input
-              placeholder="Item Code (optional)"
+              placeholder="รหัสสินค้า (ถ้ามี)"
               value={draft.item_code}
               onChange={(e) => setDraft((d) => ({ ...d, item_code: e.target.value }))}
               className="h-8 text-sm font-mono"

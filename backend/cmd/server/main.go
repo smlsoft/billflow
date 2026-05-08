@@ -24,6 +24,7 @@ import (
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
 	"billflow/internal/services/anomaly"
+	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
 	emailservice "billflow/internal/services/email"
 	"billflow/internal/services/events"
@@ -32,7 +33,6 @@ import (
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/media"
 	"billflow/internal/services/mistral"
-	"billflow/internal/services/artifact"
 	"billflow/internal/services/sml"
 	"billflow/internal/worker"
 )
@@ -99,9 +99,15 @@ func main() {
 	chatNoteRepo := repository.NewChatNoteRepo(db)
 	chatTagRepo := repository.NewChatTagRepo(db)
 	lineOARepo := repository.NewLineOAAccountRepo(db)
+	appSettingsRepo := repository.NewAppSettingsRepo(db)
+	aiUsageRepo := repository.NewAIUsageRepo(db)
+	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
+		logger.Warn("apply DB instance settings", zap.Error(err))
+	}
+	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, logger)
 
 	// Services
-	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel)
+	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel).WithUsageLogger(aiUsageRepo)
 	mapperSvc := mapper.New(mappingRepo)
 	anomalySvc := anomaly.New(billRepo).WithCustomerLookup(billRepo)
 	smlClient := sml.New(sml.Config{
@@ -186,6 +192,19 @@ func main() {
 	partyCache := sml.NewPartyCache(partyClient, logger)
 	partyCache.Start(context.Background())
 
+	// SML warehouse cache — powers the Bill Detail send dialog warehouse/shelf
+	// pickers. If the SML v4 warehouse service is not deployed yet, startup
+	// continues and the UI can still fall back to manual code entry.
+	warehouseClient := sml.NewWarehouseClient(sml.PartyConfig{
+		BaseURL:    cfg.ShopeeSMLURL,
+		GUID:       cfg.ShopeeSMLGUID,
+		Provider:   cfg.ShopeeSMLProvider,
+		ConfigFile: cfg.ShopeeSMLConfigFile,
+		Database:   cfg.ShopeeSMLDatabase,
+	}, logger)
+	warehouseCache := sml.NewWarehouseCache(warehouseClient, logger)
+	warehouseCache.Start(context.Background())
+
 	// SML catalog services for Shopee email smart matching
 	smlHeaders := map[string]string{
 		"guid":           cfg.ShopeeSMLGUID,
@@ -194,7 +213,7 @@ func main() {
 		"databaseName":   cfg.ShopeeSMLDatabase,
 	}
 	catalogSvc := catalog.NewSMLCatalogService(catalogRepo, cfg.ShopeeSMLURL, smlHeaders, logger)
-	embSvc := catalog.NewEmbeddingService(cfg.OpenRouterAPIKey)
+	embSvc := catalog.NewEmbeddingService(cfg.OpenRouterAPIKey).WithUsageLogger(aiUsageRepo)
 	catalogIdx := catalog.NewCatalogIndex()
 	// Load existing embeddings into memory at startup
 	if err := catalogIdx.Reload(catalogRepo); err != nil {
@@ -298,7 +317,7 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
 	imapConfigured := false
@@ -331,15 +350,29 @@ func main() {
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetArtifactService(artifactSvc)
-	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, cfg.AutoConfirmThreshold, logger)
+	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, cfg, cfg.AutoConfirmThreshold, logger)
+	go func() {
+		time.Sleep(3 * time.Second)
+		started, err := catalogH.StartEmbedAll("startup_auto_resume")
+		if err != nil {
+			logger.Warn("catalog auto-resume skipped", zap.Error(err))
+			return
+		}
+		if started {
+			logger.Info("catalog auto-resume started")
+		}
+	}()
 	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, channelDefaultRepo, cfg.AutoConfirmThreshold, logger)
-	shopeeH := handlers.NewShopeeImportHandler(billRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, logger)
+	shopeeH := handlers.NewShopeeImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	shopeeH.SetArtifactService(artifactSvc)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
+	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, partyCache, logger)
 	smlPartyH := handlers.NewSMLPartyHandler(partyCache, logger)
+	smlWarehouseH := handlers.NewSMLWarehouseHandler(warehouseCache, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
+	aiUsageH := handlers.NewAIUsageHandler(aiUsageRepo, logger)
 
 	// Webhooks (no auth)
 	// Webhook routes:
@@ -397,9 +430,15 @@ func main() {
 
 		// Settings
 		api.GET("/settings/status", dashH.SettingsStatus)
+		api.GET("/setup/status", middleware.RequireRole("admin"), setupH.Status)
+		api.GET("/settings/instance", middleware.RequireRole("admin"), instanceSettingsH.Get)
+		api.PUT("/settings/instance", middleware.RequireRole("admin"), instanceSettingsH.Update)
+		api.POST("/settings/instance/restart", middleware.RequireRole("admin"), instanceSettingsH.Restart)
 
 		// Logs (Activity Log)
 		api.GET("/logs", logH.List)
+		api.GET("/ai-usage/summary", middleware.RequireRole("admin"), aiUsageH.Summary)
+		api.GET("/ai-usage/logs", middleware.RequireRole("admin"), aiUsageH.Logs)
 
 		// Import — existing (JSON-RPC sale_reserve)
 		api.POST("/import/upload", middleware.RequireRole("admin", "staff"), importH.Upload)
@@ -407,6 +446,7 @@ func main() {
 
 		// Shopee import — saleinvoice REST API (SML 224)
 		api.GET("/settings/shopee-config", shopeeH.GetConfig)
+		api.GET("/import/shopee/runs", middleware.RequireRole("admin", "staff"), shopeeH.ListRuns)
 		api.POST("/import/shopee/preview", middleware.RequireRole("admin", "staff"), shopeeH.Preview)
 		api.POST("/import/shopee/confirm", middleware.RequireRole("admin", "staff"), shopeeH.Confirm)
 
@@ -425,6 +465,10 @@ func main() {
 		api.GET("/sml/suppliers", middleware.RequireRole("admin", "staff"), smlPartyH.SearchSuppliers)
 		api.POST("/sml/refresh-parties", middleware.RequireRole("admin"), smlPartyH.Refresh)
 		api.GET("/sml/parties/last-sync", middleware.RequireRole("admin", "staff"), smlPartyH.LastSync)
+		api.GET("/sml/warehouses", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchWarehouses)
+		api.GET("/sml/warehouses/:code/shelves", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchShelves)
+		api.POST("/sml/refresh-warehouses", middleware.RequireRole("admin"), smlWarehouseH.Refresh)
+		api.GET("/sml/warehouses/last-sync", middleware.RequireRole("admin", "staff"), smlWarehouseH.LastSync)
 
 		// IMAP accounts (admin only) — multi-mailbox config
 		api.GET("/settings/imap-accounts", middleware.RequireRole("admin"), imapSettingsH.List)

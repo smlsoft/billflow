@@ -39,6 +39,7 @@ export interface BillItem {
   id: string
   bill_id: string
   raw_name: string
+  source_sku?: string
   item_code?: string | null
   qty: number
   unit_code?: string | null
@@ -57,8 +58,24 @@ export interface BillRoutePreview {
   bill_type: string
   route?: string             // sale_reserve / saleorder / saleinvoice / purchaseorder
   endpoint?: string          // free-form URL/path the admin set in /settings/channels
+  doc_no?: string            // existing failed doc_no or next running preview (not reserved)
   doc_format?: string        // e.g. "BF-SO" + "YYMM####"
   doc_format_code?: string   // e.g. "SR", "INV", "PO"
+  party_code?: string        // legacy channel value; purchase flow now selects seller in the send dialog
+  party_name?: string
+  sml_defaults?: {
+    branch_code?: string
+    sale_code?: string
+    wh_code?: string
+    shelf_code?: string
+    unit_code?: string
+    vat_type?: number
+    vat_rate?: number
+    doc_time?: string
+    doc_format?: string
+    database?: string
+    base_url?: string
+  }
   // Set when there's no channel_default row yet → preview can't compute
   // route. Frontend shows a hint linking to /settings/channels.
   error?: string
@@ -69,6 +86,7 @@ export interface Bill {
   bill_type: string
   source: string
   status: BillStatus
+  document_route?: string
   raw_data?: Record<string, unknown> | null
   sml_doc_no?: string | null
   sml_order_id?: string | null
@@ -123,6 +141,16 @@ export interface DashboardStats {
   sml_failed: number
   total_amount: number
   today_bills: number
+  purchase_total?: number
+  purchase_pending?: number
+  purchase_needs_review?: number
+  purchase_sent?: number
+  purchase_failed?: number
+  sales_total?: number
+  sales_pending?: number
+  sales_needs_review?: number
+  sales_sent?: number
+  sales_failed?: number
   unread_messages?: number
   email_inbox_errors?: number
 }
@@ -178,4 +206,3 @@ export interface PlatformColumnMapping {
   column_name: string
   updated_at?: string
 }
-

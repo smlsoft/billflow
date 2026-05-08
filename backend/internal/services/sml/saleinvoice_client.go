@@ -180,11 +180,13 @@ type InvoiceDetail struct {
 	SumAmountExclVAT float64 `json:"sum_amount_exclude_vat"`
 }
 
-// InvoicePayload is the full body for POST /SMLJavaRESTService/restapi/saleinvoice
+// InvoicePayload is the full body for POST /SMLJavaRESTService/saleinvoice/v4
 type InvoicePayload struct {
 	DocNo          string          `json:"doc_no,omitempty"`
 	DocDate        string          `json:"doc_date"`
 	DocTime        string          `json:"doc_time"`
+	DocRef         string          `json:"doc_ref,omitempty"`
+	DocRefDate     string          `json:"doc_ref_date,omitempty"`
 	DocFormatCode  string          `json:"doc_format_code"`
 	CustCode       string          `json:"cust_code"`
 	SaleCode       string          `json:"sale_code"` // must always be present (even empty)
@@ -205,6 +207,7 @@ type InvoicePayload struct {
 	TransferAmount float64         `json:"tranfer_amount"` // typo intentional (matches SML)
 	Details        []InvoiceDetail `json:"details"`
 	PayDetails     []interface{}   `json:"paydetails"`
+	Remark         string          `json:"remark,omitempty"`
 }
 
 // InvoiceResponse handles both old restapi format and new v3 format.
@@ -243,7 +246,7 @@ func (c *InvoiceClient) CreateInvoice(payload InvoicePayload, urlOverride string
 		return 0, nil, err
 	}
 
-	url := resolveSMLURL(c.cfg.BaseURL, "/SMLJavaRESTService/restapi/saleinvoice", urlOverride)
+	url := resolveSMLURL(c.cfg.BaseURL, "/SMLJavaRESTService/saleinvoice/v4", urlOverride)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
@@ -380,9 +383,12 @@ type ShopeeOrderItem struct {
 func BuildInvoicePayload(
 	docNo string,
 	docDate string,
+	docRef string,
+	docRefDate string,
 	items []ShopeeOrderItem,
 	cfg InvoiceConfig,
 	productCache map[string]*ProductInfo,
+	remark string,
 ) InvoicePayload {
 	var details []InvoiceDetail
 	var totalValue, totalVAT, totalExc float64
@@ -456,6 +462,8 @@ func BuildInvoicePayload(
 		DocNo:          docNo,
 		DocDate:        docDate,
 		DocTime:        cfg.DocTime,
+		DocRef:         docRef,
+		DocRefDate:     docRefDate,
 		DocFormatCode:  cfg.DocFormat,
 		CustCode:       cfg.CustCode,
 		SaleCode:       cfg.SaleCode,
@@ -476,5 +484,6 @@ func BuildInvoicePayload(
 		TransferAmount: 0,
 		Details:        details,
 		PayDetails:     []interface{}{},
+		Remark:         remark,
 	}
 }

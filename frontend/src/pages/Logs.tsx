@@ -4,9 +4,13 @@ import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/th'
 import {
+  AlertTriangle,
   ChevronDown,
+  CheckCircle2,
   Code2,
   Copy,
+  Database,
+  FileText,
   Filter,
   RotateCw,
   ScrollText,
@@ -16,7 +20,6 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -33,6 +36,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { EmptyState } from '@/components/common/EmptyState'
+import { DateRangePicker } from '@/components/common/DateRangePicker'
 import { JsonViewer } from '@/components/common/JsonViewer'
 import { PageHeader } from '@/components/common/PageHeader'
 import api from '@/api/client'
@@ -42,6 +46,7 @@ import {
   SOURCE_LABELS,
   SOURCE_TONE,
   TONE_DOT,
+  smlRouteLabel,
   type ActionMeta,
   type AuditLog,
   type Tone,
@@ -101,6 +106,191 @@ function CopyChip({ value, label }: { value: string; label: string }) {
   )
 }
 
+interface LogFact {
+  label: string
+  value?: React.ReactNode
+  mono?: boolean
+  copyValue?: string
+  tone?: 'normal' | 'danger' | 'muted'
+}
+
+function parseDetailError(log: AuditLog): Record<string, any> {
+  const err = log.detail?.error
+  if (err && typeof err === 'object' && !Array.isArray(err)) return err
+  if (typeof err !== 'string') return {}
+  try {
+    const parsed = JSON.parse(err)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function compact(value: unknown, max = 90): string {
+  if (value == null || value === '') return ''
+  const text = String(value)
+  return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
+function makeFacts(log: AuditLog): LogFact[] {
+  const d = log.detail ?? {}
+  const parsedError = parseDetailError(log)
+  const facts: LogFact[] = []
+
+  if (log.target_id) {
+    facts.push({
+      label: 'บิล',
+      value: (
+        <Link
+          to={`/bills/${log.target_id}`}
+          className="font-mono text-primary hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {log.target_id.slice(0, 8)}…
+        </Link>
+      ),
+      copyValue: log.target_id,
+    })
+  }
+
+  const docNo = d.doc_no ?? parsedError.doc_no_attempted
+  if (docNo) facts.push({ label: 'เลขเอกสาร SML', value: docNo, mono: true, copyValue: String(docNo) })
+  if (d.route ?? parsedError.route) {
+    const route = d.route ?? parsedError.route
+    facts.push({ label: 'ปลายทาง SML', value: smlRouteLabel(route), mono: false })
+  }
+  if (d.via) facts.push({ label: 'วิธีส่ง', value: d.via, mono: true })
+  if (d.subject) facts.push({ label: 'หัวข้ออีเมล', value: compact(d.subject, 140) })
+  if (d.message_id) facts.push({ label: 'Message ID', value: compact(d.message_id, 64), mono: true, copyValue: String(d.message_id) })
+  if (d.raw_name) facts.push({ label: 'ชื่อจากบิล', value: compact(d.raw_name, 140) })
+  if (d.item_code ?? d.code) facts.push({ label: 'รหัสสินค้า', value: d.item_code ?? d.code, mono: true, copyValue: String(d.item_code ?? d.code) })
+  if (d.unit_code) facts.push({ label: 'หน่วย', value: d.unit_code })
+  if (d.name) facts.push({ label: 'ชื่อสินค้า', value: compact(d.name, 140) })
+  if (d.channel) facts.push({ label: 'ช่องทาง', value: d.channel })
+  if (d.bill_type) facts.push({ label: 'ประเภทบิล', value: d.bill_type })
+  if (d.party_code) facts.push({ label: 'คู่ค้า', value: d.party_code, mono: true })
+  if (log.duration_ms != null) facts.push({ label: 'เวลาใช้', value: `${log.duration_ms.toLocaleString()}ms`, mono: true })
+  if (log.trace_id) facts.push({ label: 'Trace', value: <CopyChip value={log.trace_id} label="trace" /> })
+
+  return facts.filter((fact) => fact.value != null && fact.value !== '')
+}
+
+function LogExpandedSummary({
+  log,
+  onRetry,
+  retrying,
+  canRetry,
+}: {
+  log: AuditLog
+  onRetry: (e: React.MouseEvent) => void
+  retrying: boolean
+  canRetry: boolean
+}) {
+  const d = log.detail ?? {}
+  const parsedError = parseDetailError(log)
+  const errorMessage = parsedError.error ?? d.error
+  const facts = makeFacts(log)
+  const isSmlSent = log.action === 'sml_sent'
+  const isSmlFailed = log.action === 'sml_failed'
+
+  return (
+    <div className="space-y-2">
+      {isSmlSent && (
+        <div className="flex items-start gap-2 rounded-md border border-success/25 bg-success/10 px-3 py-2">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-foreground">ส่งเข้า SML สำเร็จ</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              ระบบบันทึกเลขเอกสารและ response ไว้แล้ว ตรวจต่อได้จากหน้ารายละเอียดบิล
+            </p>
+          </div>
+        </div>
+      )}
+
+      {isSmlFailed && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-destructive">ส่งเข้า SML ไม่สำเร็จ</div>
+                {errorMessage && (
+                  <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-destructive">
+                    {String(errorMessage)}
+                  </p>
+                )}
+              </div>
+            </div>
+            {canRetry && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onRetry}
+                disabled={retrying}
+                className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
+              >
+                <RotateCw className={cn('h-3 w-3', retrying && 'animate-spin')} />
+                {retrying ? 'กำลัง retry…' : 'Retry'}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isSmlSent && !isSmlFailed && (log.action.includes('email') || log.action.includes('shopee')) && (
+        <div className="flex items-start gap-2 rounded-md border bg-background px-3 py-2">
+          <FileText className="mt-0.5 h-4 w-4 shrink-0 text-info" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-foreground">ข้อมูลจากช่องทางต้นทาง</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              ใช้ดูว่าอีเมลหรือไฟล์ใดเป็นต้นทางของบิล และใช้ trace กลับตอนตรวจซ้ำ
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+        {facts.map((fact, idx) => (
+          <div key={`${fact.label}-${idx}`} className="rounded-md border bg-background px-2.5 py-1.5">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {fact.label}
+            </div>
+            <div
+              className={cn(
+                'mt-0.5 min-w-0 break-words text-sm leading-5 text-foreground',
+                fact.mono && 'font-mono text-xs',
+                fact.tone === 'danger' && 'text-destructive',
+                fact.tone === 'muted' && 'text-muted-foreground',
+              )}
+            >
+              {fact.value}
+            </div>
+            {fact.copyValue && fact.label !== 'Trace' && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  navigator.clipboard?.writeText(fact.copyValue ?? '')
+                }}
+                className="mt-1 text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                คัดลอก
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {log.action === 'sml_sent' && (
+        <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          <Database className="h-3.5 w-3.5" />
+          <span>ดู payload/response เต็มได้ใน raw JSON หรือในหน้ารายละเอียดบิล</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
   const [expanded, setExpanded] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
@@ -114,7 +304,6 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
   const summary = summarize(log)
   const isError = log.level === 'error'
   const source = log.source ?? ''
-  const errMsg = String(log.detail?.error ?? '')
   const docNo = String(log.detail?.doc_no ?? '')
   // Inline retry available only on sml_failed rows that have a bill target.
   const canRetry = log.action === 'sml_failed' && !!log.target_id
@@ -140,10 +329,12 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
   return (
     <div
       className={cn(
-        'rounded-lg border bg-card transition-colors',
+        'rounded-md border bg-card transition-colors',
         isError
           ? 'border-destructive/30 bg-destructive/5'
-          : 'border-border hover:bg-accent/30',
+          : expanded
+            ? 'border-primary/25 bg-primary/[0.025]'
+            : 'border-border hover:bg-accent/30',
       )}
     >
       {/* Row is a div not a button so we can nest a Retry <button> inside
@@ -159,7 +350,7 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
             setExpanded((v) => !v)
           }
         }}
-        className="flex w-full cursor-pointer items-start gap-3 px-4 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <span
           className={cn(
@@ -170,7 +361,7 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-base leading-none">{meta.emoji}</span>
+            <span className="text-sm leading-none">{meta.emoji}</span>
             <span className="text-sm font-medium text-foreground">{meta.label}</span>
             {source && SOURCE_LABELS[source] && (
               <Badge
@@ -222,7 +413,7 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
           {summary && (
             <p
               className={cn(
-                'mt-0.5 line-clamp-2 text-xs',
+                'mt-0.5 line-clamp-1 text-xs',
                 isError ? 'text-destructive' : 'text-muted-foreground',
               )}
             >
@@ -268,9 +459,9 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
               <span
                 className={cn(
                   'font-mono text-[10px] tabular-nums',
-                  log.duration_ms > 3000
+                  log.duration_ms > 30000
                     ? 'text-destructive'
-                    : log.duration_ms > 1000
+                    : log.duration_ms > 10000
                       ? 'text-warning'
                       : 'text-muted-foreground/70',
                 )}
@@ -289,72 +480,13 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
       </div>
 
       {expanded && (
-        <div className="space-y-3 border-t border-border bg-muted/20 px-4 py-3">
-          {errMsg && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2">
-              <div className="mb-0.5 flex items-center justify-between gap-2">
-                <span className="text-[10px] uppercase tracking-wide text-destructive/70">
-                  error
-                </span>
-                {/* Inline retry — visible only on sml_failed rows tied to a bill.
-                    Saves the trip to /bills/:id just to click Retry. */}
-                {canRetry && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRetry}
-                    disabled={retrying}
-                    className="h-6 gap-1 px-2 text-[11px]"
-                  >
-                    <RotateCw className={cn('h-3 w-3', retrying && 'animate-spin')} />
-                    {retrying ? 'กำลัง retry…' : 'Retry บิลนี้'}
-                  </Button>
-                )}
-              </div>
-              <pre className="whitespace-pre-wrap break-words font-mono text-xs text-destructive">
-                {errMsg}
-              </pre>
-            </div>
-          )}
-
-          <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-2">
-            {log.target_id && (
-              <DetailRow label="Bill">
-                <Link
-                  to={`/bills/${log.target_id}`}
-                  className="font-mono text-primary hover:underline"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {log.target_id.slice(0, 8)}…
-                </Link>
-              </DetailRow>
-            )}
-            {docNo && (
-              <DetailRow label="doc_no">
-                <span className="font-mono">{docNo}</span>
-              </DetailRow>
-            )}
-            {log.detail?.route && (
-              <DetailRow label="route">
-                <span className="font-mono">{String(log.detail.route)}</span>
-              </DetailRow>
-            )}
-            {log.detail?.via && (
-              <DetailRow label="via">
-                <span className="font-mono">{String(log.detail.via)}</span>
-              </DetailRow>
-            )}
-            {log.user_id && (
-              <DetailRow label="user">
-                <span className="font-mono">{log.user_id.slice(0, 8)}…</span>
-              </DetailRow>
-            )}
-            {log.trace_id && (
-              <DetailRow label="trace">
-                <CopyChip value={log.trace_id} label="trace" />
-              </DetailRow>
-            )}
-          </dl>
+        <div className="space-y-2 border-t border-border bg-muted/20 px-3 py-2.5">
+          <LogExpandedSummary
+            log={log}
+            onRetry={handleRetry}
+            retrying={retrying}
+            canRetry={canRetry}
+          />
 
           <div>
             <button
@@ -366,7 +498,7 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
               className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
             >
               <Code2 className="h-3 w-3" />
-              {showRaw ? 'ซ่อน raw JSON' : 'ดู raw JSON'}
+              {showRaw ? 'ซ่อนข้อมูลดิบ' : 'ดูข้อมูลดิบ JSON'}
             </button>
             {showRaw && (
               <div className="mt-2">
@@ -376,17 +508,6 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2">
-      <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </dt>
-      <dd className="text-foreground">{children}</dd>
     </div>
   )
 }
@@ -484,10 +605,10 @@ export default function Logs() {
 
   return (
     <TooltipProvider>
-      <div className="space-y-5">
+      <div className="space-y-4">
         <PageHeader
-          title="Activity Log"
-          description="ประวัติทุก event — สร้างบิล / ส่ง SML / ผลลัพธ์ — คลิกแถวเพื่อดูรายละเอียด"
+          title="ประวัติการทำงาน"
+          description="ตรวจย้อนหลังว่าระบบดึงอีเมล สร้างบิล และส่งเข้า SML สำเร็จหรือไม่"
           actions={
             <Button
               variant="outline"
@@ -502,12 +623,12 @@ export default function Logs() {
           }
         />
 
-        <Card>
-          <CardContent className="flex flex-wrap items-end gap-3 p-4">
+        <Card className="shadow-none">
+          <CardContent className="flex flex-wrap items-end gap-2 p-3">
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">ช่องทาง</Label>
               <Select value={source} onValueChange={setSource}>
-                <SelectTrigger className="h-9 w-[150px]">
+                <SelectTrigger className="h-8 w-[142px] text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -526,9 +647,9 @@ export default function Logs() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">Action</Label>
+              <Label className="text-xs text-muted-foreground">เหตุการณ์</Label>
               <Select value={action} onValueChange={setAction}>
-                <SelectTrigger className="h-9 w-[200px]">
+                <SelectTrigger className="h-8 w-[190px] text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -546,43 +667,31 @@ export default function Logs() {
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">ระดับ</Label>
               <Select value={level} onValueChange={setLevel}>
-                <SelectTrigger className="h-9 w-[120px]">
+                <SelectTrigger className="h-8 w-[112px] text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>ทั้งหมด</SelectItem>
                   <SelectItem value="info">info</SelectItem>
-                  <SelectItem value="warn">warn</SelectItem>
-                  <SelectItem value="error">error</SelectItem>
+                  <SelectItem value="warn">คำเตือน</SelectItem>
+                  <SelectItem value="error">ผิดพลาด</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground" htmlFor="d-from">
-                ตั้งแต่
+              <Label className="text-xs text-muted-foreground">
+                วันที่
               </Label>
-              <Input
-                id="d-from"
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="h-9 w-[150px]"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground" htmlFor="d-to">
-                ถึง
-              </Label>
-              <Input
-                id="d-to"
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="h-9 w-[150px]"
+              <DateRangePicker
+                from={dateFrom}
+                to={dateTo}
+                onFromChange={setDateFrom}
+                onToChange={setDateTo}
+                className="h-8 min-w-[190px] text-xs"
               />
             </div>
             {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto">
+              <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto h-8 text-xs">
                 <Filter className="h-3.5 w-3.5" />
                 ล้างตัวกรอง
               </Button>
@@ -595,12 +704,12 @@ export default function Logs() {
             พบ <span className="font-medium text-foreground">{total.toLocaleString()}</span> รายการ
           </span>
           {errorCount > 0 && (
-            <span className="text-destructive">· error {errorCount}</span>
+            <span className="text-destructive">· ผิดพลาด {errorCount}</span>
           )}
-          {warnCount > 0 && <span className="text-warning">· warn {warnCount}</span>}
+          {warnCount > 0 && <span className="text-warning">· คำเตือน {warnCount}</span>}
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           {loading ? (
             <div className="space-y-2">
               {Array.from({ length: 8 }).map((_, i) => (
@@ -610,7 +719,7 @@ export default function Logs() {
           ) : logs.length === 0 ? (
             <EmptyState
               icon={ScrollText}
-              title="ยังไม่มี activity"
+              title="ยังไม่มีประวัติ"
               description={
                 hasFilters
                   ? 'ลองล้างตัวกรองหรือขยายช่วงวันที่'
@@ -619,13 +728,13 @@ export default function Logs() {
             />
           ) : (
             grouped.map((g) => (
-              <div key={g.key} className="space-y-1.5">
+              <div key={g.key} className="space-y-1">
                 <div className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                   <span>{g.label}</span>
                   <span className="text-muted-foreground/60">· {g.items.length}</span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   {g.items.map((log) => (
                     <LogRow key={log.id} log={log} onRetried={() => load(page)} />
                   ))}

@@ -11,22 +11,22 @@
 
 // Bill lifecycle status — DB enum: pending / needs_review / confirmed / sent / failed / skipped
 export const BILL_STATUS_LABEL: Record<string, string> = {
-  pending:      'รอดำเนินการ',
-  needs_review: 'รอตรวจสอบ',
+  pending:      'พร้อมส่ง',
+  needs_review: 'ต้องตรวจสินค้า',
   confirmed:    'ยืนยันแล้ว',
-  sent:         'ส่ง SML สำเร็จ',
-  failed:       'ส่ง SML ล้มเหลว',
+  sent:         'ส่งเข้า SML แล้ว',
+  failed:       'ส่งไม่สำเร็จ',
   skipped:      'ข้ามแล้ว',
 }
 
 // Short variants for tight UI (badges, table cells, action cards).
 // Use only where space matters; prefer BILL_STATUS_LABEL for descriptive contexts.
 export const BILL_STATUS_LABEL_SHORT: Record<string, string> = {
-  pending:      'รอดำเนินการ',
-  needs_review: 'รอตรวจสอบ',
+  pending:      'พร้อมส่ง',
+  needs_review: 'ตรวจสินค้า',
   confirmed:    'ยืนยันแล้ว',
-  sent:         'สำเร็จ',
-  failed:       'ล้มเหลว',
+  sent:         'ส่งแล้ว',
+  failed:       'ไม่สำเร็จ',
   skipped:      'ข้ามแล้ว',
 }
 
@@ -44,7 +44,7 @@ export const BILL_SOURCE_LABEL: Record<string, string> = {
   email:          'Email',
   shopee:         'Shopee Excel',
   shopee_email:   'Shopee Order',
-  shopee_shipped: 'Shopee → ใบสั่งซื้อ/สั่งจอง',
+  shopee_shipped: 'Email บิลซื้อ Shopee',
   lazada:         'Lazada',
   manual:         'Manual',
 }
@@ -53,16 +53,18 @@ export const BILL_SOURCE_LABEL: Record<string, string> = {
 // sidebar label exactly (no more "Mapping สินค้า" page title vs "ตารางจับคู่
 // สินค้า" sidebar label drift).
 export const PAGE_TITLE = {
-  dashboard:        'Dashboard',
-  bills:            'บิลทั้งหมด',
+  dashboard:        'ภาพรวม',
+  bills:            'ใบสั่งซื้อ',
+  salesOrders:      'ใบสั่งขาย',
+  saleInvoices:     'ขายสินค้าและบริการ',
   billDetail:       'รายละเอียดบิล',
   messages:         'ข้อความลูกค้า',
   importLazada:     'นำเข้า Lazada',
   importShopee:     'นำเข้า Shopee',
   mappings:         'ตารางจับคู่สินค้า',
   catalog:          'สินค้าใน SML',
-  channelDefaults:  'ลูกค้า / ผู้ขาย default',
-  emailInboxes:     'อีเมลรับบิล',
+  channelDefaults:  'เส้นทางเอกสาร SML',
+  emailInboxes:     'กล่องอีเมลรับบิล',
   lineOA:           'บัญชี LINE OA',
   quickReplies:     'ข้อความสำเร็จรูป',
   chatTags:         'ป้ายลูกค้า',

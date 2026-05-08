@@ -30,12 +30,12 @@ func (r *BillRepo) Create(b *models.Bill) error {
 	}
 
 	return r.db.QueryRow(
-		`INSERT INTO bills (bill_type, source, status, raw_data, ai_confidence, anomalies, created_by, sml_order_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO bills (bill_type, source, status, document_route, raw_data, ai_confidence, anomalies, created_by, sml_order_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`,
 		b.BillType, b.Source,
 		coalesceStatus(b.Status, "pending"),
-		raw, b.AIConfidence, anomalies, b.CreatedBy, orderID,
+		b.DocumentRoute, raw, b.AIConfidence, anomalies, b.CreatedBy, orderID,
 	).Scan(&b.ID, &b.CreatedAt)
 }
 
@@ -85,12 +85,12 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	var anomaliesRaw []byte
 	var smlPayloadRaw, smlResponseRaw []byte
 	err := r.db.QueryRow(
-		`SELECT id, bill_type, source, status, raw_data, sml_doc_no,
+		`SELECT id, bill_type, source, status, document_route, raw_data, sml_doc_no,
 		        sml_payload, sml_response, ai_confidence, anomalies,
 		        error_msg, created_by, created_at, sent_at, remark
 		 FROM bills WHERE id = $1`, id,
 	).Scan(
-		&b.ID, &b.BillType, &b.Source, &b.Status, &b.RawData,
+		&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData,
 		&b.SMLDocNo, &smlPayloadRaw, &smlResponseRaw, &b.AIConfidence,
 		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt, &b.Remark,
 	)
@@ -113,6 +113,7 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 		return nil, err
 	}
 	b.Items = items
+	enrichShopeeBillRawData(b, len(items), false)
 	return b, nil
 }
 
@@ -143,10 +144,21 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		args = append(args, f.BillType)
 		argN++
 	}
+	if f.DocumentRoute != "" {
+		where += fmt.Sprintf(" AND b.document_route = $%d", argN)
+		args = append(args, f.DocumentRoute)
+		argN++
+	}
 	if f.Search != "" {
 		where += fmt.Sprintf(
-			" AND (b.sml_doc_no ILIKE $%d OR b.raw_data->>'customer_name' ILIKE $%d)",
-			argN, argN,
+			` AND (
+			 b.sml_doc_no ILIKE $%d
+			 OR b.raw_data->>'customer_name' ILIKE $%d
+			 OR b.raw_data->>'order_id' ILIKE $%d
+			 OR b.raw_data->>'shopee_order_id' ILIKE $%d
+			 OR b.raw_data->>'seller_name' ILIKE $%d
+			)`,
+			argN, argN, argN, argN, argN,
 		)
 		args = append(args, "%"+f.Search+"%")
 		argN++
@@ -158,13 +170,14 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		return nil, 0, fmt.Errorf("count: %w", err)
 	}
 
-	query := `SELECT b.id, b.bill_type, b.source, b.status, b.sml_doc_no, b.ai_confidence,
+	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
 	                 b.anomalies, b.error_msg, b.created_at, b.sent_at,
-	                 COALESCE(SUM(bi.qty * bi.price), 0) AS total_amount
+	                 COALESCE(SUM(bi.qty * bi.price), 0) AS total_amount,
+	                 COUNT(bi.id) AS item_count
 	          FROM bills b
 	          LEFT JOIN bill_items bi ON bi.bill_id = b.id
 	          ` + where + `
-	          GROUP BY b.id, b.bill_type, b.source, b.status, b.sml_doc_no, b.ai_confidence,
+	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
 	                   b.anomalies, b.error_msg, b.created_at, b.sent_at
 	          ORDER BY b.created_at DESC` +
 		fmt.Sprintf(" LIMIT $%d OFFSET $%d", argN, argN+1)
@@ -180,13 +193,15 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 	for rows.Next() {
 		var b models.Bill
 		var anomaliesRaw []byte
+		var itemCount int
 		if err := rows.Scan(
-			&b.ID, &b.BillType, &b.Source, &b.Status, &b.SMLDocNo, &b.AIConfidence,
-			&anomaliesRaw, &b.ErrorMsg, &b.CreatedAt, &b.SentAt, &b.TotalAmount,
+			&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData, &b.SMLDocNo, &b.AIConfidence,
+			&anomaliesRaw, &b.ErrorMsg, &b.CreatedAt, &b.SentAt, &b.TotalAmount, &itemCount,
 		); err != nil {
 			return nil, 0, err
 		}
 		b.Anomalies = anomaliesRaw
+		enrichShopeeBillRawData(&b, itemCount, true)
 		bills = append(bills, b)
 	}
 	return bills, total, rows.Err()
@@ -204,7 +219,7 @@ func (r *BillRepo) UpdateStatus(id, status string, smlDocNo *string, smlResponse
 
 func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 	rows, err := r.db.Query(
-		`SELECT id, bill_id, raw_name, item_code, qty, unit_code, price, mapped, mapping_id,
+		`SELECT id, bill_id, raw_name, COALESCE(source_sku, ''), item_code, qty, unit_code, price, mapped, mapping_id,
 		        COALESCE(candidates, '[]') as candidates
 		 FROM bill_items WHERE bill_id = $1 ORDER BY id`, billID,
 	)
@@ -218,7 +233,7 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 		var item models.BillItem
 		var candidatesRaw []byte
 		if err := rows.Scan(
-			&item.ID, &item.BillID, &item.RawName, &item.ItemCode,
+			&item.ID, &item.BillID, &item.RawName, &item.SourceSKU, &item.ItemCode,
 			&item.Qty, &item.UnitCode, &item.Price, &item.Mapped, &item.MappingID,
 			&candidatesRaw,
 		); err != nil {
@@ -234,10 +249,10 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 
 func (r *BillRepo) InsertItem(item *models.BillItem) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, item_code, qty, unit_code, price, mapped, mapping_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, item_code, qty, unit_code, price, mapped, mapping_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id`,
-		item.BillID, item.RawName, item.ItemCode, item.Qty,
+		item.BillID, item.RawName, item.SourceSKU, item.ItemCode, item.Qty,
 		item.UnitCode, item.Price, item.Mapped, item.MappingID,
 	).Scan(&item.ID)
 }
@@ -356,6 +371,39 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 	stats["items_mapped"] = mappedCount
 	stats["items_unmapped"] = unmappedCount
 
+	// Work queues used by the Phase 1+ dashboard. These mirror the two
+	// first-class document menus so the dashboard can show where the work is
+	// waiting instead of presenting one blended bill count.
+	type queueStat struct {
+		key      string
+		source   string
+		billType string
+	}
+	queues := []queueStat{
+		{key: "purchase", source: "shopee_shipped", billType: "purchase"},
+		{key: "sales", source: "shopee", billType: "sale"},
+	}
+	for _, q := range queues {
+		var totalQ, pendingQ, needsReviewQ, sentQ, failedQ int
+		_ = r.db.QueryRow(`
+			SELECT
+			  COUNT(*),
+			  COUNT(*) FILTER (WHERE status = 'pending'),
+			  COUNT(*) FILTER (WHERE status = 'needs_review'),
+			  COUNT(*) FILTER (WHERE status = 'sent'),
+			  COUNT(*) FILTER (WHERE status = 'failed')
+			FROM bills
+			WHERE source = $1 AND bill_type = $2`,
+			q.source,
+			q.billType,
+		).Scan(&totalQ, &pendingQ, &needsReviewQ, &sentQ, &failedQ)
+		stats[q.key+"_total"] = totalQ
+		stats[q.key+"_pending"] = pendingQ
+		stats[q.key+"_needs_review"] = needsReviewQ
+		stats[q.key+"_sent"] = sentQ
+		stats[q.key+"_failed"] = failedQ
+	}
+
 	return stats, nil
 }
 
@@ -424,7 +472,9 @@ func (r *BillRepo) GetPriceHistories(itemCodes []string) (map[string]float64, ma
 func (r *BillRepo) FindByEmailMessageID(messageID string) (bool, error) {
 	var count int
 	err := r.db.QueryRow(
-		`SELECT COUNT(*) FROM bills WHERE raw_data->>'email_message_id' = $1`,
+		`SELECT
+		   (SELECT COUNT(*) FROM bills WHERE raw_data->>'email_message_id' = $1) +
+		   (SELECT COUNT(*) FROM processed_email_keys WHERE message_id = $1)`,
 		messageID,
 	).Scan(&count)
 	return count > 0, err
@@ -434,20 +484,49 @@ func (r *BillRepo) FindByEmailMessageID(messageID string) (bool, error) {
 func (r *BillRepo) FindByShopeeOrderID(orderID string) (bool, error) {
 	var count int
 	err := r.db.QueryRow(
-		`SELECT COUNT(*) FROM bills
-		 WHERE source = 'shopee_email' AND (sml_order_id = $1 OR raw_data->>'shopee_order_id' = $1)`,
+		`SELECT
+		   (SELECT COUNT(*) FROM bills
+		     WHERE source = 'shopee_email' AND (sml_order_id = $1 OR raw_data->>'shopee_order_id' = $1)) +
+		   (SELECT COUNT(*) FROM processed_email_keys
+		     WHERE source = 'shopee_email' AND order_id = $1)`,
 		orderID,
 	).Scan(&count)
 	return count > 0, err
 }
 
+// HasProcessedEmailKey returns true when a durable email/order tombstone exists.
+// It is used by IMAP processors so old mailbox messages do not recreate bills
+// after a UAT cleanup deletes the bills table rows.
+func (r *BillRepo) HasProcessedEmailKey(source, messageID, orderID string) (bool, error) {
+	var count int
+	err := r.db.QueryRow(
+		`SELECT COUNT(*) FROM processed_email_keys
+		  WHERE source = $1 AND message_id = $2 AND order_id = $3`,
+		source, messageID, orderID,
+	).Scan(&count)
+	return count > 0, err
+}
+
+func (r *BillRepo) MarkProcessedEmailKey(source, messageID, orderID string) error {
+	if messageID == "" {
+		return nil
+	}
+	_, err := r.db.Exec(
+		`INSERT INTO processed_email_keys (source, message_id, order_id)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (source, message_id, order_id) DO NOTHING`,
+		source, messageID, orderID,
+	)
+	return err
+}
+
 // InsertItemWithCandidates inserts a bill item including top-5 catalog candidates
 func (r *BillRepo) InsertItemWithCandidates(item *models.BillItem, candidatesJSON []byte) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, item_code, qty, unit_code, price, mapped, mapping_id, candidates)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, item_code, qty, unit_code, price, mapped, mapping_id, candidates)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 RETURNING id`,
-		item.BillID, item.RawName, item.ItemCode, item.Qty,
+		item.BillID, item.RawName, item.SourceSKU, item.ItemCode, item.Qty,
 		item.UnitCode, item.Price, item.Mapped, item.MappingID, candidatesJSON,
 	).Scan(&item.ID)
 }

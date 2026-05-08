@@ -45,14 +45,14 @@ export function DataTable<T>({
   const rowHeight = dense ? 'h-10' : 'h-12'
 
   return (
-    <div className={cn('overflow-hidden rounded-lg border border-border bg-card', className)}>
+    <div className={cn('overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm', className)}>
       <Table>
         <TableHeader>
-          <TableRow className="bg-muted/40 hover:bg-muted/40">
+          <TableRow className="bg-muted/50 hover:bg-muted/50">
             {columns.map((col) => (
               <TableHead
                 key={col.key}
-                className={cn('text-xs font-semibold uppercase tracking-wide text-muted-foreground', col.headerClassName)}
+                className={cn('text-[11px] font-semibold uppercase tracking-wide text-muted-foreground', col.headerClassName)}
                 style={col.width ? { width: col.width } : undefined}
               >
                 {col.header}
@@ -91,7 +91,7 @@ export function DataTable<T>({
                   key={i}
                   className={cn(
                     rowHeight,
-                    onRowClick && 'cursor-pointer hover:bg-muted/40',
+                    onRowClick && 'cursor-pointer hover:bg-accent/30',
                     dynClass,
                   )}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}

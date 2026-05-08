@@ -1,13 +1,13 @@
 # Email IMAP — การทำงานของ Email Pipeline
 
-> อัพเดตล่าสุด: 2026-04-24  
-> สถานะ: ✅ deployed — กำลัง test | dedup by Message-ID ✅
+> อัพเดตล่าสุด: 2026-05-06
+> สถานะ: ✅ multi-account IMAP deployed; config อยู่ใน `/settings/email` และ `imap_accounts` table
 
 ---
 
 ## ภาพรวม
 
-BillFlow poll Gmail (หรือ IMAP อื่น) ทุก **5 นาที** เพื่อตรวจหา email ใหม่ที่มี attachment  
+BillFlow poll Gmail/Outlook/IMAP อื่นตาม inbox ที่ admin เพิ่มใน `/settings/email` เพื่อตรวจหา email ใหม่ที่มี attachment
 เมื่อพบ → ส่ง AI อ่าน → map รหัสสินค้า → ส่งสร้างบิลใน SML โดยอัตโนมัติ
 
 ---
@@ -16,14 +16,14 @@ BillFlow poll Gmail (หรือ IMAP อื่น) ทุก **5 นาที*
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  Background Goroutine: EmailPoller                          │
+│  Background: EmailCoordinator                                │
 │                                                            │
-│  ► poll ทันทีตอน server start                             │
-│  ► poll ทุก 5 นาที (IMAP_POLL_INTERVAL)                   │
+│  ► one goroutine per enabled imap_accounts row             │
+│  ► poll ทุก poll_interval_seconds (ขั้นต่ำ 300 วินาที)    │
 └────────────────┬───────────────────────────────────────────┘
                  │
                  ▼
-        IMAP.Poll() — connect → Gmail :993 TLS
+        IMAP.Poll(account) — connect → mailbox TLS
                  │
                  ▼
         SELECT INBOX WHERE UNSEEN
@@ -38,9 +38,11 @@ BillFlow poll Gmail (หรือ IMAP อื่น) ทุก **5 นาที*
                  ▼
         ┌ Loop ทุก message ┐
         │                  │
-        │  filter ตาม config:
-        │  - IMAP_FILTER_FROM (email ผู้ส่ง)
-        │  - IMAP_FILTER_SUBJECT (keyword ใน subject)
+        │  filter ตาม account config:
+        │  - filter_from
+        │  - filter_subjects[]
+        │  - channel: general / shopee / lazada
+        │  - shopee_domains[] สำหรับ Shopee routing
         │  ถ้าไม่ผ่าน filter → ข้ามไป
         │                  │
         │  parse email body → หา attachments
@@ -102,7 +104,7 @@ BillFlow poll Gmail (หรือ IMAP อื่น) ทุก **5 นาที*
 
 ### ถ้า mark email กลับเป็น unread แล้วรอ 5 นาที จะส่ง SML ได้เลยไหม?
 
-**ได้เลย** — IMAP poller ค้นหา `UNSEEN` (unread) messages  
+**ได้เลย** — IMAP poller ค้นหา `UNSEEN` (unread) messages
 ถ้า mark กลับเป็น unread → email กลายเป็น UNSEEN → poll ถัดไป (ภายใน 5 นาที) จะ pick up ใหม่
 
 ```
@@ -114,7 +116,7 @@ timeline:
   14:15  ← poll: เจอ UNSEEN → process ใหม่ → allMapped = true → SML ✅
 ```
 
-> **หรือใช้ Retry Handler แทน** (ไม่ต้อง unread email):  
+> **หรือใช้ Retry Handler แทน** (ไม่ต้อง unread email):
 > `POST /api/bills/:id/retry` → re-map items ด้วย mapping ใหม่ → ส่ง SML ทันที
 
 ---
@@ -129,14 +131,14 @@ timeline:
 
 ### poll ถี่ได้ไหม?
 
-Gmail มี rate limit — ถ้า poll ถี่กว่า 5 นาที จะเกิด `unexpected EOF`  
-ต้องใช้ `IMAP_POLL_INTERVAL=5m` ขั้นต่ำ
+Gmail มี rate limit — ถ้า poll ถี่กว่า 5 นาที จะเกิด `unexpected EOF`
+ระบบบังคับ `poll_interval_seconds >= 300` ใน DB
 
 ---
 
 ## PDF ทำงานยังไง (Mistral OCR)
 
-Gmail ส่ง PDF บางฉบับเป็น `Content-Disposition: inline` (ไม่ใช่ attachment)  
+Gmail ส่ง PDF บางฉบับเป็น `Content-Disposition: inline` (ไม่ใช่ attachment)
 BillFlow รองรับทั้ง 2 กรณี:
 
 ```
@@ -162,7 +164,7 @@ Gemini ExtractText(markdownText)
 {customer_name, items, confidence} JSON
 ```
 
-เหตุผลที่ใช้ Mistral OCR แทน Gemini PDF:  
+เหตุผลที่ใช้ Mistral OCR แทน Gemini PDF:
 OpenRouter route Gemini ผ่าน Amazon Bedrock → ไม่รองรับ `application/pdf` MIME type โดยตรง
 
 ---
@@ -176,7 +178,7 @@ OpenRouter route Gemini ผ่าน Amazon Bedrock → ไม่รองรั
 c.Authenticate(sasl.NewPlainClient("", user, password))
 ```
 
-สาเหตุ: Gmail advertises `AUTH=PLAIN AUTH=XOAUTH2` via CAPABILITY  
+สาเหตุ: Gmail advertises `AUTH=PLAIN AUTH=XOAUTH2` via CAPABILITY
 `Login` command ถูก reject → ต้องใช้ `AUTHENTICATE PLAIN` แทน
 
 ---
@@ -196,26 +198,22 @@ c.Authenticate(sasl.NewPlainClient("", user, password))
 
 ## Config ที่เกี่ยวข้อง
 
+IMAP ไม่มี `.env IMAP_*` singleton แล้ว ให้ตั้งผ่าน UI:
+
+| Field | Table column |
+|---|---|
+| Host/Port/User/Password/Mailbox | `imap_accounts.host`, `port`, `username`, `password`, `mailbox` |
+| Filters | `filter_from`, `filter_subjects[]` |
+| Routing | `channel`, `shopee_domains[]` |
+| Timing | `poll_interval_seconds` |
+| Runtime status | `last_polled_at`, `last_poll_status`, `last_poll_error`, `consecutive_failures` |
+
+AI/OCR ยังมาจาก env:
+
 ```bash
-# IMAP Connection
-IMAP_HOST=imap.gmail.com
-IMAP_PORT=993
-IMAP_USER=billing@company.com
-IMAP_PASSWORD=                   # Gmail: App Password 16 หลัก (ไม่มีช่องว่าง)
-
-# Filter (optional — ถ้า empty จะรับทุก UNSEEN)
-IMAP_FILTER_FROM=vendor@company.com
-IMAP_FILTER_SUBJECT=PO,Purchase Order,ใบสั่งซื้อ
-
-# Timing
-IMAP_POLL_INTERVAL=5m            # ห้ามน้อยกว่า 5m สำหรับ Gmail
-
-# AI
 OPENROUTER_MODEL=google/gemini-2.5-flash
-OPENROUTER_FALLBACK_MODEL=google/gemini-flash-1.5
-MISTRAL_API_KEY=                 # สำหรับ Mistral OCR
-
-# Auto-confirm
+OPENROUTER_FALLBACK_MODEL=anthropic/claude-3-5-haiku  # server current value
+MISTRAL_API_KEY=
 AUTO_CONFIRM_THRESHOLD=0.85
 ```
 
@@ -227,8 +225,9 @@ AUTO_CONFIRM_THRESHOLD=0.85
 # 1. ดู logs
 docker logs billflow-backend --tail=50 2>&1 | grep -i "imap\|email\|poll"
 
-# 2. ตรวจ IMAP config
-docker exec billflow-backend env | grep IMAP
+# 2. ตรวจ IMAP config/status ใน DB
+docker exec billflow-postgres psql -U billflow -d billflow \
+  -c "SELECT name, enabled, last_poll_status, consecutive_failures, last_poll_error FROM imap_accounts;"
 
 # 3. ทดสอบ IMAP connection ด้วย curl
 curl -v --ssl-reqd 'imaps://imap.gmail.com:993/INBOX' \
@@ -240,7 +239,7 @@ docker exec billflow-postgres psql -U billflow -d billflow \
 ```
 
 **Checklist:**
-- [ ] `IMAP_POLL_INTERVAL` ≥ 5m
+- [ ] `poll_interval_seconds` ≥ 300
 - [ ] Gmail: 2FA เปิดอยู่ + ใช้ App Password (ไม่ใช่ password จริง)
 - [ ] Gmail: เปิด IMAP ใน Settings → Forwarding and POP/IMAP
 - [ ] Email เป็น UNSEEN (ยังไม่ได้อ่าน)
@@ -252,9 +251,11 @@ docker exec billflow-postgres psql -U billflow -d billflow \
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `backend/internal/jobs/email_poller.go` | Ticker goroutine — poll ทุก interval |
+| `backend/internal/services/email/coordinator.go` | one goroutine per enabled account |
+| `backend/internal/services/email/account.go` | account runtime/update helpers |
 | `backend/internal/services/email/imap.go` | IMAP connect, search UNSEEN, fetch, parse, mark SEEN |
 | `backend/internal/handlers/email.go` | AttachmentProcessor: OCR → extract → map → anomaly → DB → SML |
+| `backend/internal/handlers/imap_settings.go` | `/settings/email` APIs |
 | `backend/internal/services/mistral/ocr.go` | Mistral OCR API (PDF → markdown) |
 | `backend/internal/services/ai/openrouter.go` | ExtractText, ExtractImage, ExtractPDF |
 | `backend/internal/repository/bill_repo.go` | Create, UpdateStatus, UpdateBillItem, UpdatePriceHistory |

@@ -7,8 +7,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { Bill, BillItem } from '@/types'
+import { isShopeeSalesBill } from '@/lib/shopeeBill'
 import { BillItemRow } from './BillItemRow'
-import { AddItemForm } from './AddItemForm'
 
 interface Props {
   bill: Bill
@@ -31,31 +31,53 @@ export function BillItemsTable({
   highlightItemId,
 }: Props) {
   const items = bill.items ?? []
+  const rawNameLabel = isShopeeSalesBill(bill) ? 'ชื่อสินค้าจาก Excel' : 'ชื่อสินค้าจากอีเมล'
+  const issueCount = items.filter((item) => {
+    return (
+      !item.item_code ||
+      !item.unit_code ||
+      !item.qty ||
+      item.qty <= 0 ||
+      item.price == null ||
+      item.price <= 0
+    )
+  }).length
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold">
-          รายการสินค้า ({items.length} รายการ)
-        </CardTitle>
+    <Card className="rounded-2xl border-border/70 shadow-sm">
+      <CardHeader className="flex flex-row items-start justify-between gap-3 pb-3">
+        <div>
+          <CardTitle className="text-sm font-semibold">
+            รายการสินค้า ({items.length} รายการ)
+          </CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">
+            ตรวจรหัสสินค้า หน่วย จำนวน และราคาให้ครบก่อนส่งเข้า SML
+          </p>
+        </div>
+        {issueCount > 0 ? (
+          <span className="rounded-md bg-warning/10 px-2 py-1 text-xs font-medium text-warning">
+            ต้องแก้ {issueCount} รายการ
+          </span>
+        ) : items.length > 0 ? (
+          <span className="rounded-md bg-success/10 px-2 py-1 text-xs font-medium text-success">
+            พร้อมส่ง
+          </span>
+        ) : null}
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
-          <Table>
+          <Table className="min-w-[1080px]">
             <TableHeader>
               <TableRow>
-                {/* Tiny first column for validation status icon — shows ⚠
-                    when the row blocks SML send (missing item_code etc.) */}
-                <TableHead className="w-6 px-1" aria-label="status" />
-                <TableHead className="w-[220px]">ชื่อสินค้า (จาก source)</TableHead>
-                <TableHead>Item Code</TableHead>
-                <TableHead>SML Item Name</TableHead>
-                <TableHead className="text-center">Match</TableHead>
-                <TableHead className="text-right">จำนวน</TableHead>
-                <TableHead>หน่วย</TableHead>
-                <TableHead className="text-right">ราคา/หน่วย</TableHead>
-                <TableHead className="text-right">รวม</TableHead>
-                {canEdit && <TableHead className="text-center">จัดการ</TableHead>}
+                <TableHead className="w-[360px]">{rawNameLabel}</TableHead>
+                <TableHead className="w-[220px]">รหัสสินค้า SML</TableHead>
+                <TableHead className="w-[300px]">ชื่อสินค้าใน SML</TableHead>
+                <TableHead className="w-[130px] text-center">ความมั่นใจ</TableHead>
+                <TableHead className="w-[110px] text-right">จำนวน</TableHead>
+                <TableHead className="w-[120px]">หน่วย</TableHead>
+                <TableHead className="w-[140px] text-right">ราคา</TableHead>
+                <TableHead className="w-[140px] text-right">รวม</TableHead>
+                {canEdit && <TableHead className="w-[170px] text-center">จัดการ</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -68,12 +90,13 @@ export function BillItemsTable({
                   onUpdated={onItemUpdated}
                   onDeleted={onItemDeleted}
                   highlighted={item.id === highlightItemId}
+                  rawNameLabel={rawNameLabel}
                 />
               ))}
               {items.length === 0 && (
                 <TableRow>
                   <td
-                    colSpan={canEdit ? 10 : 9}
+                    colSpan={canEdit ? 9 : 8}
                     className="py-8 text-center text-sm text-muted-foreground"
                   >
                     ยังไม่มีรายการสินค้า
@@ -84,11 +107,6 @@ export function BillItemsTable({
           </Table>
         </div>
 
-        {canEdit && (
-          <div className="px-4 pb-4">
-            <AddItemForm billId={bill.id} onAdded={onItemAdded} />
-          </div>
-        )}
       </CardContent>
     </Card>
   )

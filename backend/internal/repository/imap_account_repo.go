@@ -52,14 +52,15 @@ func scanImapAccount(s interface{ Scan(...any) error }) (*models.IMAPAccount, er
 	return a, nil
 }
 
-// CountFailing returns how many enabled inboxes have at least one
-// consecutive failure since their last successful poll. Used by the
-// Dashboard "ต้อง action" widget to surface email problems at a glance.
+// CountFailing returns how many enabled inboxes have an active error/warning.
+// Processing warnings (e.g. OpenRouter 402 during AI extract) do not increment
+// consecutive_failures, but they should still surface on the dashboard.
 func (r *ImapAccountRepo) CountFailing() (int, error) {
 	var n int
 	err := r.db.QueryRow(
 		`SELECT COUNT(*) FROM imap_accounts
-		 WHERE enabled = TRUE AND consecutive_failures > 0`,
+		 WHERE enabled = TRUE
+		   AND (consecutive_failures > 0 OR last_poll_status = 'warning' OR last_poll_error IS NOT NULL)`,
 	).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count failing imap_accounts: %w", err)
@@ -168,7 +169,8 @@ func (r *ImapAccountRepo) Delete(id string) error {
 }
 
 // UpdatePollStatus is called by the coordinator after each poll cycle.
-// status="ok" resets consecutive_failures to 0; anything else increments.
+// status="ok" resets consecutive_failures to 0; status="warning" stores a
+// process-level issue without counting it as an IMAP connection failure.
 func (r *ImapAccountRepo) UpdatePollStatus(id, status, errMsg string, messageCount int) error {
 	var em sql.NullString
 	if errMsg != "" {
@@ -181,6 +183,16 @@ func (r *ImapAccountRepo) UpdatePollStatus(id, status, errMsg string, messageCou
 			   last_poll_messages=$2, consecutive_failures=0
 			 WHERE id=$1`,
 			id, messageCount,
+		)
+		return err
+	}
+	if status == "warning" {
+		_, err := r.db.Exec(
+			`UPDATE imap_accounts SET
+			   last_polled_at=NOW(), last_poll_status='warning', last_poll_error=$2,
+			   last_poll_messages=$3, consecutive_failures=0
+			 WHERE id=$1`,
+			id, em, messageCount,
 		)
 		return err
 	}

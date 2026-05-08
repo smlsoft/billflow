@@ -6,8 +6,8 @@ export const SOURCE_LABELS: Record<string, string> = {
   lazada: 'Lazada',
   shopee: 'Shopee',
   shopee_email: 'Shopee Email',
-  shopee_shipped: 'Shopee → ใบสั่งซื้อ/สั่งจอง',
-  manual: 'Manual',
+  shopee_shipped: 'Email บิลซื้อ Shopee',
+  manual: 'เพิ่มเอง',
 }
 
 export const FLOW_META: Record<
@@ -28,7 +28,7 @@ export const FLOW_META: Record<
     // Both COD-shipped emails ("ถูกจัดส่งแล้ว") and pay-now confirmation
     // emails ("ยืนยันการชำระเงิน") route to this flow, so the label can't
     // claim the package shipped. Frame it by outcome: produces a PO bill.
-    label: 'Shopee → ใบสั่งซื้อ/สั่งจอง',
+    label: 'Email บิลซื้อ Shopee',
     icon: '📦',
     variant: 'bg-amber-100 text-amber-800',
   },
@@ -99,7 +99,7 @@ export function scoreStyle(score: number | null): {
   icon: string
 } {
   if (score == null)
-    return { color: 'text-muted-foreground', bg: 'bg-muted', label: 'manual', icon: '✎' }
+    return { color: 'text-muted-foreground', bg: 'bg-muted', label: 'เลือกเอง', icon: '✎' }
   const pct = Math.round(score * 100)
   if (score >= 0.85)
     return { color: 'text-green-700', bg: 'bg-green-100', label: `${pct}%`, icon: '✓' }

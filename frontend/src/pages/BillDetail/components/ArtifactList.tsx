@@ -95,24 +95,21 @@ export function ArtifactList({ billId }: Props) {
 
   return (
     <>
-      <Card>
+      <Card className="rounded-2xl border-border/70 shadow-sm">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-            <Paperclip className="h-4 w-4 text-muted-foreground" />
-            หลักฐานต้นฉบับ ({items.length})
-          </CardTitle>
+          <div>
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+              <Paperclip className="h-4 w-4 text-muted-foreground" />
+              หลักฐานต้นฉบับ ({items.length})
+            </CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              เปิดดูเฉพาะเมื่อต้องย้อนตรวจหลักฐานต้นฉบับ
+            </p>
+          </div>
         </CardHeader>
         <CardContent className="space-y-1 pt-0">
-          <div className="mb-3 rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
-            ℹ️ เก็บไฟล์{' '}
-            <strong>ต้นฉบับ</strong>{' '}
-            ที่ระบบใช้สร้างบิลนี้ — เปิดดู/ดาวน์โหลดได้เพื่อย้อนตรวจว่าข้อมูล
-            (สินค้า, จำนวน, ราคา) มาจากที่ไหน ไม่ได้สร้างขึ้นเอง · ทุกไฟล์ถูก
-            hash ด้วย SHA-256 ป้องกันการแก้ไข
-          </div>
-
           {items.map((a) => {
-            const meta = KIND_META[a.kind] ?? { icon: '📎', label: a.kind, desc: '' }
+            const meta = KIND_META[a.kind] ?? { icon: '', label: a.kind, desc: '' }
             const ct = a.content_type ?? ''
             const isHtml = ct.startsWith('text/html') || a.kind === 'email_html' || a.kind === 'email_text'
             const previewable =
@@ -134,14 +131,12 @@ export function ArtifactList({ billId }: Props) {
                 key={a.id}
                 className="flex items-start gap-3 border-b border-border/50 py-3 last:border-0"
               >
-                <span className="text-xl leading-snug">{meta.icon}</span>
+                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                  <Paperclip className="h-4 w-4" />
+                </span>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm break-words">{meta.label}</div>
-                  {meta.desc && (
-                    <div className="mt-0.5 text-xs text-muted-foreground leading-snug">
-                      {meta.desc}
-                    </div>
-                  )}
+                  {meta.desc && <div className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">{meta.desc}</div>}
                   <div className="mt-1 font-mono text-[11px] text-muted-foreground/70">
                     {a.filename} · {fmtSize(a.size_bytes)} ·{' '}
                     {dayjs(a.created_at).format('DD/MM/YY HH:mm')}

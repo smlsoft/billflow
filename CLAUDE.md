@@ -3,7 +3,8 @@
 
 > อ่านไฟล์นี้ให้ครบก่อนเริ่ม code ทุกครั้ง
 > ห้าม assume สิ่งที่ไม่ได้ระบุ — ถามก่อนทำเสมอ
-> **project folder: `~/billflow`**
+> **local workspace:** `/Users/nontawatwongnuk/dev_bos/billflow`
+> **server deploy folder:** `/home/bosscatdog/billflow` (`~/billflow` on server; deployed copy, not a git checkout)
 
 ---
 
@@ -15,9 +16,9 @@
 ### Input Channels
 | Channel | รายละเอียด | ประเภทบิล | Phase | สถานะ |
 |---------|-----------|----------|-------|-------|
-| LINE OA (human chat) | text/image/file/audio → admin inbox `/messages` → reply ผ่าน LINE Push | บิลขาย (sale) | Phase 3 + session 13 | ✅ chat 2 ทาง + เปิดบิลขายจาก chat |
-| Email (IMAP) | attachment PDF/Excel/รูป | บิลขาย (sale) | Phase 5 | deployed, กำลัง test |
-| Shopee Excel | Export จาก Shopee Seller Center | บิลขาย (sale) | Phase 4a | ✅ deployed |
+| LINE OA (human chat) | text/image/file/audio → admin inbox `/messages` → reply ผ่าน Reply API/Push API | บิลขาย (sale) | Phase 3 + session 13+ | ✅ chat 2 ทาง + เปิดบิลขายจาก chat |
+| Email (IMAP) | multi-account body/attachment PDF/Excel/รูป | sale/purchase ตาม routing | Phase 5 + session 6+ | ✅ deployed |
+| Shopee Excel | Export จาก Shopee Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4a | ✅ deployed |
 | Lazada Excel | Export จาก Lazada | บิลขาย + บิลซื้อ | Phase 4b | รอไฟล์จริงจากลูกค้า |
 
 > ⚠️ ใช้ IMAP แทน Gmail API สำหรับ demo — ง่ายกว่า ไม่ต้องผ่าน Google OAuth2 consent
@@ -33,10 +34,10 @@
 ## 2. Tech Stack
 
 ```
-Backend:   Go 1.22+  (framework: Gin)
+Backend:   Go 1.24  (framework: Gin)
 Frontend:  React + Vite + TypeScript
 Database:  PostgreSQL 16
-AI:        OpenRouter API (google/gemini-flash-1.5 default)
+AI:        OpenRouter API (google/gemini-2.5-flash primary; server fallback anthropic/claude-3-5-haiku)
 LINE:      line-bot-sdk-go (official)
 Email:     IMAP polling — ไม่ใช้ Gmail API สำหรับ demo
 Deploy:    Docker Compose + Cloudflare Tunnel
@@ -56,7 +57,7 @@ Node:    v22.22.1 ✅
 Go:      1.24.0 ✅
 cloudflared: ✅ installed & configured
 SML #1 (LINE/Email): http://192.168.2.213:3248  ✅ JSON-RPC, /api/sale_reserve
-SML #2 (Shopee):     http://192.168.2.224:8080  ⚠️ REST API — ยังไม่ได้เปิด machine
+SML #2 (Shopee):     http://192.168.2.248:8080  ✅ REST API — saleorder/saleinvoice/purchaseorder/product
 ```
 
 ### Projects ที่รันอยู่บน Server — ห้ามกระทบ
@@ -660,7 +661,7 @@ Flow (ต่อ account):
    - subject matches "ถูกจัดส่งแล้ว" หรือ "ยืนยันการชำระเงิน"
        → ProcessShopeeShippedEmailBody → purchaseorder (SML 248)
    - from domain ใน shopee_domains && channel=shopee
-       → ProcessShopeeEmailBody → saleinvoice (SML 248)
+       → ProcessShopeeEmailBody → create Shopee sale bill; Retry default saleorder (SML 248)
    - else → download attachment → AI pipeline → pending/needs_review
 5. mark_read หลัง process (กัน process ซ้ำ)
 6. consecutive_failures ≥ 3 → LINE admin notify (throttle 1/hour per inbox)
@@ -1024,11 +1025,11 @@ mkdir -p ~/billflow/backups
 │   │   │   ├── postgres.go
 │   │   │   └── migrations/001_init.sql
 │   │   ├── handlers/
-│   │   │   ├── line.go              ← LINE webhook + chatbot + cart edit
+│   │   │   ├── line.go              ← LINE webhook + human inbox ingest
 │   │   │   ├── email.go             ← general email handler + dedup
 │   │   │   ├── shipped_email.go     ← Shopee shipped/pay-now → purchaseorder
 │   │   │   ├── import.go            ← Lazada import
-│   │   │   ├── shopee_import.go     ← Shopee Excel → SML 248 saleinvoice
+│   │   │   ├── shopee_import.go     ← Shopee Excel → local bills; Retry sends SML 248
 │   │   │   ├── bills.go             ← bill CRUD + retry (3-way routed)
 │   │   │   ├── mappings.go
 │   │   │   ├── dashboard.go
@@ -1228,26 +1229,26 @@ LINE_ADMIN_USER_ID=    ← User ID ของ admin สำหรับ push notif
 # OpenRouter
 OPENROUTER_API_KEY=sk-or-xxx
 OPENROUTER_MODEL=google/gemini-2.5-flash
-OPENROUTER_FALLBACK_MODEL=google/gemini-flash-1.5   ← ไม่ใช้ Claude Haiku แล้ว (ราคาแพงกว่า Gemini)
+OPENROUTER_FALLBACK_MODEL=anthropic/claude-3-5-haiku
 OPENROUTER_AUDIO_MODEL=openai/whisper-1
 
 # SML ERP #1 (LINE/Email — JSON-RPC)
 SML_BASE_URL=http://192.168.2.213:3248
 SML_ACCESS_MODE=sales
 
-# SML ERP #2 (Shopee — REST saleinvoice)
-SHOPEE_SML_URL=http://192.168.2.224:8080
-SHOPEE_SML_GUID=SMLX
-SHOPEE_SML_PROVIDER=SML1
-SHOPEE_SML_CONFIG_FILE=SMLConfigSML1.xml
-SHOPEE_SML_DATABASE=SMLPLOY
-SHOPEE_SML_DOC_FORMAT=IV
+# SML ERP #2 (Shopee — REST saleorder default + saleinvoice legacy)
+SHOPEE_SML_URL=http://192.168.2.248:8080
+SHOPEE_SML_GUID=smlx
+SHOPEE_SML_PROVIDER=SMLGOH
+SHOPEE_SML_CONFIG_FILE=SMLConfigSMLGOH.xml
+SHOPEE_SML_DATABASE=SML1_2026
+SHOPEE_SML_DOC_FORMAT=INV
 # cust_code per channel managed via /settings/channels (channel_defaults table — session 7)
 # SHOPEE_SML_CUST_CODE and SHIPPED_SML_CUST_CODE REMOVED — no longer in config.go
 SHOPEE_SML_SALE_CODE=           ← รหัสพนักงานขาย
-SHOPEE_SML_WH_CODE=             ← รหัสคลัง (fallback — overridable per channel via /settings/channels — session 11)
-SHOPEE_SML_SHELF_CODE=          ← รหัสชั้นวาง (fallback — overridable per channel)
-SHOPEE_SML_UNIT_CODE=           ← หน่วย (fallback)
+SHOPEE_SML_WH_CODE=WH-01        ← รหัสคลัง (fallback — overridable per channel via /settings/channels — session 11)
+SHOPEE_SML_SHELF_CODE=SH-01     ← รหัสชั้นวาง (fallback — overridable per channel)
+SHOPEE_SML_UNIT_CODE=ถุง        ← หน่วย (fallback)
 SHOPEE_SML_VAT_TYPE=0           ← 0=แยกนอก, 1=รวมใน, 2=ศูนย์% (fallback — overridable per channel)
 SHOPEE_SML_VAT_RATE=7           ← (fallback — overridable per channel)
 SHOPEE_SML_DOC_TIME=09:00
@@ -1255,7 +1256,7 @@ SHOPEE_SML_DOC_TIME=09:00
 # LINE chat — admin send media (Phase 4.1 session 14)
 # PUBLIC_BASE_URL must be reachable by LINE servers (jp/sg). When admin sends
 # image, BillFlow constructs originalContentUrl/previewImageUrl pointing here.
-# Discover the active Cloudflare Quick Tunnel URL once: 
+# Discover the active Cloudflare Quick Tunnel URL once:
 #   grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-tunnel.log
 # URL changes when cloudflared restarts (rare; current uptime 6+ days)
 PUBLIC_BASE_URL=
@@ -2430,7 +2431,7 @@ Deployed & Running on 192.168.2.109:
 
 AI Models (OpenRouter):
   primary  → google/gemini-2.5-flash
-  fallback → google/gemini-flash-1.5
+  fallback → anthropic/claude-3-5-haiku
   audio    → openai/whisper-1
   embed    → openai/text-embedding-3-small  (1536-dim, in-memory cosine index)
   PDF      → Mistral OCR (mistral-ocr-2512) → markdown → ExtractText
@@ -2439,7 +2440,8 @@ SML servers (both confirmed working):
   SML #1 (LINE/Email JSON-RPC) — http://192.168.2.213:3248
     POST /api/sale_reserve   (line / email / lazada source)
   SML #2 (Shopee REST)        — http://192.168.2.248:8080
-    POST /SMLJavaRESTService/restapi/saleinvoice    (Shopee Excel + Shopee email order)
+    POST /SMLJavaRESTService/v3/api/saleorder       (Shopee sale default)
+    POST /SMLJavaRESTService/restapi/saleinvoice    (legacy/explicit endpoint)
     POST /SMLJavaRESTService/v3/api/purchaseorder   (Shopee shipped / pay-now email)
     POST /SMLJavaRESTService/v3/api/product         (create new product)
     GET  /SMLJavaRESTService/v3/api/product/{sku}   (product lookup)
@@ -2509,7 +2511,7 @@ Bill flow → SML routing (bills.go Retry handler — 4-way dispatch):
   shopee_shipped           purchase    purchaseorder (248)            party_code from channel_defaults
   any                      any         endpoint URL overridable per (channel,bill_type) in /settings/channels
 
-Migrations applied (19 files):
+Migrations applied (20 files):
   001_init.sql
   002_audit_logging.sql                    (audit_logs structured columns)
   002_sml_catalog.sql                      (sml_catalog + extended CHECK)
@@ -2529,6 +2531,7 @@ Migrations applied (19 files):
   017_chat_crm.sql                         (chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags — Phase 4.7+4.8+4.9 session 14)
   018_chat_reply_token.sql                 (chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method — Hybrid Reply+Push session 15)
   019_line_oa_mark_as_read.sql             (line_oa_accounts.mark_as_read_enabled per-OA toggle for LINE Premium "อ่านแล้ว" — session 17)
+  020_bill_remark.sql                         (bills.remark for admin-entered remark passed to SML purchaseorder)
 
 Phases:
   Phase 0–7  ✅
@@ -3087,7 +3090,7 @@ Recent commits (session 7-10):
   feat: channel_defaults.endpoint + doc_prefix + doc_running_format (migrations 008-011)
   fix: SML UTF-8 charset — Content-Type: application/json; charset=utf-8 on all 6 POST clients
        (sale_reserve, saleinvoice, saleorder, purchaseorder, product, MCP — covers product create
-       + LINE chatbot, not just Shopee retry which was caught earlier)
+       legacy LINE flow, not just Shopee retry which was caught earlier)
        ⚠️ SUPERSEDED in session 12: charset header is ignored by SML 248. Real fix is
        marshalASCII (escape non-ASCII as \uXXXX). Header is kept for hygiene but does nothing.
   fix: resolveItemName — looks up sml_catalog.item_name before falling back to raw_name

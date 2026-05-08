@@ -1,37 +1,53 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-04-24
+> อัพเดตล่าสุด: 2026-05-08 16:44 +07
+> ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
 
-## ระบบทำงานยังไง (ในภาษาคน)
+## ระบบทำงานยังไง
 
-พนักงานร้านค้าส่งใบสั่งซื้อมาหลายช่องทาง — LINE, Email, หรือ upload Excel  
-BillFlow รับข้อมูล → ให้ AI อ่านและ extract → จับคู่รหัสสินค้า → ส่งสร้างบิลใน SML โดยอัตโนมัติ  
-พนักงานแทบไม่ต้องคีย์บิลเองเลย
+BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Excel และ Lazada Excel แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
+
+สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow และ Shopee Excel sale flow: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้.
 
 ---
 
 ## Input → Process → Output
 
 ```
-┌──────────────┐    ┌─────────────────────────────────────┐    ┌────────────┐
-│   INPUT      │    │            PROCESSING               │    │   OUTPUT   │
-│              │    │                                     │    │            │
-│  LINE OA     ├───►│  1. รับข้อมูล (webhook/poll/upload) │    │  SML ERP   │
-│  (text/รูป/  │    │                    │                │    │  บิลสร้าง  │
-│   PDF/voice) │    │  2. AI Extract     │                ├───►│  อัตโนมัติ │
-│              │    │     (Gemini/OCR)   │                │    │            │
-│  Email IMAP  ├───►│                    │                │    │  LINE      │
-│  (PDF/รูป/   │    │  3. Item Mapping   │                │    │  แจ้ง admin│
-│   Excel)     │    │     (F1 fuzzy)     │                ├───►│  ทุก event │
-│              │    │                    │                │    │            │
-│  File Upload ├───►│  4. Anomaly Check  │                │    │  PostgreSQL│
-│  (Lazada/    │    │     (F2 rules)     │                ├───►│  log ทุก   │
-│   Shopee     │    │                    │                │    │  บิล       │
-│   Excel)     │    │  5. Auto-confirm   │                │    │            │
-│              │    │     หรือ Pending   │                │    │            │
-└──────────────┘    └─────────────────────────────────────┘    └────────────┘
+LINE OA / Email / Excel Upload
+        │
+        ▼
+Ingest
+  - LINE webhook: /webhook/line/:oaId หรือ /webhook/line
+  - EmailCoordinator: one goroutine per enabled imap_accounts row
+  - Import handlers: Lazada generic / Shopee preview+confirm
+        │
+        ▼
+AI + Matching
+  - OpenRouter text/image/audio extraction
+  - Mistral OCR for PDFs
+  - F1 mapper + SML catalog similarity candidates
+  - F2 anomaly checks
+        │
+        ▼
+Manual Review
+  - /bills, /sales-orders, /sale-invoices
+  - /bills/:id, /sales-orders/:id, /sale-invoices/:id
+  - edit/add/delete items
+  - map item, create product, inspect artifacts/timeline
+  - route preview + validation guard before send
+        │
+        ▼
+SML Retry Dispatch
+  - sale_reserve  → SML #1 JSON-RPC 213
+  - saleorder     → SML #2 REST 248 default sale route
+  - saleinvoice   → SML #2 REST 248 saleinvoice v4 endpoint
+  - purchaseorder → SML #2 REST 248 purchase route
+        │
+        ▼
+PostgreSQL + Audit Logs + LINE admin notifications
 ```
 
 ---
@@ -40,186 +56,109 @@ BillFlow รับข้อมูล → ให้ AI อ่านและ extr
 
 ```
 billflow/
+├── backend/cmd/server/main.go
+│   ├── routes, handlers, services, cron jobs
+│   └── migrations auto-run from backend/internal/database/migrations
 │
-├── LINE OA Webhook (/webhook/line)
-│     handlers/line.go
-│     ├── Mode 1: Chatbot น้องบิล (text → cart → SML)
-│     ├── Mode 2: รูป/PDF PO → AI extract → SML
-│     └── Mode 3: Voice → Whisper → Mode 1 pipeline
+├── LINE OA Human Inbox
+│   ├── handlers/line.go                 webhook, media download, conversation writes
+│   ├── handlers/chat_inbox.go           /api/admin/conversations
+│   ├── services/line/registry.go        multi-OA token/secret registry
+│   ├── /messages                        admin inbox
+│   ├── /settings/line-oa                multi-OA config
+│   └── /settings/quick-replies, /settings/chat-tags
 │
-├── Email Poller (background goroutine)
-│     jobs/email_poller.go → services/email/imap.go
-│     └── handlers/email.go (AttachmentProcessor)
+├── Email Pipeline
+│   ├── services/email/coordinator.go    per-account pollers
+│   ├── services/email/imap.go           connect/search/fetch/mark seen
+│   ├── handlers/email.go                attachment AI pipeline
+│   └── /settings/email                  IMAP account admin UI
 │
-│  File Import
-│     handlers/import.go              ← Lazada (Phase 4b — รอไฟล์)
-│     handlers/shopee_import.go       ← Shopee Preview + Confirm + GetConfig ✅
+├── Import
+│   ├── handlers/import.go               generic Lazada WIP
+│   └── handlers/shopee_import.go        Shopee preview/confirm into local bills
 │
-├── Logs / Audit
-│     handlers/log_handler.go         ← GET /api/logs
-│     repository/audit_log_repo.go    ← Log() + List()
-│     models/audit_log.go
+├── SML + Catalog
+│   ├── services/sml/client.go           SML #1 JSON-RPC sale_reserve
+│   ├── saleorder_client.go              SML #2 saleorder default
+│   ├── saleinvoice_client.go            SML #2 saleinvoice v4
+│   ├── purchaseorder_client.go          SML #2 purchaseorder
+│   ├── product_client.go, party_client.go
+│   └── services/catalog                 embeddings + in-memory cosine index
 │
-├── AI Pipeline (ใช้ร่วมกันทุก channel)
-│     services/ai/openrouter.go          ← Gemini 2.5 Flash
-│     services/mistral/ocr.go            ← Mistral OCR สำหรับ PDF
-│     services/mapper/mapper.go          ← F1: fuzzy match + learning
-│     services/anomaly/detector.go       ← F2: anomaly rules
-│     services/sml/client.go             ← JSON-RPC → SML #1 (LINE/Email)
-│     services/sml/saleinvoice_client.go ← REST → SML #2 (Shopee)
-│     services/sml/mcp.go                ← catalog search
-│
-└── Web UI (React :3010)
-      /login → /dashboard → /bills → /bills/:id
-      → /import → /import/shopee → /logs → /mappings → /settings
+└── Web UI
+    ├── /dashboard, /bills, /bills/:id, /logs
+    ├── /messages
+    ├── /import, /import/shopee
+    └── /settings/*
 ```
 
 ---
 
-## AI Pipeline ทำงานยังไง (Step by step)
+## Current Routes ที่ควรรู้
 
-```
-Input (text/รูป/PDF/voice)
-        │
-        ▼
-┌─────────────────┐
-│  Step 1: Extract │  ← AI อ่านและแปลงเป็น JSON
-│                  │
-│  text  → Gemini  │    output: {customer_name, items[{raw_name, qty, unit, price}], confidence}
-│  รูป   → Gemini  │
-│  PDF   → Mistral │    Mistral OCR → markdown text → Gemini ExtractText
-│           OCR    │
-│  voice → Whisper │    transcribe → text → Gemini ExtractText
-└────────┬─────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Step 2: Map     │  ← จับคู่ raw_name → item_code/unit_code
-│  (F1 Mapper)     │
-│                  │    1. Exact match (confidence 1.0)
-│                  │    2. Fuzzy match (Levenshtein)
-│                  │       ≥ 0.85 → auto map
-│                  │       0.60-0.84 → needs_review
-│                  │       < 0.60 → unmapped
-│                  │
-│  allMapped?      │    ถ้า unmapped → pending + แจ้ง admin
-│  → ต้องครบทุกชิ้น │    พนักงานเพิ่ม mapping → retry
-└────────┬─────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Step 3: Anomaly │  ← F2 ตรวจความผิดปกติ
-│  (F2 Detector)   │
-│                  │    block: ราคา=0, qty=0, บิลซ้ำ
-│                  │    warn:  ราคาผิดปกติ, qty สูงผิดปกติ, ลูกค้าใหม่
-│                  │
-│                  │    block → ต้อง manual confirm เสมอ
-│                  │    warn > 1 รายการ → pending
-└────────┬─────────┘
-         │
-         ▼
-┌─────────────────────────────┐
-│  Step 4: Auto-confirm?       │
-│                              │
-│  allMapped = true            │
-│  AND confidence ≥ 0.85       │  YES →  ส่ง SML ทันที
-│  AND ไม่มี block             │ ──────► status = 'sent'
-│  AND warn ≤ 1                │         doc_no = BS...
-│                              │
-│                              │  NO  →  status = 'pending'
-│                              │ ──────► LINE แจ้ง admin review
-└──────────────────────────────┘
-```
-
----
-
-## Item Mapping (F1) — หัวใจของระบบ
-
-ปัญหา: ลูกค้าพิมพ์ชื่อสินค้าหลายแบบ เช่น:
-- "ปูนกาว" / "ปูนกาวปูกระเบื้อง" / "Beger ปูนกาวปูกระเบื้อง 50 มม. Eco-Series"
-
-ระบบต้องรู้ว่าทั้งหมดนี้คือ `CON-01140` (รหัสในSML)
-
-```
-Flow:
-1. ครั้งแรก: ชื่อไม่ match → unmapped → พนักงาน add mapping ใหม่
-2. ครั้งถัดไป: exact/fuzzy match → auto map
-3. ยิ่งใช้บ่อย → usage_count สูง → fuzzy score boost → match ง่ายขึ้น
-
-Table: mappings
-  raw_name = "Beger ปูนกาวปูกระเบื้อง 50 มม. Eco-Series"
-  item_code = "CON-01140"
-  unit_code = "ถุง"
-  confidence = 1.0
-  usage_count = 5
-  source = "manual" | "ai_learned"
-```
-
----
-
-## Retry Flow
-
-เมื่อบิล `status = 'failed'` หรือ `'pending'` (ยังส่ง SML ไม่ได้):
-
-```
-POST /api/bills/:id/retry
-        │
-        ▼
-  Re-run mapper บน items ทุกชิ้น
-  (pick up mappings ใหม่ที่เพิ่งเพิ่ม)
-        │
-        ├── allMapped? NO → status = 'pending', แจ้ง user
-        │
-        └── allMapped? YES → ส่ง SML → status = 'sent' + doc_no
-```
-
----
-
-## Anomaly Detection (F2) — ป้องกันบิลผิดพลาด
-
-```
-ตัวอย่าง:
-  ราคาปกติ: 189 บาท/ถุง
-  บิลใหม่มา: 1,000 บาท/ถุง → "price_too_high" (warn)
-  บิลใหม่มา: 0 บาท → "price_zero" (BLOCK → ต้อง manual confirm)
-
-  ลูกค้า A สั่งของวันนี้แล้ว สั่งอีกรายการเดิม → "duplicate_bill" (BLOCK)
-```
+| Area | Routes |
+|---|---|
+| Health | `GET /health` |
+| Auth | `POST /api/auth/login`, `GET /api/auth/me` |
+| Bills | `GET /api/bills`, `GET /api/bills/:id`, `POST /api/bills/:id/retry`, item CRUD, timeline, artifact preview/download |
+| Chat inbox | `/api/admin/conversations...` |
+| LINE OA | `POST /webhook/line/:oaId`, `POST /webhook/line`, `/api/settings/line-oa...` |
+| SSE | `POST /api/admin/events/token`, `GET /api/admin/events?t=...` |
+| Email settings | `/api/settings/imap-accounts...` |
+| Channel defaults | `/api/settings/channel-defaults...` |
+| Catalog | `/api/catalog...` |
+| Imports | `/api/import/upload`, `/api/import/confirm`, `/api/import/shopee/preview`, `/api/import/shopee/confirm` |
+| Logs | `GET /api/logs` |
 
 ---
 
 ## Background Jobs
 
-| Job | เวลา | หน้าที่ |
+| Job | เวลา/Trigger | หน้าที่ |
 |---|---|---|
-| Email Poller | ทุก 5 นาที | poll IMAP → process → SML |
-| Daily Insight (F4) | 08:00 ทุกวัน | AI สรุปยอดขาย → LINE admin |
-| Backup | 00:00 ทุกวัน | pg_dump → backups/ |
-| Token Checker | ทุกอาทิตย์ | ตรวจ LINE token หมดอายุ |
-| Disk Monitor | ทุกวัน | แจ้งถ้า disk > 90% |
+| EmailCoordinator | per `imap_accounts.poll_interval_seconds`, min 300s | poll IMAP, route general/Shopee/Shopee shipped |
+| Daily Insight | `INSIGHT_CRON_HOUR`, default 08:00 | AI summary + optional LINE notify |
+| Backup | `BACKUP_CRON_HOUR`, default 00:00 | `pg_dump` to `/app/backups` mounted as `~/billflow/backups` |
+| Disk Monitor | daily 07:00 | LINE alert when disk usage exceeds threshold |
+| LINE Token Checker | weekly | expiry reminder |
+| Reply Token Cleanup | hourly | clear LINE reply tokens older than 1 hour |
+| Tunnel Drift Monitor | daily 09:00 Bangkok | ping `PUBLIC_BASE_URL/health`, LINE alert if Cloudflare Quick Tunnel URL drifted |
 
 ---
 
-## สถานะปัจจุบัน (2026-04-24)
+## สถานะปัจจุบัน
 
-| Channel | สถานะ | หมายเหตุ |
-|---|---|---|
-| LINE OA text chatbot | ✅ ทดสอบแล้ว | cart edit ✅ |
-| LINE OA รูป/PDF/voice | ⚠️ code deployed ยังไม่ test | — |
-| Email IMAP (PDF) | ✅ deployed + tested | dedup by Message-ID ✅ |
-| Shopee Excel → SML 248 | ✅ deployed, SML 248 API confirmed | ต้องแก้ไฟล์ Excel ใช้ SKU จริง |
-| Lazada Excel | ⏳ รอไฟล์จากลูกค้า | Phase 4b |
+| Channel | สถานะ |
+|---|---|
+| Shopee purchase email | ✅ Phase 1 customer-test focus; sends SML `purchaseorder` through `192.168.2.248:8080` |
+| Email IMAP | ✅ multi-account DB-driven, Shopee email routing, artifacts, logs |
+| LINE OA | ✅ code exists for human chat 2 ทาง, multi-OA, media, quick replies, status, notes, tags, create bill from chat; hidden/not central in Phase 1 |
+| Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
+| Lazada Excel | WIP/generic upload + confirm; รอไฟล์จริงเพื่อ lock mapping |
 
-**DB ปัจจุบัน:** 0 bills (cleared สำหรับ clean Shopee test)  
-**Last successful bill:** BS20260423101501-UELM (LINE OA, 4,603.19 บาท)
+## Current Document Menus
+
+| กลุ่ม Sidebar | Menu | URL | SML route |
+|---|---|---|---|
+| งานฝั่งซื้อ | ใบสั่งซื้อ | `/bills` | `purchaseorder` |
+| งานฝั่งขาย | ใบสั่งขาย | `/sales-orders` | `saleorder` |
+| งานฝั่งขาย | ขายสินค้าและบริการ | `/sale-invoices` | `saleinvoice` |
+
+ทั้ง 3 เมนูมีปุ่ม `ส่ง SML ทั้งหมด` สำหรับเอกสารสถานะพร้อมส่ง (`pending`) โดยมี preview/validation ก่อนส่งจริง.
 
 ---
 
-## ไฟล์เอกสารอื่นๆ
+## เอกสารอื่น
 
 | ไฟล์ | เนื้อหา |
 |---|---|
-| [docs/line-oa.md](line-oa.md) | LINE OA workflow รายละเอียด |
-| [docs/email.md](email.md) | Email IMAP workflow รายละเอียด |
-| [README.md](../README.md) | คู่มือ deploy + API reference |
-| [CLAUDE.md](../CLAUDE.md) | Blueprint สำหรับ AI coding assistant |
+| [current-state.md](current-state.md) | snapshot จาก code + server + production DB |
+| [deploy-instances.md](deploy-instances.md) | registry port/folder/container/tunnel ของแต่ละร้าน |
+| [phase1-test-checklist.md](phase1-test-checklist.md) | checklist สำหรับทดสอบ Phase 1 ก่อน demo/customer test |
+| [line-oa.md](line-oa.md) | LINE OA human inbox |
+| [email.md](email.md) | Email IMAP pipeline |
+| [shopee-import.md](shopee-import.md) | Shopee Excel import |
+| [phase1-guide.md](phase1-guide.md) | คู่มือใช้งาน Phase 1 |
+| [README.md](../README.md) | setup, API, deploy notes |
+| [AGENTS.md](../AGENTS.md) | blueprint สำหรับ Codex |

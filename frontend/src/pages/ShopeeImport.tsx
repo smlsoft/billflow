@@ -7,9 +7,12 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  ExternalLink,
+  Clock3,
+  Database,
   FileSpreadsheet,
   Info,
+  Loader2,
+  ShieldCheck,
 } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -36,6 +39,7 @@ interface ShopeeConfig {
   config_file_name: string
   database_name: string
   doc_format_code: string
+  endpoint?: string
   cust_code: string
   sale_code: string
   branch_code: string
@@ -50,24 +54,55 @@ interface ShopeeConfig {
 interface ShopeeOrderItem {
   sku: string
   product_name: string
+  option_name?: string
+  raw_name: string
   price: number
   qty: number
+  no_sku?: boolean
 }
 interface ShopeeOrder {
   order_id: string
   doc_date: string
+  order_datetime?: string
+  payment_time?: string
+  payment_channel?: string
+  buyer_username?: string
+  tracking_no?: string
   status: string
   items: ShopeeOrderItem[]
   item_count: number
   total_qty: number
+  paid_amount?: number
+  order_total_amount?: number
+  item_gross_amount?: number
+  line_paid_amount?: number
+  shipping_amount?: number
+  discount_amount?: number
+  no_sku_item_count?: number
+  has_no_sku?: boolean
+  multi_line?: boolean
+  amount_mismatch?: boolean
+  existing_bill_id?: string
   duplicate: boolean
+}
+interface ImportPreflight {
+  new_orders: number
+  duplicate_orders: number
+  skipped_rows: number
+  no_sku_orders: number
+  no_sku_items: number
+  multi_item_orders: number
+  amount_mismatch_orders: number
 }
 interface PreviewResponse {
   orders: ShopeeOrder[]
   warnings: string[]
   total_orders: number
+  new_count: number
   duplicate_count: number
   skipped_count: number
+  import_run_id?: string
+  preflight: ImportPreflight
   file_token?: string
 }
 interface ConfirmResult {
@@ -77,9 +112,60 @@ interface ConfirmResult {
   doc_no?: string
   message?: string
 }
+interface ImportRunSummary {
+  id: string
+  filename: string
+  period_start?: string
+  period_end?: string
+  total_orders: number
+  new_orders: number
+  duplicate_orders: number
+  skipped_orders: number
+  warning_count: number
+  created_count: number
+  failed_count: number
+  status: 'preview' | 'confirmed' | 'failed'
+  created_at: string
+  confirmed_at?: string
+}
 
 function fmt(n: number) {
   return n.toLocaleString('th-TH', { minimumFractionDigits: 2 })
+}
+
+function fmtDateTime(s: string) {
+  if (!s) return '—'
+  return new Date(s).toLocaleString('th-TH', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function shopeeDestination(config?: ShopeeConfig | null) {
+  const docFormat = (config?.doc_format_code ?? '').trim().toUpperCase()
+  const endpoint = (config?.endpoint ?? '').toLowerCase()
+  const isSaleInvoice = endpoint.includes('saleinvoice') || docFormat === 'SI'
+  return isSaleInvoice
+    ? {
+        documentName: 'เอกสารขายสินค้าและบริการ',
+        shortName: 'ขายสินค้าและบริการ',
+        smlPath: 'ขาย -> ขายสินค้าและบริการ',
+        action: 'สร้างเอกสารขายสินค้าและบริการ',
+        done: 'สร้างเอกสารขายสินค้าและบริการแล้ว',
+        listPath: '/sale-invoices',
+        listName: 'ขายสินค้าและบริการ',
+      }
+    : {
+        documentName: 'ใบสั่งขาย',
+        shortName: 'ใบสั่งขาย',
+        smlPath: 'ขาย -> ใบสั่งขาย',
+        action: 'สร้างใบสั่งขาย',
+        done: 'สร้างใบสั่งขายแล้ว',
+        listPath: '/sales-orders',
+        listName: 'ใบสั่งขาย',
+      }
 }
 
 function SummaryCard({
@@ -122,13 +208,35 @@ export default function ShopeeImport() {
   } | null>(null)
   const [error, setError] = useState('')
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
+  const [recentRuns, setRecentRuns] = useState<ImportRunSummary[]>([])
+  const [confirmElapsed, setConfirmElapsed] = useState(0)
 
   // Track config load + ready states separately so preflight UI can render
   // a missing-config banner BEFORE admin uploads a file. Without this, file
   // upload silently succeeds → preview works → confirm fails late with a
   // confusing "config missing" error.
   const [configLoading, setConfigLoading] = useState(true)
-  const configReady = !!config && !!config.cust_code
+  const configReady = !configLoading
+  const destination = shopeeDestination(config)
+
+  const fallbackConfig: ShopeeConfig = {
+    server_url: '',
+    guid: '',
+    provider: '',
+    config_file_name: '',
+    database_name: '',
+    doc_format_code: 'SR',
+    endpoint: '',
+    cust_code: '',
+    sale_code: '',
+    branch_code: '',
+    wh_code: '',
+    shelf_code: '',
+    unit_code: '',
+    vat_type: -1,
+    vat_rate: -1,
+    doc_time: '',
+  }
 
   useEffect(() => {
     let alive = true
@@ -143,14 +251,40 @@ export default function ShopeeImport() {
       .finally(() => {
         if (alive) setConfigLoading(false)
       })
+    client
+      .get<{ runs: ImportRunSummary[] }>('/api/import/shopee/runs?limit=5')
+      .then((res) => {
+        if (alive) setRecentRuns(res.data.runs ?? [])
+      })
+      .catch(() => undefined)
     return () => {
       alive = false
     }
   }, [])
 
+  useEffect(() => {
+    if (step !== 'confirming') {
+      setConfirmElapsed(0)
+      return
+    }
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => {
+      setConfirmElapsed(Math.floor((Date.now() - startedAt) / 1000))
+    }, 1000)
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('beforeunload', onBeforeUnload)
+    }
+  }, [step])
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (!file || !config) return
+    if (!file) return
     e.target.value = ''
     setStep('uploading')
     setError('')
@@ -179,16 +313,17 @@ export default function ShopeeImport() {
   }
 
   const handleConfirm = async () => {
-    if (!preview || !config || selectedIDs.size === 0) return
+    if (!preview || selectedIDs.size === 0) return
     setStep('confirming')
     setError('')
     try {
       const res = await client.post('/api/import/shopee/confirm', {
-        config,
+        config: config ?? fallbackConfig,
         order_ids: Array.from(selectedIDs),
         orders: preview.orders,
         file_token: preview.file_token,
-      })
+        import_run_id: preview.import_run_id,
+      }, { timeout: 120000 })
       setResults(res.data)
       setStep('done')
     } catch (err: unknown) {
@@ -223,29 +358,61 @@ export default function ShopeeImport() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="นำเข้า Shopee"
-        description="อัปโหลดไฟล์ Excel จาก Shopee Seller Center → สร้างใบกำกับสินค้าใน SML"
+        title="Shopee Excel"
+        description={`อัปโหลดไฟล์จาก Shopee Seller Center แล้วสร้างเป็น${destination.documentName}สำหรับตรวจและส่งเข้า SML`}
       />
 
       <Alert>
         <Info className="h-4 w-4" />
-        <AlertTitle>ใช้สำหรับ bulk import เท่านั้น</AlertTitle>
+        <AlertTitle>ช่องทางรับข้อมูลสำหรับ{destination.shortName}</AlertTitle>
         <AlertDescription>
-          ถ้าตั้ง email forwarding ของ Shopee แล้ว ระบบจะดึง order/shipping email อัตโนมัติทุก 5
-          นาที (ดูที่{' '}
-          <Link to="/bills?source=shopee_email" className="font-medium text-primary hover:underline">
-            Shopee Email
+          หน้านี้ทำหน้าที่นำเข้าไฟล์เท่านั้น ระบบจะสร้างรายการไปที่เมนู{' '}
+          <Link to={destination.listPath} className="font-medium text-primary hover:underline">
+            {destination.listName}
           </Link>{' '}
-          และ{' '}
-          <Link
-            to="/bills?source=shopee_shipped"
-            className="font-medium text-primary hover:underline"
-          >
-            Shopee จัดส่งแล้ว
-          </Link>
-          )
+          เพื่อให้ตรวจสินค้า หน่วย จำนวน ราคา และส่งเข้า SML ปลายทาง{' '}
+          <span className="font-medium text-foreground">{destination.smlPath}</span>
         </AlertDescription>
       </Alert>
+
+      {recentRuns.length > 0 && step === 'idle' && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Clock3 className="h-4 w-4 text-muted-foreground" />
+              ประวัติการนำเข้าล่าสุด
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            {recentRuns.map((run) => (
+              <div
+                key={run.id}
+                className="grid gap-2 rounded-md border border-border px-3 py-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-foreground">
+                    {run.filename || 'Shopee Excel'}
+                  </div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    {fmtDateTime(run.created_at)}
+                    {run.period_start && run.period_end
+                      ? ` · ${run.period_start} ถึง ${run.period_end}`
+                      : ''}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1 sm:justify-end">
+                  <Badge variant={run.status === 'confirmed' ? 'default' : 'secondary'}>
+                    {run.status === 'confirmed' ? 'สร้างแล้ว' : 'Preview'}
+                  </Badge>
+                  <Badge variant="outline">ใหม่ {run.new_orders}</Badge>
+                  <Badge variant="outline">ซ้ำ {run.duplicate_orders}</Badge>
+                  <Badge variant="outline">ข้าม {run.skipped_orders}</Badge>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <input
         ref={fileRef}
@@ -264,68 +431,10 @@ export default function ShopeeImport() {
 
       {(step === 'idle' || step === 'uploading') && (
         <>
-          {/* Preflight — block file selection when config is missing.
-              Without this admin uploads a file, sees preview, then confirm
-              fails late with "ยังไม่ได้ตั้งค่าลูกค้า default". */}
-          {!configLoading && !configReady && (
-            <Alert className="border-warning/40 bg-warning/5">
-              <AlertCircle className="h-4 w-4 text-warning" />
-              <AlertTitle>ยังไม่ได้ตั้งค่า Shopee channel</AlertTitle>
-              <AlertDescription className="mt-1 space-y-1.5">
-                <p className="text-sm">
-                  ต้องตั้งค่า <span className="font-medium">ลูกค้า default</span>{' '}
-                  สำหรับ Shopee Excel ก่อน — ระบบจะใช้ AR code นี้กับทุกบิลที่ import เข้ามา
-                </p>
-                <Button asChild size="sm" variant="default" className="mt-2">
-                  <Link to="/settings/channels">
-                    ไปตั้งค่าตอนนี้
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Link>
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {config && configReady && (
-            <Card>
-              <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">ส่งเข้า SML:</span>
-                  <span>
-                    DB:{' '}
-                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                      {config.database_name}
-                    </code>
-                  </span>
-                  <span>
-                    ลูกค้า:{' '}
-                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                      {config.cust_code}
-                    </code>
-                  </span>
-                  <span>
-                    คลัง:{' '}
-                    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                      {config.wh_code || '—'}
-                    </code>
-                  </span>
-                  <span>VAT {config.vat_rate}%</span>
-                </div>
-                <Button asChild variant="ghost" size="sm">
-                  <Link to="/settings/channels">
-                    แก้ที่ /settings/channels
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-
           <div
             className={cn(
               'flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/20 p-10 text-center',
               step === 'uploading' && 'opacity-60',
-              !configReady && 'opacity-40',
             )}
           >
             {step === 'uploading' ? (
@@ -337,19 +446,17 @@ export default function ShopeeImport() {
                   คลิกเพื่อเลือกไฟล์ Excel (.xlsx) จาก Shopee
                 </p>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  รองรับไฟล์ที่ export จาก Shopee Seller Center ที่มี column: หมายเลขคำสั่งซื้อ, ชื่อสินค้า, SKU, ราคาขาย, จำนวน
+                  รองรับไฟล์ที่ export จาก Shopee Seller Center ที่มี column: หมายเลขคำสั่งซื้อ, ชื่อสินค้า, ตัวเลือกสินค้า, ราคาขาย, จำนวน
                 </p>
                 <Button
                   className="mt-4"
                   onClick={() => fileRef.current?.click()}
                   disabled={!configReady}
-                  title={!configReady ? 'ตั้งค่า channel ก่อน' : undefined}
+                  title={!configReady ? 'กำลังเตรียมหน้า import' : undefined}
                 >
                   {configLoading
                     ? 'กำลังโหลด config…'
-                    : configReady
-                      ? 'เลือกไฟล์ Shopee'
-                      : 'รอตั้งค่า channel'}
+                    : 'เลือกไฟล์ Shopee'}
                 </Button>
               </>
             )}
@@ -359,11 +466,16 @@ export default function ShopeeImport() {
 
       {step === 'preview' && preview && (
         <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             <SummaryCard
               label="Orders ทั้งหมด"
               value={preview.total_orders}
               variant="primary"
+            />
+            <SummaryCard
+              label="Order ใหม่"
+              value={preview.preflight?.new_orders ?? preview.new_count}
+              variant="success"
             />
             <SummaryCard
               label="เลือกแล้ว"
@@ -376,6 +488,24 @@ export default function ShopeeImport() {
               variant="muted"
             />
           </div>
+
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertTitle>นโยบายการนำเข้าซ้ำ</AlertTitle>
+            <AlertDescription>
+              ถ้าไฟล์ Shopee ครอบคลุมช่วงวันที่เดิม ระบบจะสร้างเฉพาะ Order ID ที่ยังไม่มีใน BillFlow และจะข้ามรายการซ้ำโดยไม่เขียนทับบิลเดิม
+            </AlertDescription>
+          </Alert>
+
+          {(preview.preflight?.no_sku_items ?? 0) > 0 && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>ไฟล์นี้ไม่มี SKU บางรายการ</AlertTitle>
+              <AlertDescription>
+                พบ {preview.preflight.no_sku_items} รายการสินค้าใน {preview.preflight.no_sku_orders} order ที่ไม่มี SKU ระบบจะใช้ชื่อสินค้า + ตัวเลือกสินค้าเป็นข้อมูลจับคู่แทน
+              </AlertDescription>
+            </Alert>
+          )}
 
           {(preview.warnings ?? []).length > 0 && (
             <Alert>
@@ -402,7 +532,7 @@ export default function ShopeeImport() {
               disabled={selectedIDs.size === 0}
               onClick={handleConfirm}
             >
-              ยืนยันส่ง {selectedIDs.size} Orders → SML
+              {destination.action} {selectedIDs.size} รายการ
             </Button>
             <Button
               variant="ghost"
@@ -432,10 +562,12 @@ export default function ShopeeImport() {
                   </TableHead>
                   <TableHead>Order ID</TableHead>
                   <TableHead>วันที่</TableHead>
+                  <TableHead>ผู้ซื้อ</TableHead>
                   <TableHead>สถานะ</TableHead>
                   <TableHead>สินค้า</TableHead>
                   <TableHead className="text-right">Qty รวม</TableHead>
-                  <TableHead>หมายเหตุ</TableHead>
+                  <TableHead className="text-right">ยอดชำระ</TableHead>
+                  <TableHead>Preflight</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -471,7 +603,10 @@ export default function ShopeeImport() {
                           </button>
                         </TableCell>
                         <TableCell className="text-xs tabular-nums text-muted-foreground">
-                          {order.doc_date}
+                          {order.order_datetime || order.doc_date}
+                        </TableCell>
+                        <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground">
+                          {order.buyer_username || '—'}
                         </TableCell>
                         <TableCell>
                           <Badge variant="secondary" className="text-xs font-normal">
@@ -484,23 +619,42 @@ export default function ShopeeImport() {
                         <TableCell className="text-right tabular-nums">
                           {order.total_qty}
                         </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {order.paid_amount != null ? `฿${fmt(order.paid_amount)}` : '—'}
+                        </TableCell>
                         <TableCell>
+                          <div className="flex flex-wrap gap-1">
                           {order.duplicate && (
                             <Badge variant="secondary" className="bg-warning/15 text-warning hover:bg-warning/20">
                               มีในระบบแล้ว
                             </Badge>
                           )}
+                          {order.has_no_sku && (
+                            <Badge variant="outline" className="border-warning/40 text-warning">
+                              ไม่มี SKU {order.no_sku_item_count}
+                            </Badge>
+                          )}
+                          {order.multi_line && (
+                            <Badge variant="outline">หลายรายการ</Badge>
+                          )}
+                          {order.amount_mismatch && (
+                            <Badge variant="outline">
+                              มีส่วนต่างยอด
+                            </Badge>
+                          )}
+                          </div>
                         </TableCell>
                       </TableRow>
                       {expanded && (
                         <TableRow>
-                          <TableCell colSpan={7} className="bg-muted/20 p-0">
+                          <TableCell colSpan={9} className="bg-muted/20 p-0">
                             <div className="overflow-hidden border-l-2 border-primary/40">
                               <Table>
                                 <TableHeader>
                                   <TableRow className="bg-muted/30">
                                     <TableHead className="text-[10px] uppercase">SKU</TableHead>
                                     <TableHead className="text-[10px] uppercase">ชื่อสินค้า</TableHead>
+                                    <TableHead className="text-[10px] uppercase">ตัวเลือก</TableHead>
                                     <TableHead className="text-right text-[10px] uppercase">ราคา</TableHead>
                                     <TableHead className="text-right text-[10px] uppercase">จำนวน</TableHead>
                                   </TableRow>
@@ -509,10 +663,22 @@ export default function ShopeeImport() {
                                   {order.items.map((item, i) => (
                                     <TableRow key={i}>
                                       <TableCell className="font-mono text-xs">
-                                        {item.sku}
+                                        {item.sku || (
+                                          <Badge variant="outline" className="border-warning/40 text-warning">
+                                            ไม่มี SKU
+                                          </Badge>
+                                        )}
                                       </TableCell>
                                       <TableCell className="text-sm">
-                                        {item.product_name}
+                                        <div>{item.raw_name || item.product_name}</div>
+                                        {item.raw_name && item.raw_name !== item.product_name && (
+                                          <div className="mt-1 text-[11px] text-muted-foreground">
+                                            ต้นทาง: {item.product_name}
+                                          </div>
+                                        )}
+                                      </TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">
+                                        {item.option_name || '—'}
                                       </TableCell>
                                       <TableCell className="text-right tabular-nums">
                                         {fmt(item.price)}
@@ -538,9 +704,53 @@ export default function ShopeeImport() {
       )}
 
       {step === 'confirming' && (
-        <Card>
-          <CardContent className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
-            กำลังบันทึกบิล… กรุณารอสักครู่
+        <Card className="overflow-hidden">
+          <CardContent className="p-0">
+            <div className="border-b border-border bg-muted/30 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    กำลัง{destination.action}จาก Shopee Excel
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    ระบบกำลังจับคู่สินค้า สร้างเอกสาร และแนบไฟล์ต้นฉบับไว้เป็นหลักฐาน
+                  </p>
+                </div>
+                <Badge variant="secondary" className="gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {confirmElapsed}s
+                </Badge>
+              </div>
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-background">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-500"
+                  style={{ width: `${Math.min(92, 18 + confirmElapsed * 2)}%` }}
+                />
+              </div>
+            </div>
+            <div className="grid gap-3 p-5 sm:grid-cols-3">
+              <div className="rounded-md border border-border p-3">
+                <Database className="h-4 w-4 text-primary" />
+                <p className="mt-2 text-xs font-medium">Order ที่เลือก</p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  {selectedIDs.size}
+                </p>
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <ShieldCheck className="h-4 w-4 text-success" />
+                <p className="mt-2 text-xs font-medium">กันนำเข้าซ้ำ</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Order ID ที่มีแล้วจะถูกข้าม ไม่เขียนทับบิลเดิม
+                </p>
+              </div>
+              <div className="rounded-md border border-border p-3">
+                <Clock3 className="h-4 w-4 text-warning" />
+                <p className="mt-2 text-xs font-medium">กรุณารอหน้านี้</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  ถ้าเปลี่ยนเมนู งานบน server อาจยังทำต่อ ให้ดูผลย้อนหลังในประวัติการนำเข้า
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -549,16 +759,16 @@ export default function ShopeeImport() {
         <>
           <Alert>
             <CheckCircle2 className="h-4 w-4 text-success" />
-            <AlertTitle>สร้างบิลแล้ว {results.success_count} รายการ</AlertTitle>
+            <AlertTitle>{destination.done} {results.success_count} รายการ</AlertTitle>
             <AlertDescription>
-              ระบบ map สินค้าให้เบื้องต้น แต่ <b>ยังไม่ส่ง SML</b> — กรุณาเข้าไปตรวจสอบรายการสินค้า
-              + แก้ไขให้ถูกต้อง แล้วกด "ยืนยันและส่งไปยัง SML" ในหน้าบิลแต่ละใบ
+              ระบบ map สินค้าให้เบื้องต้น แต่ <b>ยังไม่ส่ง SML</b> — กรุณาไปที่เมนู{destination.listName}เพื่อตรวจสินค้า
+              หน่วย จำนวน ราคา และส่งเข้า SML ปลายทาง {destination.smlPath}
             </AlertDescription>
           </Alert>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <SummaryCard
-              label="สร้างบิลสำเร็จ"
+              label="สร้างเอกสารสำเร็จ"
               value={results.success_count}
               variant="success"
             />
@@ -576,8 +786,8 @@ export default function ShopeeImport() {
 
           <div className="flex gap-2">
             <Button asChild>
-              <Link to="/bills?source=shopee">
-                ไปตรวจสอบบิลที่สร้าง
+              <Link to={destination.listPath}>
+                ไปตรวจ{destination.listName}
                 <ArrowRight className="h-4 w-4" />
               </Link>
             </Button>
@@ -614,19 +824,29 @@ export default function ShopeeImport() {
                         {r.success ? (
                           r.bill_id ? (
                             <Link
-                              to={`/bills/${r.bill_id}`}
+                              to={`${destination.listPath}/${r.bill_id}`}
                               className="inline-flex items-center gap-1 font-medium text-success hover:underline"
                             >
-                              เปิดบิล
-                              <ExternalLink className="h-3 w-3" />
+                              เปิดรายละเอียด
+                              <ArrowRight className="h-3 w-3" />
                             </Link>
                           ) : (
                             <span className="font-medium text-success">สำเร็จ</span>
                           )
                         ) : (
-                          <span className="font-medium text-destructive">
-                            ข้าม / ล้มเหลว
-                          </span>
+                          r.bill_id ? (
+                            <Link
+                              to={`${destination.listPath}/${r.bill_id}`}
+                              className="inline-flex items-center gap-1 font-medium text-warning hover:underline"
+                            >
+                              เปิดรายการเดิม
+                              <ArrowRight className="h-3 w-3" />
+                            </Link>
+                          ) : (
+                            <span className="font-medium text-destructive">
+                              ข้าม / ล้มเหลว
+                            </span>
+                          )
                         )}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">

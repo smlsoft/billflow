@@ -331,8 +331,12 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mi
 		"email_file":       filename,
 		"email_message_id": messageID,
 	})
+	billType := "purchase"
+	if extracted.DocType == "sale" || extracted.DocType == "purchase" {
+		billType = extracted.DocType
+	}
 	bill := &models.Bill{
-		BillType:     "sale",
+		BillType:     billType,
 		Source:       "email",
 		AIConfidence: &conf,
 		RawData:      json.RawMessage(rawDataBytes),
@@ -463,6 +467,9 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 	if err != nil || extracted == nil || len(extracted.Items) == 0 {
 		h.logger.Warn("shopee_email: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
+		if err == nil {
+			return fmt.Errorf("AI extract shopee email: empty items")
+		}
 		return fmt.Errorf("AI extract shopee email: %w", err)
 	}
 
@@ -587,6 +594,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 	if err := h.billRepo.Create(bill); err != nil {
 		return fmt.Errorf("create shopee_email bill: %w", err)
 	}
+	_ = h.billRepo.MarkProcessedEmailKey("shopee_email", messageID, shopeeOrderID)
 
 	// Save the email body as artifact. Prefer the rich HTML MIME part (bodyHTML)
 	// so the bill detail viewer renders it as a proper email. Fall back to plain

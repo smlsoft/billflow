@@ -9,7 +9,7 @@ export default function InsightCard({ insight }: { insight: DailyInsight | null 
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
         <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <Sparkles className="h-4 w-4 text-primary" />
-          AI Insight ประจำวัน
+          สรุปรายวัน
         </CardTitle>
         {insight && (
           <span className="text-xs text-muted-foreground">
@@ -24,7 +24,7 @@ export default function InsightCard({ insight }: { insight: DailyInsight | null 
           </p>
         ) : (
           <p className="text-sm italic text-muted-foreground">
-            ยังไม่มี insight วันนี้ — กด "สร้าง AI Insight" เพื่อสร้างรายงาน
+            ยังไม่มีสรุปวันนี้
           </p>
         )}
       </CardContent>

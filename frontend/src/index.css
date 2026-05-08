@@ -7,19 +7,19 @@
 /* ── shadcn/ui HSL tokens — light mode ─────────────────────────────────────── */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    --background: 210 24% 98%;
+    --foreground: 222 42% 10%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
-    --primary: 240 73% 58%;
+    --primary: 190 78% 28%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96%;
+    --secondary: 210 28% 94%;
     --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 210 40% 96%;
+    --muted: 210 28% 94%;
+    --muted-foreground: 215 15% 43%;
+    --accent: 190 35% 92%;
     --accent-foreground: 222 47% 11%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
@@ -31,7 +31,7 @@
     --info-foreground: 0 0% 100%;
     --border: 214 32% 91%;
     --input: 214 32% 91%;
-    --ring: 240 73% 58%;
+    --ring: 190 78% 28%;
     --radius: 0.5rem;
   }
 

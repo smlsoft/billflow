@@ -23,6 +23,10 @@ export interface ChannelDefaultRow {
   endpoint: string  // '' | URL or path; backend keyword-detects which client to use
   doc_prefix: string         // e.g. "BF-SO"
   doc_running_format: string // e.g. "YYMM####"
+  branch_code: string
+  sale_code: string
+  unit_code: string
+  doc_time: string
   // Inventory + VAT overrides (sentinel: '' / -1 = "use server default")
   wh_code: string
   shelf_code: string
@@ -79,7 +83,7 @@ export const ENDPOINT_OPTIONS: Array<{
 }> = [
   {
     value: 'saleorder',
-    label: 'ใบสั่งขาย',
+    label: 'ขาย -> ใบสั่งขาย',
     apiPath: '/SMLJavaRESTService/v3/api/saleorder',
     takesDocFormat: true,
     docFormatHint: 'SR',
@@ -87,15 +91,15 @@ export const ENDPOINT_OPTIONS: Array<{
   },
   {
     value: 'saleinvoice',
-    label: 'ใบกำกับภาษี',
-    apiPath: '/SMLJavaRESTService/restapi/saleinvoice',
+    label: 'ขาย -> ขายสินค้าและบริการ',
+    apiPath: '/SMLJavaRESTService/saleinvoice/v4',
     takesDocFormat: true,
-    docFormatHint: 'INV',
-    description: 'SML 248 — legacy ใบกำกับภาษี → เก็บที่เมนู "ใบกำกับภาษี" ใน SML',
+    docFormatHint: 'SI',
+    description: 'SML 248 — สำหรับบิลขาย Shopee/Lazada → เก็บที่เมนู "ขายสินค้าและบริการ" ใน SML',
   },
   {
     value: 'purchaseorder',
-    label: 'ใบสั่งซื้อ/สั่งจอง',
+    label: 'ซื้อ -> ใบสั่งซื้อ',
     apiPath: '/SMLJavaRESTService/v3/api/purchaseorder',
     takesDocFormat: true,
     docFormatHint: 'PO',
@@ -115,10 +119,87 @@ export const ENDPOINT_OPTIONS: Array<{
 // Used as read-only metadata in the UI so admins can see the routing without
 // digging into code.
 export interface EndpointInfo {
-  label: string         // ใบสั่งขาย / ใบสั่งซื้อ-สั่งจอง / ใบจอง
+  label: string         // ใบสั่งขาย / ซื้อ -> ใบสั่งซื้อ / ใบจอง
   apiPath: string       // /SMLJavaRESTService/v3/api/saleorder
   takesDocFormat: boolean
   docFormatHint: string // suggested values, e.g. "SR / RU"
+}
+
+export interface SmlDestinationOption {
+  value: Exclude<EndpointKind, ''>
+  billType: 'sale' | 'purchase'
+  label: string
+  apiPath: string
+  docFormatCode: string
+  docPrefix: string
+  docRunningFormat: string
+  statusLabel: string
+  description: string
+  phase1Enabled: boolean
+}
+
+// Business-level SML destinations. The backend still stores endpoint +
+// doc_format_code, but admins pick from tested destinations instead of typing
+// raw paths. Add new rows here only after that SML menu has been tested.
+export const SML_DESTINATION_OPTIONS: SmlDestinationOption[] = [
+  {
+    value: 'saleorder',
+    billType: 'sale',
+    label: 'ขาย -> ใบสั่งขาย',
+    apiPath: '/SMLJavaRESTService/v3/api/saleorder',
+    docFormatCode: 'SR',
+    docPrefix: 'BF-SO',
+    docRunningFormat: 'YYMM####',
+    statusLabel: 'ทดสอบผ่านแล้ว',
+    description: 'ส่งบิลขาย Shopee Excel เข้าเมนู ขาย -> ใบสั่งขาย ใน SML',
+    phase1Enabled: true,
+  },
+  {
+    value: 'saleinvoice',
+    billType: 'sale',
+    label: 'ขาย -> ขายสินค้าและบริการ',
+    apiPath: '/SMLJavaRESTService/saleinvoice/v4',
+    docFormatCode: 'SI',
+    docPrefix: 'BF-INV',
+    docRunningFormat: 'YYMM####',
+    statusLabel: 'ทดสอบผ่านแล้ว',
+    description: 'ส่งบิลขาย Shopee Excel เข้าเมนู ขาย -> ขายสินค้าและบริการ ใน SML',
+    phase1Enabled: true,
+  },
+  {
+    value: 'purchaseorder',
+    billType: 'purchase',
+    label: 'ซื้อ -> ใบสั่งซื้อ',
+    apiPath: '/SMLJavaRESTService/v3/api/purchaseorder',
+    docFormatCode: 'PO',
+    docPrefix: 'BF-PO',
+    docRunningFormat: 'YYMM####',
+    statusLabel: 'ทดสอบผ่านแล้ว',
+    description: 'ส่งบิลซื้อ Shopee เข้าเมนู ซื้อ -> ใบสั่งซื้อ ใน SML',
+    phase1Enabled: true,
+  },
+]
+
+export function destinationFor(
+  channel: ChannelKey,
+  billType: 'sale' | 'purchase',
+  endpoint = '',
+  docFormatCode = '',
+): SmlDestinationOption | undefined {
+  const kind = resolveEndpointKind(endpoint, channel, billType)
+  return SML_DESTINATION_OPTIONS.find((option) => {
+    if (option.value !== kind) return false
+    if (!docFormatCode) return true
+    return option.docFormatCode.toLowerCase() === docFormatCode.toLowerCase()
+  }) ?? SML_DESTINATION_OPTIONS.find((option) => option.value === kind)
+}
+
+export function phase1DestinationOptions(
+  billType?: 'sale' | 'purchase',
+): SmlDestinationOption[] {
+  return SML_DESTINATION_OPTIONS.filter((option) => (
+    option.phase1Enabled && (!billType || option.billType === billType)
+  ))
 }
 
 // resolveEndpointKind mirrors resolveEndpoint() in handlers/bills.go —
@@ -169,7 +250,7 @@ export const CHANNEL_LABELS: Record<ChannelKey, string> = {
   email: 'Email',
   shopee: 'Shopee Excel',
   shopee_email: 'Shopee Order',
-  shopee_shipped: 'Shopee → ใบสั่งซื้อ/สั่งจอง',
+  shopee_shipped: 'Email บิลซื้อ Shopee',
   lazada: 'Lazada',
   manual: 'Manual',
 }
@@ -182,6 +263,7 @@ export const CHANNEL_SLOTS: Array<{
 }> = [
   { channel: 'line', bill_type: 'sale' },
   { channel: 'email', bill_type: 'sale' },
+  { channel: 'email', bill_type: 'purchase' },
   { channel: 'shopee', bill_type: 'sale' },
   { channel: 'shopee_email', bill_type: 'sale' },
   { channel: 'shopee_shipped', bill_type: 'purchase' },
@@ -192,13 +274,16 @@ export const CHANNEL_SLOTS: Array<{
 export function channelHelp(channel: ChannelKey, isPurchase: boolean): string {
   switch (channel) {
     case 'line':
-    case 'email':
       return 'ทุกบิลที่เข้ามาทางช่องทางนี้จะใช้ชื่อลูกค้านี้เสมอ — กันไม่ให้ SML สร้างลูกค้าใหม่ทุกครั้งที่ลูกค้าทักเข้ามา'
+    case 'email':
+      return isPurchase
+        ? 'Phase 1 ใช้แถวนี้สำหรับ Email → บิลซื้อ: เลือกผู้ขาย default ที่จะส่งเข้า SML purchaseorder'
+        : 'ทุกบิลขายที่เข้าทาง Email จะใช้ชื่อลูกค้านี้เสมอ'
     case 'shopee':
     case 'shopee_email':
-      return 'รหัสลูกค้านี้จะถูกส่งเป็น cust_code ตอนสร้างใบกำกับภาษี (saleinvoice) ใน SML'
+      return 'รหัสลูกค้านี้จะถูกส่งเป็น cust_code ตอนสร้างใบสั่งขาย (saleorder) ใน SML'
     case 'shopee_shipped':
-      return 'รหัสผู้ขายนี้จะถูกส่งเป็น cust_code ตอนสร้างใบสั่งซื้อ/สั่งจอง (purchaseorder) ใน SML'
+      return 'Email บิลซื้อ Shopee จะส่งเข้า SML ตามปลายทางที่เลือก ส่วนผู้ขายจริงเลือกตอนส่งบิลแต่ละใบ'
     case 'lazada':
       return isPurchase
         ? 'ใช้รหัสนี้กับบิลซื้อ Lazada (Phase 4b)'

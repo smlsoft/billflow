@@ -46,8 +46,14 @@ export function ConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          {description && <DialogDescription>{description}</DialogDescription>}
+          <DialogTitle className={variant === 'destructive' ? 'text-destructive' : undefined}>
+            {title}
+          </DialogTitle>
+          {description && (
+            <DialogDescription className="whitespace-pre-line leading-relaxed">
+              {description}
+            </DialogDescription>
+          )}
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-2">
           <Button

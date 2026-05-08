@@ -2,7 +2,8 @@ import { cn } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import { JsonViewer } from '@/components/common/JsonViewer'
 import type { BillItem } from '@/types'
-import { FLOW_META, scoreColor } from '../utils/formatters'
+import { money, rawNumber, rawString, shopeeOrderID } from '@/lib/shopeeBill'
+import { FLOW_META } from '../utils/formatters'
 
 interface Props {
   data: Record<string, unknown> | null | undefined
@@ -10,24 +11,21 @@ interface Props {
 }
 
 function FieldRow({
-  icon,
   label,
   value,
   mono = false,
 }: {
-  icon: string
   label: string
   value: string
   mono?: boolean
 }) {
   if (!value) return null
   return (
-    <div className="flex gap-3 border-b border-border/50 py-2 text-sm last:border-0">
-      <div className="w-7 text-base leading-snug">{icon}</div>
-      <div className="min-w-[130px] text-xs text-muted-foreground">{label}</div>
+    <div className="grid gap-1 border-b border-border/50 py-1.5 text-sm last:border-0 sm:grid-cols-[130px_minmax(0,1fr)] sm:gap-3">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
       <div
         className={cn(
-          'flex-1 break-words text-foreground',
+          'flex-1 break-words text-[13px] leading-5 text-foreground',
           mono && 'font-mono text-xs',
         )}
       >
@@ -54,126 +52,103 @@ export function RawDataCard({ data, items }: Props) {
   const customer = get('customer_name')
   const phone = get('customer_phone')
   const docDate = get('doc_date')
+  const orderID = shopeeOrderID(data)
+  const orderDateTime = rawString(data, 'order_datetime')
+  const sellerName = rawString(data, 'seller_name')
+  const buyerName = rawString(data, 'buyer_username')
+  const paymentTime = rawString(data, 'payment_time')
+  const paymentChannel = rawString(data, 'payment_channel')
+  const trackingNo = rawString(data, 'tracking_no')
+  const itemCount = rawNumber(data, 'item_count')
+  const goodsTotal = rawNumber(data, 'goods_total_amount')
+  const shippingAmount = rawNumber(data, 'shipping_amount')
+  const paidTotal = rawNumber(data, 'paid_total_amount')
   const note = get('note')
   const file = get('email_file')
   const msgID = get('email_message_id')
-  const orderID = get('shopee_order_id') || get('order_id')
   const status = get('status')
   const bodyHTML = get('body_html')
   const bodyText = get('body_text')
+  const hasTechnicalData = bodyHTML || bodyText || Object.keys(data).length > 0 || (items?.length ?? 0) > 0
+  const isMultiOrderEmailFlow = flow === 'shopee_shipped'
+  const sourceTitle = flow === 'shopee_excel' ? 'ข้อมูลจาก Shopee Excel' : 'ข้อมูลอีเมลต้นทาง'
 
   return (
-    <Card>
-      <CardContent className="pt-4">
-        {flowMeta && (
-          <div
-            className={cn(
-              'mb-4 inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold',
-              flowMeta.variant,
-            )}
-          >
-            <span>{flowMeta.icon}</span>
-            <span>{flowMeta.label}</span>
+    <Card className="rounded-xl border-border/70 shadow-sm">
+      <CardContent className="px-5 py-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-semibold text-foreground">{sourceTitle}</div>
           </div>
-        )}
+          {flowMeta && (
+            <div
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold',
+                flowMeta.variant,
+              )}
+            >
+              <span>{flowMeta.label}</span>
+            </div>
+          )}
+        </div>
 
         <div>
-          <FieldRow icon="📧" label="หัวข้ออีเมล" value={subject} />
-          <FieldRow icon="📨" label="ผู้ส่ง" value={from} mono />
-          <FieldRow icon="🛒" label="หมายเลขคำสั่งซื้อ" value={orderID} mono />
-          <FieldRow icon="📅" label="วันที่เอกสาร" value={docDate} />
-          <FieldRow icon="👤" label="ลูกค้า" value={customer} />
-          <FieldRow icon="📞" label="เบอร์โทร" value={phone} />
-          <FieldRow icon="📝" label="หมายเหตุ" value={note} />
-          <FieldRow icon="📎" label="ไฟล์แนบ" value={file} mono />
-          <FieldRow icon="🏷️" label="สถานะ Shopee" value={status} />
-          <FieldRow icon="🆔" label="Message ID" value={msgID} mono />
+          <FieldRow label="หัวข้ออีเมล" value={subject} />
+          <FieldRow label="ผู้ส่ง" value={from} mono />
+          {!isMultiOrderEmailFlow && <FieldRow label="วันที่เอกสาร" value={docDate} />}
+          {!isMultiOrderEmailFlow && <FieldRow label="หมายเลขคำสั่งซื้อ" value={orderID} mono />}
+          {!isMultiOrderEmailFlow && <FieldRow label="วันที่สั่งซื้อ" value={orderDateTime} />}
+          {!isMultiOrderEmailFlow && <FieldRow label="ผู้ขาย" value={sellerName} />}
+          {!isMultiOrderEmailFlow && <FieldRow label="ผู้ซื้อ" value={buyerName} />}
+          {!isMultiOrderEmailFlow && <FieldRow label="เวลาชำระเงิน" value={paymentTime} />}
+          {!isMultiOrderEmailFlow && <FieldRow label="ช่องทางชำระเงิน" value={paymentChannel} />}
+          {!isMultiOrderEmailFlow && <FieldRow label="เลขพัสดุ" value={trackingNo} mono />}
+          {!isMultiOrderEmailFlow && itemCount != null && <FieldRow label="จำนวนสินค้า" value={`${itemCount} รายการ`} />}
+          {!isMultiOrderEmailFlow && goodsTotal != null && <FieldRow label="ยอดรวมค่าสินค้า" value={money(goodsTotal)} />}
+          {!isMultiOrderEmailFlow && paidTotal != null && <FieldRow label="ยอดที่ชำระ" value={money(paidTotal)} />}
+          {isMultiOrderEmailFlow && shippingAmount != null && (
+            <FieldRow label="ค่าส่ง / ยอดชำระ" value={`${money(shippingAmount)} / ${money(paidTotal)}`} />
+          )}
+          <FieldRow label="ลูกค้า" value={customer} />
+          <FieldRow label="เบอร์โทร" value={phone} />
+          <FieldRow label="หมายเหตุ" value={note} />
+          <FieldRow label="ไฟล์แนบ" value={file} mono />
+          <FieldRow label="สถานะ Shopee" value={status} />
+          <FieldRow label="Message ID" value={msgID} mono />
         </div>
 
-        {(bodyHTML || bodyText) && (
-          <details className="mt-4 border-t border-border pt-4">
-            <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
-              📄 เนื้อหาอีเมล (คลิกเพื่อดู)
-            </summary>
-            <div className="mt-2 overflow-hidden rounded-md border border-border">
-              {bodyHTML ? (
-                <iframe
-                  sandbox=""
-                  srcDoc={bodyHTML}
-                  className="h-[500px] w-full"
-                  title="email body"
-                />
-              ) : (
-                <pre className="max-h-[400px] overflow-auto p-3 text-xs whitespace-pre-wrap">
-                  {bodyText}
-                </pre>
-              )}
-            </div>
-          </details>
-        )}
-
-        {/* Items recap */}
-        {items && items.length > 0 && (
-          <div className="mt-4 border-t border-border pt-4">
-            <div className="mb-2 text-xs text-muted-foreground">
-              📋 รายการที่ระบบดึงมา ({items.length} รายการ):
-            </div>
-            <div className="space-y-1">
-              {items.map((it) => {
-                const candidate = (it.candidates ?? []).find(
-                  (c) => c.item_code === it.item_code,
-                )
-                const score = candidate?.score ?? null
-                const scorePct = score != null ? Math.round(score * 100) : null
-                const color = scoreColor(score)
-                return (
-                  <div
-                    key={it.id}
-                    className="flex items-start gap-2 border-b border-dashed border-border/50 py-1.5 text-sm last:border-0"
-                  >
-                    <div className="flex-1 break-words text-foreground">
-                      {it.raw_name}
-                      <div className="mt-0.5 text-xs text-muted-foreground">
-                        →{' '}
-                        <code
-                          style={{ color: it.item_code ? undefined : '#ef4444' }}
-                          className="font-mono"
-                        >
-                          {it.item_code ?? '(ยังไม่ map)'}
-                        </code>
-                        {candidate?.item_name && (
-                          <span className="text-muted-foreground">
-                            {' '}· {candidate.item_name}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="w-24 shrink-0 text-right text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                      {it.qty} × ฿{(it.price ?? 0).toLocaleString()}
-                    </div>
-                    {scorePct != null && (
-                      <div
-                        className="w-12 shrink-0 text-center text-xs font-semibold"
-                        style={{ color }}
-                      >
-                        {scorePct}%
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+        {hasTechnicalData && (
+          <div className="mt-3 border-t border-border pt-3">
+            {(bodyHTML || bodyText) && (
+              <details className="rounded-lg border border-border bg-muted/20">
+                <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                  เปิดดูเนื้อหาอีเมลต้นฉบับ / JSON
+                </summary>
+                <div className="overflow-hidden border-t border-border bg-background">
+                  {bodyHTML ? (
+                    <iframe
+                      sandbox=""
+                      srcDoc={bodyHTML}
+                      className="h-[420px] w-full"
+                      title="email body"
+                    />
+                  ) : (
+                    <pre className="max-h-[360px] overflow-auto p-3 text-xs whitespace-pre-wrap">
+                      {bodyText}
+                    </pre>
+                  )}
+                </div>
+              </details>
+            )}
+            <div className="mt-2">
+              <JsonViewer
+                title="ข้อมูลทางเทคนิคสำหรับทีม support"
+                data={{ raw_data: data, items: items ?? [] }}
+                defaultOpen={false}
+              />
             </div>
           </div>
         )}
-
-        {/* Raw JSON dump */}
-        <div className="mt-4">
-          <JsonViewer
-            title="ดู JSON ดิบ (raw_data + items + candidates)"
-            data={{ raw_data: data, items: items ?? [] }}
-            defaultOpen={false}
-          />
-        </div>
       </CardContent>
     </Card>
   )

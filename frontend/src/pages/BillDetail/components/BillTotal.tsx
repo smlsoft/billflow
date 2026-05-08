@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { isShopeePurchaseBill, isShopeeSalesBill, money, shopeeGoodsTotal, shopeePayableTotal } from '@/lib/shopeeBill'
 import type { Bill } from '@/types'
 import { issueLabel, type ValidationResult } from '../utils/validation'
 
@@ -31,10 +32,10 @@ interface Props {
 }
 
 const ROUTE_LABEL: Record<string, string> = {
-  sale_reserve: 'SML 213 · ใบสั่งจอง (sale_reserve)',
-  saleorder: 'SML 248 · ใบสั่งขาย (saleorder)',
-  saleinvoice: 'SML 248 · ใบกำกับภาษี (saleinvoice)',
-  purchaseorder: 'SML 248 · ใบสั่งซื้อ (purchaseorder)',
+  sale_reserve: 'ใบสั่งจอง',
+  saleorder: 'ใบสั่งขาย',
+  saleinvoice: 'ขาย -> ขายสินค้าและบริการ',
+  purchaseorder: 'ซื้อ -> ใบสั่งซื้อ',
 }
 
 export function BillTotal({
@@ -53,32 +54,55 @@ export function BillTotal({
     bill.status === 'pending' ||
     bill.status === 'needs_review'
   const isPurchase = bill.bill_type === 'purchase'
+  const isShopeePurchase = isShopeePurchaseBill(bill)
+  const isShopeeSale = isShopeeSalesBill(bill)
   const isFailed = bill.status === 'failed'
+  const goodsTotal = shopeeGoodsTotal(bill) ?? total
+  const payableTotal = shopeePayableTotal(bill)
 
   // Send is enabled only when validation passes AND we're not mid-retry.
   // The disabled state is communicated by both the button's :disabled state
   // and the warning card above (which is the "why" — the button alone
   // wouldn't tell the admin what to fix).
   const enabled = validation.canSend && !retrying
+  const readyText = validation.canSend
+    ? 'รายการครบแล้ว พร้อมเลือกผู้ขาย/คลัง/ภาษีและส่งเข้า SML'
+    : `ยังต้องแก้ ${validation.issues.length} จุดก่อนส่งเข้า SML`
 
   const buttonLabel = retrying
     ? 'กำลังส่ง...'
     : isFailed
-      ? `⚠️ ลองส่งใหม่${isPurchase ? ' (ใบสั่งซื้อ/สั่งจอง)' : ''}`
-      : `ยืนยันและส่งไปยัง SML${isPurchase ? ' (ใบสั่งซื้อ/สั่งจอง)' : ''}`
+      ? `ลองส่งใหม่${isPurchase ? 'ไป SML' : ''}`
+      : `ส่งเข้า SML${isPurchase ? ' (บิลซื้อ)' : ''}`
 
   return (
-    <Card>
-      <CardContent className="space-y-3 py-4">
+    <Card className="rounded-xl border-border/70 shadow-sm">
+      <CardContent className="space-y-2.5 px-5 py-3">
         {/* Top row — total + send button */}
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              ยอดรวมทั้งหมด
+              {isShopeePurchase || isShopeeSale ? 'ยอดที่ต้องชำระทั้งหมด' : 'ยอดรวมทั้งหมด'}
             </div>
-            <div className="mt-0.5 text-2xl font-bold tabular-nums tracking-tight">
-              ฿{total.toLocaleString()}
+            <div className="mt-0.5 text-xl font-bold tabular-nums tracking-tight">
+              {money(isShopeePurchase || isShopeeSale ? payableTotal ?? total : total)}
             </div>
+            {isShopeePurchase && (
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                <span>ยอดสินค้า {money(goodsTotal)}</span>
+                {payableTotal != null && payableTotal !== goodsTotal && (
+                  <span>รวมส่วนลด/ค่าส่งแล้ว</span>
+                )}
+              </div>
+            )}
+            {canShowSendButton && (
+              <p className={cn(
+                'mt-0.5 text-xs',
+                validation.canSend ? 'text-success' : 'text-warning',
+              )}>
+                {readyText}
+              </p>
+            )}
           </div>
 
           {canShowSendButton && (
@@ -96,7 +120,7 @@ export function BillTotal({
                         onClick={onRetry}
                         disabled={!enabled}
                         variant={isFailed ? 'destructive' : 'default'}
-                        className="gap-2 shrink-0"
+                        className="h-10 shrink-0 gap-2 rounded-lg px-4"
                       >
                         {retrying ? (
                           <RefreshCw className="h-4 w-4 animate-spin" />
@@ -114,7 +138,7 @@ export function BillTotal({
                       already explains itself ("กำลังส่ง..."). */}
                   {!validation.canSend && (
                     <TooltipContent side="left" className="max-w-xs">
-                      ยังส่ง SML ไม่ได้ — พบ {validation.issues.length} ปัญหา · ตรวจ item_code / unit_code / qty / price
+                      ยังส่งไม่ได้ — พบ {validation.issues.length} ปัญหา · ตรวจรหัสสินค้า หน่วย จำนวน และราคา
                     </TooltipContent>
                   )}
                 </Tooltip>
@@ -124,14 +148,14 @@ export function BillTotal({
                   admin can see the routing even before validation passes.
                   Dimmed when button is disabled to signal "preview only". */}
               {canShowSendButton && expectedRoute && (
-                <div className={cn("text-right text-[10px] tabular-nums text-muted-foreground", !enabled && "opacity-50")}>
-                  ↳{' '}
+                <div className={cn("max-w-[340px] text-right text-[10px] leading-4 tabular-nums text-muted-foreground", !enabled && "opacity-50")}>
+                  ปลายทาง SML:{' '}
                   <span className="font-medium text-foreground">
                     {ROUTE_LABEL[expectedRoute] ?? expectedRoute}
                   </span>
                   {expectedDocFormat && (
                     <>
-                      {' '}· doc_no{' '}
+                      {' '}· รหัสเอกสาร{' '}
                       <code className="rounded bg-muted px-1 py-0.5 font-mono">
                         {expectedDocFormat}
                       </code>
@@ -158,7 +182,7 @@ export function BillTotal({
         {canShowSendButton && !validation.canSend && (
           <div
             className={cn(
-              'rounded-md border border-warning/40 bg-warning/[0.06] px-3 py-2.5',
+              'rounded-md border border-warning/40 bg-warning/[0.06] px-3 py-2',
             )}
           >
             <div className="flex items-start gap-2">
@@ -171,7 +195,7 @@ export function BillTotal({
                   ยังส่ง SML ไม่ได้ — พบ {validation.issues.length}{' '}
                   ปัญหาที่ต้องแก้
                 </div>
-                <ul className="space-y-1 text-[13px]">
+                <ul className="space-y-0.5 text-[13px]">
                   {validation.issues.map((issue) => (
                     <li
                       key={issue.kind}
@@ -190,9 +214,9 @@ export function BillTotal({
                         <button
                           type="button"
                           onClick={() => onJumpToItem(issue.firstItemId)}
-                          className="shrink-0 text-[11px] font-medium text-primary hover:underline"
+                          className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/15"
                         >
-                          ดู →
+                          ไปแก้รายการ
                         </button>
                       )}
                     </li>

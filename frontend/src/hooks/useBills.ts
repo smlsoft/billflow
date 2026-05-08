@@ -8,9 +8,25 @@ interface BillsFilter {
   status?: string
   source?: string
   bill_type?: string
+  document_route?: string
   search?: string
   date_from?: string
   date_to?: string
+}
+
+export interface RetryBillPayload {
+  party_code?: string
+  party_name?: string
+  doc_no?: string
+  remark?: string
+  branch_code?: string
+  sale_code?: string
+  unit_code?: string
+  doc_time?: string
+  wh_code?: string
+  shelf_code?: string
+  vat_type?: number
+  vat_rate?: number
 }
 
 export function useBills(filter: BillsFilter = {}) {
@@ -28,6 +44,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.status) params.set('status', filter.status)
       if (filter.source) params.set('source', filter.source)
       if (filter.bill_type) params.set('bill_type', filter.bill_type)
+      if (filter.document_route) params.set('document_route', filter.document_route)
       if (filter.search) params.set('search', filter.search)
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)
@@ -52,7 +69,7 @@ export async function getBill(id: string): Promise<Bill> {
 
 export async function retryBill(
   id: string,
-  body?: { party_code?: string; remark?: string },
+  body?: RetryBillPayload,
 ): Promise<void> {
   await client.post(`/api/bills/${id}/retry`, body ?? {})
 }

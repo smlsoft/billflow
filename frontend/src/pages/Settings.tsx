@@ -9,6 +9,7 @@ import {
   Mail,
   MessageSquare,
   Sparkles,
+  Settings2,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -138,13 +139,13 @@ export default function Settings() {
     const enabled = status.imap_enabled ?? 0
     const failing = status.imap_failing ?? 0
     if (total === 0) {
-      return { status: 'ยังไม่มี inbox', tone: 'warn' as const, detail: 'เพิ่ม email inbox เพื่อรับบิลทาง email' }
+      return { status: 'ยังไม่มีกล่องเมล', tone: 'warn' as const, detail: 'เพิ่มกล่องเมลเพื่อรับบิลทางอีเมล' }
     }
     if (failing > 0) {
       return {
         status: `${failing} มีปัญหา`,
         tone: 'danger' as const,
-        detail: `จาก ${enabled} inbox ที่เปิดใช้งาน — ตรวจ password / 2FA`,
+        detail: `จาก ${enabled} กล่องเมลที่เปิดใช้งาน — ตรวจรหัสผ่าน / 2FA`,
       }
     }
     return {
@@ -185,16 +186,16 @@ export default function Settings() {
           {imap ? (
             <SubsystemRow
               icon={Mail}
-              label="Email Inbox"
+              label="กล่องอีเมลรับบิล"
               status={imap.status}
               tone={imap.tone}
               detail={imap.detail}
               to="/settings/email"
             />
           ) : loading ? (
-            <SubsystemRowSkeleton icon={Mail} label="Email Inbox" />
+            <SubsystemRowSkeleton icon={Mail} label="กล่องอีเมลรับบิล" />
           ) : (
-            <SubsystemRow icon={Mail} label="Email Inbox" status="—" tone="unknown" />
+            <SubsystemRow icon={Mail} label="กล่องอีเมลรับบิล" status="—" tone="unknown" />
           )}
 
           {/* SML — env config only; not multi-account, no click-through. */}
@@ -203,16 +204,26 @@ export default function Settings() {
             label="SML ERP"
             status={status?.sml_configured ? 'พร้อมใช้งาน' : 'ยังไม่ได้ตั้งค่า'}
             tone={status?.sml_configured ? 'ok' : 'danger'}
-            detail={status?.sml_configured ? undefined : 'ตรวจ SML_BASE_URL ใน .env'}
+            detail={status?.sml_configured ? 'แก้ URL/database/header ได้ที่การเชื่อมต่อระบบ' : 'ตั้งค่า SML ในหน้าการเชื่อมต่อระบบ'}
+            to="/settings/instance"
           />
 
-          {/* AI — env config only. */}
           <SubsystemRow
             icon={Bot}
             label="OpenRouter AI"
             status={status?.ai_configured ? 'พร้อมใช้งาน' : 'ยังไม่ได้ตั้งค่า'}
             tone={status?.ai_configured ? 'ok' : 'danger'}
-            detail={status?.ai_configured ? undefined : 'ตรวจ OPENROUTER_API_KEY ใน .env'}
+            detail={status?.ai_configured ? 'แก้ API key/model ได้ที่การเชื่อมต่อระบบ' : 'ตั้งค่า OpenRouter ในหน้าการเชื่อมต่อระบบ'}
+            to="/settings/instance"
+          />
+
+          <SubsystemRow
+            icon={Settings2}
+            label="การเชื่อมต่อระบบ"
+            status="SML / OpenRouter"
+            tone="ok"
+            detail="ข้อมูลร้าน, SML, OpenRouter และระบบอัตโนมัติ"
+            to="/settings/instance"
           />
         </CardContent>
       </Card>
@@ -226,9 +237,9 @@ export default function Settings() {
             <div className="flex items-center gap-2.5">
               <Sparkles className="h-4 w-4 text-primary" strokeWidth={2.25} />
               <div>
-                <p className="text-sm font-medium">Auto-confirm Threshold</p>
+                <p className="text-sm font-medium">เกณฑ์ส่งอัตโนมัติ</p>
                 <p className="text-[11px] text-muted-foreground">
-                  AI confidence ≥ ค่านี้ → ผ่าน auto-confirm · ตั้งใน <code className="font-mono">.env</code> AUTO_CONFIRM_THRESHOLD
+                  ความมั่นใจของระบบมากกว่าค่านี้จึงจะผ่านอัตโนมัติ · แก้ได้ที่หน้าการเชื่อมต่อระบบ
                 </p>
               </div>
             </div>
@@ -242,7 +253,7 @@ export default function Settings() {
       {/* Pre-deploy notice — let admin know /settings shows live state, not config */}
       <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
         <CheckCircle2 className="h-3 w-3" />
-        BillFlow v0.2.0 · ดู status สด · ตั้งค่าจริงในแต่ละหน้าย่อย (Email / Channels / Catalog)
+        BillFlow Phase 1 · สถานะสด · ตั้งค่าจริงในแต่ละหน้าย่อย
       </p>
     </div>
   )

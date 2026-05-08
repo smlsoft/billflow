@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   AlertCircle,
   ChevronDown,
@@ -23,25 +24,61 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { DataTable } from '@/components/common/DataTable'
 import { PageHeader } from '@/components/common/PageHeader'
 import client from '@/api/client'
+import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
 import { cn } from '@/lib/utils'
 
 import { EditDialog } from './ChannelDefaults/EditDialog'
 import {
   CHANNEL_LABELS,
   CHANNEL_SLOTS,
+  destinationFor,
   endpointFor,
   type ChannelDefaultRow,
   type ChannelKey,
 } from './ChannelDefaults/labels'
 
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
+const PHASE1_CHANNEL_SLOTS: Array<{
+  channel: ChannelKey
+  bill_type: 'sale' | 'purchase'
+}> = [
+  { channel: 'shopee_shipped', bill_type: 'purchase' },
+  ...(ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
+    ? [{ channel: 'shopee' as ChannelKey, bill_type: 'sale' as const }]
+    : []),
+]
+
+function displayChannelLabel(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type'>) {
+  if (PHASE < 2 && row.channel === 'shopee_shipped' && row.bill_type === 'purchase') {
+    return 'Email บิลซื้อ Shopee'
+  }
+  return CHANNEL_LABELS[row.channel as ChannelKey] ?? row.channel
+}
+
+function workMenuFor(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type' | 'endpoint' | 'doc_format_code'>) {
+  if (ENABLE_SALES_ORDERS && row.channel === 'shopee' && row.bill_type === 'sale') {
+    const route = `${row.endpoint ?? ''} ${row.doc_format_code ?? ''}`.toLowerCase()
+    if (route.includes('saleinvoice') || row.doc_format_code?.toUpperCase() === 'SI') {
+      return { label: 'ขายสินค้าและบริการ', to: '/sale-invoices' }
+    }
+    return { label: 'ใบสั่งขาย', to: '/sales-orders' }
+  }
+  if (row.channel === 'shopee_shipped' && row.bill_type === 'purchase') {
+    return { label: 'ใบสั่งซื้อ', to: '/bills' }
+  }
+  return null
+}
+
 function HelpBanner() {
   const [open, setOpen] = useState(true)
+  const phase1 = PHASE < 2
   return (
     <Card className="border-info/30 bg-info/5">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-info/10">
           <Info className="h-4 w-4 text-info" />
-          <span>หน้านี้ใช้ทำอะไร — อ่านก่อนตั้งค่า</span>
+          <span>{phase1 ? 'ตั้งค่าเส้นทางเอกสาร SML สำหรับ Phase 1' : 'หน้านี้ใช้ทำอะไร — อ่านก่อนตั้งค่า'}</span>
           <ChevronDown
             className={cn(
               'ml-auto h-4 w-4 text-muted-foreground transition-transform',
@@ -51,41 +88,59 @@ function HelpBanner() {
         </CollapsibleTrigger>
         <CollapsibleContent>
           <CardContent className="space-y-3 border-t border-info/20 px-4 pt-3 text-sm">
-            <p className="text-muted-foreground">
-              บิลทุกใบที่ระบบรับเข้ามา (LINE / Email / Shopee / Lazada) สุดท้ายต้องส่งเข้า{' '}
-              <b>SML ERP</b> เพื่อบันทึก. หน้านี้กำหนดว่า <b>"แต่ละช่องทาง"</b> จะ:
-            </p>
+            {phase1 ? (
+              <p className="text-muted-foreground">
+                ใน Phase 1 หน้านี้เปิดเฉพาะเส้นทางที่พร้อมใช้งานก่อน ได้แก่{' '}
+                <b>Email Shopee → บิลซื้อ</b>{ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Shopee Excel → บิลขาย</b></> : null}.
+                ใช้กำหนดปลายทางที่จะส่งเอกสารเข้า SML ได้แก่ เมนู SML รหัสประเภทเอกสาร
+                และรูปแบบเลขเอกสาร. ส่วนคู่ค้า คลัง พื้นที่เก็บ และภาษี จะเลือกในขั้นตอนส่งบิล.
+              </p>
+            ) : (
+              <p className="text-muted-foreground">
+                บิลทุกใบที่ระบบรับเข้ามา (LINE / Email / Shopee / Lazada) สุดท้ายต้องส่งเข้า{' '}
+                <b>SML ERP</b> เพื่อบันทึก. หน้านี้กำหนดว่า <b>"แต่ละช่องทาง"</b> จะ:
+              </p>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="rounded-md border border-border bg-card p-3">
-                <div className="mb-1 text-sm font-semibold">1. ส่งเข้า API ตัวไหน</div>
+                <div className="mb-1 text-sm font-semibold">1. ส่งเข้าเมนูไหนใน SML</div>
                 <p className="text-xs text-muted-foreground">
-                  เลือกระหว่าง <code>ใบสั่งขาย</code>, <code>ใบกำกับภาษี</code>,{' '}
-                  <code>ใบสั่งซื้อ/สั่งจอง</code>, <code>ใบจอง</code> — แต่ละตัวเก็บที่
-                  เมนูคนละจุดใน SML
+                  {phase1
+                    ? ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
+                      ? <>Phase 1 เปิดปลายทาง {'ซื้อ -> ใบสั่งซื้อ'}, {'ขาย -> ใบสั่งขาย'} และ {'ขาย -> ขายสินค้าและบริการ'} เพื่อให้เอกสารถูกบันทึกในเมนูที่สัมพันธ์กับประเภทบิล</>
+                      : <>Phase 1 เปิดปลายทาง {'ซื้อ -> ใบสั่งซื้อ'} สำหรับบิลซื้อจากอีเมลก่อน</>
+                    : <>เลือกปลายทางของบิล เช่น {'ซื้อ -> ใบสั่งซื้อ'} หรือ {'ขาย -> ขายสินค้าและบริการ'} เพื่อให้เอกสารถูกบันทึกในเมนูที่ถูกต้อง</>}
                 </p>
               </div>
               <div className="rounded-md border border-border bg-card p-3">
-                <div className="mb-1 text-sm font-semibold">2. doc_format_code</div>
+                <div className="mb-1 text-sm font-semibold">2. รหัสประเภทเอกสาร</div>
                 <p className="text-xs text-muted-foreground">
-                  รหัสประเภทเอกสารใน SML — เช่น <code>SR</code> สำหรับใบสั่งขาย,{' '}
-                  <code>PO</code> สำหรับใบสั่งซื้อ. ตั้ง code ที่ตรงกับที่ SML
-                  ของลูกค้าใช้
+                รหัสที่ SML ใช้แยกชนิดเอกสาร เช่น <code>PO</code> สำหรับใบสั่งซื้อ หรือ <code>SR</code> สำหรับใบสั่งขาย.
+                  ตั้งให้ตรงกับระบบของลูกค้า
                 </p>
               </div>
               <div className="rounded-md border border-border bg-card p-3">
-                <div className="mb-1 text-sm font-semibold">3. ลูกค้า / ผู้ขาย</div>
+                <div className="mb-1 text-sm font-semibold">{phase1 ? '3. เลขเอกสาร' : '3. ลูกค้า / ผู้ขาย'}</div>
                 <p className="text-xs text-muted-foreground">
-                  เลือกรหัสลูกค้า (AR-xxx) หรือผู้ขาย (V-xxx) จาก SML —
-                  ทุกบิลที่มาจาก channel นี้จะ link ไปที่รหัสที่ตั้งไว้
+                  {phase1
+                    ? 'ตั้ง prefix และรูปแบบเลขรัน doc_no ของช่องทางนี้ ส่วนผู้ขาย คลัง พื้นที่เก็บ และภาษีจะอยู่ใน dialog ก่อนส่ง SML'
+                    : 'เลือกรหัสลูกค้า (AR-xxx) หรือผู้ขาย (V-xxx) จาก SML — ทุกบิลที่มาจาก channel นี้จะ link ไปที่รหัสที่ตั้งไว้'}
                 </p>
               </div>
             </div>
-            <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
-              <b>⚠️ ถ้าตั้งไม่ครบ:</b> บิลที่ retry/auto-confirm จะ <b>fail</b>{' '}
-              ทันทีพร้อม error "ยังไม่ได้ตั้งค่าลูกค้า default" — ใช้ปุ่ม "ตั้งค่าอัตโนมัติ"
-              ให้ระบบ pair LINE/Email/Shopee กับ AR00001-04 ใน SML เป็น default แรก
-              แล้วค่อย edit แต่ละแถวต่อ
-            </p>
+            {phase1 ? (
+              <p className="rounded-md bg-info/10 px-3 py-2 text-xs text-info">
+                หน้าเส้นทางเอกสาร SML เก็บเฉพาะปลายทาง SML, doc_format_code และ doc_no.
+                ตอนส่งบิลจริงระบบจะใช้ค่าที่สัมพันธ์กับประเภทบิล และเปิด dialog ให้กรอกค่าที่ต้องเลือกเฉพาะบิลนั้น.
+              </p>
+            ) : (
+              <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
+                <b>⚠️ ถ้าตั้งไม่ครบ:</b> บิลที่ retry/auto-confirm จะ <b>fail</b>{' '}
+                ทันทีพร้อม error "ยังไม่ได้ตั้งค่าลูกค้า default" — ใช้ปุ่ม "ตั้งค่าอัตโนมัติ"
+                ให้ระบบ pair LINE/Email/Shopee กับ AR00001-04 ใน SML เป็น default แรก
+                แล้วค่อย edit แต่ละแถวต่อ
+              </p>
+            )}
           </CardContent>
         </CollapsibleContent>
       </Collapsible>
@@ -148,11 +203,12 @@ export default function ChannelDefaults() {
   // Merge DB rows with the static slot list so unset channels show up too
   // (instead of "no data" — we need to nudge admin to set them).
   const tableRows = useMemo(() => {
+    const slots = PHASE < 2 ? PHASE1_CHANNEL_SLOTS : CHANNEL_SLOTS
     const byKey = new Map<string, ChannelDefaultRow>()
     for (const r of rows) {
       byKey.set(`${r.channel}/${r.bill_type}`, r)
     }
-    return CHANNEL_SLOTS.map((slot) => {
+    return slots.map((slot) => {
       const existing = byKey.get(`${slot.channel}/${slot.bill_type}`)
       if (existing) return existing
       return {
@@ -167,6 +223,10 @@ export default function ChannelDefaults() {
         endpoint: '',
         doc_prefix: '',
         doc_running_format: '',
+        branch_code: '',
+        sale_code: '',
+        unit_code: '',
+        doc_time: '',
         wh_code: '',
         shelf_code: '',
         vat_type: -1,
@@ -175,7 +235,13 @@ export default function ChannelDefaults() {
     })
   }, [rows])
 
-  const unsetCount = tableRows.filter((r) => !r.party_code).length
+  const unsetCount = tableRows.filter((r) => {
+    if (PHASE < 2) {
+      const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
+      return !r.endpoint || (ep.takesDocFormat && !r.doc_format_code) || !r.doc_prefix || !r.doc_running_format
+    }
+    return !r.party_code
+  }).length
 
   const handleQuickSetup = async () => {
     setQuickRunning(true)
@@ -224,8 +290,14 @@ export default function ChannelDefaults() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="ลูกค้า / ผู้ขายต่อช่องทาง"
-        description="กำหนดว่าแต่ละช่องทางจะส่งบิลเข้า API ของ SML ตัวไหน + บันทึกไปที่ลูกค้า (หรือผู้ขาย) รหัสไหน"
+        title="เส้นทางเอกสาร SML"
+        description={
+          PHASE < 2
+            ? ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
+              ? 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee และบิลขาย Shopee Excel'
+              : 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee'
+            : 'กำหนดว่าแต่ละช่องทางจะส่งบิลเข้าเมนูไหนใน SML พร้อมคู่ค้าและรูปแบบเลขเอกสาร'
+        }
         actions={
           <Button
             variant="outline"
@@ -241,7 +313,7 @@ export default function ChannelDefaults() {
 
       <HelpBanner />
 
-      {unsetCount > 0 && (
+      {PHASE >= 2 && unsetCount > 0 && (
         <Card className="border-warning/40 bg-warning/5">
           <CardContent className="flex flex-wrap items-center gap-3 px-4 py-3">
             <Sparkles className="h-5 w-5 shrink-0 text-warning" />
@@ -276,7 +348,7 @@ export default function ChannelDefaults() {
             header: 'ช่องทาง',
             cell: (r) => (
               <span className="font-medium">
-                {CHANNEL_LABELS[r.channel as ChannelKey] ?? r.channel}
+                {displayChannelLabel(r)}
               </span>
             ),
           },
@@ -297,10 +369,10 @@ export default function ChannelDefaults() {
               </Badge>
             ),
           },
-          {
+          ...(PHASE >= 2 ? [{
             key: 'party',
             header: 'ลูกค้า / ผู้ขาย',
-            cell: (r) =>
+            cell: (r: ChannelDefaultRow) =>
               r.party_code ? (
                 <div className="flex flex-col">
                   <span className="font-mono text-xs font-medium text-foreground">
@@ -314,17 +386,25 @@ export default function ChannelDefaults() {
                   ยังไม่ตั้งค่า
                 </span>
               ),
-          },
+          }] : []),
           {
             key: 'endpoint',
             header: 'ส่งเข้า SML',
             cell: (r) => {
               const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
-              const overridden = !!r.endpoint
+              const destination = destinationFor(
+                r.channel as ChannelKey,
+                r.bill_type,
+                r.endpoint ?? '',
+                r.doc_format_code ?? '',
+              )
+              const overridden = PHASE >= 2 && !!r.endpoint
               return (
                 <div className="flex flex-col">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium text-foreground">{ep.label}</span>
+                    <span className="text-xs font-medium text-foreground">
+                      {destination?.label ?? ep.label}
+                    </span>
                     {overridden && (
                       <span className="rounded bg-info/10 px-1 py-0.5 text-[9px] font-medium uppercase text-info">
                         ตั้งเอง
@@ -339,8 +419,21 @@ export default function ChannelDefaults() {
             },
           },
           {
+            key: 'work_menu',
+            header: 'เมนูงาน',
+            cell: (r) => {
+              const menu = workMenuFor(r)
+              if (!menu) return <span className="text-xs text-muted-foreground">—</span>
+              return (
+                <Link to={menu.to} className="text-xs font-medium text-primary hover:underline">
+                  {menu.label}
+                </Link>
+              )
+            },
+          },
+          {
             key: 'doc_format',
-            header: 'doc format',
+            header: 'รหัสเอกสาร',
             cell: (r) => {
               const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
               if (!ep.takesDocFormat) {
@@ -383,12 +476,12 @@ export default function ChannelDefaults() {
                     setEditing(r)
                     setEditOpen(true)
                   }}
-                  title="แก้ไข endpoint, ลูกค้า, doc format, prefix และเลขรัน"
+                  title={PHASE < 2 ? 'แก้ไขปลายทาง SML, doc format, prefix และเลขรัน' : 'แก้ไข endpoint, ลูกค้า, doc format, prefix และเลขรัน'}
                 >
                   <Pencil className="h-3.5 w-3.5" />
-                  {r.party_code ? 'แก้ไข' : 'ตั้งค่า'}
+                  {PHASE < 2 ? 'ตั้งค่า' : r.party_code ? 'แก้ไข' : 'ตั้งค่า'}
                 </Button>
-                {r.party_code && (
+                {PHASE >= 2 && r.party_code && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -433,7 +526,7 @@ export default function ChannelDefaults() {
         title="ลบการตั้งค่า"
         description={
           deleting
-            ? `ลบการตั้งค่าของ ${CHANNEL_LABELS[deleting.channel as ChannelKey] ?? deleting.channel} (${
+            ? `ลบการตั้งค่าของ ${displayChannelLabel(deleting)} (${
                 deleting.bill_type === 'purchase' ? 'บิลซื้อ' : 'บิลขาย'
               })?`
             : ''

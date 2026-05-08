@@ -7,6 +7,10 @@ WORKDIR /app
 # Pass it via docker-compose build args (see docker-compose.yml args section).
 ARG VITE_PHASE=99
 ENV VITE_PHASE=${VITE_PHASE}
+ARG VITE_ENABLE_SALES_ORDERS=true
+ENV VITE_ENABLE_SALES_ORDERS=${VITE_ENABLE_SALES_ORDERS}
+ARG VITE_ENABLE_SHOPEE_EXCEL=true
+ENV VITE_ENABLE_SHOPEE_EXCEL=${VITE_ENABLE_SHOPEE_EXCEL}
 
 COPY package.json ./
 RUN npm install --legacy-peer-deps

@@ -1,6 +1,6 @@
 # BillFlow
 
-ระบบช่วยพนักงานลดเวลาคีย์บิลจาก **วันละ 100+ บิล** ลงเหลือ **เกือบ 0**  
+ระบบช่วยพนักงานลดเวลาคีย์บิลจาก **วันละ 100+ บิล** ลงเหลือ **เกือบ 0**
 โดยใช้ AI extract ข้อมูลจากหลาย channel แล้วส่งเข้า ERP (SML) โดยอัตโนมัติ
 
 ---
@@ -35,9 +35,9 @@
 
 | Input Channel | รายละเอียด | ประเภทบิล | Phase | สถานะ |
 |---|---|---|---|---|
-| LINE OA | รูปภาพ, PDF, text, voice | บิลขาย | Phase 3 | text ✅ / รูป+PDF+voice deployed ยังไม่ test |
-| Email IMAP | attachment PDF/Excel/รูป | บิลขาย | Phase 5 | deployed, กำลัง test |
-| Shopee Excel | Export จาก Shopee Seller Center | บิลขาย | Phase 4a | ✅ deployed (รอ SML 248 เปิด) |
+| LINE OA | human chat inbox: text/image/file/audio → `/messages` | บิลขาย | Phase 3 + session 13+ | ✅ chat 2 ทาง + เปิดบิลจาก chat |
+| Email IMAP | multi-account attachment/body pipeline | บิลขาย/ซื้อตาม routing | Phase 5 + session 6+ | ✅ deployed |
+| Shopee Excel | Export จาก Shopee Seller Center | บิลขาย | Phase 4a | ✅ deployed; SML send via Retry route |
 | Lazada Excel | Export จาก Lazada | บิลขาย + บิลซื้อ | Phase 4b | รอไฟล์จากลูกค้า |
 
 
@@ -51,7 +51,7 @@
 Backend:   Go 1.24  (Gin framework)
 Frontend:  React + Vite + TypeScript
 Database:  PostgreSQL 16
-AI:        OpenRouter API (google/gemini-2.5-flash primary, gemini-flash-1.5 fallback)
+AI:        OpenRouter API (free model first; fallback google/gemini-2.5-flash-lite)
 LINE:      line-bot-sdk-go v8 (official)
 Email:     IMAP polling (go-imap/v2)
 Excel:     excelize v2.10.1
@@ -66,7 +66,8 @@ Deploy:    Docker Compose + Cloudflare Tunnel
 OS:      Ubuntu 24.04.4 LTS
 Server:  192.168.2.109  (user: bosscatdog)
 Docker:  29.3.0
-SML API: http://192.168.2.213:3248
+SML #1:   http://192.168.2.213:3248  (JSON-RPC sale_reserve)
+SML #2:   http://192.168.2.248:8080  (REST saleorder/saleinvoice/purchaseorder/product)
 ```
 
 **Ports ที่ BillFlow ใช้ (ไม่ชนกับ project อื่นบน server)**
@@ -77,7 +78,14 @@ SML API: http://192.168.2.213:3248
 | billflow-frontend | 3010 |
 | billflow-postgres | 5438 |
 
-**Projects อื่นบน server ที่ห้ามกระทบ:** openclaw-admin (3000/5432), tcc (8080/5433), ledgioai (3004/5436), centrix (3002/5434)
+**Projects อื่นบน server ที่ห้ามกระทบ:** openclaw-admin (3000/5432), tcc (8080/5433/9092/8123/9000/6382), ledgioai (3004/5436/6381), centrix (3002/5001/5434/6380)
+
+Server deploy folder: `/home/bosscatdog/billflow` (deployed copy, not a git checkout). See [docs/current-state.md](docs/current-state.md).
+
+Phase 1 customer-test docs:
+
+- [docs/phase1-guide.md](docs/phase1-guide.md) — คู่มือใช้งานบิลซื้อ Shopee ล่าสุด
+- [docs/phase1-test-checklist.md](docs/phase1-test-checklist.md) — checklist ก่อน demo/customer test
 
 ---
 
@@ -128,7 +136,7 @@ Go Backend (Gin) :8090
          │
     ┌────┴────┐
 PostgreSQL   External APIs
-  :5438        OpenRouter, SML 213 (sale_reserve), SML 248 (saleinvoice/PO/product),
+  :5438        OpenRouter, SML 213 (sale_reserve), SML 248 (saleorder/saleinvoice/PO/product),
                LINE API, Mistral OCR, IMAP
 ```
 
@@ -211,26 +219,26 @@ LINE_ADMIN_USER_ID=
 
 # OpenRouter
 OPENROUTER_API_KEY=sk-or-xxx
-OPENROUTER_MODEL=google/gemini-2.5-flash
-OPENROUTER_FALLBACK_MODEL=google/gemini-flash-1.5
+OPENROUTER_MODEL=google/gemma-4-26b-a4b-it:free
+OPENROUTER_FALLBACK_MODEL=google/gemini-2.5-flash-lite
 OPENROUTER_AUDIO_MODEL=openai/whisper-1
 
 # SML ERP #1 (LINE/Email — JSON-RPC)
 SML_BASE_URL=http://192.168.2.213:3248
 SML_ACCESS_MODE=sales
 
-# SML ERP #2 (Shopee — REST saleinvoice)
+# SML ERP #2 (Shopee — REST saleorder default + saleinvoice legacy)
 SHOPEE_SML_URL=http://192.168.2.248:8080
-SHOPEE_SML_GUID=SMLX
-SHOPEE_SML_PROVIDER=SML1
-SHOPEE_SML_CONFIG_FILE=SMLConfigSML1.xml
-SHOPEE_SML_DATABASE=SMLPLOY
-SHOPEE_SML_DOC_FORMAT=IV
+SHOPEE_SML_GUID=smlx
+SHOPEE_SML_PROVIDER=SMLGOH
+SHOPEE_SML_CONFIG_FILE=SMLConfigSMLGOH.xml
+SHOPEE_SML_DATABASE=SML1_2026
+SHOPEE_SML_DOC_FORMAT=INV
 # cust_code per channel → managed via /settings/channels admin UI (channel_defaults table)
 # SHOPEE_SML_CUST_CODE removed — set party_code in /settings/channels instead
 SHOPEE_SML_SALE_CODE=       # รหัสพนักงานขาย
-SHOPEE_SML_WH_CODE=         # รหัสคลัง (fallback)
-SHOPEE_SML_SHELF_CODE=      # รหัสชั้นวาง (fallback)
+SHOPEE_SML_WH_CODE=WH-01    # รหัสคลัง (fallback)
+SHOPEE_SML_SHELF_CODE=SH-01 # รหัสชั้นวาง (fallback)
 SHOPEE_SML_UNIT_CODE=ถุง     # หน่วย fallback ⚠️ ต้องไม่ว่าง — SML reject unit_code=""
 SHOPEE_SML_VAT_TYPE=0       # 0=แยกนอก, 1=รวมใน, 2=ศูนย์%
 SHOPEE_SML_VAT_RATE=7
@@ -255,19 +263,24 @@ VITE_API_URL=http://localhost:8090
 
 ```sql
 users                       -- auth + roles
-bills                       -- บิลทุกใบ (status + needs_review, sml_order_id)
-bill_items                  -- รายการ + candidates JSONB (catalog matches)
-mappings                    -- raw_name → item_code/unit_code (F1)
-mapping_feedback            -- F1: human corrections
+bills                       -- all bills (status, source, bill_type, sml_order_id, remark)
+bill_items                  -- line items + catalog candidates JSONB
+bill_artifacts              -- original source artifacts on disk + metadata
+mappings / mapping_feedback -- F1 learning
 item_price_history          -- F2: avg/min/max price per item_code
 daily_insights              -- F4: AI-generated daily summaries
 platform_column_mappings    -- Lazada/Shopee column name config
 audit_logs                  -- structured log (source, level, duration_ms, trace_id)
-chat_sessions               -- LINE conversation state (persistent)
 sml_catalog                 -- SML product catalog + 1536-dim embeddings
 channel_defaults            -- per (channel, bill_type): party_code/name + endpoint URL + doc_format + doc_prefix + running format + WH/Shelf/VAT override
 doc_counters                -- atomic per-prefix per-period sequential doc_no generator (avoids SML UI bug)
 imap_accounts               -- multi-account IMAP config (replaces .env IMAP_* singleton)
+line_oa_accounts            -- multi-OA credentials + mark-as-read toggle
+chat_conversations          -- LINE human inbox threads
+chat_messages / chat_media  -- chat messages and downloaded media
+chat_quick_replies          -- canned replies for composer
+chat_notes                  -- internal admin notes
+chat_tags / chat_conversation_tags -- CRM tags
 ```
 
 Key columns in `imap_accounts`: name, host, port, username, password, mailbox, filter_from,
@@ -294,6 +307,9 @@ Migrations (run in order, all idempotent):
 - [017_chat_crm.sql](backend/internal/database/migrations/017_chat_crm.sql) — chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags m2m (CRM lite Phase 4.7+4.8+4.9 — session 14)
 - [018_chat_reply_token.sql](backend/internal/database/migrations/018_chat_reply_token.sql) — chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method (Hybrid Reply+Push API — session 15, makes admin replies free when within reply token window)
 - [019_line_oa_mark_as_read.sql](backend/internal/database/migrations/019_line_oa_mark_as_read.sql) — line_oa_accounts.mark_as_read_enabled per-OA opt-in for LINE Premium "อ่านแล้ว" read receipts (session 17)
+- [020_bill_remark.sql](backend/internal/database/migrations/020_bill_remark.sql) — bills.remark for admin-entered remark passed through to SML purchaseorder
+
+Production DB note: server currently also has legacy `system_settings` and `sml_settings` tables that are not in current local migrations and are not referenced by current code.
 
 ---
 
@@ -312,10 +328,14 @@ Migrations (run in order, all idempotent):
 |---|---|---|---|
 | GET | `/api/bills` | JWT | List bills (filter: status, source, bill_type, date) |
 | GET | `/api/bills/:id` | JWT | Bill detail with items |
-| POST | `/api/bills/:id/retry` | JWT | Manual confirm/send → SML (3-way routed by source/bill_type) |
+| POST | `/api/bills/:id/retry` | JWT | Manual confirm/send → SML (4-way route: sale_reserve/saleorder/saleinvoice/purchaseorder) |
 | PUT | `/api/bills/:id/items/:item_id` | admin/staff | Edit qty/price/item_code (F1 auto-learn on item_code change) |
 | POST | `/api/bills/:id/items` | admin/staff | Add a new line item |
 | DELETE | `/api/bills/:id/items/:item_id` | admin/staff | Remove a line item |
+| GET | `/api/bills/:id/timeline` | JWT | Audit timeline for a bill |
+| GET | `/api/bills/:id/artifacts` | JWT | Source artifacts list |
+| GET | `/api/bills/:id/artifacts/:artifact_id/preview` | JWT | Preview artifact |
+| GET | `/api/bills/:id/artifacts/:artifact_id/download` | JWT | Download artifact |
 
 ### Mappings
 
@@ -335,7 +355,7 @@ Migrations (run in order, all idempotent):
 | POST | `/api/import/upload` | admin/staff | Upload Lazada Excel → preview bills |
 | GET | `/api/settings/shopee-config` | JWT | Shopee SML defaults (pre-fill dialog) |
 | POST | `/api/import/shopee/preview` | admin/staff | Parse Shopee Excel + dedup check |
-| POST | `/api/import/shopee/confirm` | admin/staff | ส่ง orders → SML 248 saleinvoice |
+| POST | `/api/import/shopee/confirm` | admin/staff | Create local Shopee bills; SML send happens via bill Retry route |
 
 ### Logs
 
@@ -350,6 +370,13 @@ Migrations (run in order, all idempotent):
 | GET | `/api/settings/status` | JWT | Connection status |
 | GET | `/api/settings/column-mappings/:platform` | JWT | Column mapping config |
 | PUT | `/api/settings/column-mappings/:platform` | admin | Update column mapping |
+| GET | `/api/settings/line-oa` | admin | List LINE OA accounts |
+| POST | `/api/settings/line-oa` | admin | Create LINE OA account |
+| PUT | `/api/settings/line-oa/:id` | admin | Update LINE OA account |
+| DELETE | `/api/settings/line-oa/:id` | admin | Delete LINE OA account |
+| POST | `/api/settings/line-oa/:id/test` | admin | Test LINE OA token |
+| GET/POST/PUT/DELETE | `/api/admin/quick-replies` | admin/staff, write admin | Quick reply templates |
+| GET/POST/PUT/DELETE | `/api/settings/chat-tags` | admin/staff, write admin | Chat tag master |
 
 ### Settings — Channel Defaults (admin only)
 
@@ -398,43 +425,55 @@ Migrations (run in order, all idempotent):
 | POST | `/api/catalog/embed-all` | admin | Background batch embedding |
 | POST | `/api/catalog/reload-index` | admin | Rebuild in-memory index |
 | POST | `/api/catalog/:code/embed` | admin | Embed single item |
+| POST | `/api/catalog/:code/refresh` | admin | Refresh single item from SML |
+| DELETE | `/api/catalog/:code` | admin | Delete catalog row |
 | POST | `/api/bills/:id/items/:item_id/confirm-match` | admin/staff | Confirm catalog match (needs_review) |
+
+### Chat Inbox + SSE
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/admin/conversations` | admin/staff | List LINE conversations |
+| GET | `/api/admin/conversations/unread-count` | admin/staff | Unread count |
+| GET | `/api/admin/conversations/:lineUserId/messages` | admin/staff | Message thread |
+| POST | `/api/admin/conversations/:lineUserId/messages` | admin/staff | Send text reply |
+| POST | `/api/admin/conversations/:lineUserId/messages/media` | admin/staff | Send media reply |
+| POST | `/api/admin/conversations/:lineUserId/mark-read` | admin/staff | Mark conversation read |
+| PATCH | `/api/admin/conversations/:lineUserId/status` | admin/staff | open/resolved/archived |
+| PATCH | `/api/admin/conversations/:lineUserId/phone` | admin/staff | Save phone |
+| GET/POST/PUT/DELETE | `/api/admin/conversations/:lineUserId/notes` | admin/staff | Internal notes |
+| GET/PUT | `/api/admin/conversations/:lineUserId/tags` | admin/staff | Conversation tags |
+| POST | `/api/admin/conversations/:lineUserId/messages/:messageId/extract` | admin/staff | Extract bill data from media |
+| POST | `/api/admin/conversations/:lineUserId/bills` | admin/staff | Create bill from chat |
+| GET | `/api/admin/conversations/:lineUserId/history` | admin/staff | Customer bill history |
+| POST | `/api/admin/events/token` | JWT | Issue SSE token |
+| GET | `/api/admin/events` | HMAC query token | Server-Sent Events stream |
 
 ### Webhook
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/webhook/line` | LINE Signature | LINE OA events |
+| POST | `/webhook/line/:oaId` | LINE Signature | Multi-OA LINE events |
+| POST | `/webhook/line` | LINE Signature | Legacy single-OA fallback |
+| GET | `/public/media/:mediaID` | HMAC query token | Public media delivery for LINE |
 
 ---
 
 ## 9. Input Channels
 
-### LINE OA — น้องบิล Chatbot (Phase 3)
+### LINE OA — Human Chat Inbox (Phase 3 + session 13+)
 
 ```
-Mode 1 — Conversational Sales (น้องบิล)  ← ✅ TESTED
-────────────────────────────────────────────────────────────
-ลูกค้าพูดคุยใน LINE → LINE webhook → verify signature → async
-  AI วิเคราะห์ intent:
-  - inquiry  → smartSearch SML catalog → แสดง 1-5 รายการ
-  - เลือกรายการ → ถามจำนวน
-  - พิมพ์จำนวน (รับ "3", "10 ถุง", "สิบถุง" ผ่าน AI ParseQty)
-  - view_cart → แสดงตะกร้า
-  - checkout  → ขอชื่อ+เบอร์ → สรุป → รอยืนยัน
-  - ยืนยัน   → ส่ง SML → bill created → แจ้ง LINE
-  Cart edit:
-  - "ลบรายการที่ 2"           → ลบสินค้าชิ้นที่ 2 ออกจากตะกร้า ✅
-  - "แก้จำนวนรายการที่ 1 เป็น 5" → เปลี่ยน qty ✅
+LINE webhook → verify per-OA signature → save conversation/message/media
+  → publish SSE to /messages
+  → admin replies using cached Reply API token first
+  → fallback to Push API when needed
+  → admin can extract media and create a bill from chat
 
-Mode 2 — ส่งรูป/PDF PO โดยตรง  ← code deployed, ยังไม่ test
-────────────────────────────────────────────────────────────
-ลูกค้าส่งรูป/PDF → download LINE Content API → AI extract → SML
-
-Mode 3 — Voice message (F3)  ← code deployed, ยังไม่ test
-────────────────────────────────────────────────────────────
-ลูกค้าส่ง voice → Whisper transcribe → text → Mode 1 pipeline
-confidence ลด 0.1 อัตโนมัติ
+Old chatbot/cart/MCP flow was removed in session 13.
+Webhook URLs:
+  /webhook/line/:oaId  preferred multi-OA route
+  /webhook/line        legacy fallback
 ```
 
 ### Email IMAP (Phase 5 + session 6: multi-account)
@@ -447,7 +486,7 @@ Per-account channel routing:
   subject "ถูกจัดส่งแล้ว" or "ยืนยันการชำระเงิน"
     → ProcessShopeeShippedEmailBody → purchaseorder (SML 248)
   from domain in shopee_domains && channel=shopee
-    → ProcessShopeeEmailBody → saleinvoice (SML 248)
+    → ProcessShopeeEmailBody → create Shopee sale bill; Retry default saleorder (SML 248)
   else → download attachment → AI pipeline → pending/needs_review
 
 Admin manages inboxes at /settings/email (no .env changes required).
@@ -474,7 +513,7 @@ test-connection button, list-folders button.
 
 ## 10. AI Extraction
 
-**Model:** `google/gemini-2.5-flash` (fallback: `google/gemini-flash-1.5`)
+**Model:** `google/gemma-4-26b-a4b-it:free` first (fallback: `google/gemini-2.5-flash-lite`)
 
 **System Prompt Output Format:**
 ```json
@@ -593,7 +632,7 @@ Request body (JSON-RPC 2.0):
 Success: {"success":true,"doc_no":"BS20260422XXXX","message":"create success"}
 ```
 
-**Retry policy:** max 3 ครั้ง, backoff 1s/3s/5s  
+**Retry policy:** max 3 ครั้ง, backoff 1s/3s/5s
 **หลัง fail 3 ครั้ง:** `status='failed'` + LINE admin push notify
 
 ### SML #2 — REST API (Shopee)
@@ -611,7 +650,11 @@ Response (flat — ไม่มี nested):
 ⚠️ ถ้า data=null → ใช้ fallback SHOPEE_SML_UNIT_CODE / WH_CODE / SHELF_CODE จาก .env
 ⚠️ ต้องตั้ง SHOPEE_SML_UNIT_CODE ไว้เสมอ (เช่น "ถุง") เพราะ SML reject unit_code=""
 
-2. Create saleinvoice  ← ✅ CONFIRMED WORKING (Shopee Excel + Shopee email order)
+2. Create saleorder  ← default sale route for Shopee bills
+POST /SMLJavaRESTService/v3/api/saleorder
+Payload uses `items`. BillFlow chooses this route by default for `source=shopee` sale bills unless `channel_defaults.endpoint` explicitly contains `saleinvoice`.
+
+3. Create saleinvoice  ← legacy/explicit endpoint
 POST /SMLJavaRESTService/restapi/saleinvoice
 {
   "doc_no": "",                    ← empty → SML auto-generates BS...
@@ -627,7 +670,7 @@ POST /SMLJavaRESTService/restapi/saleinvoice
   }]
 }
 
-3. Create purchaseorder  ← ✅ CONFIRMED WORKING (Shopee shipped emails)
+4. Create purchaseorder  ← ✅ CONFIRMED WORKING (Shopee shipped emails)
 POST /SMLJavaRESTService/v3/api/purchaseorder
 Same payload shape as saleinvoice, except:
   - doc_no MUST be non-empty (v3 endpoint does NOT auto-generate; null
@@ -637,7 +680,7 @@ Same payload shape as saleinvoice, except:
   - "buy_type" instead of "sale_type"
 Client: backend/internal/services/sml/purchaseorder_client.go
 
-4. Create product  ← ✅ CONFIRMED WORKING (used by MapItemModal)
+5. Create product  ← ✅ CONFIRMED WORKING (used by MapItemModal)
 POST /SMLJavaRESTService/v3/api/product
 {
   "code": "TEST-001", "name": "ทดสอบ",
@@ -660,7 +703,7 @@ doc_format=INV  cust_code=AR00004  wh_code=WH-01  shelf_code=SH-01
 
 **SKU จริงใน SML 248:** CON-xxxxx (ถุง), STEEL-xxxxx (เส้น), PLUMB-xxxxx (ท่อน), ROOF-xxxxx (แผ่น)
 
-**ดูรายละเอียด Shopee import:** [docs/shopee-import.md](docs/shopee-import.md)  
+**ดูรายละเอียด Shopee import:** [docs/shopee-import.md](docs/shopee-import.md)
 ⚠️ SML 248 (192.168.2.248) ต้องเปิดเครื่องก่อนใช้งาน
 
 ---
@@ -672,8 +715,8 @@ doc_format=INV  cust_code=AR00004  wh_code=WH-01  shelf_code=SH-01
 ```
 URL: /import/shopee
 
-1. กด "เลือกไฟล์ Shopee" → ระบบ GET /api/settings/shopee-config
-2. Config dialog popup (pre-filled จาก env) → ผู้ใช้ยืนยัน
+1. กด "เลือกไฟล์ Shopee" → ระบบ GET /api/settings/shopee-config + ตรวจ channel_defaults
+2. ถ้า Shopee sale config ยังไม่พร้อม UI จะ block file picker และพาไป `/settings/channels`
 3. เปิด file picker → เลือก .xlsx จาก Shopee Seller Center
 4. POST /api/import/shopee/preview
    - parse Excel (columns ภาษาไทย hardcoded)
@@ -683,9 +726,9 @@ URL: /import/shopee
 6. เลือก orders (non-duplicate pre-checked) → ยืนยัน
 7. POST /api/import/shopee/confirm
    - pre-fetch product info จาก SML 248
-   - POST saleinvoice ต่อ order (retry max 3)
-   - save bill ลง DB
-8. แสดง results: สำเร็จ X / ล้มเหลว Y
+   - save bill + items ลง DB
+   - SML send happens later from BillDetail Retry
+8. Admin เปิดบิล → ตรวจ route preview → Retry ส่ง default saleorder
 ```
 
 **Shopee column names (hardcoded — ไฟล์ Shopee Seller Center คงที่):**
@@ -704,7 +747,7 @@ URL: /import/shopee
 
 ### Lazada Excel Import (Phase 4b) ⏳ รอไฟล์จากลูกค้า
 
-Column mapping เก็บใน DB → admin แก้ได้จาก `/settings`  
+Column mapping เก็บใน DB → admin แก้ได้จาก `/settings`
 (ไม่ hardcode เพราะ Lazada format อาจต่างกันตาม seller)
 
 ---
@@ -795,8 +838,8 @@ sudo systemctl start cloudflared
 | 0 | Server prep (Go install, disk cleanup, cloudflared install) | ✅ Done |
 | 1 | Foundation: Docker, DB migrations, JWT auth, Login UI | ✅ Done |
 | 2 | Core AI pipeline: OpenRouter, MapperService (F1), AnomalyService (F2), SML client, WorkerPool | ✅ Done |
-| 3 | LINE integration: chatbot text ✅, cart edit ✅, image/PDF/voice (deployed, untested in LINE) | ✅ Partial |
-| 4a | Shopee import: Excel → SML 248 saleinvoice (verified end-to-end) | ✅ Done |
+| 3 | LINE integration: human inbox, multi-OA, Reply/Push, media, quick replies, notes/tags, create bill from chat | ✅ Done |
+| 4a | Shopee import: Excel → local bills → Retry default SML 248 saleorder | ✅ Done |
 | 4b | Lazada import: Excel parser + Web UI | ⏳ รอไฟล์จากลูกค้า |
 | 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped → PO) | ✅ Done |
 | 5+ | Manual-confirm flow — auto-send removed; user confirms in BillDetail UI | ✅ Done |
@@ -804,14 +847,19 @@ sudo systemctl start cloudflared
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
-### Latest Test Results (2026-04-27)
+### Latest Production Check (2026-05-06)
 
 ```
-LINE OA text flow (chatbot น้องบิล) — last verified 2026-04-23:
-✅ ค้นหาสินค้า → เลือก → ใส่จำนวน → checkout → SML
-✅ bill created: BS20260423101501-UELM (4,603.19 บาท)
-✅ SML fail → LINE admin notify
-✅ retry handler: re-map + re-send SML
+Server folder: /home/bosscatdog/billflow
+Containers:
+  billflow-backend   Up, :8090
+  billflow-frontend  Up, :3010
+  billflow-postgres  Up healthy, :5438
+Health:
+  {"database":"ok","env":"production","status":"ok"}
+DB:
+  migrations through 020 present in code; production also has legacy
+  system_settings/sml_settings tables not referenced by current code.
 
 Email IMAP pipeline (2026-04-24):
 ✅ SASL PLAIN auth (Gmail App Password)
@@ -850,11 +898,9 @@ Backup cron (2026-04-27):
 ✅ pg_dump from inside backend container (postgresql-client added to Dockerfile)
 ✅ 20 MB .sql.gz file produced + accessible on host volume mount
 
-ยังไม่ test:
-⬜ LINE OA: รูป / PDF / voice (code deployed, never sent through LINE)
+ยังไม่ test / ยังต้องรอข้อมูลจริง:
 ⬜ Lazada Excel import (Phase 4b — รอไฟล์ลูกค้า)
-⬜ Shopee Excel end-to-end with real SKUs (most paths deploy-verified
-   via the email flow, which uses the same SML 248 saleinvoice client)
+⬜ Shopee Excel end-to-end with real customer file/SKU set
 ```
 
 ---
@@ -863,7 +909,7 @@ Backup cron (2026-04-27):
 
 ### ทำไมต้องใช้ App Password แทน password จริง
 
-Google บังคับใช้ **2-Step Verification** สำหรับ IMAP โดยตรง → ต้องสร้าง App Password แยกต่างหาก  
+Google บังคับใช้ **2-Step Verification** สำหรับ IMAP โดยตรง → ต้องสร้าง App Password แยกต่างหาก
 ไม่ต้องผ่าน OAuth2 consent screen — เหมาะสำหรับ server-side automation
 
 ---
@@ -951,10 +997,11 @@ docker logs billflow-backend --tail=20 2>&1 | grep coordinator
 
 | ไฟล์ | เนื้อหา |
 |---|---|
+| [docs/current-state.md](docs/current-state.md) | snapshot จาก code + server + production DB |
 | [docs/overview.md](docs/overview.md) | ภาพรวมการทำงานทั้งระบบ (flow diagram + component map) |
-| [docs/line-oa.md](docs/line-oa.md) | LINE OA workflow: chatbot, cart edit, รูป/PDF, voice |
+| [docs/line-oa.md](docs/line-oa.md) | LINE OA human inbox, multi-OA, Reply/Push, media |
 | [docs/email.md](docs/email.md) | Email IMAP workflow: poll, dedup, OCR, extract, SML |
-| [docs/shopee-import.md](docs/shopee-import.md) | Shopee Excel import → SML 248 saleinvoice |
+| [docs/shopee-import.md](docs/shopee-import.md) | Shopee Excel import → local bills → SML 248 Retry route |
 
 ---
 

@@ -22,10 +22,10 @@ import (
 type BillHandler struct {
 	billRepo        *repository.BillRepo
 	mapperSvc       *mapper.Service
-	smlClient       *sml.Client                    // SML 213 JSON-RPC (sale_reserve)
-	invoiceClient   *sml.InvoiceClient             // SML 248 saleinvoice REST (legacy)
-	saleOrderClient *sml.SaleOrderClient           // SML 248 saleorder REST (default)
-	poClient        *sml.PurchaseOrderClient       // SML 248 purchaseorder REST
+	smlClient       *sml.Client              // SML 213 JSON-RPC (sale_reserve)
+	invoiceClient   *sml.InvoiceClient       // SML 248 saleinvoice REST (legacy)
+	saleOrderClient *sml.SaleOrderClient     // SML 248 saleorder REST (default)
+	poClient        *sml.PurchaseOrderClient // SML 248 purchaseorder REST
 	cfg             *config.Config
 	lineSvc         *lineservice.Service
 	auditRepo       *repository.AuditLogRepo
@@ -33,6 +33,7 @@ type BillHandler struct {
 	channelDefaults *repository.ChannelDefaultRepo // per-(channel,bill_type) party config
 	docCounters     *repository.DocCounterRepo     // atomic doc_no generator
 	artifactSvc     *artifact.Service              // source-artifact storage (PDF/HTML/etc.)
+	warehouseCache  *sml.WarehouseCache            // optional validation for wh/shelf chosen in dialog
 	log             *zap.Logger
 }
 
@@ -50,6 +51,7 @@ func NewBillHandler(
 	channelDefaults *repository.ChannelDefaultRepo,
 	docCounters *repository.DocCounterRepo,
 	artifactSvc *artifact.Service,
+	warehouseCache *sml.WarehouseCache,
 	log *zap.Logger,
 ) *BillHandler {
 	return &BillHandler{
@@ -66,6 +68,7 @@ func NewBillHandler(
 		channelDefaults: channelDefaults,
 		docCounters:     docCounters,
 		artifactSvc:     artifactSvc,
+		warehouseCache:  warehouseCache,
 		log:             log,
 	}
 }
@@ -94,6 +97,43 @@ func (h *BillHandler) resolveDocNo(bill *models.Bill, def *models.ChannelDefault
 	return h.docCounters.GenerateDocNo(prefix, format, time.Now())
 }
 
+func (h *BillHandler) resolveRetryDocNo(req RetryRequest, bill *models.Bill, def *models.ChannelDefault, fallbackPrefix string) (string, error) {
+	if docNo := strings.TrimSpace(req.DocNo); docNo != "" {
+		return docNo, nil
+	}
+	return h.resolveDocNo(bill, def, fallbackPrefix)
+}
+
+func (h *BillHandler) peekDocNo(def *models.ChannelDefault, fallbackPrefix string) (string, error) {
+	if h.docCounters == nil {
+		return "", nil
+	}
+	prefix := fallbackPrefix
+	format := "YYMM####"
+	if def != nil {
+		if def.DocPrefix != "" {
+			prefix = def.DocPrefix
+		}
+		if def.DocRunningFormat != "" {
+			format = def.DocRunningFormat
+		}
+	}
+	return h.docCounters.PeekDocNo(prefix, format, time.Now())
+}
+
+func fallbackDocPrefix(route string) string {
+	switch route {
+	case "purchaseorder":
+		return "BF-PO"
+	case "saleinvoice":
+		return "BF-INV"
+	case "saleorder":
+		return "BF-SO"
+	default:
+		return "BF"
+	}
+}
+
 // resolveEndpoint figures out which SML client to use for a channel.
 //
 // The admin-supplied `endpoint` is now a free-form URL/path (e.g.
@@ -103,16 +143,26 @@ func (h *BillHandler) resolveDocNo(bill *models.Bill, def *models.ChannelDefault
 // client posts to the admin's chosen path.
 //
 // Returns:
-//   kind        — "saleorder" | "saleinvoice" | "purchaseorder" | "sale_reserve"
-//   urlOverride — the URL to send to (empty = use client's default)
+//
+//	kind        — "saleorder" | "saleinvoice" | "purchaseorder" | "sale_reserve"
+//	urlOverride — the URL to send to (empty = use client's default)
 func resolveEndpoint(def *models.ChannelDefault, source, billType string) (kind, urlOverride string) {
 	raw := ""
 	if def != nil {
 		raw = def.Endpoint
 	}
 	rawLower := strings.ToLower(raw)
+	rawTrimmed := strings.Trim(rawLower, " /")
 
 	switch {
+	case rawTrimmed == "purchaseorder":
+		return "purchaseorder", ""
+	case rawTrimmed == "saleinvoice":
+		return "saleinvoice", ""
+	case rawTrimmed == "saleorder":
+		return "saleorder", ""
+	case rawTrimmed == "sale_reserve":
+		return "sale_reserve", ""
 	case strings.Contains(rawLower, "purchaseorder"):
 		return "purchaseorder", raw
 	case strings.Contains(rawLower, "saleinvoice"):
@@ -208,12 +258,22 @@ func (h *BillHandler) Get(c *gin.Context) {
 			if urlOverride != "" {
 				preview["endpoint"] = urlOverride
 			}
+			if bill.SMLDocNo != nil && *bill.SMLDocNo != "" {
+				preview["doc_no"] = *bill.SMLDocNo
+			} else if docNo, err := h.peekDocNo(def, fallbackDocPrefix(route)); err == nil && docNo != "" {
+				preview["doc_no"] = docNo
+			}
 			if def.DocPrefix != "" || def.DocRunningFormat != "" {
 				preview["doc_format"] = def.DocPrefix + def.DocRunningFormat
 			}
 			if def.DocFormatCode != "" {
 				preview["doc_format_code"] = def.DocFormatCode
 			}
+			if bill.BillType == "purchase" && def.PartyCode != "" {
+				preview["party_code"] = def.PartyCode
+				preview["party_name"] = def.PartyName
+			}
+			preview["sml_defaults"] = h.previewSMLDefaults(def, bill.BillType)
 		} else {
 			// No channel_default row — admin needs to set one up. Surface
 			// this as a preview-level warning so the UI can render a hint.
@@ -276,12 +336,23 @@ func (h *BillHandler) Timeline(c *gin.Context) {
 //	line / email / lazada / manual (sale)  → smlClient.CreateSaleReserve  (SML 213 JSON-RPC)
 //	shopee / shopee_email           (sale) → saleOrderClient.CreateSaleOrder (SML 248 saleorder — ใบสั่งขาย)
 //	shopee_shipped              (purchase) → poClient.CreatePurchaseOrder (SML 248 purchaseorder)
+//
 // RetryRequest is the optional POST body for POST /api/bills/:id/retry.
 // For purchase bills: party_code overrides channel_defaults.party_code and
 // remark is stored on the bill + forwarded to SML.
 type RetryRequest struct {
-	PartyCode string `json:"party_code"`
-	Remark    string `json:"remark"`
+	PartyCode  string   `json:"party_code"`
+	PartyName  string   `json:"party_name"`
+	DocNo      string   `json:"doc_no"`
+	Remark     string   `json:"remark"`
+	BranchCode string   `json:"branch_code"`
+	SaleCode   string   `json:"sale_code"`
+	UnitCode   string   `json:"unit_code"`
+	DocTime    string   `json:"doc_time"`
+	WHCode     string   `json:"wh_code"`
+	ShelfCode  string   `json:"shelf_code"`
+	VATType    *int     `json:"vat_type"`
+	VATRate    *float64 `json:"vat_rate"`
 }
 
 func (h *BillHandler) Retry(c *gin.Context) {
@@ -303,16 +374,38 @@ func (h *BillHandler) Retry(c *gin.Context) {
 	var req RetryRequest
 	_ = c.ShouldBindJSON(&req)
 
-	// Verify all items mapped — required regardless of route
+	// Look up channel default once; pass to retry handlers + use to decide
+	// which SML endpoint to dispatch to. The URL override (if admin typed one)
+	// is threaded down to the client via context.
+	def, _ := h.channelDefaults.Get(bill.Source, bill.BillType)
+	kind, urlOverride := resolveEndpoint(def, bill.Source, bill.BillType)
+	c.Set("sml_url_override", urlOverride)
+
+	// Verify all items mapped. For REST SML documents, the item_code must also
+	// exist in the local SML catalog; Shopee SKU is only a source hint, not
+	// proof that the SML product exists.
 	allMapped := true
+	missingCatalogCode := ""
 	for _, item := range bill.Items {
-		if item.ItemCode == nil || *item.ItemCode == "" {
+		if !item.Mapped || item.ItemCode == nil || strings.TrimSpace(*item.ItemCode) == "" {
 			allMapped = false
 			break
+		}
+		if kind != "sale_reserve" && h.catalogRepo != nil {
+			code := strings.TrimSpace(*item.ItemCode)
+			if cat, _ := h.catalogRepo.GetOne(code); cat == nil {
+				missingCatalogCode = code
+				allMapped = false
+				break
+			}
 		}
 	}
 	if !allMapped {
 		_ = h.billRepo.UpdateStatus(id, "needs_review", nil, nil, nil)
+		if missingCatalogCode != "" {
+			c.JSON(http.StatusAccepted, gin.H{"message": fmt.Sprintf("ไม่พบรหัสสินค้า %s ในสินค้า SML — bill set to needs_review", missingCatalogCode)})
+			return
+		}
 		c.JSON(http.StatusAccepted, gin.H{"message": "some items still unmapped — bill set to needs_review"})
 		return
 	}
@@ -326,20 +419,13 @@ func (h *BillHandler) Retry(c *gin.Context) {
 		}
 	}
 
-	// Look up channel default once; pass to retry handlers + use to decide
-	// which SML endpoint to dispatch to. The URL override (if admin typed one)
-	// is threaded down to the client via context.
-	def, _ := h.channelDefaults.Get(bill.Source, bill.BillType)
-	kind, urlOverride := resolveEndpoint(def, bill.Source, bill.BillType)
-	c.Set("sml_url_override", urlOverride)
-
 	switch kind {
 	case "purchaseorder":
-		h.retryPurchaseOrder(c, bill, req.PartyCode, req.Remark)
+		h.retryPurchaseOrder(c, bill, req)
 	case "saleinvoice":
-		h.retrySaleInvoice(c, bill)
+		h.retrySaleInvoice(c, bill, req)
 	case "saleorder":
-		h.retrySaleOrder(c, bill)
+		h.retrySaleOrder(c, bill, req)
 	default:
 		h.retrySaleReserve(c, bill)
 	}
@@ -429,9 +515,9 @@ func (h *BillHandler) retrySaleReserve(c *gin.Context, bill *models.Bill) {
 
 // ─── Route 2: SML 248 saleorder REST (shopee, shopee_email) ──────────────────
 // ใบสั่งขาย — landed in /v3/api/saleorder, the sale-side counterpart to
-// purchaseorder. Replaces the legacy /restapi/saleinvoice path so Shopee
+// purchaseorder. Replaces the old saleinvoice default path so Shopee
 // orders show up under "ใบสั่งขาย" in SML instead of "ใบกำกับภาษี".
-func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill) {
+func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req RetryRequest) {
 	id := bill.ID
 	if h.saleOrderClient == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "saleorder client not configured"})
@@ -466,14 +552,33 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill) {
 		return
 	}
 	cfg := h.shopeeSaleOrderConfig()
-	cfg.CustCode = def.PartyCode
+	if req.PartyCode != "" {
+		cfg.CustCode = req.PartyCode
+	}
+	if cfg.CustCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาเลือกลูกค้าก่อนส่ง SML"})
+		return
+	}
 	if def.DocFormatCode != "" {
 		cfg.DocFormat = def.DocFormatCode
 	}
-	applyChannelOverrides(def, &cfg.WHCode, &cfg.ShelfCode, &cfg.VATType, &cfg.VATRate)
+	if err := h.validateSendDialogOverrides(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cfg.WHCode = ""
+	cfg.ShelfCode = ""
+	cfg.DocTime = ""
+	applyRetryDocumentOverrides(req, &cfg.BranchCode, &cfg.SaleCode, &cfg.UnitCode, &cfg.DocTime)
+	applyRetryOverrides(req, &cfg.WHCode, &cfg.ShelfCode, &cfg.VATType, &cfg.VATRate)
 
 	docDate := docDateFromBill(bill)
-	reqDocNo, err := h.resolveDocNo(bill, def, "BF-SO")
+	docRef := docRefFromBill(bill)
+	docRefDate := ""
+	if docRef != "" {
+		docRefDate = docDate
+	}
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-SO")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate doc_no: " + err.Error()})
 		return
@@ -481,7 +586,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill) {
 	// Stamp doc_no on the bill BEFORE calling SML so a re-retry uses the same
 	// number (no counter inflation, no duplicate docs in SML on transient fail).
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildSaleOrderPayload(reqDocNo, docDate, items, cfg)
+	payload := sml.BuildSaleOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -517,7 +622,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill) {
 // ─── Route 2b: SML 248 saleinvoice REST (legacy ใบกำกับภาษี) ─────────────────
 // Kept for admins who explicitly select endpoint="saleinvoice" on a channel
 // (e.g. they need invoices instead of sale orders for tax purposes).
-func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
+func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req RetryRequest) {
 	id := bill.ID
 	if h.invoiceClient == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "saleinvoice client not configured"})
@@ -553,7 +658,6 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 		ConfigFile: h.cfg.ShopeeSMLConfigFile,
 		Database:   h.cfg.ShopeeSMLDatabase,
 		DocFormat:  h.cfg.ShopeeSMLDocFormat,
-		CustCode:   def.PartyCode,
 		SaleCode:   h.cfg.ShopeeSMLSaleCode,
 		BranchCode: h.cfg.ShopeeSMLBranchCode,
 		WHCode:     h.cfg.ShopeeSMLWHCode,
@@ -563,10 +667,25 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 		VATRate:    h.cfg.ShopeeSMLVATRate,
 		DocTime:    h.cfg.ShopeeSMLDocTime,
 	}
+	if req.PartyCode != "" {
+		cfg.CustCode = req.PartyCode
+	}
+	if cfg.CustCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาเลือกลูกค้าก่อนส่ง SML"})
+		return
+	}
 	if def.DocFormatCode != "" {
 		cfg.DocFormat = def.DocFormatCode
 	}
-	applyChannelOverrides(def, &cfg.WHCode, &cfg.ShelfCode, &cfg.VATType, &cfg.VATRate)
+	if err := h.validateSendDialogOverrides(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cfg.WHCode = ""
+	cfg.ShelfCode = ""
+	cfg.DocTime = ""
+	applyRetryDocumentOverrides(req, &cfg.BranchCode, &cfg.SaleCode, &cfg.UnitCode, &cfg.DocTime)
+	applyRetryOverrides(req, &cfg.WHCode, &cfg.ShelfCode, &cfg.VATType, &cfg.VATRate)
 	productCache := map[string]*sml.ProductInfo{}
 	for _, it := range bill.Items {
 		if it.ItemCode == nil || it.UnitCode == nil {
@@ -579,13 +698,18 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 	}
 
 	docDate := docDateFromBill(bill)
-	reqDocNo, err := h.resolveDocNo(bill, def, "BF-INV")
+	docRef := docRefFromBill(bill)
+	docRefDate := ""
+	if docRef != "" {
+		docRefDate = docDate
+	}
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-INV")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate doc_no: " + err.Error()})
 		return
 	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildInvoicePayload(reqDocNo, docDate, items, cfg, productCache)
+	payload := sml.BuildInvoicePayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, productCache, req.Remark)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -617,7 +741,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill) {
 }
 
 // ─── Route 3: SML 248 purchaseorder REST (shopee_shipped) ────────────────────
-func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, partyCodeOverride, remark string) {
+func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req RetryRequest) {
 	id := bill.ID
 	if h.poClient == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "purchaseorder client not configured"})
@@ -652,26 +776,47 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, part
 		return
 	}
 	cfg := h.shopeePurchaseConfig()
-	cfg.CustCode = def.PartyCode
-	if partyCodeOverride != "" {
-		cfg.CustCode = partyCodeOverride
+	if req.PartyCode != "" {
+		cfg.CustCode = req.PartyCode
+	}
+	if req.PartyName != "" {
+		cfg.SupplierName = req.PartyName
+	}
+	if cfg.CustCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาเลือกผู้ขายก่อนส่ง SML"})
+		return
 	}
 	if def.DocFormatCode != "" {
 		cfg.DocFormat = def.DocFormatCode
 	}
-	applyChannelOverrides(def, &cfg.WHCode, &cfg.ShelfCode, &cfg.VATType, &cfg.VATRate)
+	if err := h.validateSendDialogOverrides(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cfg.WHCode = ""
+	cfg.ShelfCode = ""
+	cfg.DocTime = ""
+	cfg.BranchCode = req.BranchCode
+	cfg.SaleCode = req.SaleCode
+	applyRetryDocumentOverrides(req, &cfg.BranchCode, &cfg.SaleCode, &cfg.UnitCode, &cfg.DocTime)
+	applyRetryOverrides(req, &cfg.WHCode, &cfg.ShelfCode, &cfg.VATType, &cfg.VATRate)
 	docDate := docDateFromBill(bill)
-	reqDocNo, err := h.resolveDocNo(bill, def, "BF-PO")
+	docRef := docRefFromBill(bill)
+	docRefDate := ""
+	if docRef != "" {
+		docRefDate = docDate
+	}
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate doc_no: " + err.Error()})
 		return
 	}
 	// Persist remark before SML call so it's available even on failure
-	if remark != "" {
-		_ = h.billRepo.UpdateRemark(id, remark)
+	if req.Remark != "" {
+		_ = h.billRepo.UpdateRemark(id, req.Remark)
 	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, items, cfg, remark)
+	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -721,6 +866,27 @@ func docDateFromBill(bill *models.Bill) string {
 	return time.Now().Format("2006-01-02")
 }
 
+// docRefFromBill returns the upstream Shopee order number for SML doc_ref.
+// Shopee email extraction has used a few key names across iterations, so this
+// accepts the known aliases and keeps the SML reference stable.
+func docRefFromBill(bill *models.Bill) string {
+	if bill == nil || bill.RawData == nil {
+		return ""
+	}
+	var rd map[string]interface{}
+	if err := json.Unmarshal(bill.RawData, &rd); err != nil {
+		return ""
+	}
+	for _, key := range []string{"shopee_order_id", "order_id", "order_no", "doc_ref"} {
+		if v, ok := rd[key].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return strings.TrimLeft(s, "#")
+			}
+		}
+	}
+	return ""
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // shopeeSaleOrderConfig returns the static SML 248 saleorder config without
@@ -763,8 +929,71 @@ func (h *BillHandler) shopeePurchaseConfig() sml.PurchaseOrderConfig {
 	}
 }
 
+func (h *BillHandler) previewSMLDefaults(def *models.ChannelDefault, billType string) gin.H {
+	if billType == "purchase" {
+		cfg := h.shopeePurchaseConfig()
+		if def != nil {
+			if def.DocFormatCode != "" {
+				cfg.DocFormat = def.DocFormatCode
+			}
+		}
+		return gin.H{
+			"branch_code": cfg.BranchCode,
+			"sale_code":   cfg.SaleCode,
+			"wh_code":     cfg.WHCode,
+			"shelf_code":  cfg.ShelfCode,
+			"unit_code":   cfg.UnitCode,
+			"vat_type":    cfg.VATType,
+			"vat_rate":    cfg.VATRate,
+			"doc_time":    cfg.DocTime,
+			"doc_format":  cfg.DocFormat,
+			"database":    cfg.Database,
+			"base_url":    cfg.BaseURL,
+		}
+	}
+	cfg := h.shopeeSaleOrderConfig()
+	if def != nil {
+		if def.DocFormatCode != "" {
+			cfg.DocFormat = def.DocFormatCode
+		}
+	}
+	return gin.H{
+		"branch_code": cfg.BranchCode,
+		"sale_code":   cfg.SaleCode,
+		"wh_code":     cfg.WHCode,
+		"shelf_code":  cfg.ShelfCode,
+		"unit_code":   cfg.UnitCode,
+		"vat_type":    cfg.VATType,
+		"vat_rate":    cfg.VATRate,
+		"doc_time":    cfg.DocTime,
+		"doc_format":  cfg.DocFormat,
+		"database":    cfg.Database,
+		"base_url":    cfg.BaseURL,
+	}
+}
+
+// applyDocumentOverrides overlays per-channel document defaults. Empty means
+// "keep instance/env fallback".
+func applyDocumentOverrides(def *models.ChannelDefault, branch, sale, unit, docTime *string) {
+	if def == nil {
+		return
+	}
+	if def.BranchCode != "" {
+		*branch = def.BranchCode
+	}
+	if def.SaleCode != "" {
+		*sale = def.SaleCode
+	}
+	if def.UnitCode != "" {
+		*unit = def.UnitCode
+	}
+	if def.DocTime != "" {
+		*docTime = def.DocTime
+	}
+}
+
 // applyChannelOverrides overlays the per-channel WH/Shelf/VAT settings onto
-// the env-derived dst values. Sentinel ('' / -1) means "no override — keep env".
+// the env-derived dst values. Sentinel (empty / -1) means "no override — keep env".
 // Pointer args so we can leave dst untouched when the channel didn't override.
 func applyChannelOverrides(def *models.ChannelDefault, wh, shelf *string, vatType *int, vatRate *float64) {
 	if def == nil {
@@ -782,6 +1011,70 @@ func applyChannelOverrides(def *models.ChannelDefault, wh, shelf *string, vatTyp
 	if def.VATRate >= 0 {
 		*vatRate = def.VATRate
 	}
+}
+
+// applyRetryOverrides overlays one-off choices from the Bill Detail send
+// dialog. These are per-bill decisions, so they win over channel defaults and
+// env defaults without mutating the saved channel config.
+func applyRetryOverrides(req RetryRequest, wh, shelf *string, vatType *int, vatRate *float64) {
+	if req.WHCode != "" {
+		*wh = req.WHCode
+	}
+	if req.ShelfCode != "" {
+		*shelf = req.ShelfCode
+	}
+	if req.VATType != nil {
+		*vatType = *req.VATType
+	}
+	if req.VATRate != nil {
+		*vatRate = *req.VATRate
+	}
+}
+
+// applyRetryDocumentOverrides overlays one-off document values from the Bill
+// Detail send dialog. Channels intentionally no longer own these fields in
+// Phase 1, so the source of truth is instance/env + this per-bill override.
+func applyRetryDocumentOverrides(req RetryRequest, branch, sale, unit, docTime *string) {
+	if req.BranchCode != "" {
+		*branch = req.BranchCode
+	}
+	if req.SaleCode != "" {
+		*sale = req.SaleCode
+	}
+	if req.UnitCode != "" {
+		*unit = req.UnitCode
+	}
+	if req.DocTime != "" {
+		*docTime = req.DocTime
+	}
+}
+
+func (h *BillHandler) validateSendDialogOverrides(req RetryRequest) error {
+	switch {
+	case strings.TrimSpace(req.WHCode) == "":
+		return fmt.Errorf("กรุณากรอกรหัสคลังก่อนส่ง SML")
+	case strings.TrimSpace(req.ShelfCode) == "":
+		return fmt.Errorf("กรุณากรอกรหัสพื้นที่เก็บก่อนส่ง SML")
+	case req.VATType == nil:
+		return fmt.Errorf("กรุณาเลือกประเภทภาษีก่อนส่ง SML")
+	case req.VATRate == nil:
+		return fmt.Errorf("กรุณากรอกอัตราภาษีก่อนส่ง SML")
+	case strings.TrimSpace(req.DocTime) == "":
+		return fmt.Errorf("กรุณากรอกเวลาเอกสารก่อนส่ง SML")
+	}
+	if h.warehouseCache != nil {
+		whCode := strings.TrimSpace(req.WHCode)
+		shelfCode := strings.TrimSpace(req.ShelfCode)
+		if whCount, _ := h.warehouseCache.Counts(); whCount > 0 {
+			if h.warehouseCache.GetByCode(whCode) == nil {
+				return fmt.Errorf("ไม่พบรหัสคลัง %s ใน SML", whCode)
+			}
+			if !h.warehouseCache.HasShelf(whCode, shelfCode) {
+				return fmt.Errorf("ไม่พบพื้นที่เก็บ %s ภายใต้คลัง %s ใน SML", shelfCode, whCode)
+			}
+		}
+	}
+	return nil
 }
 
 // lookupChannelDefault fetches the (channel, bill_type) party config or
@@ -827,7 +1120,14 @@ func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON [
 	errMsgJSON, _ := json.Marshal(fail)
 	errMsg := string(errMsgJSON)
 	respJSON, _ := json.Marshal(map[string]string{"error": rawErr})
-	_ = h.billRepo.UpdateStatus(id, "failed", nil, respJSON, &errMsg)
+	var docNo *string
+	if docNoAttempted != "" {
+		docNo = &docNoAttempted
+	}
+	_ = h.billRepo.UpdateStatus(id, "failed", docNo, respJSON, &errMsg)
+	if len(reqJSON) > 0 {
+		_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
+	}
 	h.log.Error("Retry: SML failed", zap.String("bill", id), zap.String("route", route), zap.Error(err))
 	if h.auditRepo != nil {
 		billID := id
@@ -880,10 +1180,10 @@ func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, reqJSON, 
 
 // POST /api/bills/:id/items — add a new line item to a not-yet-sent bill.
 type addItemRequest struct {
-	RawName  string  `json:"raw_name" binding:"required"`
-	ItemCode *string `json:"item_code"`
-	UnitCode *string `json:"unit_code"`
-	Qty      float64 `json:"qty" binding:"required"`
+	RawName  string   `json:"raw_name" binding:"required"`
+	ItemCode *string  `json:"item_code"`
+	UnitCode *string  `json:"unit_code"`
+	Qty      float64  `json:"qty" binding:"required"`
 	Price    *float64 `json:"price"`
 }
 
@@ -1058,11 +1358,11 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 					Source:   bill.Source,
 					Level:    "info",
 					Detail: map[string]interface{}{
-						"raw_name":      existingItem.RawName,
-						"prev_code":     prev,
-						"new_code":      *req.ItemCode,
-						"unit_code":     unit,
-						"bill_id":       billID,
+						"raw_name":  existingItem.RawName,
+						"prev_code": prev,
+						"new_code":  *req.ItemCode,
+						"unit_code": unit,
+						"bill_id":   billID,
 					},
 				})
 			}

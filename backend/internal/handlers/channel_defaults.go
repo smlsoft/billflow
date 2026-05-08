@@ -70,6 +70,10 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 		Endpoint:         in.Endpoint,
 		DocPrefix:        in.DocPrefix,
 		DocRunningFormat: in.DocRunningFormat,
+		BranchCode:       in.BranchCode,
+		SaleCode:         in.SaleCode,
+		UnitCode:         in.UnitCode,
+		DocTime:          in.DocTime,
 		WHCode:           in.WHCode,
 		ShelfCode:        in.ShelfCode,
 		VATType:          in.VATType,
@@ -128,12 +132,12 @@ var quickSetupMappings = []quickSetupMapping{
 
 // QuickSetupResult describes what happened in one row of POST /quick-setup.
 type QuickSetupResult struct {
-	Channel  string `json:"channel"`
-	BillType string `json:"bill_type"`
-	Applied  bool   `json:"applied"`
+	Channel   string `json:"channel"`
+	BillType  string `json:"bill_type"`
+	Applied   bool   `json:"applied"`
 	PartyCode string `json:"party_code,omitempty"`
 	PartyName string `json:"party_name,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // POST /api/settings/channel-defaults/quick-setup
@@ -208,7 +212,9 @@ func validChannelBillTypeCombo(channel, billType string) bool {
 	switch channel {
 	case "shopee_shipped":
 		return billType == "purchase"
-	case "shopee", "shopee_email", "line", "email", "manual":
+	case "email":
+		return billType == "sale" || billType == "purchase"
+	case "shopee", "shopee_email", "line", "manual":
 		return billType == "sale"
 	case "lazada":
 		return billType == "sale" || billType == "purchase"

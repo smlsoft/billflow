@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
 import { getBill, retryBill } from '@/hooks/useBills'
+import type { RetryBillPayload } from '@/hooks/useBills'
 import type { Bill } from '@/types'
 
 export interface UseBillDataReturn {
@@ -9,7 +10,7 @@ export interface UseBillDataReturn {
   retrying: boolean
   retryError: string | null
   handleRetry: () => Promise<void>
-  handleRetryWithOverride: (partyCode: string, remark: string) => Promise<void>
+  handleRetryWithOverride: (body: RetryBillPayload) => Promise<void>
   setBill: React.Dispatch<React.SetStateAction<Bill | null>>
 }
 
@@ -29,7 +30,7 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
   }, [id])
 
   const doRetry = useCallback(
-    async (body?: { party_code?: string; remark?: string }) => {
+    async (body?: RetryBillPayload) => {
       if (!id) return
       setRetrying(true)
       setRetryError(null)
@@ -55,8 +56,7 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
   const handleRetry = useCallback(() => doRetry(), [doRetry])
 
   const handleRetryWithOverride = useCallback(
-    (partyCode: string, remark: string) =>
-      doRetry({ party_code: partyCode || undefined, remark: remark || undefined }),
+    (body: RetryBillPayload) => doRetry(body),
     [doRetry],
   )
 

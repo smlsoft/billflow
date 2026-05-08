@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -117,6 +118,10 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 	id := c.Param("id")
 	res, err := h.coordinator.PollNow(id)
 	if err != nil {
+		if strings.Contains(err.Error(), "poll already running") {
+			c.JSON(http.StatusConflict, gin.H{"error": "กล่องเมลนี้กำลังดึงอีเมลอยู่แล้ว กรุณารอสักครู่แล้วรีเฟรชสถานะ"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -130,6 +135,9 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 	}
 	if res.Err != nil {
 		resp["error"] = res.Err.Error()
+	} else if len(res.ProcessWarnings) > 0 {
+		resp["error"] = res.ProcessWarnings[0]
+		resp["warnings"] = res.ProcessWarnings
 	}
 	c.JSON(http.StatusOK, resp)
 }

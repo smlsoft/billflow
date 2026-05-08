@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import BillStatusBadge from '@/components/BillStatusBadge'
 import type { Bill } from '@/types'
+import { isShopeeSalesBill, rawNumber, rawString, shopeeOrderID } from '@/lib/shopeeBill'
 import { SOURCE_LABELS } from '../utils/formatters'
 
 interface Props {
@@ -18,7 +19,7 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
-      <span className="text-sm text-foreground">{value || '—'}</span>
+      <span className="text-[13px] leading-5 text-foreground">{value || '—'}</span>
     </div>
   )
 }
@@ -27,9 +28,22 @@ export function BillHeader({ bill }: Props) {
   const navigate = useNavigate()
   const rawData = bill.raw_data as Record<string, unknown> | null
   const isPurchase = bill.bill_type === 'purchase'
+  const isShopeeSale = isShopeeSalesBill(bill)
+  const orderID = shopeeOrderID(rawData)
+  const orderDateTime = rawString(rawData, 'order_datetime') || rawString(rawData, 'doc_date')
+  const sellerName = rawString(rawData, 'seller_name')
+  const buyerName = rawString(rawData, 'customer_name') || rawString(rawData, 'buyer_username')
+  const paymentChannel = rawString(rawData, 'payment_channel')
+  const trackingNo = rawString(rawData, 'tracking_no')
+  const docDate = (rawData?.doc_date as string) || ''
+  const rawItemCount = rawNumber(rawData, 'item_count')
+  const itemCount = bill.items?.length ?? 0
+  const issueCount = (bill.items ?? []).filter((item) => {
+    return !item.item_code || !item.unit_code || !item.qty || item.qty <= 0 || item.price == null || item.price <= 0
+  }).length
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <Button
         type="button"
         variant="ghost"
@@ -41,10 +55,10 @@ export function BillHeader({ bill }: Props) {
         กลับ
       </Button>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3 border-b">
+      <Card className="overflow-hidden rounded-xl border-border/70 shadow-sm">
+        <CardHeader className="flex flex-row items-center justify-between gap-3 border-b bg-card px-5 py-3">
           <div className="flex items-center gap-2">
-            <h2 className="font-mono text-lg font-bold tracking-tight">
+            <h2 className="font-mono text-xl font-bold tracking-tight">
               {bill.sml_doc_no ?? bill.id.slice(0, 8)}
             </h2>
             {isPurchase && (
@@ -53,40 +67,105 @@ export function BillHeader({ bill }: Props) {
                 className="bg-warning/15 text-warning hover:bg-warning/20"
                 title="Purchase Order"
               >
-                ใบสั่งซื้อ/สั่งจอง
+                {'ซื้อ -> ใบสั่งซื้อ'}
+              </Badge>
+            )}
+            {isShopeeSale && (
+              <Badge
+                variant="secondary"
+                className="bg-primary/10 text-primary hover:bg-primary/15"
+                title="Sales Order"
+              >
+                {'ขาย -> ใบสั่งขาย'}
               </Badge>
             )}
           </div>
           <BillStatusBadge status={bill.status} />
         </CardHeader>
 
-        <CardContent className="pt-5">
-          <div className="grid grid-cols-2 gap-x-8 gap-y-4 md:grid-cols-3">
+        <CardContent className="px-5 py-3">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-4 xl:grid-cols-6">
+            {!isPurchase && (
+              <>
+                <InfoRow
+                  label="ลูกค้า"
+                  value={buyerName || '—'}
+                />
+                <InfoRow
+                  label="เบอร์โทร"
+                  value={(rawData?.customer_phone as string) || '—'}
+                />
+              </>
+            )}
             <InfoRow
-              label={isPurchase ? 'ผู้ขาย (Supplier)' : 'ลูกค้า'}
-              value={(rawData?.customer_name as string) || '—'}
-            />
-            <InfoRow
-              label="เบอร์โทร"
-              value={(rawData?.customer_phone as string) || '—'}
-            />
-            <InfoRow
-              label="Platform"
+              label="ช่องทาง"
               value={SOURCE_LABELS[bill.source] ?? bill.source}
             />
+            {isPurchase && orderID && (
+              <InfoRow
+                label="เลขคำสั่งซื้อ"
+                value={<span className="font-mono text-xs">{orderID}</span>}
+              />
+            )}
+            {isShopeeSale && orderID && (
+              <InfoRow
+                label="เลขคำสั่งซื้อ"
+                value={<span className="font-mono text-xs">{orderID}</span>}
+              />
+            )}
+            {(isPurchase || isShopeeSale) && orderDateTime && (
+              <InfoRow
+                label="วันที่สั่งซื้อ"
+                value={orderDateTime}
+              />
+            )}
+            {isPurchase && sellerName && (
+              <InfoRow
+                label="ผู้ขาย Shopee"
+                value={sellerName}
+              />
+            )}
+            {isPurchase && docDate && (
+              <InfoRow
+                label="วันที่เอกสาร"
+                value={docDate}
+              />
+            )}
+            {isShopeeSale && paymentChannel && (
+              <InfoRow
+                label="ช่องทางชำระเงิน"
+                value={paymentChannel}
+              />
+            )}
+            {isShopeeSale && trackingNo && (
+              <InfoRow
+                label="เลขพัสดุ"
+                value={<span className="font-mono text-xs">{trackingNo}</span>}
+              />
+            )}
             <InfoRow
               label="วันที่สร้าง"
               value={dayjs(bill.created_at).format('DD/MM/YYYY HH:mm')}
             />
+            <InfoRow
+              label="รายการสินค้า"
+              value={`${rawItemCount ?? itemCount} รายการ`}
+            />
+            {isPurchase && (
+              <InfoRow
+                label="สถานะตรวจสินค้า"
+                value={issueCount > 0 ? `ต้องแก้ ${issueCount} รายการ` : 'พร้อมส่ง SML'}
+              />
+            )}
             {bill.sent_at && (
               <InfoRow
                 label="ส่ง SML เมื่อ"
                 value={dayjs(bill.sent_at).format('DD/MM/YYYY HH:mm')}
               />
             )}
-            {bill.ai_confidence != null && (
+            {!isPurchase && bill.ai_confidence != null && (
               <InfoRow
-                label="AI Confidence"
+                label="ความมั่นใจ"
                 value={`${Math.round(bill.ai_confidence * 100)}%`}
               />
             )}

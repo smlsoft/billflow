@@ -28,7 +28,7 @@ export default function StatsCard({
   className,
 }: StatsCardProps) {
   return (
-    <Card className={cn('transition-shadow hover:shadow-sm', className)}>
+    <Card className={cn('rounded-xl border-border/80 shadow-sm transition-shadow hover:shadow-md', className)}>
       <CardContent className="flex items-start justify-between gap-3 p-5">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-muted-foreground">{label}</p>

@@ -5,22 +5,22 @@ import Sidebar from '@/components/layout/Sidebar'
 import Topbar from '@/components/layout/Topbar'
 import { CommandPalette } from '@/components/CommandPalette'
 import { BreadcrumbProvider } from '@/lib/breadcrumbs'
-import { useUIStore } from '@/lib/ui-store'
 import { useEventsStore } from '@/lib/events-store'
 import { useChordHotkeys, useHotkeys } from '@/hooks/useHotkeys'
 import { useAuth } from '@/hooks/useAuth'
+import { ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
 
 // Routes that want a full-height, no-padding viewport (chat / inbox style).
 // On these routes the page handles its own scroll regions; the Layout
 // removes the default padded wrapper so the page can fill 100% of the area
 // under the topbar.
 const FULL_HEIGHT_ROUTES = ['/messages']
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
 export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar)
   const { logout } = useAuth()
 
   // Open the SSE connection once per authenticated session. The store
@@ -30,11 +30,13 @@ export default function Layout() {
   const connectEvents = useEventsStore((s) => s.connect)
   const disconnectEvents = useEventsStore((s) => s.disconnect)
   useEffect(() => {
+    if (PHASE < 2) return
     connectEvents()
     return () => disconnectEvents()
   }, [connectEvents, disconnectEvents])
 
   const isFullHeight = FULL_HEIGHT_ROUTES.some((p) => location.pathname.startsWith(p))
+  const isBillDetail = /^\/(bills|sales-orders|sale-invoices)\/[^/]+/.test(location.pathname)
 
   useHotkeys([
     {
@@ -49,8 +51,12 @@ export default function Layout() {
   useChordHotkeys({
     'g d': () => navigate('/dashboard'),
     'g b': () => navigate('/bills'),
-    'g i': () => navigate('/import'),
-    'g s': () => navigate('/import/shopee'),
+    ...(PHASE >= 2
+      ? {
+          'g i': () => navigate('/import'),
+          ...(ENABLE_SHOPEE_EXCEL ? { 'g s': () => navigate('/import/shopee') } : {}),
+        }
+      : {}),
     'g m': () => navigate('/mappings'),
     'g l': () => navigate('/logs'),
     'g c': () => navigate('/settings/catalog'),
@@ -73,8 +79,8 @@ export default function Layout() {
               <Outlet />
             </main>
           ) : (
-            <main className="flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-7xl p-6">
+            <main className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_left,hsl(var(--accent)/0.45),transparent_32rem)]">
+              <div className={isBillDetail ? 'w-full p-4 lg:p-5' : 'mx-auto w-full max-w-[1480px] p-5 lg:p-6'}>
                 <Outlet />
               </div>
             </main>

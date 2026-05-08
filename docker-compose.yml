@@ -45,6 +45,8 @@ services:
       context: ./frontend
       args:
         VITE_PHASE: ${VITE_PHASE:-99}
+        VITE_ENABLE_SALES_ORDERS: ${VITE_ENABLE_SALES_ORDERS:-true}
+        VITE_ENABLE_SHOPEE_EXCEL: ${VITE_ENABLE_SHOPEE_EXCEL:-true}
     container_name: billflow-frontend
     ports:
       - "3010:80"

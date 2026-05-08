@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"strings"
 
 	_ "github.com/lib/pq"
 )
@@ -40,7 +41,7 @@ func runMigrations(db *sql.DB) error {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		data, err := migrationFS.ReadFile("migrations/" + entry.Name())

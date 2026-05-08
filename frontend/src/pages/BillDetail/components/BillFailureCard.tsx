@@ -42,8 +42,8 @@ function parseFailure(msg: string): FailureDetail | null {
 const ROUTE_LABEL: Record<string, string> = {
   SaleReserve: 'ใบสั่งจอง (SML 213)',
   SaleOrder: 'ใบสั่งขาย (SML 248)',
-  SaleInvoice: 'ใบกำกับภาษี (SML 248)',
-  PurchaseOrder: 'ใบสั่งซื้อ (SML 248)',
+  SaleInvoice: 'ขาย -> ขายสินค้าและบริการ (SML 248)',
+  PurchaseOrder: 'ซื้อ -> ใบสั่งซื้อ (SML 248)',
 }
 
 // BillFailureCard surfaces the *why* of a failed bill in a way an admin can

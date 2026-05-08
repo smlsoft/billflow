@@ -43,6 +43,8 @@ import { useAuth } from '@/hooks/useAuth'
 import type { BillPreview, ImportConfirmResponse } from '@/types'
 import { LazadaColumnMapping } from './Import/LazadaColumnMapping'
 
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+
 type Step = 'idle' | 'uploading' | 'preview' | 'confirming' | 'result'
 
 function AnomalyBadges({
@@ -190,13 +192,19 @@ export default function Import() {
             <Alert>
               <Construction className="h-4 w-4" />
               <AlertTitle>Lazada import ยังพัฒนาไม่เสร็จ</AlertTitle>
-              <AlertDescription>
-                รอไฟล์ตัวอย่างจากลูกค้าเพื่อสร้าง parser — ระหว่างนี้ใช้{' '}
-                <a href="/import/shopee" className="font-medium text-primary hover:underline">
-                  /import/shopee
-                </a>{' '}
-                สำหรับ Shopee Excel แทน
-              </AlertDescription>
+              {PHASE < 2 ? (
+                <AlertDescription>
+                  Phase 1 ตอนนี้โฟกัส Email → บิลซื้อ หน้านำเข้า marketplace ถูกซ่อนไว้จากเมนูหลักก่อน
+                </AlertDescription>
+              ) : (
+                <AlertDescription>
+                  รอไฟล์ตัวอย่างจากลูกค้าเพื่อสร้าง parser — ระหว่างนี้ใช้{' '}
+                  <a href="/import/shopee" className="font-medium text-primary hover:underline">
+                    /import/shopee
+                  </a>{' '}
+                  สำหรับ Shopee Excel แทน
+                </AlertDescription>
+              )}
             </Alert>
           )}
 

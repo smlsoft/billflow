@@ -45,18 +45,18 @@ export default function LearningProgress({ stats }: { stats: MappingStats }) {
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
           <Brain className="h-4 w-4 text-primary" />
-          F1 Learning Progress
+          ความจำการจับคู่สินค้า
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <ProgressRow
-          label="AI เรียนรู้แล้ว"
+          label="ระบบจับคู่ได้เอง"
           value={stats.auto_confirmed ?? 0}
           total={stats.total ?? 0}
           variant="success"
         />
         <ProgressRow
-          label="Admin map เอง"
+          label="ต้องให้คนตรวจ"
           value={stats.needs_review ?? 0}
           total={stats.total ?? 0}
           variant="warning"

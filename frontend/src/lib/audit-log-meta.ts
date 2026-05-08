@@ -46,9 +46,9 @@ export const ACTION_META: Record<string, ActionMeta> = {
   // Catalog
   product_created: { label: 'สร้างสินค้าใน SML', emoji: '🆕', tone: 'primary' },
   // Channel defaults
-  channel_default_updated: { label: 'แก้ไขลูกค้า default', emoji: '⚙️', tone: 'info' },
-  channel_default_deleted: { label: 'ลบลูกค้า default', emoji: '🗑️', tone: 'muted' },
-  channel_default_quick_setup: { label: 'ตั้งค่าลูกค้า default อัตโนมัติ', emoji: '🚀', tone: 'primary' },
+  channel_default_updated: { label: 'แก้ไขเส้นทาง SML', emoji: '⚙️', tone: 'info' },
+  channel_default_deleted: { label: 'ลบเส้นทาง SML', emoji: '🗑️', tone: 'muted' },
+  channel_default_quick_setup: { label: 'ตั้งค่าเส้นทาง SML อัตโนมัติ', emoji: '🚀', tone: 'primary' },
   // LINE chat — admin actions (session 13-15)
   line_admin_reply: { label: 'ตอบลูกค้าใน LINE', emoji: '💬', tone: 'info' },
   line_admin_send_media: { label: 'ส่งรูปให้ลูกค้าใน LINE', emoji: '🖼️', tone: 'info' },
@@ -111,6 +111,19 @@ export const TONE_DOT: Record<Tone, string> = {
   primary: 'bg-primary',
 }
 
+export function smlRouteLabel(route: unknown): string {
+  const text = String(route ?? '')
+  const normalized = text.toLowerCase()
+  const map: Record<string, string> = {
+    purchaseorder: 'ซื้อ -> ใบสั่งซื้อ',
+    saleorder: 'ใบสั่งขาย',
+    saleinvoice: 'ขาย -> ขายสินค้าและบริการ',
+    salereserve: 'ใบสั่งจอง',
+    sale_reserve: 'ใบสั่งจอง',
+  }
+  return map[normalized] ?? text
+}
+
 // summarize returns the 1-line human description of a log entry, derived
 // from its detail fields. Falls back to '' when no shape matches; callers
 // then either use ACTION_META.label alone or hide the summary slot.
@@ -127,10 +140,13 @@ export function summarize(log: AuditLog): string {
       if (d.flow) return String(d.flow)
       return ''
     case 'sml_sent':
-      return [d.doc_no, d.route].filter(Boolean).join(' · ')
+      return [d.doc_no, d.route ? smlRouteLabel(d.route) : '', d.via ? `via ${d.via}` : ''].filter(Boolean).join(' · ')
     case 'sml_failed': {
-      const err = String(d.error ?? '')
-      return err.length > 140 ? err.slice(0, 140) + '…' : err
+      const err = parseMaybeJSON(d.error)
+      const route = err.route ?? d.route
+      const docNo = err.doc_no_attempted ?? d.doc_no
+      const message = err.error ?? d.error ?? ''
+      return [route ? smlRouteLabel(route) : '', docNo, message].filter(Boolean).join(' · ')
     }
     case 'shopee_import_done':
       return `สำเร็จ ${d.success_count ?? 0} / ล้มเหลว ${d.fail_count ?? 0} (รวม ${d.total ?? 0})`
@@ -204,5 +220,18 @@ export function summarize(log: AuditLog): string {
       return d.label ? String(d.label) : ''
     default:
       return ''
+  }
+}
+
+function parseMaybeJSON(value: unknown): Record<string, any> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, any>
+  }
+  if (typeof value !== 'string') return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
   }
 }

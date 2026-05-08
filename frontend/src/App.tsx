@@ -13,11 +13,17 @@ import Logs from './pages/Logs'
 import CatalogSettings from './pages/CatalogSettings'
 import EmailAccounts from './pages/EmailAccounts'
 import ChannelDefaults from './pages/ChannelDefaults'
+import InstanceSettings from './pages/InstanceSettings'
+import AIUsage from './pages/AIUsage'
 import ChatTags from './pages/ChatTags'
 import LineOA from './pages/LineOA'
 import Messages from './pages/Messages'
 import QuickReplies from './pages/QuickReplies'
 import Showcase from './pages/Showcase'
+import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from './lib/featureFlags'
+import SetupCenter from './pages/SetupCenter'
+
+const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -41,19 +47,26 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route index element={<Navigate to="/setup" replace />} />
+          <Route path="setup" element={<SetupCenter />} />
           <Route path="dashboard" element={<Dashboard />} />
-          <Route path="bills" element={<Bills />} />
+          <Route path="bills" element={<Bills mode="purchase-order" />} />
+          <Route path="sales-orders" element={ENABLE_SALES_ORDERS ? <Bills mode="sales-order" /> : <Navigate to="/dashboard" replace />} />
+          <Route path="sale-invoices" element={ENABLE_SALES_ORDERS ? <Bills mode="sale-invoice" /> : <Navigate to="/dashboard" replace />} />
           <Route path="bills/:id" element={<BillDetail />} />
+          <Route path="sales-orders/:id" element={ENABLE_SALES_ORDERS ? <BillDetail /> : <Navigate to="/dashboard" replace />} />
+          <Route path="sale-invoices/:id" element={ENABLE_SALES_ORDERS ? <BillDetail /> : <Navigate to="/dashboard" replace />} />
           <Route path="messages" element={<Messages />} />
           <Route path="import" element={<Import />} />
-          <Route path="import/shopee" element={<ShopeeImport />} />
+          <Route path="import/shopee" element={ENABLE_SHOPEE_EXCEL ? <ShopeeImport /> : <Navigate to="/dashboard" replace />} />
           <Route path="mappings" element={<Mappings />} />
-          <Route path="settings" element={<Settings />} />
+          <Route path="settings" element={PHASE < 2 ? <Navigate to="/settings/instance" replace /> : <Settings />} />
           <Route path="logs" element={<Logs />} />
           <Route path="settings/catalog" element={<CatalogSettings />} />
           <Route path="settings/email" element={<EmailAccounts />} />
           <Route path="settings/channels" element={<ChannelDefaults />} />
+          <Route path="settings/instance" element={<InstanceSettings />} />
+          <Route path="settings/ai-usage" element={<AIUsage />} />
           <Route path="settings/line-oa" element={<LineOA />} />
           <Route path="settings/quick-replies" element={<QuickReplies />} />
           <Route path="settings/chat-tags" element={<ChatTags />} />

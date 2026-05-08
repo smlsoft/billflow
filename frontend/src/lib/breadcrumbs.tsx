@@ -13,27 +13,46 @@ interface BreadcrumbDef {
 }
 
 const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
-  { pattern: '/dashboard', crumbs: [{ label: 'Dashboard' }] },
-  { pattern: '/bills', crumbs: [{ label: 'บิลทั้งหมด' }] },
+  { pattern: '/dashboard', crumbs: [{ label: 'ภาพรวม' }] },
+  { pattern: '/setup', crumbs: [{ label: 'เริ่มต้นใช้งาน' }] },
+  { pattern: '/bills', crumbs: [{ label: 'ใบสั่งซื้อ' }] },
+  { pattern: '/sales-orders', crumbs: [{ label: 'ใบสั่งขาย' }] },
+  { pattern: '/sale-invoices', crumbs: [{ label: 'ขายสินค้าและบริการ' }] },
   {
     pattern: '/bills/:id',
-    crumbs: [{ label: 'บิลทั้งหมด', href: '/bills' }, { label: ':id', dynamic: true }],
+    crumbs: [{ label: 'ใบสั่งซื้อ', href: '/bills' }, { label: ':id', dynamic: true }],
+  },
+  {
+    pattern: '/sales-orders/:id',
+    crumbs: [{ label: 'ใบสั่งขาย', href: '/sales-orders' }, { label: ':id', dynamic: true }],
+  },
+  {
+    pattern: '/sale-invoices/:id',
+    crumbs: [{ label: 'ขายสินค้าและบริการ', href: '/sale-invoices' }, { label: ':id', dynamic: true }],
   },
   {
     pattern: '/import',
-    crumbs: [{ label: 'นำเข้า', href: '/import' }, { label: 'Lazada' }],
+    crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'Lazada Excel' }],
   },
   {
     pattern: '/import/shopee',
-    crumbs: [{ label: 'นำเข้า', href: '/import' }, { label: 'Shopee' }],
+    crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'Shopee Excel' }],
   },
-  { pattern: '/mappings', crumbs: [{ label: 'Mapping สินค้า' }] },
+  { pattern: '/mappings', crumbs: [{ label: 'ตารางจับคู่สินค้า' }] },
   { pattern: '/settings', crumbs: [{ label: 'ตั้งค่า' }] },
   {
     pattern: '/settings/catalog',
-    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'Catalog SML' }],
+    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'สินค้าใน SML' }],
   },
-  { pattern: '/logs', crumbs: [{ label: 'Activity Log' }] },
+  {
+    pattern: '/settings/instance',
+    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'การเชื่อมต่อระบบ' }],
+  },
+  {
+    pattern: '/settings/email',
+    crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'กล่องอีเมลรับบิล' }],
+  },
+  { pattern: '/logs', crumbs: [{ label: 'ประวัติการทำงาน' }] },
 ]
 
 interface CtxValue {

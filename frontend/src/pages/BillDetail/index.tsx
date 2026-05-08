@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useParams } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -17,10 +17,13 @@ import { ArtifactList } from './components/ArtifactList'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
 import { SendPurchaseDialog } from './components/SendPurchaseDialog'
 import { validateForSML } from './utils/validation'
+import type { RetryBillPayload } from '@/hooks/useBills'
+import { isShopeeSalesBill } from '@/lib/shopeeBill'
 
 export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const { bill, loading, retrying, retryError, handleRetry, handleRetryWithOverride, setBill } =
     useBillData(id)
 
@@ -35,8 +38,8 @@ export default function BillDetail() {
   // on second click of the same row we briefly null the state in handleJump.
   const [highlightItemId, setHighlightItemId] = useState<string | null>(null)
 
-  // sendDialogOpen — purchase bills show a dialog (supplier picker + remark)
-  // before the actual retry call, so admin can override party_code and add a note.
+  // sendDialogOpen — SML 248 documents show a dialog (party picker + WH/VAT)
+  // before the retry call, so admin can override per-bill send values.
   const [sendDialogOpen, setSendDialogOpen] = useState(false)
 
   // Frontend-side validation against backend retry rules. Memo on `bill`
@@ -47,6 +50,20 @@ export default function BillDetail() {
     [bill],
   )
 
+  useEffect(() => {
+    if (!bill || !id) return
+    const route = bill.document_route || bill.preview?.route
+    const expectedPath =
+      bill.bill_type !== 'sale'
+        ? `/bills/${id}`
+        : route === 'saleinvoice'
+          ? `/sale-invoices/${id}`
+          : `/sales-orders/${id}`
+    if (location.pathname !== expectedPath) {
+      navigate(expectedPath, { replace: true })
+    }
+  }, [bill, id, location.pathname, navigate])
+
   const handleJumpToItem = (id: string | null) => {
     if (!id) return
     setHighlightItemId(null)
@@ -55,18 +72,18 @@ export default function BillDetail() {
     setTimeout(() => setHighlightItemId(id), 0)
   }
 
-  // For purchase bills, open the supplier+remark dialog instead of retrying directly.
+  // Shopee purchase/sale documents both need explicit per-bill SML values.
   const handleSendClick = () => {
-    if (bill?.bill_type === 'purchase') {
+    if (bill?.bill_type === 'purchase' || (bill?.bill_type === 'sale' && bill?.source === 'shopee')) {
       setSendDialogOpen(true)
     } else {
       handleRetry()
     }
   }
 
-  const handlePurchaseConfirm = async (partyCode: string, remark: string) => {
+  const handlePurchaseConfirm = async (body: RetryBillPayload) => {
     setSendDialogOpen(false)
-    await handleRetryWithOverride(partyCode, remark)
+    await handleRetryWithOverride(body)
   }
 
   if (loading) {
@@ -102,6 +119,8 @@ export default function BillDetail() {
     bill.status === 'pending' ||
     bill.status === 'needs_review'
   const canEdit = canSend
+  const isShopeeSale = isShopeeSalesBill(bill)
+  const evidenceSourceLabel = isShopeeSale ? 'ไฟล์ Shopee Excel' : 'อีเมล'
 
   const handleItemUpdated = (updated: BillItem) => {
     setBill((prev) => {
@@ -130,15 +149,9 @@ export default function BillDetail() {
   }
 
   return (
-    // space-y-6 (was 4) — bill detail has 8 stacked sections (header, failure
-    // card, total, items, raw data, artifacts, sml payload, timeline). The
-    // tighter spacing made everything feel cramped on smaller screens.
-    <div className="space-y-6">
+    <div className="space-y-4">
       <BillHeader bill={bill} />
 
-      {/* Structured failure card — only renders when the bill has a stored
-          error or there's a fresh retry error. Replaces the previous
-          inline red text under BillHeader; admin can copy + send to dev. */}
       {(bill.error_msg || retryError) && (
         <BillFailureCard errorMsg={bill.error_msg} retryError={retryError} />
       )}
@@ -155,14 +168,6 @@ export default function BillDetail() {
         expectedDocFormat={bill.preview?.doc_format}
       />
 
-      {bill.bill_type === 'purchase' && (
-        <SendPurchaseDialog
-          open={sendDialogOpen}
-          onConfirm={handlePurchaseConfirm}
-          onCancel={() => setSendDialogOpen(false)}
-        />
-      )}
-
       <BillItemsTable
         bill={bill}
         canEdit={canEdit}
@@ -172,26 +177,48 @@ export default function BillDetail() {
         highlightItemId={highlightItemId}
       />
 
-      {bill.raw_data && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-foreground">ข้อมูลที่รับมา</h3>
-          <RawDataCard
-            data={bill.raw_data as Record<string, unknown>}
-            items={bill.items}
-          />
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border/70 pb-2">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">ข้อมูลประกอบการตรวจสอบ</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              ใช้เมื่อต้องย้อนดูที่มาจาก{evidenceSourceLabel} หลักฐานต้นฉบับ และประวัติของบิลนี้
+            </p>
+          </div>
+          <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+            ข้อมูลส่วนนี้ไม่ต้องแก้ก่อนส่ง SML
+          </span>
         </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.18fr)_minmax(380px,0.82fr)]">
+          {bill.raw_data && (
+            <div className="min-w-0">
+              <RawDataCard
+                data={bill.raw_data as Record<string, unknown>}
+                items={bill.items}
+              />
+            </div>
+          )}
+
+          <div className="min-w-0 space-y-4">
+            <ArtifactList billId={bill.id} />
+            <BillTimeline billId={bill.id} />
+            <SmlPayloadSection
+              smlPayload={bill.sml_payload}
+              smlResponse={bill.sml_response}
+            />
+          </div>
+        </div>
+      </section>
+
+      {(bill.bill_type === 'purchase' || (bill.bill_type === 'sale' && bill.source === 'shopee')) && (
+        <SendPurchaseDialog
+          open={sendDialogOpen}
+          bill={bill}
+          onConfirm={handlePurchaseConfirm}
+          onCancel={() => setSendDialogOpen(false)}
+        />
       )}
-
-      <ArtifactList billId={bill.id} />
-
-      <SmlPayloadSection
-        smlPayload={bill.sml_payload}
-        smlResponse={bill.sml_response}
-      />
-
-      {/* Activity timeline for this bill — answers "ทำไมบิลนี้ถึงเป็นแบบนี้"
-          without leaving the page. Joins audit_logs ON target_id = bill.id. */}
-      <BillTimeline billId={bill.id} />
     </div>
   )
 }

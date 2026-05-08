@@ -46,18 +46,22 @@ type PollConfig struct {
 // PollResult summarises one poll cycle. Either Err is non-nil or the counts
 // describe what happened.
 type PollResult struct {
-	TraceID        string
-	MessagesFound  int
-	Processed      int
-	Skipped        int
-	Duration       time.Duration
-	Err            error
-	FailureStage   string // "connect" | "authenticate" | "select" | "search" | "" if ok
+	TraceID         string
+	MessagesFound   int
+	Processed       int
+	Skipped         int
+	ProcessWarnings []string
+	Duration        time.Duration
+	Err             error
+	FailureStage    string // "connect" | "authenticate" | "select" | "search" | "" if ok
 }
 
 // Status returns a short tag suitable for `imap_accounts.last_poll_status`.
 func (r *PollResult) Status() string {
 	if r.Err == nil {
+		if len(r.ProcessWarnings) > 0 {
+			return "warning"
+		}
 		return "ok"
 	}
 	switch r.FailureStage {
@@ -218,11 +222,14 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 			zap.String("subject", envelope.Subject),
 		)
 
-		ok := dispatch(cfg, p, envelope, fromAddr, bodyBytes, messageID, logger, res.TraceID)
+		ok, warning := dispatch(cfg, p, envelope, fromAddr, bodyBytes, messageID, logger, res.TraceID)
 		if ok && msgUID != 0 {
 			processedUIDs.AddNum(msgUID)
 			res.Processed++
 		} else {
+			if warning != "" {
+				res.ProcessWarnings = append(res.ProcessWarnings, warning)
+			}
 			res.Skipped++
 		}
 	}
@@ -266,9 +273,9 @@ func dispatch(
 	messageID string,
 	logger *zap.Logger,
 	traceID string,
-) bool {
+) (bool, string) {
 	if p == nil {
-		return false
+		return false, ""
 	}
 
 	switch cfg.Channel {
@@ -281,7 +288,7 @@ func dispatch(
 				zap.String("trace_id", traceID), zap.String("from", fromAddr),
 				zap.String("reason", "shopee_channel_non_shopee_from"),
 			)
-			return false
+			return false, ""
 		}
 		plainText, bodyHTML := extractBodyParts(bodyBytes)
 		if plainText == "" {
@@ -291,26 +298,26 @@ func dispatch(
 			if err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID); err != nil {
 				logger.Warn("imap_shopee_shipped_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
-				return false
+				return false, err.Error()
 			}
-			return true
+			return true, ""
 		}
 		if p.ShopeeOrder != nil {
 			if err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID); err != nil {
 				logger.Warn("imap_shopee_order_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
-				return false
+				return false, err.Error()
 			}
-			return true
+			return true, ""
 		}
-		return false
+		return false, ""
 
 	default:
 		// general / lazada → attachment pipeline
 		if p.Attachment == nil {
-			return false
+			return false, ""
 		}
-		return parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, p.Attachment, logger, traceID)
+		return parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, p.Attachment, logger, traceID), ""
 	}
 }
 
