@@ -104,7 +104,7 @@ func main() {
 	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
 		logger.Warn("apply DB instance settings", zap.Error(err))
 	}
-	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, logger)
+	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, auditLogRepo, logger)
 
 	// Services
 	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel).WithUsageLogger(aiUsageRepo)
@@ -431,6 +431,7 @@ func main() {
 		// Settings
 		api.GET("/settings/status", dashH.SettingsStatus)
 		api.GET("/setup/status", middleware.RequireRole("admin"), setupH.Status)
+		api.POST("/setup/reset-test-data", middleware.RequireRole("admin"), setupH.ResetTestData)
 		api.GET("/settings/instance", middleware.RequireRole("admin"), instanceSettingsH.Get)
 		api.PUT("/settings/instance", middleware.RequireRole("admin"), instanceSettingsH.Update)
 		api.POST("/settings/instance/restart", middleware.RequireRole("admin"), instanceSettingsH.Restart)

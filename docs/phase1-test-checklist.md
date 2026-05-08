@@ -153,6 +153,14 @@ select * from ic_trans_detail where doc_no = '<DOC_NO>';
 
 ## 6. Test Cases ที่ควรผ่านก่อน demo
 
+ก่อนเริ่ม test ให้เปิด `/setup`:
+
+- [ ] readiness สำคัญผ่านครบ: ข้อมูลร้าน/SML, เส้นทางเอกสาร, อีเมล, catalog
+- [ ] SML DB / instance name / model ตรงกับร้านที่จะ demo
+- [ ] ถ้าต้องเริ่ม UAT ใหม่ กด `Reset UAT` แล้วเลือก option เฉพาะที่จำเป็น
+- [ ] ไม่รีเซ็ตเลขรันเอกสารถ้าเคยส่งเข้า SML จริงแล้ว
+- [ ] ไม่ล้าง email dedup keys ถ้าไม่ต้องการให้อีเมลเก่าถูก import ซ้ำ
+
 | Case | สิ่งที่ต้องทดสอบ | Expected |
 |---|---|---|
 | 1 item, VAT แยกนอก | สินค้า 1 รายการ, `vat_type=0` | ส่งผ่าน, total รวม VAT ถูก |
@@ -173,6 +181,7 @@ select * from ic_trans_detail where doc_no = '<DOC_NO>';
 - [ ] มีอย่างน้อย 1 บิลที่หลายรายการ
 - [ ] มีอย่างน้อย 1 บิลที่ต้อง map/สร้างสินค้าใหม่
 - [ ] ตรวจ SML DB แล้ว header/detail เข้าในระดับที่ลูกค้าต้องใช้
+- [ ] `/setup` แสดง instance/status ถูกต้อง และ Reset UAT ใช้งานได้ตามสิทธิ์ admin
 - [ ] User สามารถดูประวัติ/สาเหตุ error จาก `/logs` ได้โดยไม่ต้องอ่าน raw JSON
 - [ ] เอกสาร `phase1-guide.md` และ checklist นี้ตรงกับระบบล่าสุด
 

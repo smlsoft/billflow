@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-08 17:10 +07
+> Updated: 2026-05-08 19:55 +07
 > Source of truth checked: local code/migrations, `docker compose` on `192.168.2.109`, production `/health`, production PostgreSQL schema, and active Cloudflare Quick Tunnel checks.
 
 ## Latest Handoff For New Chat
@@ -15,6 +15,17 @@
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
 - Instance/port registry อยู่ที่ [deploy-instances.md](deploy-instances.md). ใช้ไฟล์นี้เป็น source of truth เมื่อต้องจำ port/tunnel ของแต่ละร้าน.
+- `/setup` ถูกยกระดับเป็น Demo/UAT Setup Center:
+  - แสดง readiness ของ SML, channel routes, email, catalog, AI
+  - แสดง instance summary, SML DB, model, last catalog sync/email poll/import
+  - แสดงจำนวนเอกสารค้างแยกซื้อ/ขาย/saleinvoice และจำนวน import/log
+  - มีปุ่ม `Reset UAT` สำหรับ admin ล้าง bills/import runs/logs โดยไม่แตะ settings/catalog/mappings/AI usage
+  - option reset doc counters และ email dedup ต้องเลือกเอง เพราะมีความเสี่ยง doc_no ซ้ำหรืออ่านอีเมลเก่าซ้ำ
+- BillFlow main deploy แล้วและทดสอบ Reset UAT จริงแล้ว:
+  - bills/import runs ถูกล้างเป็น 0
+  - audit logs เหลือ 1 รายการจาก action reset เอง
+  - doc counters ไม่ถูก reset
+  - email dedup keys ไม่ถูกล้าง
 - Sidebar ล่าสุดแยก `งานฝั่งซื้อ` และ `งานฝั่งขาย` แล้ว:
   - งานฝั่งซื้อ: `ใบสั่งซื้อ`
   - งานฝั่งขาย: `ใบสั่งขาย`, `ขายสินค้าและบริการ`
@@ -79,6 +90,7 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Shopee shipped email | Routes to purchase bill and SML 248 `purchaseorder`. |
 | Bill Retry | 4-way dispatch: `sale_reserve`, `saleorder`, `saleinvoice`, `purchaseorder`, selected by source/bill type plus `channel_defaults.endpoint`. Phase 1 purchase send uses the Bill Detail confirmation dialog for supplier, warehouse, shelf, VAT, document time, branch/sale code, and remark. |
 | Bulk SML send | `/bills`, `/sales-orders`, and `/sale-invoices` have `ส่ง SML ทั้งหมด` for `pending` documents. It loads a preview, validates each bill, skips invalid rows, and sends ready bills one-by-one using shared dialog values. |
+| Setup Center | `/setup` is the demo hardening hub. It checks blocking setup steps, shows instance/system counters, and provides an admin-only Reset UAT dialog that preserves settings/catalog/mappings/AI usage by default. |
 | Sidebar navigation | Sidebar groups document work by purchase/sale: `งานฝั่งซื้อ` and `งานฝั่งขาย`. Badges are per-document-route queue counts, not global pending count. |
 | Bill detail | Shows route preview, blocks send when item validation fails, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML payload/response before raw JSON. |
 | Logs | `/logs` shows action-specific summaries. Expanding a row shows key facts first (bill, doc_no, route, trace, error) and keeps raw JSON as a secondary debug view. |
