@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-09 07:30 +07
+> Updated: 2026-05-09 07:40 +07
 > Source of truth checked: local code/migrations, `docker compose` on `192.168.2.109`, production `/health`, production PostgreSQL schema, and active Cloudflare Quick Tunnel checks.
 
 ## Latest Handoff For New Chat
@@ -58,6 +58,10 @@
 - AI model update:
   - production log ยืนยันว่า `google/gemma-4-26b-a4b-it:free` fail แล้ว fallback ไป `google/gemini-2.5-flash-lite`
   - BillFlow main จึงเปลี่ยน model หลักเป็น `google/gemini-2.5-flash-lite` และใช้ `google/gemini-2.5-flash` เป็น fallback สำหรับงานที่ต้องการความเสถียรกว่า
+- SML party cache reliability:
+  - ตอน backend start ระบบ retry ดึงรายชื่อลูกค้า/ผู้ขายจาก SML หลายรอบแบบ backoff แทนการ fail ครั้งเดียว
+  - `/api/sml/parties/last-sync` และ party picker ส่ง/แสดง `status`, `last_attempt`, `last_sync`, `error` เพื่อให้ผู้ใช้รู้ว่าควรกดรีเฟรชหรือตรวจ SML API
+  - ตรวจ production ล่าสุดแล้ว `status=ok`, ลูกค้า 1,004 รายการ, ผู้ขาย 500 รายการ
 
 ## Deployment
 

@@ -209,6 +209,9 @@ interface SyncStatus {
   customers: number
   suppliers: number
   last_sync: string | null
+  last_attempt?: string | null
+  status?: 'ok' | 'error' | 'not_ready' | 'not_configured'
+  error?: string
 }
 
 export default function ChannelDefaults() {
@@ -317,6 +320,7 @@ export default function ChannelDefaults() {
         `ซิงก์เสร็จ — ${r.data.customers} ลูกค้า / ${r.data.suppliers} ผู้ขาย`,
       )
     } catch (e: any) {
+      setSync((prev) => prev ? { ...prev, status: 'error', error: e?.response?.data?.error ?? e?.message ?? 'unknown' } : prev)
       toast.error('รีเฟรชไม่สำเร็จ: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
     }
   }
@@ -523,17 +527,40 @@ export default function ChannelDefaults() {
         ]}
       />
 
-      <div className="text-xs text-muted-foreground">
-        {sync && (
-          <>
-            แคช SML: {sync.customers.toLocaleString()} ลูกค้า ·{' '}
-            {sync.suppliers.toLocaleString()} ผู้ขาย
-            {sync.last_sync && (
-              <> · ซิงก์ล่าสุด {dayjs(sync.last_sync).format('DD/MM/YY HH:mm')}</>
+      {sync && (
+        <div className={cn(
+          'rounded-md border px-3 py-2 text-xs',
+          sync.status === 'error' || sync.status === 'not_ready'
+            ? 'border-warning/35 bg-warning/[0.07] text-warning'
+            : 'border-border/70 bg-muted/25 text-muted-foreground',
+        )}>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium text-foreground">
+              รายชื่อลูกค้า/ผู้ขายจาก SML:
+            </span>
+            <span>{sync.customers.toLocaleString()} ลูกค้า</span>
+            <span>·</span>
+            <span>{sync.suppliers.toLocaleString()} ผู้ขาย</span>
+            {sync.last_sync ? (
+              <>
+                <span>·</span>
+                <span>ซิงก์ล่าสุด {dayjs(sync.last_sync).format('DD/MM/YY HH:mm')}</span>
+              </>
+            ) : (
+              <>
+                <span>·</span>
+                <span>ยังไม่เคยซิงก์สำเร็จ</span>
+              </>
             )}
-          </>
-        )}
-      </div>
+          </div>
+          {(sync.status === 'error' || sync.status === 'not_ready') && (
+            <div className="mt-1 leading-relaxed">
+              ถ้าค้นหาลูกค้า/ผู้ขายไม่เจอ ให้กด “รีเฟรชจาก SML” หรือตรวจ SML API.
+              {sync.error ? <> รายละเอียด: {sync.error}</> : null}
+            </div>
+          )}
+        </div>
+      )}
 
       <EditDialog
         open={editOpen}

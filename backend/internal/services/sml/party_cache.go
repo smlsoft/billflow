@@ -20,10 +20,12 @@ type PartyCache struct {
 	client *PartyClient
 	log    *zap.Logger
 
-	mu        sync.RWMutex
-	customers []Party
-	suppliers []Party
-	lastSync  time.Time
+	mu          sync.RWMutex
+	customers   []Party
+	suppliers   []Party
+	lastSync    time.Time
+	lastAttempt time.Time
+	lastErr     string
 
 	stopCh chan struct{}
 }
@@ -45,9 +47,7 @@ func (pc *PartyCache) Start(ctx context.Context) {
 		return
 	}
 	go func() {
-		if err := pc.RefreshNow(ctx); err != nil {
-			pc.log.Error("party_cache_initial_fetch_failed", zap.Error(err))
-		}
+		pc.refreshInitialWithRetry(ctx)
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -58,11 +58,50 @@ func (pc *PartyCache) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				if err := pc.RefreshNow(ctx); err != nil {
-					pc.log.Error("party_cache_refresh_failed", zap.Error(err))
+					pc.log.Error(
+						"party_cache_refresh_failed",
+						zap.Error(err),
+						zap.String("user_message", "ดึงรายชื่อลูกค้า/ผู้ขายจาก SML ไม่สำเร็จ กรุณากดรีเฟรชหรือตรวจ SML API"),
+					)
 				}
 			}
 		}
 	}()
+}
+
+func (pc *PartyCache) refreshInitialWithRetry(ctx context.Context) {
+	delays := []time.Duration{0, 3 * time.Second, 10 * time.Second, 30 * time.Second, time.Minute}
+	var lastErr error
+	for attempt, delay := range delays {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+		if err := pc.RefreshNow(ctx); err != nil {
+			lastErr = err
+			pc.log.Warn(
+				"party_cache_initial_fetch_retry",
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_attempts", len(delays)),
+				zap.Error(err),
+				zap.String("user_message", "ยังดึงรายชื่อลูกค้า/ผู้ขายจาก SML ไม่สำเร็จ ระบบจะลองใหม่อัตโนมัติ"),
+			)
+			continue
+		}
+		return
+	}
+	if lastErr != nil {
+		pc.log.Error(
+			"party_cache_initial_fetch_failed",
+			zap.Error(lastErr),
+			zap.String("user_message", "ดึงรายชื่อลูกค้า/ผู้ขายจาก SML ไม่สำเร็จ กรุณากดรีเฟรชหรือตรวจ SML API"),
+		)
+	}
 }
 
 func (pc *PartyCache) Stop() {
@@ -78,18 +117,22 @@ func (pc *PartyCache) Stop() {
 // failure).
 func (pc *PartyCache) RefreshNow(ctx context.Context) error {
 	start := time.Now()
+	pc.recordAttempt()
 	customers, err := pc.client.FetchAllCustomers(ctx)
 	if err != nil {
+		pc.recordError(err)
 		return err
 	}
 	suppliers, err := pc.client.FetchAllSuppliers(ctx)
 	if err != nil {
+		pc.recordError(err)
 		return err
 	}
 	pc.mu.Lock()
 	pc.customers = customers
 	pc.suppliers = suppliers
 	pc.lastSync = time.Now()
+	pc.lastErr = ""
 	pc.mu.Unlock()
 	pc.log.Info("party_cache_refreshed",
 		zap.Int("customers", len(customers)),
@@ -99,11 +142,52 @@ func (pc *PartyCache) RefreshNow(ctx context.Context) error {
 	return nil
 }
 
+func (pc *PartyCache) recordAttempt() {
+	pc.mu.Lock()
+	pc.lastAttempt = time.Now()
+	pc.mu.Unlock()
+}
+
+func (pc *PartyCache) recordError(err error) {
+	pc.mu.Lock()
+	pc.lastErr = err.Error()
+	pc.mu.Unlock()
+}
+
 // LastSync returns when the cache was last filled. Zero value means never.
 func (pc *PartyCache) LastSync() time.Time {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
 	return pc.lastSync
+}
+
+type PartyCacheStatus struct {
+	Customers   int       `json:"customers"`
+	Suppliers   int       `json:"suppliers"`
+	LastSync    time.Time `json:"last_sync"`
+	LastAttempt time.Time `json:"last_attempt"`
+	Status      string    `json:"status"`
+	Error       string    `json:"error,omitempty"`
+}
+
+func (pc *PartyCache) Status() PartyCacheStatus {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	status := "ok"
+	if pc.lastSync.IsZero() {
+		status = "not_ready"
+	}
+	if pc.lastErr != "" {
+		status = "error"
+	}
+	return PartyCacheStatus{
+		Customers:   len(pc.customers),
+		Suppliers:   len(pc.suppliers),
+		LastSync:    pc.lastSync,
+		LastAttempt: pc.lastAttempt,
+		Status:      status,
+		Error:       pc.lastErr,
+	}
 }
 
 // Counts returns (customerCount, supplierCount).
@@ -152,12 +236,13 @@ func (pc *PartyCache) FindByExactName(billType, name string) *Party {
 //   - non-empty   → score each row, descending by score
 //
 // Scoring (highest wins):
-//   100  exact code match
-//    90  code starts with query
-//    70  code contains query
-//    60  name starts with query
-//    40  name contains query
-//    20  tax_id contains query
+//
+//	100  exact code match
+//	 90  code starts with query
+//	 70  code contains query
+//	 60  name starts with query
+//	 40  name contains query
+//	 20  tax_id contains query
 //
 // Strings are compared case-insensitive for ASCII; Thai is left as-is
 // (Thai has no case so strings.Contains works directly).

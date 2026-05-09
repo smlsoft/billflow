@@ -67,6 +67,8 @@ func (c *PartyClient) headers() map[string]string {
 
 type partyListResponse struct {
 	Success bool    `json:"success"`
+	Message string  `json:"message"`
+	Code    string  `json:"code"`
 	Data    []Party `json:"data"`
 	Pages   struct {
 		Size        int `json:"size"`
@@ -106,7 +108,11 @@ func (c *PartyClient) fetchPage(ctx context.Context, endpoint string, page, size
 		return nil, fmt.Errorf("sml %s decode page %d: %w", endpoint, page, err)
 	}
 	if !pr.Success {
-		return nil, fmt.Errorf("sml %s page %d: success=false", endpoint, page)
+		detail := pr.Message
+		if detail == "" {
+			detail = string(body)
+		}
+		return nil, fmt.Errorf("sml %s page %d: success=false code=%s message=%s", endpoint, page, pr.Code, detail)
 	}
 	return &pr, nil
 }

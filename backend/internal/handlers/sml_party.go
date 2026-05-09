@@ -46,15 +46,18 @@ func (h *SMLPartyHandler) search(c *gin.Context, billType string) {
 		}
 	}
 	results := h.cache.Search(billType, q, limit)
-	cust, sup := h.cache.Counts()
-	total := cust
+	status := h.cache.Status()
+	total := status.Customers
 	if billType == "purchase" {
-		total = sup
+		total = status.Suppliers
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"data":      results,
-		"total":     total,
-		"last_sync": h.cache.LastSync(),
+		"data":         results,
+		"total":        total,
+		"last_sync":    nullableTime(status.LastSync),
+		"last_attempt": nullableTime(status.LastAttempt),
+		"status":       status.Status,
+		"error":        status.Error,
 	})
 }
 
@@ -67,14 +70,24 @@ func (h *SMLPartyHandler) Refresh(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := h.cache.RefreshNow(ctx); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		status := h.cache.Status()
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":        "ดึงรายชื่อลูกค้า/ผู้ขายจาก SML ไม่สำเร็จ: " + err.Error(),
+			"customers":    status.Customers,
+			"suppliers":    status.Suppliers,
+			"last_sync":    nullableTime(status.LastSync),
+			"last_attempt": nullableTime(status.LastAttempt),
+			"status":       status.Status,
+		})
 		return
 	}
-	cust, sup := h.cache.Counts()
+	status := h.cache.Status()
 	c.JSON(http.StatusOK, gin.H{
-		"customers": cust,
-		"suppliers": sup,
-		"last_sync": h.cache.LastSync(),
+		"customers":    status.Customers,
+		"suppliers":    status.Suppliers,
+		"last_sync":    nullableTime(status.LastSync),
+		"last_attempt": nullableTime(status.LastAttempt),
+		"status":       status.Status,
 	})
 }
 
@@ -82,16 +95,28 @@ func (h *SMLPartyHandler) Refresh(c *gin.Context) {
 func (h *SMLPartyHandler) LastSync(c *gin.Context) {
 	if h.cache == nil {
 		c.JSON(http.StatusOK, gin.H{
-			"customers": 0,
-			"suppliers": 0,
-			"last_sync": nil,
+			"customers":    0,
+			"suppliers":    0,
+			"last_sync":    nil,
+			"last_attempt": nil,
+			"status":       "not_configured",
 		})
 		return
 	}
-	cust, sup := h.cache.Counts()
+	status := h.cache.Status()
 	c.JSON(http.StatusOK, gin.H{
-		"customers": cust,
-		"suppliers": sup,
-		"last_sync": h.cache.LastSync(),
+		"customers":    status.Customers,
+		"suppliers":    status.Suppliers,
+		"last_sync":    nullableTime(status.LastSync),
+		"last_attempt": nullableTime(status.LastAttempt),
+		"status":       status.Status,
+		"error":        status.Error,
 	})
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }

@@ -36,6 +36,8 @@ export function PartyPicker({ billType, value, onChange, disabled }: PartyPicker
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [lastSync, setLastSync] = useState<string | null>(null)
+  const [syncStatus, setSyncStatus] = useState<string>('not_ready')
+  const [syncError, setSyncError] = useState('')
   const [total, setTotal] = useState(0)
 
   const endpoint = billType === 'purchase' ? '/api/sml/suppliers' : '/api/sml/customers'
@@ -46,15 +48,27 @@ export function PartyPicker({ billType, value, onChange, disabled }: PartyPicker
       (q: string) => {
         setLoading(true)
         client
-          .get<{ data: Party[]; total: number; last_sync: string }>(
+          .get<{
+            data: Party[]
+            total: number
+            last_sync: string | null
+            status?: string
+            error?: string
+          }>(
             `${endpoint}?search=${encodeURIComponent(q)}&limit=20`,
           )
           .then((r) => {
             setResults(r.data.data ?? [])
             setTotal(r.data.total ?? 0)
             setLastSync(r.data.last_sync)
+            setSyncStatus(r.data.status ?? (r.data.last_sync ? 'ok' : 'not_ready'))
+            setSyncError(r.data.error ?? '')
           })
-          .catch(() => setResults([]))
+          .catch((e) => {
+            setResults([])
+            setSyncStatus('error')
+            setSyncError(e?.response?.data?.error ?? e?.message ?? 'โหลดรายชื่อไม่สำเร็จ')
+          })
           .finally(() => setLoading(false))
       },
     [endpoint],
@@ -82,13 +96,19 @@ export function PartyPicker({ billType, value, onChange, disabled }: PartyPicker
       const r = await client.post<{
         customers: number
         suppliers: number
-        last_sync: string
+        last_sync: string | null
+        status?: string
       }>('/api/sml/refresh-parties')
       setLastSync(r.data.last_sync)
+      setSyncStatus(r.data.status ?? 'ok')
+      setSyncError('')
       toast.success(`ซิงก์เสร็จ — ${r.data.customers} ลูกค้า / ${r.data.suppliers} ผู้ขาย`)
       fetchResults(query)
     } catch (e: any) {
-      toast.error('รีเฟรชไม่สำเร็จ: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
+      const msg = e?.response?.data?.error ?? e?.message ?? 'unknown'
+      setSyncStatus('error')
+      setSyncError(msg)
+      toast.error('รีเฟรชไม่สำเร็จ: ' + msg)
     } finally {
       setRefreshing(false)
     }
@@ -184,11 +204,14 @@ export function PartyPicker({ billType, value, onChange, disabled }: PartyPicker
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-          <span>
+          <span className={cn((syncStatus === 'error' || syncStatus === 'not_ready') && 'text-warning')}>
             {total.toLocaleString()} รายการ
-            {lastSync && (
+            {lastSync ? (
               <> · ซิงก์ล่าสุด {dayjs(lastSync).format('HH:mm')}</>
+            ) : (
+              <> · ยังไม่เคยซิงก์สำเร็จ</>
             )}
+            {syncStatus === 'error' && syncError ? <> · {syncError}</> : null}
           </span>
           <Button
             variant="ghost"
