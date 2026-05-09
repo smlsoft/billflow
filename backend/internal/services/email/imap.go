@@ -40,7 +40,7 @@ type PollConfig struct {
 	FilterSubjects []string // lower-cased keywords; empty = match all
 	LookbackDays   int      // ≥1
 	Channel        string   // "general" | "shopee" | "lazada"
-	ShopeeDomains  []string // lower-cased; only consulted for channel="shopee"
+	ShopeeDomains  []string // accepted senders for channel="shopee" (legacy DB name)
 }
 
 // PollResult summarises one poll cycle. Either Err is non-nil or the counts
@@ -348,8 +348,9 @@ func isShippedSubject(subject string) bool {
 		strings.Contains(subject, "ยืนยันการชำระเงิน")
 }
 
-// isShopeeFrom returns true if the from address matches any of the configured
-// entries. Each entry may be either:
+// isShopeeFrom returns true if the from address matches any configured accepted
+// sender. Empty accepted-sender list means "accept every sender that passed the
+// subject filter", matching the UI copy in /settings/email. Each entry may be:
 //   - a domain like "shopee.co.th" → matches if from ends with "@shopee.co.th"
 //   - a full email like "user@example.com" → matches the exact address (used
 //     for forwarded mail where a single forwarder relays Shopee notifications
@@ -358,6 +359,9 @@ func isShopeeFrom(from string, domains []string) bool {
 	from = strings.ToLower(strings.TrimSpace(from))
 	if from == "" {
 		return false
+	}
+	if len(domains) == 0 {
+		return true
 	}
 	for _, d := range domains {
 		d = strings.ToLower(strings.TrimSpace(d))

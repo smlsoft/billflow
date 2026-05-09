@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, CheckCircle2, Clock, Info, Search, Send } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock, Info, Mail, Search, Send, Settings, UploadCloud } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import BillTable from '@/components/BillTable'
+import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import { useBills } from '@/hooks/useBills'
 import { BulkSendDialog } from './BulkSendDialog'
@@ -44,6 +45,12 @@ const MODE_CONFIG: Record<BillsMode, {
   docCode: string
   routeLabel: string
   routeTo: string
+  emptyTitle: string
+  emptyDescription: string
+  emptyActionLabel: string
+  emptyActionTo: string
+  emptySecondaryLabel?: string
+  emptySecondaryTo?: string
   searchPlaceholder: string
 }> = {
   'purchase-order': {
@@ -55,6 +62,12 @@ const MODE_CONFIG: Record<BillsMode, {
     docCode: 'PO',
     routeLabel: 'กล่องอีเมลรับบิล',
     routeTo: '/settings/email',
+    emptyTitle: 'ยังไม่มีใบสั่งซื้อ',
+    emptyDescription: 'เมื่อ BillFlow อ่านอีเมล Shopee จากกล่องที่ตั้งค่าไว้ เอกสารจะเข้าคิวที่นี่ให้ตรวจสินค้าและส่งเข้า SML',
+    emptyActionLabel: 'ไปตั้งค่ากล่องอีเมล',
+    emptyActionTo: '/settings/email',
+    emptySecondaryLabel: 'ตรวจหน้าเริ่มต้นใช้งาน',
+    emptySecondaryTo: '/setup',
     searchPlaceholder: 'ค้นหาเลขบิล / เลขคำสั่งซื้อ / ผู้ขาย…',
   },
   'sales-order': {
@@ -67,6 +80,12 @@ const MODE_CONFIG: Record<BillsMode, {
     docCode: 'SR',
     routeLabel: 'Shopee Excel',
     routeTo: '/import/shopee',
+    emptyTitle: 'ยังไม่มีใบสั่งขาย',
+    emptyDescription: 'นำเข้าไฟล์ Shopee Excel จาก Seller Center แล้วเอกสารที่ตั้งปลายทางเป็นใบสั่งขายจะมาอยู่หน้านี้',
+    emptyActionLabel: 'นำเข้า Shopee Excel',
+    emptyActionTo: '/import/shopee',
+    emptySecondaryLabel: 'ตั้งค่าเส้นทาง SML',
+    emptySecondaryTo: '/settings/channels',
     searchPlaceholder: 'ค้นหาเลขบิล / เลขคำสั่งซื้อ / ลูกค้า…',
   },
   'sale-invoice': {
@@ -79,6 +98,12 @@ const MODE_CONFIG: Record<BillsMode, {
     docCode: 'SI',
     routeLabel: 'Shopee Excel',
     routeTo: '/import/shopee',
+    emptyTitle: 'ยังไม่มีเอกสารขายสินค้าและบริการ',
+    emptyDescription: 'นำเข้าไฟล์ Shopee Excel แล้วเลือกปลายทาง SML เป็นขายสินค้าและบริการ เอกสารจะมาอยู่หน้านี้',
+    emptyActionLabel: 'นำเข้า Shopee Excel',
+    emptyActionTo: '/import/shopee',
+    emptySecondaryLabel: 'ตั้งค่าเส้นทาง SML',
+    emptySecondaryTo: '/settings/channels',
     searchPlaceholder: 'ค้นหาเลขบิล / เลขคำสั่งซื้อ / ลูกค้า…',
   },
 }
@@ -233,11 +258,34 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
       </div>
 
-      <BillTable
-        bills={data?.data ?? []}
-        loading={loading}
-        onRowClick={(id) => navigate(`${detailBasePath}/${id}`)}
-      />
+      {!loading && (data?.total ?? 0) === 0 && !search && status === ALL ? (
+        <EmptyState
+          icon={mode === 'purchase-order' ? Mail : UploadCloud}
+          title={config.emptyTitle}
+          description={config.emptyDescription}
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button asChild>
+                <Link to={config.emptyActionTo}>
+                  {mode === 'purchase-order' ? <Settings className="h-4 w-4" /> : <UploadCloud className="h-4 w-4" />}
+                  {config.emptyActionLabel}
+                </Link>
+              </Button>
+              {config.emptySecondaryLabel && config.emptySecondaryTo && (
+                <Button asChild variant="outline">
+                  <Link to={config.emptySecondaryTo}>{config.emptySecondaryLabel}</Link>
+                </Button>
+              )}
+            </div>
+          }
+        />
+      ) : (
+        <BillTable
+          bills={data?.data ?? []}
+          loading={loading}
+          onRowClick={(id) => navigate(`${detailBasePath}/${id}`)}
+        />
+      )}
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>ทั้งหมด {(data?.total ?? 0).toLocaleString()} รายการ</span>

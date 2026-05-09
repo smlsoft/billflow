@@ -30,6 +30,11 @@ function currentTimeHHMM() {
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 }
 
+function errorMessage(err: unknown) {
+  const maybe = err as { response?: { data?: { error?: string } }; message?: string }
+  return maybe.response?.data?.error ?? maybe.message ?? 'ส่งไม่สำเร็จ'
+}
+
 type Candidate = {
   bill: Bill
   ready: boolean
@@ -89,6 +94,14 @@ export function BulkSendDialog({
     Number.isFinite(vatRateNum) &&
     docTime.trim() !== '' &&
     !sending
+  const missingFields = [
+    !party?.code ? (billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย') : '',
+    whCode.trim() === '' ? 'คลัง' : '',
+    shelfCode.trim() === '' ? 'พื้นที่เก็บ' : '',
+    vatTypeStr === '' ? 'ประเภทภาษี' : '',
+    vatRateStr.trim() === '' || !Number.isFinite(vatRateNum) ? 'อัตราภาษี' : '',
+    docTime.trim() === '' ? 'เวลาเอกสาร' : '',
+  ].filter(Boolean)
 
   const destination = useMemo(() => {
     if (filters.document_route === 'saleinvoice') return 'ขาย -> ขายสินค้าและบริการ'
@@ -191,7 +204,7 @@ export function BulkSendDialog({
           prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'sent', message: 'ส่งสำเร็จ' } : c),
         )
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'ส่งไม่สำเร็จ'
+        const msg = errorMessage(err)
         setCandidates((prev) =>
           prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'failed', message: msg } : c),
         )
@@ -215,6 +228,12 @@ export function BulkSendDialog({
               ระบบจะส่งเฉพาะเอกสารสถานะพร้อมส่ง และใช้ค่าชุดนี้ร่วมกันทุกเอกสารในรอบนี้
             </div>
           </div>
+          {totalPending > candidates.length && (
+            <div className="rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
+              รอบนี้โหลดมา {candidates.length} จาก {totalPending} รายการเพื่อให้ระบบทำงานนิ่ง
+              หลังส่งชุดแรกเสร็จ ให้เปิด dialog นี้อีกครั้งเพื่อส่งรายการที่เหลือ
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5 sm:col-span-2">
@@ -328,7 +347,7 @@ export function BulkSendDialog({
                     <div className="min-w-0">
                       <div className="font-mono text-foreground">{row.bill.sml_doc_no || row.bill.id.slice(0, 8)}</div>
                       <div className="truncate text-muted-foreground">
-                        {row.ready ? 'ผ่าน validation' : row.issues.join(' · ')}
+                        {row.message ?? (row.ready ? 'ผ่านการตรวจความพร้อม' : row.issues.join(' · '))}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 justify-end">
@@ -347,6 +366,11 @@ export function BulkSendDialog({
               )}
             </div>
           </div>
+          {missingFields.length > 0 && (
+            <div className="rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
+              ต้องกรอกเพิ่มก่อนส่ง: {missingFields.join(', ')}
+            </div>
+          )}
         </div>
 
         <DialogFooter className="items-center gap-2 sm:justify-between">

@@ -98,7 +98,7 @@ const DEFAULTS: FormState = {
   enabled: true,
 }
 
-const SHOPEE_DEFAULT_DOMAINS = ['shopee.co.th', 'mail.shopee.co.th', 'noreply.shopee.co.th']
+const DEFAULT_ACCEPTED_SENDERS = ['shopee.co.th', 'mail.shopee.co.th', 'noreply.shopee.co.th']
 const SHOPEE_DEFAULT_SUBJECTS = ['ถูกจัดส่งแล้ว', 'ยืนยันการชำระเงินคำสั่งซื้อหมายเลข']
 
 function newAccountDefaults(): FormState {
@@ -107,7 +107,7 @@ function newAccountDefaults(): FormState {
       ...DEFAULTS,
       name: 'Shopee Inbox',
       channel: 'shopee',
-      shopee_domains: SHOPEE_DEFAULT_DOMAINS,
+      shopee_domains: DEFAULT_ACCEPTED_SENDERS,
       filter_subjects: SHOPEE_DEFAULT_SUBJECTS,
     }
   }
@@ -244,7 +244,7 @@ const PRESETS: Preset[] = [
       port: 993,
       mailbox: 'INBOX',
       channel: 'shopee',
-      shopee_domains: SHOPEE_DEFAULT_DOMAINS,
+      shopee_domains: DEFAULT_ACCEPTED_SENDERS,
       filter_subjects: SHOPEE_DEFAULT_SUBJECTS,
       lookback_days: 30,
       poll_interval_minutes: 5,
@@ -278,7 +278,7 @@ const PRESETS: Preset[] = [
       port: 993,
       mailbox: 'INBOX',
       channel: 'shopee',
-      shopee_domains: SHOPEE_DEFAULT_DOMAINS,
+      shopee_domains: DEFAULT_ACCEPTED_SENDERS,
       filter_subjects: SHOPEE_DEFAULT_SUBJECTS,
       lookback_days: 30,
       poll_interval_minutes: 5,
@@ -747,7 +747,7 @@ export function AccountDialog({
                 placeholder="เพิ่มอีเมลหรือโดเมนผู้ส่ง แล้วกด Enter"
               />
               <Hint>
-                ปล่อยว่างได้ เพราะส่วน Shopee ด้านล่างมีรายการผู้ส่งที่ยอมรับอยู่แล้ว
+                ปล่อยว่างได้ แล้วไปกำหนดในส่วน “ผู้ส่งที่ยอมรับ” ด้านล่างแทน
               </Hint>
             </div>
 
@@ -767,7 +767,7 @@ export function AccountDialog({
             </div>
           </details>
 
-          {/* ─── Section: Shopee config ─── */}
+          {/* ─── Section: accepted senders ─── */}
           <details
             open={isShopee}
             className={cn(
@@ -780,31 +780,31 @@ export function AccountDialog({
             <summary className="list-none">
               <SectionHeader
                 icon={ShoppingBag}
-                title="Shopee — ตั้งค่าเฉพาะ"
+                title="ผู้ส่งที่ยอมรับ"
                 subtitle={
                   isShopee
-                    ? 'กำหนดผู้ส่งของ Shopee เพื่อกันอีเมลปลอม'
+                    ? 'กำหนดอีเมลหรือโดเมนที่อนุญาตให้เข้าระบบ'
                     : 'ส่วนนี้ใช้เฉพาะประเภท Shopee — เลือกด้านบนเพื่อเปิดใช้งาน'
                 }
               />
             </summary>
 
             <div className="space-y-1">
-              <Label>ผู้ส่ง Shopee ที่ยอมรับ</Label>
+              <Label>รับเมลจากผู้ส่ง</Label>
               <TagInput
                 value={form.shopee_domains}
                 onChange={(v) => set('shopee_domains', v)}
                 placeholder={
                   isShopee
-                    ? 'เพิ่ม domain หรืออีเมล แล้วกด Enter'
+                    ? 'เพิ่มโดเมนหรืออีเมล แล้วกด Enter'
                     : 'ปิดใช้งาน — เปลี่ยน channel เป็น Shopee ก่อน'
                 }
                 lower
                 className={cn(!isShopee && 'pointer-events-none')}
               />
               <Hint>
-                BillFlow จะรับเฉพาะอีเมลจากโดเมนหรืออีเมลในรายการนี้ เพื่อกันอีเมลปลอม.
-                ถ้ามีการ forward จากอีเมลอื่น ให้เพิ่มอีเมลผู้ forward เข้าไปได้
+                ใส่ได้ทั้งโดเมน เช่น <code>shopee.co.th</code> หรืออีเมลเต็ม เช่น{' '}
+                <code>billing@example.com</code>. ถ้าเว้นว่าง ระบบจะรับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ
               </Hint>
             </div>
           </details>

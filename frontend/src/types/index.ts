@@ -110,6 +110,7 @@ export interface BillListResponse {
   total: number
   page: number
   per_page: number
+  page_size?: number
 }
 
 // ─── Mapping ─────────────────────────────────────────────────────────────────

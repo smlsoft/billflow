@@ -100,6 +100,32 @@ export default function Dashboard() {
         </Card>
       )}
 
+      {setupStatus?.ready && !loading && (stats?.total_bills ?? 0) === 0 && (
+        <Card className="border-primary/25 bg-primary/[0.04]">
+          <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-2.5">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <div>
+                <p className="text-sm font-semibold">ระบบพร้อมแล้ว แต่ยังไม่มีเอกสาร</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  เริ่มจากนำเข้า Shopee Excel หรือกดดึงอีเมล Shopee เพื่อสร้างใบสั่งซื้อเข้าคิวตรวจ
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS && (
+                <Button asChild size="sm">
+                  <Link to="/import/shopee">นำเข้า Shopee Excel</Link>
+                </Button>
+              )}
+              <Button asChild size="sm" variant="outline">
+                <Link to="/settings/email">ดึงอีเมลรับบิล</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
         <CardContent className="grid gap-0 p-0 lg:grid-cols-[1.15fr_0.85fr]">
           <div className="border-b border-border/70 p-5 lg:border-b-0 lg:border-r">
@@ -168,7 +194,7 @@ export default function Dashboard() {
               <FlowStep
                 icon={ShoppingBag}
                 title="Shopee Excel"
-                desc="นำเข้าไฟล์จาก Seller Center → ใบสั่งขาย → ขาย -> ใบสั่งขาย"
+                desc="นำเข้าไฟล์จาก Seller Center → แยกตามปลายทางที่ตั้งไว้ → ใบสั่งขายหรือขายสินค้าและบริการ"
               />
             )}
           </CardContent>

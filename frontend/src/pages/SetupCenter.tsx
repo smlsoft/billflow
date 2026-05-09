@@ -186,6 +186,8 @@ export default function SetupCenter() {
   const pct = status ? Math.round((status.blocking_ready_count / Math.max(status.blocking_total_count, 1)) * 100) : 0
   const docs = status?.documents
   const imports = status?.imports
+  const workPending = (docs?.pending ?? 0) + (docs?.needs_review ?? 0) + (docs?.failed ?? 0)
+  const hasWorkPending = !!status?.ready && workPending > 0
 
   const resetTestData = async () => {
     if (confirmText !== 'RESET') {
@@ -243,12 +245,18 @@ export default function SetupCenter() {
                   <CircleAlert className="h-5 w-5 text-warning" />
                 )}
                 <p className="text-sm font-semibold">
-                  {status?.ready ? 'พร้อมให้ลูกค้าทดลองใช้งาน' : 'ยังมีขั้นตอนที่ต้องตั้งค่า'}
+                  {status?.ready
+                    ? hasWorkPending
+                      ? 'ระบบพร้อมใช้งาน มีงานค้างให้จัดการ'
+                      : 'พร้อมให้ลูกค้าทดลองใช้งาน'
+                    : 'ยังมีขั้นตอนที่ต้องตั้งค่า'}
                 </p>
               </div>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                 {status
-                  ? `ขั้นตอนสำคัญพร้อม ${status.blocking_ready_count}/${status.blocking_total_count} · ทั้งหมด ${status.ready_count}/${status.total_count}`
+                  ? hasWorkPending
+                    ? `การตั้งค่าหลักพร้อมแล้ว · มีเอกสารต้องตรวจ/ส่ง ${n(workPending)} รายการ`
+                    : `ขั้นตอนสำคัญพร้อม ${status.blocking_ready_count}/${status.blocking_total_count} · ทั้งหมด ${status.ready_count}/${status.total_count}`
                   : 'กำลังตรวจสถานะ...'}
               </p>
               {status?.pending_restart && (
@@ -271,6 +279,28 @@ export default function SetupCenter() {
                   <ArrowRight className="h-4 w-4" />
                 </Link>
               </Button>
+            )}
+            {hasWorkPending && (
+              <div className="flex shrink-0 flex-wrap gap-2">
+                {(docs?.needs_review ?? 0) > 0 && (
+                  <Button asChild size="sm">
+                    <Link to="/bills?status=needs_review">
+                      ไปตรวจเอกสาร
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                )}
+                {(docs?.pending ?? 0) > 0 && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link to="/bills?status=pending">ดูเอกสารพร้อมส่ง</Link>
+                  </Button>
+                )}
+                {(docs?.failed ?? 0) > 0 && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link to="/logs?level=error">ดูรายการส่งไม่สำเร็จ</Link>
+                  </Button>
+                )}
+              </div>
             )}
           </CardContent>
         </Card>

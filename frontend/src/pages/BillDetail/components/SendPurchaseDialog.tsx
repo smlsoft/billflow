@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Send } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -103,6 +103,14 @@ export function SendPurchaseDialog({
     vatRateStr.trim() !== '' &&
     Number.isFinite(vatRateNum) &&
     docTime.trim() !== ''
+  const missingFields = useMemo(() => [
+    !effectivePartyCode ? (isSale ? 'ลูกค้า' : 'ผู้ขาย') : '',
+    whCode.trim() === '' ? 'คลัง' : '',
+    shelfCode.trim() === '' ? 'พื้นที่เก็บ' : '',
+    vatTypeStr === '' ? 'ประเภทภาษี' : '',
+    vatRateStr.trim() === '' || !Number.isFinite(vatRateNum) ? 'อัตราภาษี' : '',
+    docTime.trim() === '' ? 'เวลาเอกสาร' : '',
+  ].filter(Boolean), [docTime, effectivePartyCode, isSale, shelfCode, vatRateNum, vatRateStr, vatTypeStr, whCode])
 
   useEffect(() => {
     if (!open) return
@@ -147,7 +155,7 @@ export function SendPurchaseDialog({
       <DialogContent className="grid max-h-[90vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            ยืนยันการส่ง{documentName}ไปยัง SML
+            ยืนยันการส่ง {documentName} ไปยัง SML
           </DialogTitle>
         </DialogHeader>
 
@@ -308,7 +316,7 @@ export function SendPurchaseDialog({
               </div>
             </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
-              ต้องเลือก{isSale ? 'ลูกค้า' : 'ผู้ขาย'} และกรอกคลัง พื้นที่เก็บ ประเภทภาษี อัตราภาษี เวลาเอกสารให้ครบก่อนส่งเข้า SML
+              เลขเอกสารจะใช้ค่าที่แสดงอยู่ใน dialog นี้ ถ้า SML แจ้งเลขซ้ำ ให้แก้ doc_no แล้วลองส่งใหม่
             </div>
           </div>
 
@@ -323,6 +331,12 @@ export function SendPurchaseDialog({
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
             />
           </div>
+          {missingFields.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>ต้องกรอกเพิ่มก่อนส่ง: {missingFields.join(', ')}</div>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2">

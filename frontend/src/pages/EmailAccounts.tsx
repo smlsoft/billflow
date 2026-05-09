@@ -152,6 +152,12 @@ function statusLabel(s?: string | null): string {
 function friendlyPollError(error?: string | null): string {
   if (!error) return ''
   const lower = error.toLowerCase()
+  if (lower.includes('ถูกข้าม') && lower.includes('ผู้ส่งที่ยอมรับ')) {
+    return error
+  }
+  if (lower.includes('shopee_channel_non_shopee_from')) {
+    return 'มีอีเมลเข้ามา แต่ผู้ส่งไม่อยู่ในรายการที่ยอมรับ ให้กดแก้ไขแล้วเพิ่มอีเมลหรือโดเมนผู้ส่ง หรือเว้นว่างถ้าต้องการรับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ'
+  }
   if (lower.includes('empty items')) {
     return 'มีอีเมลที่ผ่านคำกรองหัวข้อเข้ามา แต่ไม่ใช่รูปแบบบิลซื้อ Shopee ที่ระบบอ่านได้ แนะนำให้กดแก้ไขกล่องเมล แล้วเหลือคำกรองเฉพาะ "ถูกจัดส่งแล้ว" และ "ยืนยันการชำระเงินคำสั่งซื้อหมายเลข"'
   }
@@ -162,6 +168,16 @@ function friendlyPollError(error?: string | null): string {
     return 'ระบบ AI ยังประมวลผลไม่ได้ กรุณาตรวจเครดิตหรือการเชื่อมต่อ OpenRouter'
   }
   return error
+}
+
+function compactList(value?: string | null, maxItems = 2): string {
+  const items = (value ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+  if (items.length === 0) return 'ยังไม่กำหนด'
+  if (items.length <= maxItems) return items.join(', ')
+  return `${items.slice(0, maxItems).join(', ')} +${items.length - maxItems}`
 }
 
 export default function EmailAccounts() {
@@ -329,9 +345,22 @@ export default function EmailAccounts() {
                 cell: (a) => {
                   const meta = CHANNEL_META[a.channel] ?? CHANNEL_META.general
                   return (
-                    <Badge variant="secondary" className={meta.cls}>
-                      {meta.label}
-                    </Badge>
+                    <div className="flex flex-col gap-1">
+                      <Badge variant="secondary" className={cn('w-fit', meta.cls)}>
+                        {meta.label}
+                      </Badge>
+                      {a.channel === 'shopee' && (
+                        <span
+                          className={cn(
+                            'max-w-[260px] truncate text-[11px]',
+                            a.shopee_domains ? 'text-muted-foreground' : 'text-info',
+                          )}
+                          title={a.shopee_domains || 'เว้นว่าง = รับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ'}
+                        >
+                          ผู้ส่งที่ยอมรับ: {a.shopee_domains ? compactList(a.shopee_domains) : 'ทุกผู้ส่ง'}
+                        </span>
+                      )}
+                    </div>
                   )
                 },
               },

@@ -204,6 +204,9 @@ func (h *BillHandler) List(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if f.PerPage > 0 {
+		f.PageSize = f.PerPage
+	}
 
 	bills, total, err := h.billRepo.List(f)
 	if err != nil {
@@ -211,12 +214,16 @@ func (h *BillHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
+	if bills == nil {
+		bills = []models.Bill{}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":      bills,
 		"total":     total,
 		"page":      f.Page,
 		"page_size": f.PageSize,
+		"per_page":  f.PageSize,
 	})
 }
 

@@ -57,6 +57,7 @@ type BillListFilter struct {
 	Search        string `form:"search"`
 	Page          int    `form:"page,default=1"`
 	PageSize      int    `form:"page_size,default=20"`
+	PerPage       int    `form:"per_page"`
 }
 
 type Anomaly struct {

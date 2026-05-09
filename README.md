@@ -51,7 +51,7 @@
 Backend:   Go 1.24  (Gin framework)
 Frontend:  React + Vite + TypeScript
 Database:  PostgreSQL 16
-AI:        OpenRouter API (free model first; fallback google/gemini-2.5-flash-lite)
+AI:        OpenRouter API (primary google/gemini-2.5-flash-lite; fallback google/gemini-2.5-flash)
 LINE:      line-bot-sdk-go v8 (official)
 Email:     IMAP polling (go-imap/v2)
 Excel:     excelize v2.10.1
@@ -219,8 +219,8 @@ LINE_ADMIN_USER_ID=
 
 # OpenRouter
 OPENROUTER_API_KEY=sk-or-xxx
-OPENROUTER_MODEL=google/gemma-4-26b-a4b-it:free
-OPENROUTER_FALLBACK_MODEL=google/gemini-2.5-flash-lite
+OPENROUTER_MODEL=google/gemini-2.5-flash-lite
+OPENROUTER_FALLBACK_MODEL=google/gemini-2.5-flash
 OPENROUTER_AUDIO_MODEL=openai/whisper-1
 
 # SML ERP #1 (LINE/Email — JSON-RPC)
@@ -513,7 +513,7 @@ test-connection button, list-folders button.
 
 ## 10. AI Extraction
 
-**Model:** `google/gemma-4-26b-a4b-it:free` first (fallback: `google/gemini-2.5-flash-lite`)
+**Model:** `google/gemini-2.5-flash-lite` first (fallback: `google/gemini-2.5-flash`)
 
 **System Prompt Output Format:**
 ```json

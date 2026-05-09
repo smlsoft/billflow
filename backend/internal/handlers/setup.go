@@ -110,8 +110,8 @@ func (h *SetupHandler) Status(c *gin.Context) {
 		},
 		{
 			"key":         "uat",
-			"title":       "ข้อมูลทดสอบและ UAT",
-			"description": "ตรวจจำนวนเอกสารค้าง, import run และประวัติงานก่อนส่งให้ลูกค้าทดลอง",
+			"title":       "ข้อมูลทดสอบ",
+			"description": "ตรวจจำนวนเอกสารค้าง, รอบนำเข้า และประวัติการทำงานก่อนส่งให้ลูกค้าทดลอง",
 			"href":        "/setup",
 			"ready":       true,
 			"status":      "พร้อมตรวจสอบ",

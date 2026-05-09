@@ -114,6 +114,12 @@ interface LogFact {
   tone?: 'normal' | 'danger' | 'muted'
 }
 
+interface LogGuidance {
+  title: string
+  description: string
+  tone: 'warning' | 'danger' | 'info'
+}
+
 function parseDetailError(log: AuditLog): Record<string, any> {
   const err = log.detail?.error
   if (err && typeof err === 'object' && !Array.isArray(err)) return err
@@ -124,6 +130,59 @@ function parseDetailError(log: AuditLog): Record<string, any> {
   } catch {
     return {}
   }
+}
+
+function guidanceFor(log: AuditLog): LogGuidance | null {
+  const d = log.detail ?? {}
+  const parsedError = parseDetailError(log)
+  const errorText = String(parsedError.error ?? d.error ?? '').toLowerCase()
+
+  if (log.action === 'sml_failed') {
+    if (errorText.includes('duplicate key') || errorText.includes('already exists')) {
+      return {
+        title: 'ผู้ใช้แก้ได้: เลขเอกสาร SML ซ้ำ',
+        description: 'เปิดบิลนี้ กดส่งใหม่ แล้วเปลี่ยนเลขเอกสาร SML (doc_no) ก่อนส่งอีกครั้ง',
+        tone: 'warning',
+      }
+    }
+    if (errorText.includes('warehouse') || errorText.includes('wh_code') || errorText.includes('shelf')) {
+      return {
+        title: 'ผู้ใช้แก้ได้: ตรวจคลังหรือพื้นที่เก็บ',
+        description: 'เปิดบิลนี้แล้วกรอกรหัสคลังและพื้นที่เก็บให้ตรงกับ SML ก่อนส่งใหม่',
+        tone: 'warning',
+      }
+    }
+    if (errorText.includes('item') || errorText.includes('สินค้า') || errorText.includes('unit')) {
+      return {
+        title: 'ผู้ใช้แก้ได้: ตรวจสินค้าและหน่วย',
+        description: 'ตรวจรหัสสินค้าและหน่วยในหน้ารายละเอียดบิล ถ้ารหัสไม่มีใน SML ให้ซิงก์หรือสร้างสินค้าให้เรียบร้อยก่อน',
+        tone: 'warning',
+      }
+    }
+    return {
+      title: 'ส่งให้ทีมดูแลระบบตรวจ',
+      description: 'คัดลอก error พร้อมเลขเอกสาร SML และ Trace ให้ทีมดูแลระบบหรือทีม SML API ตรวจต่อ',
+      tone: 'danger',
+    }
+  }
+
+  if (log.level === 'error') {
+    return {
+      title: 'ต้องให้ผู้ดูแลระบบตรวจ',
+      description: 'เหตุการณ์นี้เป็น error ของระบบ ให้แนบ Trace หรือข้อมูลดิบในรายการนี้เวลาส่งต่อทีมดูแล',
+      tone: 'danger',
+    }
+  }
+
+  if (log.level === 'warn' || String(d.error ?? '').includes('ถูกข้าม')) {
+    return {
+      title: 'ควรตรวจการตั้งค่า',
+      description: 'ระบบยังทำงานได้ แต่มีข้อมูลบางส่วนถูกข้ามหรืออ่านไม่ครบ ให้ตรวจ filter, ผู้ส่งอีเมล หรือไฟล์ต้นทาง',
+      tone: 'warning',
+    }
+  }
+
+  return null
 }
 
 function compact(value: unknown, max = 90): string {
@@ -190,6 +249,7 @@ function LogExpandedSummary({
   const parsedError = parseDetailError(log)
   const errorMessage = parsedError.error ?? d.error
   const facts = makeFacts(log)
+  const guidance = guidanceFor(log)
   const isSmlSent = log.action === 'sml_sent'
   const isSmlFailed = log.action === 'sml_failed'
 
@@ -245,6 +305,45 @@ function LogExpandedSummary({
             <p className="mt-0.5 text-xs text-muted-foreground">
               ใช้ดูว่าอีเมลหรือไฟล์ใดเป็นต้นทางของบิล และใช้ trace กลับตอนตรวจซ้ำ
             </p>
+          </div>
+        </div>
+      )}
+
+      {guidance && (
+        <div
+          className={cn(
+            'flex items-start gap-2 rounded-md border px-3 py-2',
+            guidance.tone === 'danger'
+              ? 'border-destructive/30 bg-destructive/10'
+              : guidance.tone === 'warning'
+                ? 'border-warning/30 bg-warning/10'
+                : 'border-info/25 bg-info/10',
+          )}
+        >
+          <AlertTriangle
+            className={cn(
+              'mt-0.5 h-4 w-4 shrink-0',
+              guidance.tone === 'danger'
+                ? 'text-destructive'
+                : guidance.tone === 'warning'
+                  ? 'text-warning'
+                  : 'text-info',
+            )}
+          />
+          <div className="min-w-0">
+            <div
+              className={cn(
+                'text-sm font-semibold',
+                guidance.tone === 'danger'
+                  ? 'text-destructive'
+                  : guidance.tone === 'warning'
+                    ? 'text-warning'
+                    : 'text-foreground',
+              )}
+            >
+              {guidance.title}
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground">{guidance.description}</p>
           </div>
         </div>
       )}

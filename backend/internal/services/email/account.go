@@ -173,7 +173,7 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 	if res.Err != nil {
 		errMsg = res.Err.Error()
 	} else if len(res.ProcessWarnings) > 0 {
-		errMsg = strings.Join(res.ProcessWarnings, "\n")
+		errMsg = strings.Join(compactWarnings(res.ProcessWarnings, 8), "\n")
 	}
 	if updateErr := p.repo.UpdatePollStatus(account.ID, res.Status(), errMsg, res.Processed); updateErr != nil {
 		p.logger.Warn("imap_poller_status_update_failed", zap.Error(updateErr))
@@ -223,6 +223,27 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func compactWarnings(warnings []string, limit int) []string {
+	if limit <= 0 {
+		limit = 8
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		w = strings.TrimSpace(w)
+		if w == "" || seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+	}
+	if len(out) <= limit {
+		return out
+	}
+	hidden := len(out) - limit
+	return append(out[:limit], fmt.Sprintf("มีคำเตือนอื่นอีก %d รายการ", hidden))
 }
 
 // pollConfigFromAccount snapshots the DB row into a value struct so the

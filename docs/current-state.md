@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-08 20:15 +07
+> Updated: 2026-05-09 07:30 +07
 > Source of truth checked: local code/migrations, `docker compose` on `192.168.2.109`, production `/health`, production PostgreSQL schema, and active Cloudflare Quick Tunnel checks.
 
 ## Latest Handoff For New Chat
@@ -21,6 +21,7 @@
   - แสดงจำนวนเอกสารค้างแยกซื้อ/ขาย/saleinvoice และจำนวน import/log
   - มีปุ่ม `ล้างข้อมูลทดสอบ` สำหรับ admin ล้าง bills/import runs/logs โดยไม่แตะ settings/catalog/mappings/AI usage
   - ตัวเลือกรีเซ็ตเลขรันเอกสารและล้างประวัติอีเมลที่เคยอ่านแล้วต้องเลือกเอง เพราะมีความเสี่ยง doc_no ซ้ำหรืออ่านอีเมลเก่าซ้ำ
+  - ถ้าการตั้งค่าหลักพร้อมแล้วแต่ยังมีเอกสารค้าง ระบบจะแยกข้อความเป็น “ระบบพร้อมใช้งาน มีงานค้างให้จัดการ” พร้อมปุ่มไปตรวจเอกสาร/เอกสารพร้อมส่ง/log ที่เกี่ยวข้อง
 - BillFlow main deploy แล้วและทดสอบล้างข้อมูลทดสอบจริงแล้ว:
   - bills/import runs ถูกล้างเป็น 0
   - audit logs เหลือ 1 รายการจาก action reset เอง
@@ -41,6 +42,22 @@
 - Shopee SKU ถูกเก็บแยกเป็น `bill_items.source_sku`; ถ้า SKU ไม่มีใน SML Catalog จะไม่เอาไปใส่เป็น `item_code`.
 - REST SML retry ตรวจซ้ำว่า `item_code` มีอยู่ใน Catalog จริงก่อนส่ง.
 - Saleinvoice test ล่าสุด: `BF-INV26050001` ส่ง payload มี `doc_ref_date: "2026-03-10"` แล้ว ถ้า SML UI ไม่แสดงให้ dev SML ตรวจ API mapping.
+- UX hardening ล่าสุดสำหรับ Phase 1+:
+  - หน้า Dashboard และหน้าเอกสารแสดง empty state พร้อมปุ่มไปงานถัดไปเมื่อยังไม่มีบิลหลังล้างข้อมูลทดสอบ
+  - `/settings/channels` ซ่อน API path เป็น `รายละเอียดขั้นสูง` เพื่อไม่ให้พนักงานทั่วไปสับสน
+  - dialog ส่ง SML ทั้งแบบรายใบและแบบส่งทั้งหมดแสดง field ที่ยังขาด เช่น ลูกค้า/ผู้ขาย, คลัง, พื้นที่เก็บ, ภาษี, เวลาเอกสาร ก่อนกดส่ง
+  - bulk send แสดงข้อความเตือนเมื่อมีเอกสารพร้อมส่งเกิน 100 รายการ และแสดง error จาก backend/SML ในแถวที่ส่งไม่สำเร็จ
+  - `/settings/email` แสดง `ผู้ส่ง Shopee ที่ยอมรับ` ในตาราง และ backend จะบันทึกคำเตือนภาษาไทยเมื่ออีเมลถูกข้ามเพราะผู้ส่งไม่ตรง
+  - `/logs` แสดงคำแนะนำว่า error นั้นผู้ใช้แก้เองได้หรือควรส่งให้ทีมดูแลระบบ/SML API
+  - `/api/bills` รองรับทั้ง `per_page` และ `page_size`, และคืน `data: []` แทน `null` เมื่อไม่มีข้อมูล
+- Email accepted-sender update:
+  - ช่องเดิม `shopee_domains` ใน DB ยังใช้ชื่อเดิมเพื่อเลี่ยง migration เสี่ยง แต่ UI แสดงเป็น `ผู้ส่งที่ยอมรับ`
+  - ใส่ได้ทั้งโดเมนและอีเมลเต็ม เช่น `shopee.co.th`, `mail.shopee.co.th`, `billing@example.com`
+  - เว้นว่าง = รับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ
+  - backend ลด warning ซ้ำจากการ poll อีเมล เพื่อไม่ให้ `/settings/email` แสดง error ยาวเกินจำเป็น
+- AI model update:
+  - production log ยืนยันว่า `google/gemma-4-26b-a4b-it:free` fail แล้ว fallback ไป `google/gemini-2.5-flash-lite`
+  - BillFlow main จึงเปลี่ยน model หลักเป็น `google/gemini-2.5-flash-lite` และใช้ `google/gemini-2.5-flash` เป็น fallback สำหรับงานที่ต้องการความเสถียรกว่า
 
 ## Deployment
 
@@ -60,8 +77,8 @@ Secrets are intentionally omitted.
 
 | Key | Production value observed |
 |---|---|
-| `OPENROUTER_MODEL` | `google/gemma-4-26b-a4b-it:free` |
-| `OPENROUTER_FALLBACK_MODEL` | `google/gemini-2.5-flash-lite` |
+| `OPENROUTER_MODEL` | `google/gemini-2.5-flash-lite` |
+| `OPENROUTER_FALLBACK_MODEL` | `google/gemini-2.5-flash` |
 | `OPENROUTER_AUDIO_MODEL` | `openai/whisper-1` |
 | `SML_BASE_URL` | `http://192.168.2.213:3248` |
 | `SHOPEE_SML_URL` | `http://192.168.2.248:8080` |
@@ -95,6 +112,7 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Sidebar navigation | Sidebar groups document work by purchase/sale: `งานฝั่งซื้อ` and `งานฝั่งขาย`. Badges are per-document-route queue counts, not global pending count. |
 | Bill detail | Shows route preview, blocks send when item validation fails, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML request/response before raw JSON. |
 | Logs | `/logs` shows action-specific summaries. Expanding a row shows key facts first (bill, doc_no, route, trace, error) and keeps raw JSON as a secondary technical view. |
+| UX guardrails | Empty queues guide users to import/email setup, channel API details are collapsed, email sender mismatch is surfaced in Thai, and logs classify common SML failures into user-fixable vs support-needed actions. |
 | Catalog | SML 248 catalog sync, CSV import, product create, per-row refresh/delete, embeddings, and in-memory cosine index. |
 | SSE | `/api/admin/events` streams inbox/admin events with HMAC token from `/api/admin/events/token`. |
 | Background jobs | Daily insight, daily backup, disk monitor, LINE token checker, hourly reply-token cleanup, daily Cloudflare tunnel drift monitor, IMAP coordinator. |

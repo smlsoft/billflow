@@ -70,6 +70,54 @@ function workMenuFor(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type' | 'end
   return null
 }
 
+function EndpointCell({ row }: { row: ChannelDefaultRow }) {
+  const [open, setOpen] = useState(false)
+  const ep = endpointFor(row.channel as ChannelKey, row.bill_type, row.endpoint ?? '')
+  const destination = destinationFor(
+    row.channel as ChannelKey,
+    row.bill_type,
+    row.endpoint ?? '',
+    row.doc_format_code ?? '',
+  )
+  const overridden = PHASE >= 2 && !!row.endpoint
+
+  return (
+    <div className="min-w-[220px] space-y-1">
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs font-medium text-foreground">
+          {destination?.label ?? ep.label}
+        </span>
+        {overridden && (
+          <span className="rounded bg-info/10 px-1 py-0.5 text-[9px] font-medium uppercase text-info">
+            ตั้งเอง
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen((v) => !v)
+        }}
+        className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+      >
+        <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
+        {open ? 'ซ่อนรายละเอียดขั้นสูง' : 'รายละเอียดขั้นสูง'}
+      </button>
+      {open && (
+        <div className="rounded-md border border-border/70 bg-muted/35 px-2 py-1.5">
+          <div className="text-[10px] font-medium uppercase text-muted-foreground">
+            API path
+          </div>
+          <code className="mt-0.5 block break-all text-[10px] leading-4 text-muted-foreground">
+            {ep.apiPath}
+          </code>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function HelpBanner() {
   const [open, setOpen] = useState(true)
   const phase1 = PHASE < 2
@@ -255,7 +303,7 @@ export default function ChannelDefaults() {
       toast.success(`ตั้งค่าสำเร็จ ${applied} channel · ข้าม ${skipped}`)
       await load()
     } catch (e: any) {
-      toast.error('Quick setup ล้มเหลว: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
+      toast.error('ตั้งค่าอัตโนมัติล้มเหลว: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
     } finally {
       setQuickRunning(false)
     }
@@ -319,11 +367,11 @@ export default function ChannelDefaults() {
             <Sparkles className="h-5 w-5 shrink-0 text-warning" />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-foreground">
-                Quick setup — ตั้งค่าอัตโนมัติจาก placeholder ใน SML
+                ตั้งค่าอัตโนมัติจากลูกค้า/ผู้ขายตั้งต้นใน SML
               </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
-                ระบบจะค้นหาลูกค้าชื่อ <span className="font-mono text-foreground">"ลูกค้า จาก AI / Line / Email / Shopee"</span>{' '}
-                ใน SML 248 (ปกติ AR00001–04) แล้ว pair เข้าทุก channel ที่ยังไม่ตั้งค่า — ไม่กระทบ row ที่มีค่าอยู่แล้ว
+                ระบบจะค้นหาลูกค้าตั้งต้นใน SML แล้วผูกเข้าช่องทางที่ยังไม่ตั้งค่า
+                โดยไม่ทับรายการที่ตั้งค่าไว้แล้ว
               </div>
             </div>
             <Button
@@ -390,33 +438,7 @@ export default function ChannelDefaults() {
           {
             key: 'endpoint',
             header: 'ส่งเข้า SML',
-            cell: (r) => {
-              const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
-              const destination = destinationFor(
-                r.channel as ChannelKey,
-                r.bill_type,
-                r.endpoint ?? '',
-                r.doc_format_code ?? '',
-              )
-              const overridden = PHASE >= 2 && !!r.endpoint
-              return (
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium text-foreground">
-                      {destination?.label ?? ep.label}
-                    </span>
-                    {overridden && (
-                      <span className="rounded bg-info/10 px-1 py-0.5 text-[9px] font-medium uppercase text-info">
-                        ตั้งเอง
-                      </span>
-                    )}
-                  </div>
-                  <code className="text-[10px] text-muted-foreground">
-                    {ep.apiPath}
-                  </code>
-                </div>
-              )
-            },
+            cell: (r) => <EndpointCell row={r} />,
           },
           {
             key: 'work_menu',
