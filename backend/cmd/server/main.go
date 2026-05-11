@@ -365,6 +365,10 @@ func main() {
 	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, channelDefaultRepo, cfg.AutoConfirmThreshold, logger)
 	shopeeH := handlers.NewShopeeImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	shopeeH.SetArtifactService(artifactSvc)
+	lazadaH := handlers.NewLazadaImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
+	lazadaH.SetArtifactService(artifactSvc)
+	tiktokH := handlers.NewTikTokImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
+	tiktokH.SetArtifactService(artifactSvc)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
@@ -450,6 +454,18 @@ func main() {
 		api.GET("/import/shopee/runs", middleware.RequireRole("admin", "staff"), shopeeH.ListRuns)
 		api.POST("/import/shopee/preview", middleware.RequireRole("admin", "staff"), shopeeH.Preview)
 		api.POST("/import/shopee/confirm", middleware.RequireRole("admin", "staff"), shopeeH.Confirm)
+
+		// Lazada import — same manual-review flow as Shopee Excel
+		api.GET("/settings/lazada-config", lazadaH.GetConfig)
+		api.GET("/import/lazada/runs", middleware.RequireRole("admin", "staff"), lazadaH.ListRuns)
+		api.POST("/import/lazada/preview", middleware.RequireRole("admin", "staff"), lazadaH.Preview)
+		api.POST("/import/lazada/confirm", middleware.RequireRole("admin", "staff"), lazadaH.Confirm)
+
+		// TikTok import — same manual-review flow as Shopee/Lazada Excel
+		api.GET("/settings/tiktok-config", tiktokH.GetConfig)
+		api.GET("/import/tiktok/runs", middleware.RequireRole("admin", "staff"), tiktokH.ListRuns)
+		api.POST("/import/tiktok/preview", middleware.RequireRole("admin", "staff"), tiktokH.Preview)
+		api.POST("/import/tiktok/confirm", middleware.RequireRole("admin", "staff"), tiktokH.Confirm)
 
 		// Platform column mappings
 		api.GET("/settings/column-mappings/:platform", settingsH.GetColumnMappings)

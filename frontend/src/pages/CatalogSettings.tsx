@@ -14,7 +14,6 @@ import {
   Search,
   Sparkles,
   Trash2,
-  Upload,
   X,
 } from 'lucide-react'
 
@@ -44,6 +43,14 @@ interface CatalogStats {
   error: number
   index_size: number
   embed_running: boolean
+  sync_running?: boolean
+  sync_status?: {
+    running: boolean
+    started_at?: string
+    finished_at?: string
+    count: number
+    error?: string
+  }
 }
 
 interface ListResponse {
@@ -180,7 +187,6 @@ export default function CatalogSettings() {
     },
     { page: 1, filter: '', query: '' },
   )
-  const fileRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const PER_PAGE = 50
 
@@ -228,12 +234,17 @@ export default function CatalogSettings() {
   }, [fetchStats, fetchInstanceStatus])
 
   useEffect(() => {
-    if (stats?.embed_running) {
+    if (stats?.embed_running || stats?.sync_running) {
       pollRef.current = setInterval(async () => {
         const s = await fetchStats()
-        if (!s.embed_running) {
+        if (!s.embed_running && !s.sync_running) {
           if (pollRef.current) clearInterval(pollRef.current)
           fetchItems(params)
+          if (s.sync_status?.error) {
+            notify(`Sync ล้มเหลว: ${s.sync_status.error}`, false)
+          } else if (stats?.sync_running && s.sync_status?.count) {
+            notify(`Sync สำเร็จ ${s.sync_status.count} รายการ`)
+          }
         }
       }, 3000)
     } else {
@@ -243,7 +254,7 @@ export default function CatalogSettings() {
       if (pollRef.current) clearInterval(pollRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stats?.embed_running])
+  }, [stats?.embed_running, stats?.sync_running])
 
   function notify(text: string, ok = true) {
     setMessage({ text, ok })
@@ -275,10 +286,9 @@ export default function CatalogSettings() {
     }
     setSyncing(true)
     try {
-      const res = await api.post<{ synced: number }>('/api/catalog/sync')
-      notify(`Sync สำเร็จ ${res.data.synced} รายการ`)
+      const res = await api.post<{ message?: string; sync_running?: boolean }>('/api/catalog/sync')
+      notify(res.data.message === 'catalog sync already running' ? 'กำลัง Sync สินค้าอยู่แล้ว' : 'เริ่ม Sync สินค้าแล้ว')
       fetchStats()
-      fetchItems(params)
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { error?: string; pending_restart?: boolean; pending_restart_settings?: string[] } } })?.response?.data
       if (msg?.pending_restart) {
@@ -288,25 +298,6 @@ export default function CatalogSettings() {
       notify(msg?.error ?? 'Sync ล้มเหลว', false)
     } finally {
       setSyncing(false)
-    }
-  }
-
-  async function handleCSVUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const form = new FormData()
-    form.append('file', file)
-    try {
-      const res = await api.post<{ synced: number }>('/api/catalog/import-csv', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      notify(`Import CSV สำเร็จ ${res.data.synced} รายการ`)
-      fetchStats()
-      fetchItems(params)
-    } catch {
-      notify('Import CSV ล้มเหลว', false)
-    } finally {
-      if (fileRef.current) fileRef.current.value = ''
     }
   }
 
@@ -389,6 +380,7 @@ export default function CatalogSettings() {
   )
 
   const isEmbedBusy = embedding || (stats?.embed_running ?? false)
+  const isSyncBusy = syncing || (stats?.sync_running ?? false)
 
   const tabs: Array<{ key: StatusFilter; label: string; count?: number }> = [
     { key: '', label: 'ทั้งหมด', count: stats?.total },
@@ -404,22 +396,9 @@ export default function CatalogSettings() {
         description="รายการสินค้าจาก SML ที่ใช้จับคู่กับชื่อสินค้าจากอีเมล Shopee"
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing || pendingRestart}>
-              <RotateCw className={cn('h-3.5 w-3.5', syncing && 'animate-spin')} />
-              {pendingRestart ? 'รอรีสตาร์ท SML' : syncing ? 'กำลังซิงก์…' : 'ซิงก์สินค้า'}
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <label className="cursor-pointer">
-                <Upload className="h-3.5 w-3.5" />
-                นำเข้า CSV
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".csv"
-                  onChange={handleCSVUpload}
-                  className="sr-only"
-                />
-              </label>
+            <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncBusy || pendingRestart}>
+              <RotateCw className={cn('h-3.5 w-3.5', isSyncBusy && 'animate-spin')} />
+              {pendingRestart ? 'รอรีสตาร์ท SML' : isSyncBusy ? 'กำลังซิงก์…' : 'ซิงก์สินค้า'}
             </Button>
             <Button size="sm" onClick={handleEmbedAll} disabled={isEmbedBusy}>
               {isEmbedBusy ? (
@@ -455,6 +434,20 @@ export default function CatalogSettings() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {stats?.sync_running && (
+        <div className="rounded-lg border border-primary/25 bg-primary/[0.06] p-3 text-sm">
+          <div className="flex items-start gap-2.5">
+            <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" />
+            <div>
+              <p className="font-medium text-foreground">กำลัง Sync สินค้าจาก SML</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                งานนี้อาจใช้เวลาหลายนาที ปิดหน้านี้ได้ ระบบจะทำต่อบน server
+              </p>
             </div>
           </div>
         </div>

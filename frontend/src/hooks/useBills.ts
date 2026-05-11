@@ -9,6 +9,7 @@ interface BillsFilter {
   source?: string
   bill_type?: string
   document_route?: string
+  email_account_id?: string
   search?: string
   date_from?: string
   date_to?: string
@@ -45,6 +46,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.source) params.set('source', filter.source)
       if (filter.bill_type) params.set('bill_type', filter.bill_type)
       if (filter.document_route) params.set('document_route', filter.document_route)
+      if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
       if (filter.search) params.set('search', filter.search)
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)

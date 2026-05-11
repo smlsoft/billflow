@@ -43,8 +43,12 @@ export const ACTION_META: Record<string, ActionMeta> = {
   // Shopee Excel import
   shopee_import_preview: { label: 'พรีวิวไฟล์ Shopee Excel', emoji: '👁️', tone: 'muted' },
   shopee_import_done: { label: 'นำเข้า Shopee สำเร็จ', emoji: '📊', tone: 'success' },
+  tiktok_import_preview: { label: 'พรีวิวไฟล์ TikTok Excel', emoji: '👁️', tone: 'muted' },
+  tiktok_import_done: { label: 'นำเข้า TikTok สำเร็จ', emoji: '📊', tone: 'success' },
   // Catalog
   product_created: { label: 'สร้างสินค้าใน SML', emoji: '🆕', tone: 'primary' },
+  // Setup / demo maintenance
+  demo_test_data_reset: { label: 'ล้างข้อมูลทดสอบ', emoji: '🧹', tone: 'warning' },
   // Channel defaults
   channel_default_updated: { label: 'แก้ไขเส้นทาง SML', emoji: '⚙️', tone: 'info' },
   channel_default_deleted: { label: 'ลบเส้นทาง SML', emoji: '🗑️', tone: 'muted' },
@@ -77,6 +81,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   line_oa: 'LINE',
   email: 'Email',
   lazada: 'Lazada',
+  tiktok: 'TikTok Excel',
   shopee: 'Shopee',
   shopee_email: 'Shopee Email',
   shopee_excel: 'Shopee Excel',
@@ -84,6 +89,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   manual: 'Manual',
   sml: 'SML',
   system: 'System',
+  setup: 'Setup',
   channel_defaults: 'Settings',
   catalog: 'Catalog',
 }
@@ -96,8 +102,10 @@ export const SOURCE_TONE: Record<string, string> = {
   shopee_excel: 'bg-warning/10 text-warning',
   shopee_shipped: 'bg-warning/10 text-warning',
   lazada: 'bg-info/10 text-info',
+  tiktok: 'bg-muted text-foreground',
   sml: 'bg-primary/10 text-primary',
   system: 'bg-muted text-muted-foreground',
+  setup: 'bg-warning/10 text-warning',
   channel_defaults: 'bg-muted text-muted-foreground',
   catalog: 'bg-muted text-muted-foreground',
 }
@@ -131,9 +139,9 @@ export function summarize(log: AuditLog): string {
   const d = log.detail ?? {}
   switch (log.action) {
     case 'bill_created':
-      if (d.flow === 'shopee_email' || d.flow === 'shopee_excel' || d.shopee_order_id) {
+      if (d.flow === 'shopee_email' || d.flow === 'shopee_excel' || d.flow === 'tiktok_excel' || d.shopee_order_id || d.tiktok_order_id) {
         const items = d.items_count ?? d.items ?? ''
-        const id = d.order_id ?? d.shopee_order_id ?? ''
+        const id = d.order_id ?? d.shopee_order_id ?? d.tiktok_order_id ?? ''
         return `order ${id}${items ? ` · ${items} รายการ` : ''}`
       }
       if (d.from_text || d.flow === 'line_text') return 'จากข้อความ LINE'
@@ -149,8 +157,10 @@ export function summarize(log: AuditLog): string {
       return [route ? smlRouteLabel(route) : '', docNo, message].filter(Boolean).join(' · ')
     }
     case 'shopee_import_done':
+    case 'tiktok_import_done':
       return `สำเร็จ ${d.success_count ?? 0} / ล้มเหลว ${d.fail_count ?? 0} (รวม ${d.total ?? 0})`
     case 'shopee_import_preview':
+    case 'tiktok_import_preview':
       return `${d.filename ?? ''} — ${d.total_orders ?? 0} order${
         d.duplicate_count ? ` · ซ้ำ ${d.duplicate_count}` : ''
       }`
@@ -164,6 +174,28 @@ export function summarize(log: AuditLog): string {
       return [d.channel, d.bill_type, d.party_code].filter(Boolean).join(' / ')
     case 'product_created':
       return d.code ? `${d.code} — ${d.name ?? ''}` : ''
+    case 'demo_test_data_reset': {
+      const docs = d.before_documents ?? {}
+      const imports = d.before_imports ?? {}
+      const totalDocs = Number(docs.total ?? 0)
+      const logs = Number(d.before_logs ?? imports.audit_logs ?? 0)
+      const preserved = [
+        d.preserved_settings ? 'ตั้งค่า' : '',
+        d.preserved_catalog ? 'สินค้า SML' : '',
+        d.preserved_mappings ? 'ตารางจับคู่' : '',
+        d.preserved_ai_usage_log ? 'ประวัติ AI' : '',
+      ].filter(Boolean)
+      const resetParts = [
+        d.reset_doc_counter ? 'รีเซ็ตเลขรันเอกสาร' : '',
+        d.reset_email_dedup ? 'ล้างประวัติอีเมลที่เคยอ่านแล้ว' : '',
+      ].filter(Boolean)
+      return [
+        `ล้างบิลทดสอบ ${totalDocs.toLocaleString()} ใบ`,
+        `ล้างประวัติการทำงานเดิม ${logs.toLocaleString()} รายการ`,
+        preserved.length ? `เก็บไว้: ${preserved.join(', ')}` : '',
+        resetParts.length ? resetParts.join(', ') : 'ไม่รีเซ็ตเลขรัน/ประวัติอีเมล',
+      ].filter(Boolean).join(' · ')
+    }
     case 'mapping_feedback':
       return [d.raw_name, '→', d.item_code].filter(Boolean).join(' ')
     case 'bill_item_added':

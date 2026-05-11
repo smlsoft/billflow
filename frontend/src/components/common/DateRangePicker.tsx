@@ -60,7 +60,7 @@ export function DateRangePicker({
         <Button
           type="button"
           variant="outline"
-          className={cn('h-9 min-w-[210px] justify-start gap-2 px-3 font-normal', className)}
+          className={cn('h-10 min-w-[210px] justify-start gap-2 px-3 font-normal', className)}
         >
           <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
           <span className={cn('text-sm', !(from || to) && 'text-muted-foreground')}>

@@ -48,6 +48,11 @@ interface EventsState {
 //     polling fallback kicks in via the existing 30s intervals)
 //   - On successful 'hello' event → reset failedAttempts, mark 'live'
 const RECONNECT_BACKOFF_MS = [3_000, 6_000, 12_000, 20_000, 30_000]
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+
+function apiEventURL(path: string): string {
+  return `${API_BASE_URL}${path}`
+}
 
 export const useEventsStore = create<EventsState>((set, get) => ({
   status: 'connecting',
@@ -89,7 +94,9 @@ export const useEventsStore = create<EventsState>((set, get) => ({
     // Step 2 — open the stream. EventSource auto-reconnects on its own
     // for many failure modes (network glitch, server bounce), but we still
     // listen to onerror so we can update UI state.
-    const url = `/api/admin/events?u=${encodeURIComponent(userID)}&t=${encodeURIComponent(token)}`
+    const url = apiEventURL(
+      `/api/admin/events?u=${encodeURIComponent(userID)}&t=${encodeURIComponent(token)}`,
+    )
     const es = new EventSource(url)
     set({ _es: es })
 

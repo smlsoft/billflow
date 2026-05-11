@@ -36,28 +36,30 @@ type DailyInsight struct {
 }
 
 type BillItem struct {
-	ID         string          `json:"id"`
-	BillID     string          `json:"bill_id"`
-	RawName    string          `json:"raw_name"`
-	SourceSKU  string          `json:"source_sku,omitempty"`
-	ItemCode   *string         `json:"item_code,omitempty"`
-	Qty        float64         `json:"qty"`
-	UnitCode   *string         `json:"unit_code,omitempty"`
-	Price      *float64        `json:"price,omitempty"`
-	Mapped     bool            `json:"mapped"`
-	MappingID  *string         `json:"mapping_id,omitempty"`
-	Candidates json.RawMessage `json:"candidates,omitempty"` // top-5 catalog matches
+	ID             string          `json:"id"`
+	BillID         string          `json:"bill_id"`
+	RawName        string          `json:"raw_name"`
+	SourceSKU      string          `json:"source_sku,omitempty"`
+	SourceImageURL string          `json:"source_image_url,omitempty"`
+	ItemCode       *string         `json:"item_code,omitempty"`
+	Qty            float64         `json:"qty"`
+	UnitCode       *string         `json:"unit_code,omitempty"`
+	Price          *float64        `json:"price,omitempty"`
+	Mapped         bool            `json:"mapped"`
+	MappingID      *string         `json:"mapping_id,omitempty"`
+	Candidates     json.RawMessage `json:"candidates,omitempty"` // top-5 catalog matches
 }
 
 type BillListFilter struct {
-	Status        string `form:"status"`
-	Source        string `form:"source"`
-	BillType      string `form:"bill_type"`
-	DocumentRoute string `form:"document_route"`
-	Search        string `form:"search"`
-	Page          int    `form:"page,default=1"`
-	PageSize      int    `form:"page_size,default=20"`
-	PerPage       int    `form:"per_page"`
+	Status         string `form:"status"`
+	Source         string `form:"source"`
+	BillType       string `form:"bill_type"`
+	DocumentRoute  string `form:"document_route"`
+	EmailAccountID string `form:"email_account_id"`
+	Search         string `form:"search"`
+	Page           int    `form:"page,default=1"`
+	PageSize       int    `form:"page_size,default=20"`
+	PerPage        int    `form:"per_page"`
 }
 
 type Anomaly struct {

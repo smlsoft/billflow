@@ -27,6 +27,9 @@ type IMAPAccount struct {
 	LastPollStatus      *string    `json:"last_poll_status"`
 	LastPollError       *string    `json:"last_poll_error"`
 	LastPollMessages    *int       `json:"last_poll_messages"`
+	LastPollFound       *int       `json:"last_poll_found"`
+	LastPollProcessed   *int       `json:"last_poll_processed"`
+	LastPollSkipped     *int       `json:"last_poll_skipped"`
 	ConsecutiveFailures int        `json:"consecutive_failures"`
 	LastAdminAlertAt    *time.Time `json:"last_admin_alert_at"`
 	CreatedAt           time.Time  `json:"created_at"`

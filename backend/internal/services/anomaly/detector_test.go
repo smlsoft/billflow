@@ -49,7 +49,7 @@ func TestCanAutoConfirm_TwoWarnsBlocked(t *testing.T) {
 // ── Check ─────────────────────────────────────────────────────────────────────
 
 func TestCheck_QtyZero(t *testing.T) {
-	svc := New()
+	svc := New(nil)
 	out := svc.Check(CheckInput{
 		Items: []models.BillItem{{RawName: "ปูน", Qty: 0}},
 	})
@@ -63,7 +63,7 @@ func TestCheck_QtyZero(t *testing.T) {
 }
 
 func TestCheck_PriceZero(t *testing.T) {
-	svc := New()
+	svc := New(nil)
 	code := "CEM001"
 	out := svc.Check(CheckInput{
 		Items: []models.BillItem{{RawName: "ปูน", Qty: 1, ItemCode: &code, Price: ptr(0.0)}},
@@ -74,7 +74,7 @@ func TestCheck_PriceZero(t *testing.T) {
 }
 
 func TestCheck_PriceTooHigh(t *testing.T) {
-	svc := New()
+	svc := New(nil)
 	code := "CEM001"
 	out := svc.Check(CheckInput{
 		Items:     []models.BillItem{{RawName: "ปูน", Qty: 1, ItemCode: &code, Price: ptr(1000.0)}},
@@ -86,7 +86,7 @@ func TestCheck_PriceTooHigh(t *testing.T) {
 }
 
 func TestCheck_PriceTooLow(t *testing.T) {
-	svc := New()
+	svc := New(nil)
 	code := "CEM001"
 	out := svc.Check(CheckInput{
 		Items:     []models.BillItem{{RawName: "ปูน", Qty: 1, ItemCode: &code, Price: ptr(50.0)}},
@@ -98,7 +98,7 @@ func TestCheck_PriceTooLow(t *testing.T) {
 }
 
 func TestCheck_NormalPriceNoAnomaly(t *testing.T) {
-	svc := New()
+	svc := New(nil)
 	code := "CEM001"
 	out := svc.Check(CheckInput{
 		Items:     []models.BillItem{{RawName: "ปูน", Qty: 2, ItemCode: &code, Price: ptr(300.0)}},
@@ -110,7 +110,7 @@ func TestCheck_NormalPriceNoAnomaly(t *testing.T) {
 }
 
 func TestCheck_NewItem(t *testing.T) {
-	svc := New()
+	svc := New(nil)
 	code := "NEWITEM"
 	out := svc.Check(CheckInput{
 		Items:      []models.BillItem{{RawName: "สินค้าใหม่", Qty: 1, ItemCode: &code, Price: ptr(100.0)}},
@@ -122,7 +122,7 @@ func TestCheck_NewItem(t *testing.T) {
 }
 
 func TestCheck_QtySuspicious(t *testing.T) {
-	svc := New()
+	svc := New(nil)
 	code := "CEM001"
 	out := svc.Check(CheckInput{
 		Items:   []models.BillItem{{RawName: "ปูน", Qty: 1000, ItemCode: &code, Price: ptr(300.0)}},

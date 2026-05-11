@@ -40,6 +40,7 @@ export interface BillItem {
   bill_id: string
   raw_name: string
   source_sku?: string
+  source_image_url?: string
   item_code?: string | null
   qty: number
   unit_code?: string | null

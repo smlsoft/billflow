@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, Clock, Info, Mail, Search, Send, Settings, UploadCloud } from 'lucide-react'
 
@@ -8,6 +8,7 @@ import BillTable from '@/components/BillTable'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import { useBills } from '@/hooks/useBills'
+import client from '@/api/client'
 import { BulkSendDialog } from './BulkSendDialog'
 import {
   BILL_SOURCE_LABEL,
@@ -18,6 +19,12 @@ import {
 
 const PER_PAGE = 20
 const ALL = '__all__'
+
+interface InboxOption {
+  id: string
+  name: string
+  username: string
+}
 
 // Filter options pull labels from lib/labels.ts so Bills, Dashboard, and
 // Logs all show identical status names — no more "ล้มเหลว" vs "ส่ง SML
@@ -39,6 +46,7 @@ const MODE_CONFIG: Record<BillsMode, {
   title: string
   description: string
   source: string
+  sourceLabel?: string
   billType: 'purchase' | 'sale'
   documentRoute?: string
   destination: string
@@ -72,16 +80,17 @@ const MODE_CONFIG: Record<BillsMode, {
   },
   'sales-order': {
     title: PAGE_TITLE.salesOrders,
-    description: 'ตรวจข้อมูลจาก Shopee Excel ที่นำเข้า แล้วสร้างเป็นใบสั่งขายเพื่อส่งเข้า SML',
-    source: 'shopee',
+    description: 'ตรวจข้อมูลจาก Marketplace Excel ที่นำเข้า แล้วสร้างเป็นใบสั่งขายเพื่อส่งเข้า SML',
+    source: '',
+    sourceLabel: 'Marketplace Excel',
     billType: 'sale',
     documentRoute: 'saleorder',
     destination: 'ขาย -> ใบสั่งขาย',
     docCode: 'SR',
-    routeLabel: 'Shopee Excel',
+    routeLabel: 'Marketplace Excel',
     routeTo: '/import/shopee',
     emptyTitle: 'ยังไม่มีใบสั่งขาย',
-    emptyDescription: 'นำเข้าไฟล์ Shopee Excel จาก Seller Center แล้วเอกสารที่ตั้งปลายทางเป็นใบสั่งขายจะมาอยู่หน้านี้',
+    emptyDescription: 'นำเข้าไฟล์ Shopee, Lazada หรือ TikTok Excel แล้วเอกสารที่ตั้งปลายทางเป็นใบสั่งขายจะมาอยู่หน้านี้',
     emptyActionLabel: 'นำเข้า Shopee Excel',
     emptyActionTo: '/import/shopee',
     emptySecondaryLabel: 'ตั้งค่าเส้นทาง SML',
@@ -90,16 +99,17 @@ const MODE_CONFIG: Record<BillsMode, {
   },
   'sale-invoice': {
     title: PAGE_TITLE.saleInvoices,
-    description: 'ตรวจข้อมูลจาก Shopee Excel ที่นำเข้า แล้วสร้างเป็นเอกสารขายสินค้าและบริการเพื่อส่งเข้า SML',
-    source: 'shopee',
+    description: 'ตรวจข้อมูลจาก Marketplace Excel ที่นำเข้า แล้วสร้างเป็นเอกสารขายสินค้าและบริการเพื่อส่งเข้า SML',
+    source: '',
+    sourceLabel: 'Marketplace Excel',
     billType: 'sale',
     documentRoute: 'saleinvoice',
     destination: 'ขาย -> ขายสินค้าและบริการ',
     docCode: 'SI',
-    routeLabel: 'Shopee Excel',
+    routeLabel: 'Marketplace Excel',
     routeTo: '/import/shopee',
     emptyTitle: 'ยังไม่มีเอกสารขายสินค้าและบริการ',
-    emptyDescription: 'นำเข้าไฟล์ Shopee Excel แล้วเลือกปลายทาง SML เป็นขายสินค้าและบริการ เอกสารจะมาอยู่หน้านี้',
+    emptyDescription: 'นำเข้าไฟล์ Shopee, Lazada หรือ TikTok Excel แล้วเลือกปลายทาง SML เป็นขายสินค้าและบริการ เอกสารจะมาอยู่หน้านี้',
     emptyActionLabel: 'นำเข้า Shopee Excel',
     emptyActionTo: '/import/shopee',
     emptySecondaryLabel: 'ตั้งค่าเส้นทาง SML',
@@ -124,6 +134,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [status, setStatus] = useState<string>(() =>
     readURLFilter(searchParams, 'status', VALID_STATUSES),
   )
+  const [emailAccountId, setEmailAccountId] = useState(ALL)
+  const [inboxes, setInboxes] = useState<InboxOption[]>([])
   const [search, setSearch] = useState('')
   const [bulkOpen, setBulkOpen] = useState(false)
 
@@ -134,6 +146,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     source: config.source,
     bill_type: config.billType,
     document_route: config.documentRoute,
+    email_account_id: emailAccountId === ALL ? '' : emailAccountId,
     search,
   })
   const needsReviewCount = useBills({
@@ -178,6 +191,18 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     cb()
     setPage(1)
   }
+
+  useEffect(() => {
+    let alive = true
+    client.get<{ data: InboxOption[] }>('/api/settings/imap-accounts')
+      .then((res) => {
+        if (alive) setInboxes(res.data.data ?? [])
+      })
+      .catch(() => {
+        if (alive) setInboxes([])
+      })
+    return () => { alive = false }
+  }, [])
 
   return (
     <div className="space-y-5">
@@ -243,8 +268,23 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
 
         <span className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
-          {BILL_SOURCE_LABEL[config.source]} · {BILL_TYPE_LABEL[config.billType]}
+          {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
         </span>
+        {inboxes.length > 0 && config.routeTo === '/settings/email' && (
+          <select
+            value={emailAccountId}
+            onChange={(e) => resetPage(() => setEmailAccountId(e.target.value))}
+            className="h-9 rounded-md border border-border bg-background px-2.5 text-xs text-foreground"
+            aria-label="กรองตามกล่องอีเมล"
+          >
+            <option value={ALL}>ทุกกล่องอีเมล</option>
+            {inboxes.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} · {a.username}
+              </option>
+            ))}
+          </select>
+        )}
         <Button
           type="button"
           size="sm"

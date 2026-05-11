@@ -20,11 +20,11 @@ export function isShopeePurchaseBill(bill: Pick<Bill, 'source' | 'bill_type'>): 
 }
 
 export function isShopeeSalesBill(bill: Pick<Bill, 'source' | 'bill_type'>): boolean {
-  return bill.source === 'shopee' && bill.bill_type === 'sale'
+  return (bill.source === 'shopee' || bill.source === 'lazada' || bill.source === 'tiktok') && bill.bill_type === 'sale'
 }
 
 export function shopeeOrderID(raw: Record<string, unknown> | null | undefined): string {
-  return rawString(raw, 'order_id') || rawString(raw, 'shopee_order_id')
+  return rawString(raw, 'order_id') || rawString(raw, 'shopee_order_id') || rawString(raw, 'lazada_order_id') || rawString(raw, 'tiktok_order_id')
 }
 
 export function shopeePayableTotal(bill: Bill): number | null {

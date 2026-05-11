@@ -128,6 +128,8 @@ var quickSetupMappings = []quickSetupMapping{
 	// SML 248 saleorder — BF-SO + YYMM + 4-digit running counter (resets monthly)
 	{"shopee", "sale", "ลูกค้า จาก Shopee", "SR", "BF-SO", "YYMM####"},
 	{"shopee_email", "sale", "ลูกค้า จาก Shopee", "SR", "BF-SO", "YYMM####"},
+	{"lazada", "sale", "ลูกค้า จาก Lazada", "SR", "BF-SO", "YYMM####"},
+	{"tiktok", "sale", "ลูกค้า จาก TikTok", "SR", "BF-SO", "YYMM####"},
 }
 
 // QuickSetupResult describes what happened in one row of POST /quick-setup.
@@ -218,6 +220,8 @@ func validChannelBillTypeCombo(channel, billType string) bool {
 		return billType == "sale"
 	case "lazada":
 		return billType == "sale" || billType == "purchase"
+	case "tiktok":
+		return billType == "sale"
 	}
 	return false
 }

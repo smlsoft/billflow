@@ -9,6 +9,7 @@ export type ChannelKey =
   | 'shopee_email'
   | 'shopee_shipped'
   | 'lazada'
+  | 'tiktok'
   | 'manual'
 
 export interface ChannelDefaultRow {
@@ -87,7 +88,7 @@ export const ENDPOINT_OPTIONS: Array<{
     apiPath: '/SMLJavaRESTService/v3/api/saleorder',
     takesDocFormat: true,
     docFormatHint: 'SR',
-    description: 'SML 248 — สำหรับบิลขาย Shopee/Lazada → เก็บที่เมนู "ใบสั่งขาย" ใน SML',
+    description: 'SML 248 — สำหรับบิลขาย Marketplace Excel → เก็บที่เมนู "ใบสั่งขาย" ใน SML',
   },
   {
     value: 'saleinvoice',
@@ -95,7 +96,7 @@ export const ENDPOINT_OPTIONS: Array<{
     apiPath: '/SMLJavaRESTService/saleinvoice/v4',
     takesDocFormat: true,
     docFormatHint: 'SI',
-    description: 'SML 248 — สำหรับบิลขาย Shopee/Lazada → เก็บที่เมนู "ขายสินค้าและบริการ" ใน SML',
+    description: 'SML 248 — สำหรับบิลขาย Marketplace Excel → เก็บที่เมนู "ขายสินค้าและบริการ" ใน SML',
   },
   {
     value: 'purchaseorder',
@@ -151,7 +152,7 @@ export const SML_DESTINATION_OPTIONS: SmlDestinationOption[] = [
     docPrefix: 'BF-SO',
     docRunningFormat: 'YYMM####',
     statusLabel: 'ทดสอบผ่านแล้ว',
-    description: 'ส่งบิลขาย Shopee Excel เข้าเมนู ขาย -> ใบสั่งขาย ใน SML',
+    description: 'ส่งบิลขาย Marketplace Excel เข้าเมนู ขาย -> ใบสั่งขาย ใน SML',
     phase1Enabled: true,
   },
   {
@@ -163,7 +164,7 @@ export const SML_DESTINATION_OPTIONS: SmlDestinationOption[] = [
     docPrefix: 'BF-INV',
     docRunningFormat: 'YYMM####',
     statusLabel: 'ทดสอบผ่านแล้ว',
-    description: 'ส่งบิลขาย Shopee Excel เข้าเมนู ขาย -> ขายสินค้าและบริการ ใน SML',
+    description: 'ส่งบิลขาย Marketplace Excel เข้าเมนู ขาย -> ขายสินค้าและบริการ ใน SML',
     phase1Enabled: true,
   },
   {
@@ -217,7 +218,7 @@ export function resolveEndpointKind(
   if (lower.includes('sale_reserve')) return 'sale_reserve'
   // No keyword match → default by channel+bill_type
   if (channel === 'shopee_shipped' || billType === 'purchase') return 'purchaseorder'
-  if (channel === 'shopee' || channel === 'shopee_email') return 'saleorder'
+  if (channel === 'shopee' || channel === 'shopee_email' || channel === 'lazada' || channel === 'tiktok') return 'saleorder'
   return 'sale_reserve'
 }
 
@@ -251,7 +252,8 @@ export const CHANNEL_LABELS: Record<ChannelKey, string> = {
   shopee: 'Shopee Excel',
   shopee_email: 'Shopee Order',
   shopee_shipped: 'Email บิลซื้อ Shopee',
-  lazada: 'Lazada',
+  lazada: 'Lazada Excel',
+  tiktok: 'TikTok Excel',
   manual: 'Manual',
 }
 
@@ -269,6 +271,7 @@ export const CHANNEL_SLOTS: Array<{
   { channel: 'shopee_shipped', bill_type: 'purchase' },
   { channel: 'lazada', bill_type: 'sale' },
   { channel: 'lazada', bill_type: 'purchase' },
+  { channel: 'tiktok', bill_type: 'sale' },
 ]
 
 export function channelHelp(channel: ChannelKey, isPurchase: boolean): string {
@@ -287,7 +290,9 @@ export function channelHelp(channel: ChannelKey, isPurchase: boolean): string {
     case 'lazada':
       return isPurchase
         ? 'ใช้รหัสนี้กับบิลซื้อ Lazada (Phase 4b)'
-        : 'ใช้รหัสนี้กับบิลขาย Lazada (Phase 4b)'
+        : 'รหัสลูกค้านี้จะถูกส่งเป็น cust_code ตอนสร้างใบสั่งขาย Lazada ใน SML'
+    case 'tiktok':
+      return 'รหัสลูกค้านี้จะถูกส่งเป็น cust_code ตอนสร้างใบสั่งขาย TikTok ใน SML'
     default:
       return ''
   }

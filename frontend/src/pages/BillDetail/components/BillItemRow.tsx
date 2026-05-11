@@ -165,7 +165,7 @@ export function BillItemRow({
             </div>
             {item.source_sku && (
               <div className="mt-1 text-[11px] text-muted-foreground">
-                SKU Shopee: <code className="font-mono">{item.source_sku}</code>
+                SKU ต้นทาง: <code className="font-mono">{item.source_sku}</code>
                 {!item.item_code && <span className="text-warning"> · ยังไม่พบในสินค้า SML</span>}
               </div>
             )}
@@ -254,6 +254,7 @@ export function BillItemRow({
           currentCode={draft.item_code}
           currentUnit={draft.unit_code}
           currentPrice={Number(draft.price) || 0}
+          sourceImageUrl={item.source_image_url}
           rawNameLabel={rawNameLabel}
           onPick={(code, unit) =>
             setDraft((d) => ({ ...d, item_code: code, unit_code: unit || d.unit_code }))

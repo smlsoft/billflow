@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/emersion/go-imap/v2/imapclient"
+	"github.com/emersion/go-sasl"
 	"go.uber.org/zap"
 
 	"billflow/internal/models"
@@ -145,11 +147,38 @@ func (c *Coordinator) PollNow(id string) (PollResult, error) {
 // account values without saving anything. Used by "ทดสอบการเชื่อมต่อ" button.
 func (c *Coordinator) TestConnection(ctx context.Context, a *models.IMAPAccount) error {
 	cfg := pollConfigFromAccount(a)
-	// Re-use PollOnce but with nil processors so it never marks anything
-	// Seen and skips the dispatch loop. We only care about connect+auth+select.
-	cfg.FilterSubjects = []string{"__never_match_subject__"}
-	res := PollOnce(ctx, cfg, nil, c.logger)
-	return res.Err
+	mailbox := cfg.Mailbox
+	if mailbox == "" {
+		mailbox = "INBOX"
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+		client, err := imapclient.DialTLS(addr, nil)
+		if err != nil {
+			errCh <- fmt.Errorf("IMAP connect %s: %w", addr, err)
+			return
+		}
+		defer client.Close()
+
+		if err := client.Authenticate(sasl.NewPlainClient("", cfg.Username, cfg.Password)); err != nil {
+			errCh <- fmt.Errorf("IMAP authenticate: %w", err)
+			return
+		}
+		if _, err := client.Select(mailbox, nil).Wait(); err != nil {
+			errCh <- fmt.Errorf("IMAP select %s: %w", mailbox, err)
+			return
+		}
+		errCh <- nil
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	}
 }
 
 func (c *Coordinator) startPoller(a *models.IMAPAccount) {

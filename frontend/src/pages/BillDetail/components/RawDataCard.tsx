@@ -71,7 +71,14 @@ export function RawDataCard({ data, items }: Props) {
   const bodyText = get('body_text')
   const hasTechnicalData = bodyHTML || bodyText || Object.keys(data).length > 0 || (items?.length ?? 0) > 0
   const isMultiOrderEmailFlow = flow === 'shopee_shipped'
-  const sourceTitle = flow === 'shopee_excel' ? 'ข้อมูลจาก Shopee Excel' : 'ข้อมูลอีเมลต้นทาง'
+  const sourceTitle =
+    flow === 'shopee_excel'
+      ? 'ข้อมูลจาก Shopee Excel'
+      : flow === 'lazada_excel'
+        ? 'ข้อมูลจาก Lazada Excel'
+        : flow === 'tiktok_excel'
+          ? 'ข้อมูลจาก TikTok Excel/CSV'
+          : 'ข้อมูลอีเมลต้นทาง'
 
   return (
     <Card className="rounded-xl border-border/70 shadow-sm">
@@ -113,7 +120,7 @@ export function RawDataCard({ data, items }: Props) {
           <FieldRow label="เบอร์โทร" value={phone} />
           <FieldRow label="หมายเหตุ" value={note} />
           <FieldRow label="ไฟล์แนบ" value={file} mono />
-          <FieldRow label="สถานะ Shopee" value={status} />
+          <FieldRow label="สถานะต้นทาง" value={status} />
           <FieldRow label="Message ID" value={msgID} mono />
         </div>
 

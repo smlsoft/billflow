@@ -368,8 +368,8 @@ func (h *SetupHandler) documentCounts() gin.H {
 		       COUNT(*) FILTER (WHERE status='failed'),
 		       COUNT(*) FILTER (WHERE status='sent'),
 		       COUNT(*) FILTER (WHERE source='shopee_shipped' AND bill_type='purchase'),
-		       COUNT(*) FILTER (WHERE source='shopee' AND bill_type='sale' AND COALESCE(document_route, 'saleorder')='saleorder'),
-		       COUNT(*) FILTER (WHERE source='shopee' AND bill_type='sale' AND document_route='saleinvoice')
+		       COUNT(*) FILTER (WHERE source IN ('shopee','lazada','tiktok') AND bill_type='sale' AND COALESCE(document_route, 'saleorder')='saleorder'),
+		       COUNT(*) FILTER (WHERE source IN ('shopee','lazada','tiktok') AND bill_type='sale' AND document_route='saleinvoice')
 		  FROM bills`,
 	).Scan(
 		&total, &pending, &needsReview, &failed, &sent,

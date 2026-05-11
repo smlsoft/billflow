@@ -17,6 +17,7 @@ import (
 	"billflow/internal/services/anomaly"
 	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
+	emailservice "billflow/internal/services/email"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/mistral"
@@ -39,6 +40,7 @@ var docDatePatterns = []*regexp.Regexp{
 // total or shipping fee. The (?:...) limits it to the line-level "ราคา"
 // label that appears right after qty in each item block.
 var shopeePricePattern = regexp.MustCompile(`(?:^|\s)ราคา\s*[:：]\s*฿\s*([\d,]+(?:\.\d+)?)`)
+var imgSrcPattern = regexp.MustCompile(`(?i)<img[^>]+src=["']([^"']+)["']`)
 
 // extractShopeePrices returns the per-item prices from a Shopee email body
 // in the order they appear in the email. Used as a fallback when the AI
@@ -55,6 +57,53 @@ func extractShopeePrices(body string) []float64 {
 			out = append(out, v)
 		}
 	}
+	return out
+}
+
+func extractShopeeImageURLs(html string) []string {
+	if strings.TrimSpace(html) == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	primary := []string{}
+	fallback := []string{}
+	out := []string{}
+	for _, m := range imgSrcPattern.FindAllStringSubmatch(html, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		u := strings.TrimSpace(m[1])
+		if u == "" || seen[u] || strings.HasPrefix(strings.ToLower(u), "data:") {
+			continue
+		}
+		lower := strings.ToLower(u)
+		if !(strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) {
+			continue
+		}
+		if strings.Contains(lower, "tracking.") ||
+			strings.Contains(lower, "/tracking/") ||
+			strings.Contains(lower, "/open/") {
+			continue
+		}
+		// Product images in Thai Shopee emails usually use the local CDN and
+		// a "th-" file key. Global Shopee assets are often logos/app/social
+		// icons, so keep them only as a fallback.
+		isProductLike := strings.Contains(lower, "cf.shopee.co.th/file/") ||
+			strings.Contains(lower, "f.shopee.co.th/file/") ||
+			strings.Contains(lower, "/file/th-")
+		isShopeeAsset := strings.Contains(lower, "shopee") && strings.Contains(lower, "/file/")
+		if !isProductLike && !isShopeeAsset {
+			continue
+		}
+		seen[u] = true
+		if isProductLike {
+			primary = append(primary, u)
+		} else {
+			fallback = append(fallback, u)
+		}
+	}
+	out = append(out, primary...)
+	out = append(out, fallback...)
 	return out
 }
 
@@ -170,9 +219,27 @@ func (h *EmailHandler) saveEmailArtifacts(
 	}
 }
 
+func applyMailSource(raw map[string]interface{}, source emailservice.MailSource) {
+	if source.AccountID != "" {
+		raw["imap_account_id"] = source.AccountID
+	}
+	if source.AccountName != "" {
+		raw["imap_account_name"] = source.AccountName
+	}
+	if source.Username != "" {
+		raw["imap_username"] = source.Username
+	}
+	if source.Mailbox != "" {
+		raw["imap_mailbox"] = source.Mailbox
+	}
+	if source.EmailDate != "" {
+		raw["email_date"] = source.EmailDate
+	}
+}
+
 // ProcessAttachment is called once per qualifying email attachment.
 // It satisfies emailservice.AttachmentProcessor signature.
-func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messageID, subject, fromAddr string) error {
+func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messageID, subject, fromAddr string, source emailservice.MailSource) error {
 	// Use message-id as trace_id so all events for the same email are correlated.
 	traceID := messageID
 	if traceID == "" {
@@ -225,7 +292,7 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 		return fmt.Errorf("no items extracted from %s", filename)
 	}
 
-	return h.handleExtracted(extracted, filename, mimeType, messageID, subject, fromAddr, traceID, data, attachStart)
+	return h.handleExtracted(extracted, filename, mimeType, messageID, subject, fromAddr, traceID, data, attachStart, source)
 }
 
 // handleExtracted resolves item codes via F1 (exact mappings) → catalog
@@ -240,7 +307,7 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 // unrelated products. The 3000-item embedded catalog is the reliable
 // matcher; the F1 mapping table is reserved for explicit user-confirmed
 // (raw_name → item_code) memory.
-func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mimeType, messageID, subject, fromAddr, traceID string, sourceBytes []byte, startTime time.Time) error {
+func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mimeType, messageID, subject, fromAddr, traceID string, sourceBytes []byte, startTime time.Time, source emailservice.MailSource) error {
 	const topK = 5
 	const highConfThreshold = 0.85
 
@@ -321,7 +388,7 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mi
 	// (subject, from, flow, doc_date, etc.) so the BillDetail JSON viewer
 	// shows the same context regardless of source.
 	conf := extracted.Confidence
-	rawDataBytes, _ := json.Marshal(map[string]interface{}{
+	rawDataMap := map[string]interface{}{
 		"flow":             "email_pdf",
 		"subject":          subject,
 		"from":             fromAddr,
@@ -330,7 +397,9 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mi
 		"note":             extracted.Note,
 		"email_file":       filename,
 		"email_message_id": messageID,
-	})
+	}
+	applyMailSource(rawDataMap, source)
+	rawDataBytes, _ := json.Marshal(rawDataMap)
 	billType := "purchase"
 	if extracted.DocType == "sale" || extracted.DocType == "purchase" {
 		billType = extracted.DocType
@@ -440,7 +509,7 @@ func (h *EmailHandler) adminNotify(msg string) {
 //  3. Creates a bill with source='shopee_email'
 //     - status='needs_review' if any item has low confidence
 //     - status='pending' if all items are high confidence (and sends to SML)
-func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML, messageID string) error {
+func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) error {
 	traceID := fmt.Sprintf("shopee-email-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 
@@ -500,6 +569,10 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 	// Fallback per-item prices in case the AI returned nil for some lines
 	// (Gemini occasionally drops Price fields when it sees the ฿ glyph).
 	fallbackPrices := extractShopeePrices(plainText)
+	sourceImages := extractShopeeImageURLs(bodyHTML)
+	if len(sourceImages) == 0 {
+		sourceImages = extractShopeeImageURLs(bodyText)
+	}
 
 	for i, extItem := range extracted.Items {
 		var matches []models.CatalogMatch
@@ -526,6 +599,9 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 			RawName: extItem.RawName,
 			Qty:     extItem.Qty,
 			Mapped:  false,
+		}
+		if i < len(sourceImages) {
+			item.SourceImageURL = sourceImages[i]
 		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
@@ -574,6 +650,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		"note":             extracted.Note,
 		"doc_date":         docDate,
 	}
+	applyMailSource(rawDataMap, source)
 	rawDataBytes, _ := json.Marshal(rawDataMap)
 
 	// Determine bill status

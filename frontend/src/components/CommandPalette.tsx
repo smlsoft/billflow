@@ -34,7 +34,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/lib/theme'
 import { useUIStore } from '@/lib/ui-store'
 import { billSourceLabel, billStatusLabel } from '@/lib/labels'
-import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
+import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import type { Bill } from '@/types'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
@@ -63,7 +63,8 @@ const NAV_ITEMS: Array<{
   { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, enabled: ENABLE_SALES_ORDERS },
   { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail },
   { to: '/import/shopee', label: 'Shopee Excel', icon: Upload, enabled: ENABLE_SHOPEE_EXCEL },
-  { to: '/import', label: 'Lazada Excel', icon: Upload, minPhase: 2 },
+  { to: '/import/lazada', label: 'Lazada Excel', icon: Upload, enabled: ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS },
+  { to: '/import/tiktok', label: 'TikTok Excel', icon: Upload, enabled: ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS },
   { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow },
   { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database },
   { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot },

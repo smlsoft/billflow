@@ -178,7 +178,7 @@ func resolveEndpoint(def *models.ChannelDefault, source, billType string) (kind,
 	if source == "shopee_shipped" || billType == "purchase" {
 		return "purchaseorder", ""
 	}
-	if source == "shopee" || source == "shopee_email" {
+	if source == "shopee" || source == "shopee_email" || source == "lazada" || source == "tiktok" {
 		return "saleorder", ""
 	}
 	return "sale_reserve", ""
@@ -308,10 +308,14 @@ func mapSourceToChannel(source string) string {
 	switch source {
 	case "shopee_shipped":
 		return "shopee_shipped"
-	case "shopee_email", "shopee":
+	case "shopee_email":
+		return "shopee_email"
+	case "shopee":
 		return "shopee"
 	case "lazada":
 		return "lazada"
+	case "tiktok":
+		return "tiktok"
 	case "email":
 		return "email"
 	}

@@ -168,6 +168,9 @@ type ShopeeConfigRequest struct {
 // Seller Center exports; when it is missing RawName becomes the matching key.
 type ShopeeExcelItem struct {
 	SKU         string  `json:"sku"`
+	LazadaSKU   string  `json:"lazada_sku,omitempty"`
+	TikTokSKU   string  `json:"tiktok_sku,omitempty"`
+	OrderItemID string  `json:"order_item_id,omitempty"`
 	ProductName string  `json:"product_name"`
 	OptionName  string  `json:"option_name,omitempty"`
 	RawName     string  `json:"raw_name"`

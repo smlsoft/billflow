@@ -100,6 +100,9 @@ const DEFAULTS: FormState = {
 
 const DEFAULT_ACCEPTED_SENDERS = ['shopee.co.th', 'mail.shopee.co.th', 'noreply.shopee.co.th']
 const SHOPEE_DEFAULT_SUBJECTS = ['ถูกจัดส่งแล้ว', 'ยืนยันการชำระเงินคำสั่งซื้อหมายเลข']
+const GMAIL_SECURITY_URL = 'https://myaccount.google.com/security'
+const GMAIL_APP_PASSWORDS_URL = 'https://myaccount.google.com/apppasswords'
+const GMAIL_IMAP_SETTINGS_URL = 'https://mail.google.com/mail/u/0/#settings/fwdandpop'
 
 function newAccountDefaults(): FormState {
   if (PHASE < 2) {
@@ -128,16 +131,17 @@ const PROVIDER_GUIDES: Array<{ match: RegExp; guide: ProviderGuide }> = [
     match: /gmail|google/i,
     guide: {
       name: 'Gmail',
-      url: 'https://myaccount.google.com/apppasswords',
+      url: GMAIL_APP_PASSWORDS_URL,
       steps: [
         'เข้า Google Account → Security',
         'เปิด 2-Step Verification ก่อน (จำเป็น — ไม่งั้นเมนู App passwords จะไม่ปรากฏ)',
         'เปิดหน้า App passwords ตาม link ด้านบน',
-        'เลือก App = "Mail", Device = ระบุชื่อเช่น "BillFlow"',
-        'กด Generate → ได้ password 16 ตัวอักษร — ลบเว้นวรรคออกได้',
+        'กด Generate แล้วได้ password 16 ตัวอักษร',
+        'วางใน BillFlow ได้เลย — ระบบจะลบช่องว่าง/ขีดกลางให้ก่อนทดสอบและบันทึก',
+        'ไป Gmail Settings → Forwarding and POP/IMAP → Enable IMAP → Save Changes',
         'Copy ครั้งเดียวเท่านั้น — ปิดหน้าแล้วดูไม่ได้อีก',
       ],
-      note: 'ห้ามใช้ password Google จริง — ใช้ App Password (16 หลัก) เท่านั้น',
+      note: 'ห้ามใช้ password Gmail จริง — ใช้ App Password 16 ตัวอักษรเท่านั้น',
     },
   },
   {
@@ -161,6 +165,79 @@ function getProviderGuide(host: string): ProviderGuide | null {
     if (match.test(host)) return guide
   }
   return null
+}
+
+function LinkButton({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-foreground hover:bg-accent"
+    >
+      {children}
+      <ExternalLink className="h-3 w-3 text-muted-foreground" />
+    </a>
+  )
+}
+
+function GmailSetupChecklist() {
+  const items = [
+    {
+      title: 'เปิด 2-Step Verification',
+      desc: 'ถ้าไม่เปิด Google มักไม่ให้สร้าง App Password',
+      href: GMAIL_SECURITY_URL,
+      action: 'Security',
+    },
+    {
+      title: 'สร้าง App Password',
+      desc: 'ใช้รหัส 16 ตัวอักษรสำหรับ BillFlow ไม่ใช่รหัส Gmail ปกติ',
+      href: GMAIL_APP_PASSWORDS_URL,
+      action: 'App Passwords',
+    },
+    {
+      title: 'เปิด IMAP ใน Gmail',
+      desc: 'Gmail Settings → Forwarding and POP/IMAP → Enable IMAP',
+      href: GMAIL_IMAP_SETTINGS_URL,
+      action: 'POP/IMAP',
+    },
+  ]
+  return (
+    <div className="rounded-md border border-info/25 bg-info/5 p-3">
+      <div className="flex items-start gap-2">
+        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-info" />
+        <div className="min-w-0 space-y-2">
+          <div>
+            <div className="text-sm font-semibold text-foreground">ก่อนเชื่อม Gmail ให้ครบ 3 ขั้นตอน</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              ถ้า Google ขึ้นว่า “การตั้งค่านี้ไม่พร้อมใช้งาน” มักแปลว่ายังไม่ได้เปิด 2-Step Verification
+              หรือบัญชีเป็น work/school ที่ผู้ดูแลระบบจำกัดไว้
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {items.map((item, idx) => (
+              <div key={item.title} className="rounded-md border bg-background px-2.5 py-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-info/10 text-[11px] text-info">
+                    {idx + 1}
+                  </span>
+                  {item.title}
+                </div>
+                <p className="mt-1 min-h-[32px] text-[11px] leading-snug text-muted-foreground">{item.desc}</p>
+                <div className="mt-2">
+                  <LinkButton href={item.href}>{item.action}</LinkButton>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            ตัวอย่างที่ Google แสดง: <code>qzqq vwqb zydo dtsi</code> ใช้งานจริงเป็น{' '}
+            <code>qzqqvwqbzydodtsi</code>. BillFlow จะลบช่องว่าง/ขีดกลางให้อัตโนมัติก่อนส่งเข้า IMAP.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function AppPasswordHelp({ host }: { host: string }) {
@@ -338,6 +415,38 @@ function arrayToCSV(a: string[]): string {
   return a.join(', ')
 }
 
+function isGmailHost(host: string): boolean {
+  const h = host.trim().toLowerCase()
+  return h === 'imap.gmail.com' || h.includes('.gmail.') || h.includes('google')
+}
+
+function normalizePasswordForHost(host: string, password: string): string {
+  if (!isGmailHost(host)) return password
+  return password.replace(/[\s-]+/g, '')
+}
+
+function gmailPasswordIssue(host: string, password: string): string {
+  if (!isGmailHost(host) || !password) return ''
+  const normalized = normalizePasswordForHost(host, password)
+  if (normalized.length !== 16) {
+    return 'Gmail App Password ควรมี 16 ตัวอักษรหลังลบช่องว่าง'
+  }
+  return ''
+}
+
+function friendlyConnectionError(message: string): string {
+  const lower = message.toLowerCase()
+  if (
+    lower.includes('authenticationfailed') ||
+    lower.includes('authenticate') ||
+    lower.includes('invalid credentials') ||
+    lower.includes('password')
+  ) {
+    return 'Gmail/IMAP ยืนยันตัวตนไม่ผ่าน: ใช้ App Password 16 ตัวจาก Google ไม่ใช่รหัส Gmail ปกติ, ตรวจว่าเปิด 2-Step Verification แล้ว, เปิด IMAP แล้ว, และวางรหัสได้แม้มีช่องว่างเพราะระบบจะลบให้'
+  }
+  return message
+}
+
 function fromAccount(a: IMAPAccount | null): FormState {
   if (!a) return newAccountDefaults()
   return {
@@ -358,17 +467,19 @@ function fromAccount(a: IMAPAccount | null): FormState {
 }
 
 function toUpsert(f: FormState) {
+  const acceptedSenders = f.channel === 'shopee' ? f.shopee_domains : f.filter_from
+
   return {
     name: f.name,
     host: f.host,
     port: f.port,
     username: f.username,
-    password: f.password,
+    password: normalizePasswordForHost(f.host, f.password),
     mailbox: f.mailbox || 'INBOX',
-    filter_from: arrayToCSV(f.filter_from),
+    filter_from: f.channel === 'shopee' ? '' : arrayToCSV(acceptedSenders),
     filter_subjects: arrayToCSV(f.filter_subjects),
     channel: f.channel,
-    shopee_domains: arrayToCSV(f.shopee_domains),
+    shopee_domains: f.channel === 'shopee' ? arrayToCSV(acceptedSenders) : '',
     lookback_days: f.lookback_days,
     poll_interval_seconds: Math.max(300, f.poll_interval_minutes * 60),
     enabled: f.enabled,
@@ -449,6 +560,11 @@ export function AccountDialog({
   }
 
   const handleTest = async () => {
+    const issue = gmailPasswordIssue(form.host, form.password)
+    if (issue) {
+      toast.error(`${issue} — ตัวอย่าง: qzqqvwqbzydodtsi`)
+      return
+    }
     setTesting(true)
     setTestResult(null)
     try {
@@ -463,12 +579,12 @@ export function AccountDialog({
         ok: res.data.ok,
         message: res.data.ok
           ? 'เชื่อมต่อสำเร็จ'
-          : res.data.error || 'เชื่อมต่อไม่สำเร็จ',
+          : friendlyConnectionError(res.data.error || 'เชื่อมต่อไม่สำเร็จ'),
         ms: res.data.duration_ms,
       })
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
-      setTestResult({ ok: false, message: msg || 'request failed' })
+      setTestResult({ ok: false, message: friendlyConnectionError(msg || 'request failed') })
     } finally {
       setTesting(false)
     }
@@ -487,7 +603,7 @@ export function AccountDialog({
       const list = res.data.folders ?? []
       setFolders(list)
       if (res.data.error) {
-        toast.error('โหลด folders ไม่สำเร็จ — ' + res.data.error)
+        toast.error('โหลด folders ไม่สำเร็จ — ' + friendlyConnectionError(res.data.error))
       }
     } catch {
       toast.error('โหลด folders ไม่สำเร็จ')
@@ -498,7 +614,12 @@ export function AccountDialog({
 
   const handleSave = async () => {
     if (!editing && !form.password) {
-      toast.error('กรุณากรอก password')
+      toast.error('กรุณากรอก App Password')
+      return
+    }
+    const issue = gmailPasswordIssue(form.host, form.password)
+    if (issue) {
+      toast.error(`${issue} — ตัวอย่าง: qzqqvwqbzydodtsi`)
       return
     }
     if (form.poll_interval_minutes < 5) {
@@ -519,13 +640,18 @@ export function AccountDialog({
       onOpenChange(false)
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
-      toast.error('บันทึกไม่สำเร็จ: ' + (msg || 'unknown'))
+      toast.error('บันทึกไม่สำเร็จ: ' + friendlyConnectionError(msg || 'unknown'))
     } finally {
       setSaving(false)
     }
   }
 
   const isShopee = form.channel === 'shopee'
+  const isGmail = isGmailHost(form.host)
+  const normalizedPassword = normalizePasswordForHost(form.host, form.password)
+  const passwordIssue = gmailPasswordIssue(form.host, form.password)
+  const passwordWasNormalized = !!form.password && normalizedPassword !== form.password
+  const acceptedSenders = isShopee ? form.shopee_domains : form.filter_from
   const visiblePresets = PHASE < 2
     ? PRESETS.filter((p) => p.id === 'gmail-shopee' || p.id === 'outlook-shopee' || p.id === 'custom')
     : PRESETS
@@ -561,6 +687,8 @@ export function AccountDialog({
               </div>
             </div>
           )}
+
+          {isGmail && <GmailSetupChecklist />}
 
           {/* ─── Section: การเชื่อมต่อ ─── */}
           <div className="space-y-2.5">
@@ -653,7 +781,7 @@ export function AccountDialog({
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="ac-pwd">
-                    รหัสผ่าน
+                    {isGmail ? 'App Password จาก Google' : 'รหัสผ่าน / App Password'}
                     {editing && (
                       <span className="ml-1 text-xs font-normal text-muted-foreground">
                         (เว้นว่างถ้าไม่เปลี่ยน)
@@ -668,6 +796,9 @@ export function AccountDialog({
                     type={showPwd ? 'text' : 'password'}
                     value={form.password}
                     onChange={(e) => set('password', e.target.value)}
+                    onBlur={() => {
+                      if (passwordWasNormalized) set('password', normalizedPassword)
+                    }}
                     placeholder={editing ? '••••••••' : 'App Password 16 หลัก'}
                     autoComplete="off"
                     className="pr-9"
@@ -681,7 +812,20 @@ export function AccountDialog({
                     {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-                <Hint>Gmail ห้ามใช้ password จริง — กดปุ่มข้างบนดูวิธีรับ App Password</Hint>
+                <Hint>
+                  {isGmail ? (
+                    <>
+                      วาง App Password จาก Google ได้เลย ระบบจะลบช่องว่าง/ขีดกลางก่อนทดสอบและบันทึก.
+                      {form.password && (
+                        <span className={cn('ml-1', passwordIssue ? 'text-destructive' : 'text-success')}>
+                          หลังลบช่องว่าง: {normalizedPassword.length}/16 ตัวอักษร
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    'บางผู้ให้บริการต้องใช้ App Password แทนรหัสผ่านจริง'
+                  )}
+                </Hint>
               </div>
             </div>
           </div>
@@ -740,18 +884,6 @@ export function AccountDialog({
             </div>
 
             <div className="space-y-1">
-              <Label>กรองผู้ส่ง</Label>
-              <TagInput
-                value={form.filter_from}
-                onChange={(v) => set('filter_from', v)}
-                placeholder="เพิ่มอีเมลหรือโดเมนผู้ส่ง แล้วกด Enter"
-              />
-              <Hint>
-                ปล่อยว่างได้ แล้วไปกำหนดในส่วน “ผู้ส่งที่ยอมรับ” ด้านล่างแทน
-              </Hint>
-            </div>
-
-            <div className="space-y-1">
               <Label>กรองหัวข้ออีเมล</Label>
               <TagInput
                 value={form.filter_subjects}
@@ -768,43 +900,35 @@ export function AccountDialog({
           </details>
 
           {/* ─── Section: accepted senders ─── */}
-          <details
-            open={isShopee}
-            className={cn(
-              'group space-y-2.5 rounded-md border p-3 transition-opacity',
-              isShopee
-                ? 'border-warning/30 bg-warning/5'
-                : 'border-border bg-muted/20 opacity-60',
-            )}
-          >
+          <details className="group space-y-2.5 rounded-md border border-border/70 p-3" open>
             <summary className="list-none">
               <SectionHeader
                 icon={ShoppingBag}
                 title="ผู้ส่งที่ยอมรับ"
-                subtitle={
-                  isShopee
-                    ? 'กำหนดอีเมลหรือโดเมนที่อนุญาตให้เข้าระบบ'
-                    : 'ส่วนนี้ใช้เฉพาะประเภท Shopee — เลือกด้านบนเพื่อเปิดใช้งาน'
-                }
+                subtitle="ช่องเดียวสำหรับกำหนดอีเมลหรือโดเมนที่อนุญาตให้เข้าระบบ"
               />
             </summary>
 
             <div className="space-y-1">
               <Label>รับเมลจากผู้ส่ง</Label>
               <TagInput
-                value={form.shopee_domains}
-                onChange={(v) => set('shopee_domains', v)}
-                placeholder={
-                  isShopee
-                    ? 'เพิ่มโดเมนหรืออีเมล แล้วกด Enter'
-                    : 'ปิดใช้งาน — เปลี่ยน channel เป็น Shopee ก่อน'
-                }
+                value={acceptedSenders}
+                onChange={(v) => {
+                  if (isShopee) {
+                    set('shopee_domains', v)
+                  } else {
+                    set('filter_from', v)
+                  }
+                }}
+                placeholder="เพิ่มโดเมนหรืออีเมล แล้วกด Enter"
                 lower
-                className={cn(!isShopee && 'pointer-events-none')}
               />
               <Hint>
                 ใส่ได้ทั้งโดเมน เช่น <code>shopee.co.th</code> หรืออีเมลเต็ม เช่น{' '}
-                <code>billing@example.com</code>. ถ้าเว้นว่าง ระบบจะรับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ
+                <code>billing@example.com</code>. ถ้าเว้นว่าง ระบบจะรับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ.
+                {isShopee
+                  ? ' สำหรับ Shopee ระบบจะตรวจซ้ำหลังอ่านหัวอีเมลเพื่อกันเมลที่ไม่ใช่ Shopee'
+                  : ' สำหรับไฟล์แนบทั่วไป ระบบจะใช้ค่านี้เป็นตัวกรองผู้ส่งตอนดึงจาก IMAP'}
               </Hint>
             </div>
           </details>

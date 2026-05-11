@@ -42,6 +42,12 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
           description: updated?.sml_doc_no ? `Doc: ${updated.sml_doc_no}` : undefined,
         })
       } catch {
+        try {
+          const updated = await getBill(id)
+          setBill(updated)
+        } catch {
+          // Keep the existing bill in view if the follow-up refresh also fails.
+        }
         setRetryError('Retry ล้มเหลว — กรุณาลองใหม่อีกครั้ง')
         toast.error('ส่ง SML ไม่สำเร็จ', {
           description: 'ดูรายละเอียดในการ์ด Error ด้านบน',

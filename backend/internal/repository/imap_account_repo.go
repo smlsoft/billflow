@@ -20,6 +20,7 @@ const imapSelectCols = `
   filter_from, filter_subjects, channel, shopee_domains,
   lookback_days, poll_interval_seconds, enabled,
   last_polled_at, last_poll_status, last_poll_error, last_poll_messages,
+  last_poll_found, last_poll_processed, last_poll_skipped,
   consecutive_failures, last_admin_alert_at, created_at, updated_at
 `
 
@@ -27,11 +28,13 @@ func scanImapAccount(s interface{ Scan(...any) error }) (*models.IMAPAccount, er
 	a := &models.IMAPAccount{}
 	var status, errMsg sql.NullString
 	var msgCount sql.NullInt32
+	var foundCount, processedCount, skippedCount sql.NullInt32
 	err := s.Scan(
 		&a.ID, &a.Name, &a.Host, &a.Port, &a.Username, &a.Password, &a.Mailbox,
 		&a.FilterFrom, &a.FilterSubjects, &a.Channel, &a.ShopeeDomains,
 		&a.LookbackDays, &a.PollIntervalSeconds, &a.Enabled,
 		&a.LastPolledAt, &status, &errMsg, &msgCount,
+		&foundCount, &processedCount, &skippedCount,
 		&a.ConsecutiveFailures, &a.LastAdminAlertAt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
@@ -48,6 +51,18 @@ func scanImapAccount(s interface{ Scan(...any) error }) (*models.IMAPAccount, er
 	if msgCount.Valid {
 		n := int(msgCount.Int32)
 		a.LastPollMessages = &n
+	}
+	if foundCount.Valid {
+		n := int(foundCount.Int32)
+		a.LastPollFound = &n
+	}
+	if processedCount.Valid {
+		n := int(processedCount.Int32)
+		a.LastPollProcessed = &n
+	}
+	if skippedCount.Valid {
+		n := int(skippedCount.Int32)
+		a.LastPollSkipped = &n
 	}
 	return a, nil
 }
@@ -171,7 +186,7 @@ func (r *ImapAccountRepo) Delete(id string) error {
 // UpdatePollStatus is called by the coordinator after each poll cycle.
 // status="ok" resets consecutive_failures to 0; status="warning" stores a
 // process-level issue without counting it as an IMAP connection failure.
-func (r *ImapAccountRepo) UpdatePollStatus(id, status, errMsg string, messageCount int) error {
+func (r *ImapAccountRepo) UpdatePollStatus(id, status, errMsg string, foundCount, processedCount, skippedCount int) error {
 	var em sql.NullString
 	if errMsg != "" {
 		em = sql.NullString{String: errMsg, Valid: true}
@@ -180,9 +195,11 @@ func (r *ImapAccountRepo) UpdatePollStatus(id, status, errMsg string, messageCou
 		_, err := r.db.Exec(
 			`UPDATE imap_accounts SET
 			   last_polled_at=NOW(), last_poll_status='ok', last_poll_error=NULL,
-			   last_poll_messages=$2, consecutive_failures=0
+			   last_poll_messages=$3,
+			   last_poll_found=$2, last_poll_processed=$3, last_poll_skipped=$4,
+			   consecutive_failures=0
 			 WHERE id=$1`,
-			id, messageCount,
+			id, foundCount, processedCount, skippedCount,
 		)
 		return err
 	}
@@ -190,19 +207,22 @@ func (r *ImapAccountRepo) UpdatePollStatus(id, status, errMsg string, messageCou
 		_, err := r.db.Exec(
 			`UPDATE imap_accounts SET
 			   last_polled_at=NOW(), last_poll_status='warning', last_poll_error=$2,
-			   last_poll_messages=$3, consecutive_failures=0
+			   last_poll_messages=$4,
+			   last_poll_found=$3, last_poll_processed=$4, last_poll_skipped=$5,
+			   consecutive_failures=0
 			 WHERE id=$1`,
-			id, em, messageCount,
+			id, em, foundCount, processedCount, skippedCount,
 		)
 		return err
 	}
 	_, err := r.db.Exec(
 		`UPDATE imap_accounts SET
 		   last_polled_at=NOW(), last_poll_status=$2, last_poll_error=$3,
-		   last_poll_messages=$4,
+		   last_poll_messages=$5,
+		   last_poll_found=$4, last_poll_processed=$5, last_poll_skipped=$6,
 		   consecutive_failures = consecutive_failures + 1
 		 WHERE id=$1`,
-		id, status, em, messageCount,
+		id, status, em, foundCount, processedCount, skippedCount,
 	)
 	return err
 }

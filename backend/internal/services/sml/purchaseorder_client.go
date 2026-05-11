@@ -70,6 +70,7 @@ type PurchaseOrderDetail struct {
 	ItemName         string  `json:"item_name,omitempty"`
 	LineNumber       int     `json:"line_number"`
 	IsPremium        int     `json:"is_permium"` // typo intentional (matches SML)
+	IsGetPrice       int     `json:"is_get_price"`
 	UnitCode         string  `json:"unit_code"`
 	WHCode           string  `json:"wh_code"`
 	ShelfCode        string  `json:"shelf_code"`
@@ -295,6 +296,7 @@ func BuildPurchaseOrderPayload(
 			ItemName:         item.ItemName,
 			LineNumber:       i,
 			IsPremium:        0,
+			IsGetPrice:       1,
 			UnitCode:         unit,
 			WHCode:           wh,
 			ShelfCode:        shelf,

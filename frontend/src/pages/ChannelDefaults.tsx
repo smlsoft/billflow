@@ -24,7 +24,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { DataTable } from '@/components/common/DataTable'
 import { PageHeader } from '@/components/common/PageHeader'
 import client from '@/api/client'
-import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
+import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import { cn } from '@/lib/utils'
 
 import { EditDialog } from './ChannelDefaults/EditDialog'
@@ -47,6 +47,12 @@ const PHASE1_CHANNEL_SLOTS: Array<{
   ...(ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
     ? [{ channel: 'shopee' as ChannelKey, bill_type: 'sale' as const }]
     : []),
+  ...(ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS
+    ? [{ channel: 'lazada' as ChannelKey, bill_type: 'sale' as const }]
+    : []),
+  ...(ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS
+    ? [{ channel: 'tiktok' as ChannelKey, bill_type: 'sale' as const }]
+    : []),
 ]
 
 function displayChannelLabel(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type'>) {
@@ -57,7 +63,7 @@ function displayChannelLabel(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type
 }
 
 function workMenuFor(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type' | 'endpoint' | 'doc_format_code'>) {
-  if (ENABLE_SALES_ORDERS && row.channel === 'shopee' && row.bill_type === 'sale') {
+  if (ENABLE_SALES_ORDERS && (row.channel === 'shopee' || row.channel === 'lazada' || row.channel === 'tiktok') && row.bill_type === 'sale') {
     const route = `${row.endpoint ?? ''} ${row.doc_format_code ?? ''}`.toLowerCase()
     if (route.includes('saleinvoice') || row.doc_format_code?.toUpperCase() === 'SI') {
       return { label: 'ขายสินค้าและบริการ', to: '/sale-invoices' }
@@ -139,13 +145,13 @@ function HelpBanner() {
             {phase1 ? (
               <p className="text-muted-foreground">
                 ใน Phase 1 หน้านี้เปิดเฉพาะเส้นทางที่พร้อมใช้งานก่อน ได้แก่{' '}
-                <b>Email Shopee → บิลซื้อ</b>{ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Shopee Excel → บิลขาย</b></> : null}.
+                <b>Email Shopee → บิลซื้อ</b>{ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Shopee Excel → บิลขาย</b></> : null}{ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Lazada Excel → บิลขาย</b></> : null}{ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>TikTok Excel → บิลขาย</b></> : null}.
                 ใช้กำหนดปลายทางที่จะส่งเอกสารเข้า SML ได้แก่ เมนู SML รหัสประเภทเอกสาร
                 และรูปแบบเลขเอกสาร. ส่วนคู่ค้า คลัง พื้นที่เก็บ และภาษี จะเลือกในขั้นตอนส่งบิล.
               </p>
             ) : (
               <p className="text-muted-foreground">
-                บิลทุกใบที่ระบบรับเข้ามา (LINE / Email / Shopee / Lazada) สุดท้ายต้องส่งเข้า{' '}
+                บิลทุกใบที่ระบบรับเข้ามา (LINE / Email / Shopee / Lazada / TikTok) สุดท้ายต้องส่งเข้า{' '}
                 <b>SML ERP</b> เพื่อบันทึก. หน้านี้กำหนดว่า <b>"แต่ละช่องทาง"</b> จะ:
               </p>
             )}
@@ -346,7 +352,7 @@ export default function ChannelDefaults() {
         description={
           PHASE < 2
             ? ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
-              ? 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee และบิลขาย Shopee Excel'
+              ? 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee และบิลขาย Marketplace Excel'
               : 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee'
             : 'กำหนดว่าแต่ละช่องทางจะส่งบิลเข้าเมนูไหนใน SML พร้อมคู่ค้าและรูปแบบเลขเอกสาร'
         }

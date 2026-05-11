@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"billflow/internal/models"
+	"github.com/lib/pq"
 )
 
 type BillRepo struct {
@@ -149,6 +150,11 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		args = append(args, f.DocumentRoute)
 		argN++
 	}
+	if f.EmailAccountID != "" {
+		where += fmt.Sprintf(" AND b.raw_data->>'imap_account_id' = $%d", argN)
+		args = append(args, f.EmailAccountID)
+		argN++
+	}
 	if f.Search != "" {
 		where += fmt.Sprintf(
 			` AND (
@@ -219,7 +225,7 @@ func (r *BillRepo) UpdateStatus(id, status string, smlDocNo *string, smlResponse
 
 func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 	rows, err := r.db.Query(
-		`SELECT id, bill_id, raw_name, COALESCE(source_sku, ''), item_code, qty, unit_code, price, mapped, mapping_id,
+		`SELECT id, bill_id, raw_name, COALESCE(source_sku, ''), COALESCE(source_image_url, ''), item_code, qty, unit_code, price, mapped, mapping_id,
 		        COALESCE(candidates, '[]') as candidates
 		 FROM bill_items WHERE bill_id = $1 ORDER BY id`, billID,
 	)
@@ -233,8 +239,8 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 		var item models.BillItem
 		var candidatesRaw []byte
 		if err := rows.Scan(
-			&item.ID, &item.BillID, &item.RawName, &item.SourceSKU, &item.ItemCode,
-			&item.Qty, &item.UnitCode, &item.Price, &item.Mapped, &item.MappingID,
+			&item.ID, &item.BillID, &item.RawName, &item.SourceSKU, &item.SourceImageURL,
+			&item.ItemCode, &item.Qty, &item.UnitCode, &item.Price, &item.Mapped, &item.MappingID,
 			&candidatesRaw,
 		); err != nil {
 			return nil, err
@@ -249,10 +255,10 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 
 func (r *BillRepo) InsertItem(item *models.BillItem) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, source_sku, item_code, qty, unit_code, price, mapped, mapping_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, mapped, mapping_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 RETURNING id`,
-		item.BillID, item.RawName, item.SourceSKU, item.ItemCode, item.Qty,
+		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
 		item.UnitCode, item.Price, item.Mapped, item.MappingID,
 	).Scan(&item.ID)
 }
@@ -376,12 +382,12 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 	// waiting instead of presenting one blended bill count.
 	type queueStat struct {
 		key      string
-		source   string
+		sources  []string
 		billType string
 	}
 	queues := []queueStat{
-		{key: "purchase", source: "shopee_shipped", billType: "purchase"},
-		{key: "sales", source: "shopee", billType: "sale"},
+		{key: "purchase", sources: []string{"shopee_shipped"}, billType: "purchase"},
+		{key: "sales", sources: []string{"shopee", "lazada", "tiktok"}, billType: "sale"},
 	}
 	for _, q := range queues {
 		var totalQ, pendingQ, needsReviewQ, sentQ, failedQ int
@@ -393,8 +399,8 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 			  COUNT(*) FILTER (WHERE status = 'sent'),
 			  COUNT(*) FILTER (WHERE status = 'failed')
 			FROM bills
-			WHERE source = $1 AND bill_type = $2`,
-			q.source,
+			WHERE source = ANY($1) AND bill_type = $2`,
+			pq.Array(q.sources),
 			q.billType,
 		).Scan(&totalQ, &pendingQ, &needsReviewQ, &sentQ, &failedQ)
 		stats[q.key+"_total"] = totalQ
@@ -523,10 +529,10 @@ func (r *BillRepo) MarkProcessedEmailKey(source, messageID, orderID string) erro
 // InsertItemWithCandidates inserts a bill item including top-5 catalog candidates
 func (r *BillRepo) InsertItemWithCandidates(item *models.BillItem, candidatesJSON []byte) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, source_sku, item_code, qty, unit_code, price, mapped, mapping_id, candidates)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, mapped, mapping_id, candidates)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 RETURNING id`,
-		item.BillID, item.RawName, item.SourceSKU, item.ItemCode, item.Qty,
+		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
 		item.UnitCode, item.Price, item.Mapped, item.MappingID, candidatesJSON,
 	).Scan(&item.ID)
 }

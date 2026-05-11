@@ -7,6 +7,8 @@ import Bills from './pages/Bills'
 import BillDetail from './pages/BillDetail'
 import Import from './pages/Import'
 import ShopeeImport from './pages/ShopeeImport'
+import LazadaImport from './pages/LazadaImport'
+import TikTokImport from './pages/TikTokImport'
 import Mappings from './pages/Mappings'
 import Settings from './pages/Settings'
 import Logs from './pages/Logs'
@@ -20,7 +22,7 @@ import LineOA from './pages/LineOA'
 import Messages from './pages/Messages'
 import QuickReplies from './pages/QuickReplies'
 import Showcase from './pages/Showcase'
-import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from './lib/featureFlags'
+import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from './lib/featureFlags'
 import SetupCenter from './pages/SetupCenter'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
@@ -59,6 +61,8 @@ export default function App() {
           <Route path="messages" element={<Messages />} />
           <Route path="import" element={<Import />} />
           <Route path="import/shopee" element={ENABLE_SHOPEE_EXCEL ? <ShopeeImport /> : <Navigate to="/dashboard" replace />} />
+          <Route path="import/lazada" element={ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <LazadaImport /> : <Navigate to="/dashboard" replace />} />
+          <Route path="import/tiktok" element={ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? <TikTokImport /> : <Navigate to="/dashboard" replace />} />
           <Route path="mappings" element={<Mappings />} />
           <Route path="settings" element={PHASE < 2 ? <Navigate to="/settings/instance" replace /> : <Settings />} />
           <Route path="logs" element={<Logs />} />

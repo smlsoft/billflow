@@ -10,7 +10,7 @@ import LearningProgress from '@/components/LearningProgress'
 import { PageHeader } from '@/components/common/PageHeader'
 import client from '@/api/client'
 import { useAuthStore } from '@/store/auth'
-import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
+import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import type { DailyInsight, DashboardStats, MappingStats } from '@/types'
 import { ActionCards } from './Dashboard/ActionCards'
 
@@ -118,6 +118,16 @@ export default function Dashboard() {
                   <Link to="/import/shopee">นำเข้า Shopee Excel</Link>
                 </Button>
               )}
+              {ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS && (
+                <Button asChild size="sm" variant="outline">
+                  <Link to="/import/lazada">นำเข้า Lazada Excel</Link>
+                </Button>
+              )}
+              {ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS && (
+                <Button asChild size="sm" variant="outline">
+                  <Link to="/import/tiktok">นำเข้า TikTok Excel</Link>
+                </Button>
+              )}
               <Button asChild size="sm" variant="outline">
                 <Link to="/settings/email">ดึงอีเมลรับบิล</Link>
               </Button>
@@ -195,6 +205,20 @@ export default function Dashboard() {
                 icon={ShoppingBag}
                 title="Shopee Excel"
                 desc="นำเข้าไฟล์จาก Seller Center → แยกตามปลายทางที่ตั้งไว้ → ใบสั่งขายหรือขายสินค้าและบริการ"
+              />
+            )}
+            {ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS && (
+              <FlowStep
+                icon={ShoppingBag}
+                title="Lazada Excel"
+                desc="นำเข้าไฟล์จาก Lazada Seller Center → ตรวจสินค้า → ใบสั่งขายหรือขายสินค้าและบริการ"
+              />
+            )}
+            {ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS && (
+              <FlowStep
+                icon={ShoppingBag}
+                title="TikTok Excel"
+                desc="นำเข้าไฟล์ Excel/CSV จาก TikTok Seller Center → ตรวจสินค้า → ใบสั่งขายหรือขายสินค้าและบริการ"
               />
             )}
           </CardContent>

@@ -3,6 +3,7 @@ import axios from 'axios'
 import {
   AlertCircle,
   ChevronDown,
+  ExternalLink,
   FileText,
   Info,
   Mail,
@@ -40,12 +41,18 @@ import type { IMAPAccount } from '@/pages/EmailAccounts/AccountDialog'
 import { AccountDialog } from '@/pages/EmailAccounts/AccountDialog'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+const GMAIL_SECURITY_URL = 'https://myaccount.google.com/security'
+const GMAIL_APP_PASSWORDS_URL = 'https://myaccount.google.com/apppasswords'
+const GMAIL_IMAP_SETTINGS_URL = 'https://mail.google.com/mail/u/0/#settings/fwdandpop'
 
 interface IMAPAccountFull extends IMAPAccount {
   last_polled_at?: string | null
   last_poll_status?: string | null
   last_poll_error?: string | null
   last_poll_messages?: number | null
+  last_poll_found?: number | null
+  last_poll_processed?: number | null
+  last_poll_skipped?: number | null
   consecutive_failures?: number
 }
 
@@ -118,8 +125,28 @@ function HelpBanner() {
               )}
             </div>
             <div className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
-              Gmail ต้องใช้ <b>App Password</b> (16 หลัก) ไม่ใช่ password จริง —
-              ในฟอร์มเพิ่ม inbox มีปุ่ม "วิธีรับ App Password" ข้างช่อง Password
+              Gmail ต้องเตรียม 3 อย่างก่อนเชื่อม: เปิด <b>2-Step Verification</b>, สร้าง{' '}
+              <b>App Password 16 ตัวอักษร</b>, และเปิด <b>IMAP</b> ใน Gmail. วาง App Password
+              แบบมีช่องว่างได้ เช่น <code>qzqq vwqb zydo dtsi</code> ระบบจะส่งเป็น{' '}
+              <code>qzqqvwqbzydodtsi</code> อัตโนมัติ.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                ['เปิด 2-Step Verification', GMAIL_SECURITY_URL],
+                ['สร้าง App Password', GMAIL_APP_PASSWORDS_URL],
+                ['เปิด Gmail IMAP', GMAIL_IMAP_SETTINGS_URL],
+              ].map(([label, href]) => (
+                <a
+                  key={href}
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-foreground hover:bg-accent"
+                >
+                  {label}
+                  <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                </a>
+              ))}
             </div>
           </CardContent>
         </CollapsibleContent>
@@ -166,6 +193,14 @@ function friendlyPollError(error?: string | null): string {
   }
   if (lower.includes('openrouter') || lower.includes('credit') || lower.includes('quota')) {
     return 'ระบบ AI ยังประมวลผลไม่ได้ กรุณาตรวจเครดิตหรือการเชื่อมต่อ OpenRouter'
+  }
+  if (
+    lower.includes('authenticationfailed') ||
+    lower.includes('authenticate') ||
+    lower.includes('invalid credentials') ||
+    lower.includes('password')
+  ) {
+    return 'Gmail/IMAP ยืนยันตัวตนไม่ผ่าน: ให้ใช้ App Password 16 ตัวจาก Google ไม่ใช่รหัสผ่าน Gmail ปกติ, ตรวจว่าเปิด 2-Step Verification แล้ว, เปิด IMAP แล้ว, และวางรหัสได้แม้มีช่องว่างเพราะระบบจะลบให้'
   }
   return error
 }
@@ -222,6 +257,7 @@ export default function EmailAccounts() {
         status: string
         messages_found: number
         processed: number
+        skipped: number
         duration_ms: number
         error?: string
       }>(`/api/settings/imap-accounts/${a.id}/poll`, undefined, {
@@ -230,7 +266,7 @@ export default function EmailAccounts() {
       const r = res.data
       if (r.status === 'ok') {
         toast.success(
-          `ดึงเสร็จ ${r.processed}/${r.messages_found} ราย (${r.duration_ms} ms)`,
+          `ดึงเสร็จ พบ ${r.messages_found} / ประมวลผล ${r.processed} / ข้าม ${r.skipped}`,
           { id },
         )
       } else {
@@ -406,15 +442,36 @@ export default function EmailAccounts() {
               },
               {
                 key: 'msgs',
-                header: 'สร้างบิล',
-                headerClassName: 'text-right',
-                className: 'text-right',
-                cell: (a) =>
-                  a.last_poll_messages != null ? (
-                    <span className="font-mono text-xs">{a.last_poll_messages}</span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">—</span>
-                  ),
+                header: 'ผลรอบล่าสุด',
+                cell: (a) => {
+                  const found = a.last_poll_found
+                  const processed = a.last_poll_processed ?? a.last_poll_messages
+                  const skipped = a.last_poll_skipped
+                  if (found == null && processed == null && skipped == null) {
+                    return <span className="text-xs text-muted-foreground">—</span>
+                  }
+                  return (
+                    <div className="flex flex-col gap-0.5 text-xs tabular-nums">
+                      {found != null && (
+                        <span>
+                          <span className="text-muted-foreground">พบ</span>{' '}
+                          <span className="font-mono">{found}</span>
+                        </span>
+                      )}
+                      {processed != null && (
+                        <span>
+                          <span className="text-muted-foreground">ประมวลผล</span>{' '}
+                          <span className="font-mono">{processed}</span>
+                        </span>
+                      )}
+                      {skipped != null && skipped > 0 && (
+                        <span className="text-warning">
+                          <span>ข้าม</span> <span className="font-mono">{skipped}</span>
+                        </span>
+                      )}
+                    </div>
+                  )
+                },
               },
               {
                 key: 'interval',
@@ -485,7 +542,7 @@ export default function EmailAccounts() {
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>
             มีกล่องเมลที่ดึงไม่สำเร็จ 3 ครั้งติด — ผู้ดูแลได้รับ LINE แจ้งเตือนแล้ว
-            กรุณาแก้ password หรือ host ให้ถูกต้อง
+            กรุณาตรวจ host, เปิด IMAP, และใช้ App Password 16 ตัวอักษรแทนรหัสผ่าน Gmail ปกติ
           </span>
         </div>
       )}

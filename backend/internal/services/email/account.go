@@ -175,7 +175,7 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 	} else if len(res.ProcessWarnings) > 0 {
 		errMsg = strings.Join(compactWarnings(res.ProcessWarnings, 8), "\n")
 	}
-	if updateErr := p.repo.UpdatePollStatus(account.ID, res.Status(), errMsg, res.Processed); updateErr != nil {
+	if updateErr := p.repo.UpdatePollStatus(account.ID, res.Status(), errMsg, res.MessagesFound, res.Processed, res.Skipped); updateErr != nil {
 		p.logger.Warn("imap_poller_status_update_failed", zap.Error(updateErr))
 	}
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,19 @@ type SMLCatalogService struct {
 	logger     *zap.Logger
 	// Background embed state
 	embedRunning atomic.Int32
+	// Background sync state. Full SML catalog sync can take minutes, so the
+	// HTTP handler starts it asynchronously and reports progress via stats.
+	syncRunning atomic.Int32
+	syncMu      sync.RWMutex
+	syncStatus  SyncStatus
+}
+
+type SyncStatus struct {
+	Running    bool       `json:"running"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Count      int        `json:"count"`
+	Error      string     `json:"error,omitempty"`
 }
 
 func NewSMLCatalogService(
@@ -149,6 +163,43 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 
 	s.logger.Info("catalog: sync from API complete", zap.Int("count", total))
 	return total, nil
+}
+
+func (s *SMLCatalogService) BeginSync() bool {
+	if !s.syncRunning.CompareAndSwap(0, 1) {
+		return false
+	}
+	now := time.Now()
+	s.syncMu.Lock()
+	s.syncStatus = SyncStatus{Running: true, StartedAt: &now}
+	s.syncMu.Unlock()
+	return true
+}
+
+func (s *SMLCatalogService) FinishSync(count int, err error) {
+	now := time.Now()
+	s.syncMu.Lock()
+	s.syncStatus.Running = false
+	s.syncStatus.FinishedAt = &now
+	s.syncStatus.Count = count
+	s.syncStatus.Error = ""
+	if err != nil {
+		s.syncStatus.Error = err.Error()
+	}
+	s.syncMu.Unlock()
+	s.syncRunning.Store(0)
+}
+
+func (s *SMLCatalogService) IsSyncRunning() bool {
+	return s.syncRunning.Load() == 1
+}
+
+func (s *SMLCatalogService) SyncStatus() SyncStatus {
+	s.syncMu.RLock()
+	defer s.syncMu.RUnlock()
+	status := s.syncStatus
+	status.Running = s.IsSyncRunning()
+	return status
 }
 
 // singleProductV3Response is the shape of GET /v3/api/product/{code}.

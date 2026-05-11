@@ -21,6 +21,7 @@ interface Props {
   currentCode: string
   currentUnit: string
   currentPrice: number
+  sourceImageUrl?: string
   rawNameLabel?: string
   onPick: (code: string, unitCode: string) => void
   onClose: () => void
@@ -60,6 +61,7 @@ export function MapItemModal({
   currentCode,
   currentUnit,
   currentPrice,
+  sourceImageUrl,
   rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
   onPick,
   onClose,
@@ -143,16 +145,31 @@ export function MapItemModal({
         </DialogHeader>
 
         {/* Raw name context */}
-        <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-          <div className="mb-1 text-xs font-medium text-muted-foreground">{rawNameLabel}</div>
-          <div className="line-clamp-2 break-words font-medium leading-5">{rawName}</div>
-          {currentCode && (
-            <div className="mt-1.5 text-xs text-muted-foreground">
-              เลือกไว้ตอนนี้:{' '}
-              <code className="text-foreground font-mono">{currentCode}</code>
-              {' '}({currentUnit || '—'})
+        <div className="rounded-md border border-border bg-muted/30 p-2.5 text-sm">
+          <div className="flex gap-3">
+            {sourceImageUrl && (
+              <div className="h-20 w-20 shrink-0 overflow-hidden rounded-md border border-border bg-background">
+                <img
+                  src={sourceImageUrl}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 text-xs font-medium text-muted-foreground">{rawNameLabel}</div>
+              <div className="line-clamp-2 break-words font-medium leading-5">{rawName}</div>
+              {currentCode && (
+                <div className="mt-1.5 text-xs text-muted-foreground">
+                  เลือกไว้ตอนนี้:{' '}
+                  <code className="text-foreground font-mono">{currentCode}</code>
+                  {' '}({currentUnit || '—'})
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         <Tabs

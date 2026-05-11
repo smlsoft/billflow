@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -66,8 +67,13 @@ func (h *IMAPSettingsHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	normalizeIMAPUpsert(&in)
 	if in.Password == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password required for new account"})
+		return
+	}
+	if msg := validateIMAPUpsert(in, true); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
 	}
 	a := upsertToModel(in)
@@ -88,6 +94,11 @@ func (h *IMAPSettingsHandler) Update(c *gin.Context) {
 	var in models.IMAPAccountUpsert
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	normalizeIMAPUpsert(&in)
+	if msg := validateIMAPUpsert(in, false); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
 	}
 	a := upsertToModel(in)
@@ -150,6 +161,7 @@ func (h *IMAPSettingsHandler) TestConnection(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	normalizeIMAPUpsert(&in)
 	a := upsertToModel(in)
 	if a.Password == "" {
 		// Editing an existing row without re-typing password — pull from DB.
@@ -163,6 +175,10 @@ func (h *IMAPSettingsHandler) TestConnection(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password required"})
 		return
 	}
+	if msg := validateIMAPAccount(a, true); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "error": msg})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 	defer cancel()
@@ -171,7 +187,7 @@ func (h *IMAPSettingsHandler) TestConnection(c *gin.Context) {
 	if err := h.coordinator.TestConnection(ctx, a); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"ok":          false,
-			"error":       err.Error(),
+			"error":       friendlyIMAPError(err.Error()),
 			"duration_ms": time.Since(start).Milliseconds(),
 		})
 		return
@@ -190,6 +206,7 @@ func (h *IMAPSettingsHandler) ListFolders(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	normalizeIMAPUpsert(&in)
 	a := upsertToModel(in)
 	if a.Password == "" {
 		if id := c.Query("id"); id != "" {
@@ -202,16 +219,77 @@ func (h *IMAPSettingsHandler) ListFolders(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password required"})
 		return
 	}
+	if msg := validateIMAPAccount(a, true); msg != "" {
+		c.JSON(http.StatusOK, gin.H{"folders": []string{}, "error": msg})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 	defer cancel()
 
 	folders, err := emailservice.ListMailboxes(ctx, a)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"folders": folders, "error": err.Error()})
+		c.JSON(http.StatusOK, gin.H{"folders": folders, "error": friendlyIMAPError(err.Error())})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"folders": folders})
+}
+
+func normalizeIMAPUpsert(in *models.IMAPAccountUpsert) {
+	in.Name = strings.TrimSpace(in.Name)
+	in.Host = strings.ToLower(strings.TrimSpace(in.Host))
+	in.Username = strings.TrimSpace(in.Username)
+	in.Mailbox = strings.TrimSpace(in.Mailbox)
+	in.FilterFrom = strings.TrimSpace(in.FilterFrom)
+	in.FilterSubjects = strings.TrimSpace(in.FilterSubjects)
+	in.ShopeeDomains = strings.TrimSpace(in.ShopeeDomains)
+	if isGmailHost(in.Host) {
+		in.Password = normalizeGmailAppPassword(in.Password)
+	}
+}
+
+func normalizeGmailAppPassword(password string) string {
+	var b strings.Builder
+	for _, r := range password {
+		if unicode.IsSpace(r) || r == '-' {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func isGmailHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "imap.gmail.com" || strings.Contains(host, ".gmail.") || strings.Contains(host, "google")
+}
+
+func validateIMAPUpsert(in models.IMAPAccountUpsert, requirePassword bool) string {
+	if requirePassword && strings.TrimSpace(in.Password) == "" {
+		return "กรุณากรอก App Password"
+	}
+	if isGmailHost(in.Host) && in.Password != "" && len([]rune(in.Password)) != 16 {
+		return "Gmail App Password ควรมี 16 ตัวอักษรหลังลบช่องว่าง เช่น qzqqvwqbzydodtsi ไม่ใช่รหัสผ่าน Gmail ปกติ"
+	}
+	return ""
+}
+
+func validateIMAPAccount(a *models.IMAPAccount, requirePassword bool) string {
+	return validateIMAPUpsert(models.IMAPAccountUpsert{
+		Host:     a.Host,
+		Password: a.Password,
+	}, requirePassword)
+}
+
+func friendlyIMAPError(msg string) string {
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "authenticationfailed") ||
+		strings.Contains(lower, "authenticate") ||
+		strings.Contains(lower, "invalid credentials") ||
+		strings.Contains(lower, "password") {
+		return "Gmail/IMAP ยืนยันตัวตนไม่ผ่าน: ให้ใช้ App Password 16 ตัวจาก Google ไม่ใช่รหัสผ่าน Gmail ปกติ, ตรวจว่าเปิด 2-Step Verification แล้ว, เปิด IMAP ใน Gmail แล้ว, และถ้า copy รหัสแบบมีช่องว่าง ระบบจะลบช่องว่างให้อัตโนมัติ"
+	}
+	return msg
 }
 
 func upsertToModel(in models.IMAPAccountUpsert) *models.IMAPAccount {

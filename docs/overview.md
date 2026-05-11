@@ -1,13 +1,13 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-05-08 16:44 +07
+> อัพเดตล่าสุด: 2026-05-11 20:00 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
 
 ## ระบบทำงานยังไง
 
-BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Excel และ Lazada Excel แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
+BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
 
 สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow และ Shopee Excel sale flow: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้.
 
@@ -22,7 +22,7 @@ LINE OA / Email / Excel Upload
 Ingest
   - LINE webhook: /webhook/line/:oaId หรือ /webhook/line
   - EmailCoordinator: one goroutine per enabled imap_accounts row
-  - Import handlers: Lazada generic / Shopee preview+confirm
+  - Import handlers: Lazada generic / Shopee/Lazada/TikTok preview+confirm
         │
         ▼
 AI + Matching
@@ -135,7 +135,8 @@ billflow/
 | Email IMAP | ✅ multi-account DB-driven, Shopee email routing, artifacts, logs |
 | LINE OA | ✅ code exists for human chat 2 ทาง, multi-OA, media, quick replies, status, notes, tags, create bill from chat; hidden/not central in Phase 1 |
 | Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
-| Lazada Excel | WIP/generic upload + confirm; รอไฟล์จริงเพื่อ lock mapping |
+| Lazada Excel | ✅ local implementation for sale Excel: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
+| TikTok Excel/CSV | ✅ local-ready for sale Excel/CSV: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
 
 ## Current Document Menus
 

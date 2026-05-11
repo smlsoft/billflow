@@ -57,7 +57,7 @@ export function issueLabel(kind: IssueKind): string {
 export function rowIssueReason(item: BillItem): string {
   const reasons: string[] = []
   if (!item.item_code || item.item_code.trim() === '') {
-    reasons.push(item.source_sku ? `SKU Shopee ${item.source_sku} ยังไม่พบในสินค้า SML` : ISSUE_TOOLTIP.unmapped_item_code)
+    reasons.push(item.source_sku ? `SKU ต้นทาง ${item.source_sku} ยังไม่พบในสินค้า SML` : ISSUE_TOOLTIP.unmapped_item_code)
   }
   if (!item.unit_code || item.unit_code.trim() === '') {
     reasons.push(ISSUE_TOOLTIP.unmapped_unit_code)

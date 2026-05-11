@@ -10,6 +10,7 @@ import (
 
 	"billflow/internal/models"
 	"billflow/internal/services/ai"
+	emailservice "billflow/internal/services/email"
 )
 
 // ProcessShopeeShippedEmailBody handles Shopee shipping-confirmation emails
@@ -17,7 +18,7 @@ import (
 // One email may contain multiple Shopee orders (one per seller) — this
 // function creates a separate purchase bill for each order_id found by AI.
 // Bills are never auto-sent — status is always pending or needs_review.
-func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bodyHTML, messageID string) error {
+func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) error {
 	traceID := fmt.Sprintf("shopee-shipped-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 
@@ -70,13 +71,17 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 
 	// Per-item prices parsed from the email body — fallback for AI nulls.
 	fallbackPrices := extractShopeePrices(plainText)
+	sourceImages := extractShopeeImageURLs(bodyHTML)
+	if len(sourceImages) == 0 {
+		sourceImages = extractShopeeImageURLs(bodyText)
+	}
 
 	createdCount := 0
 	skippedCount := 0
 	failedCount := 0
 	for _, order := range orders {
 		created, err := h.processOneShippedOrder(
-			order, subject, from, bodyText, bodyHTML, messageID, fallbackPrices, traceID, startTime,
+			order, subject, from, bodyText, bodyHTML, messageID, fallbackPrices, sourceImages, traceID, startTime, source,
 		)
 		if err != nil {
 			failedCount++
@@ -108,8 +113,10 @@ func (h *EmailHandler) processOneShippedOrder(
 	order ai.ExtractedOrder,
 	subject, from, bodyText, bodyHTML, messageID string,
 	fallbackPrices []float64,
+	sourceImages []string,
 	traceID string,
 	startTime time.Time,
+	source emailservice.MailSource,
 ) (bool, error) {
 	orderID := strings.TrimSpace(order.OrderID)
 	if orderID == "" || strings.EqualFold(orderID, "#unknown") {
@@ -191,6 +198,9 @@ func (h *EmailHandler) processOneShippedOrder(
 			Qty:     extItem.Qty,
 			Mapped:  false,
 		}
+		if i < len(sourceImages) {
+			item.SourceImageURL = sourceImages[i]
+		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
 		} else if i < len(fallbackPrices) {
@@ -231,6 +241,7 @@ func (h *EmailHandler) processOneShippedOrder(
 		"body_text":        bodyText,
 		"body_html":        bodyHTML,
 	}
+	applyMailSource(rawDataMap, source)
 	rawDataBytes, _ := json.Marshal(rawDataMap)
 
 	status := "needs_review"

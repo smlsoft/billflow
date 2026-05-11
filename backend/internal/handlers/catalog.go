@@ -94,6 +94,7 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	syncStatus := h.catalogSvc.SyncStatus()
 	c.JSON(http.StatusOK, gin.H{
 		"total":         total,
 		"embedded":      done,
@@ -101,6 +102,8 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 		"error":         errCount,
 		"index_size":    h.catalogIdx.Size(),
 		"embed_running": h.catalogSvc.IsEmbedRunning(),
+		"sync_running":  syncStatus.Running,
+		"sync_status":   syncStatus,
 	})
 }
 
@@ -109,18 +112,26 @@ func (h *CatalogHandler) SyncFromAPI(c *gin.Context) {
 	if h.hasPendingRestart(c) {
 		return
 	}
-	count, err := h.catalogSvc.SyncFromAPI()
-	if err != nil {
-		h.logger.Error("catalog sync", zap.Error(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+	if !h.catalogSvc.BeginSync() {
+		c.JSON(http.StatusAccepted, gin.H{"message": "catalog sync already running", "sync_running": true})
 		return
 	}
-	// Reload in-memory index so /api/catalog/search reflects the new rows
-	// without waiting for the next embed batch.
-	if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
-		h.logger.Warn("catalog: reload index after sync", zap.Error(err))
-	}
-	c.JSON(http.StatusOK, gin.H{"synced": count, "message": fmt.Sprintf("synced %d items from SML", count)})
+	go func() {
+		h.logger.Info("catalog: sync from API started")
+		count, err := h.catalogSvc.SyncFromAPI()
+		if err != nil {
+			h.logger.Error("catalog sync", zap.Error(err))
+		}
+		if err == nil {
+			// Reload in-memory index so /api/catalog/search reflects the new rows
+			// without waiting for the next embed batch.
+			if reloadErr := h.catalogIdx.Reload(h.catalogRepo); reloadErr != nil {
+				h.logger.Warn("catalog: reload index after sync", zap.Error(reloadErr))
+			}
+		}
+		h.catalogSvc.FinishSync(count, err)
+	}()
+	c.JSON(http.StatusAccepted, gin.H{"message": "catalog sync started", "sync_running": true})
 }
 
 func (h *CatalogHandler) hasPendingRestart(c *gin.Context) bool {

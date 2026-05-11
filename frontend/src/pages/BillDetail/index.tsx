@@ -72,9 +72,9 @@ export default function BillDetail() {
     setTimeout(() => setHighlightItemId(id), 0)
   }
 
-  // Shopee purchase/sale documents both need explicit per-bill SML values.
+  // Marketplace purchase/sale documents need explicit per-bill SML values.
   const handleSendClick = () => {
-    if (bill?.bill_type === 'purchase' || (bill?.bill_type === 'sale' && bill?.source === 'shopee')) {
+    if (bill?.bill_type === 'purchase' || (bill?.bill_type === 'sale' && (bill?.source === 'shopee' || bill?.source === 'lazada' || bill?.source === 'tiktok'))) {
       setSendDialogOpen(true)
     } else {
       handleRetry()
@@ -120,7 +120,7 @@ export default function BillDetail() {
     bill.status === 'needs_review'
   const canEdit = canSend
   const isShopeeSale = isShopeeSalesBill(bill)
-  const evidenceSourceLabel = isShopeeSale ? 'ไฟล์ Shopee Excel' : 'อีเมล'
+  const evidenceSourceLabel = isShopeeSale ? 'ไฟล์ Marketplace Excel' : 'อีเมล'
 
   const handleItemUpdated = (updated: BillItem) => {
     setBill((prev) => {
@@ -211,7 +211,7 @@ export default function BillDetail() {
         </div>
       </section>
 
-      {(bill.bill_type === 'purchase' || (bill.bill_type === 'sale' && bill.source === 'shopee')) && (
+      {(bill.bill_type === 'purchase' || (bill.bill_type === 'sale' && (bill.source === 'shopee' || bill.source === 'lazada' || bill.source === 'tiktok'))) && (
         <SendPurchaseDialog
           open={sendDialogOpen}
           bill={bill}

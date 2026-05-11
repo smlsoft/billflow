@@ -137,6 +137,15 @@ function guidanceFor(log: AuditLog): LogGuidance | null {
   const parsedError = parseDetailError(log)
   const errorText = String(parsedError.error ?? d.error ?? '').toLowerCase()
 
+  if (log.action === 'demo_test_data_reset') {
+    return {
+      title: 'ไม่ใช่ error: มีการล้างข้อมูลทดสอบ',
+      description:
+        'รายการนี้เกิดจากผู้ดูแลกดล้างข้อมูลทดสอบในหน้าเริ่มต้นใช้งาน ระบบลบเฉพาะบิล/import/log เดิม และเก็บการตั้งค่า สินค้า SML ตารางจับคู่ และประวัติ AI ไว้ตามค่าเริ่มต้น',
+      tone: 'info',
+    }
+  }
+
   if (log.action === 'sml_failed') {
     if (errorText.includes('duplicate key') || errorText.includes('already exists')) {
       return {
@@ -230,6 +239,31 @@ function makeFacts(log: AuditLog): LogFact[] {
   if (d.party_code) facts.push({ label: 'คู่ค้า', value: d.party_code, mono: true })
   if (log.duration_ms != null) facts.push({ label: 'เวลาใช้', value: `${log.duration_ms.toLocaleString()}ms`, mono: true })
   if (log.trace_id) facts.push({ label: 'Trace', value: <CopyChip value={log.trace_id} label="trace" /> })
+
+  if (log.action === 'demo_test_data_reset') {
+    const beforeDocuments = d.before_documents && typeof d.before_documents === 'object' ? d.before_documents : {}
+    const beforeImports = d.before_imports && typeof d.before_imports === 'object' ? d.before_imports : {}
+    const beforeTotal = Number(beforeDocuments.total ?? 0)
+    const beforePurchase = Number(beforeDocuments.purchase ?? 0)
+    const beforeSaleOrder = Number(beforeDocuments.saleorder ?? 0)
+    const beforeSaleInvoice = Number(beforeDocuments.saleinvoice ?? 0)
+    const beforeLogs = Number(d.before_logs ?? beforeImports.audit_logs ?? 0)
+    const preserved: string[] = []
+    if (d.preserved_settings) preserved.push('การตั้งค่า')
+    if (d.preserved_catalog) preserved.push('สินค้า SML')
+    if (d.preserved_mappings) preserved.push('ตารางจับคู่')
+    if (d.preserved_ai_usage_log) preserved.push('ประวัติ AI')
+
+    facts.push({ label: 'บิลก่อนล้าง', value: `${beforeTotal.toLocaleString()} ใบ` })
+    facts.push({
+      label: 'แยกตามงาน',
+      value: `ซื้อ ${beforePurchase.toLocaleString()} · ใบสั่งขาย ${beforeSaleOrder.toLocaleString()} · ขายสินค้า ${beforeSaleInvoice.toLocaleString()}`,
+    })
+    facts.push({ label: 'ประวัติเดิม', value: `${beforeLogs.toLocaleString()} รายการ` })
+    facts.push({ label: 'เก็บข้อมูลไว้', value: preserved.length ? preserved.join(', ') : 'ไม่มีข้อมูลที่ระบุ' })
+    facts.push({ label: 'เลขรันเอกสาร', value: d.reset_doc_counter ? 'รีเซ็ตแล้ว' : 'ไม่ได้รีเซ็ต' })
+    facts.push({ label: 'ประวัติอีเมลซ้ำ', value: d.reset_email_dedup ? 'ล้างแล้ว' : 'ไม่ได้ล้าง' })
+  }
 
   return facts.filter((fact) => fact.value != null && fact.value !== '')
 }
@@ -723,11 +757,11 @@ export default function Logs() {
         />
 
         <Card className="shadow-none">
-          <CardContent className="flex flex-wrap items-end gap-2 p-3">
+          <CardContent className="grid grid-cols-1 items-end gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[180px_minmax(220px,1fr)_150px_240px_auto]">
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">ช่องทาง</Label>
+              <Label className="block text-xs text-muted-foreground">ช่องทาง</Label>
               <Select value={source} onValueChange={setSource}>
-                <SelectTrigger className="h-8 w-[142px] text-xs">
+                <SelectTrigger className="h-10 w-full text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -735,10 +769,11 @@ export default function Logs() {
                   {PHASE >= 2 && <SelectItem value="line">LINE</SelectItem>}
                   <SelectItem value="email">Email</SelectItem>
                   <SelectItem value="shopee_email">Shopee Email</SelectItem>
-                  <SelectItem value="shopee_shipped">Shopee Shipped</SelectItem>
-                  {PHASE >= 2 && <SelectItem value="shopee_excel">Shopee Excel</SelectItem>}
-                  {PHASE >= 2 && <SelectItem value="lazada">Lazada</SelectItem>}
-                  <SelectItem value="sml">SML</SelectItem>
+	                  <SelectItem value="shopee_shipped">Shopee Shipped</SelectItem>
+	                  {PHASE >= 2 && <SelectItem value="shopee_excel">Shopee Excel</SelectItem>}
+	                  {PHASE >= 2 && <SelectItem value="lazada">Lazada</SelectItem>}
+	                  {PHASE >= 2 && <SelectItem value="tiktok">TikTok Excel</SelectItem>}
+	                  <SelectItem value="sml">SML</SelectItem>
                   <SelectItem value="catalog">Catalog</SelectItem>
                   <SelectItem value="channel_defaults">Settings</SelectItem>
                   <SelectItem value="system">System</SelectItem>
@@ -746,9 +781,9 @@ export default function Logs() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">เหตุการณ์</Label>
+              <Label className="block text-xs text-muted-foreground">เหตุการณ์</Label>
               <Select value={action} onValueChange={setAction}>
-                <SelectTrigger className="h-8 w-[190px] text-xs">
+                <SelectTrigger className="h-10 w-full text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -764,9 +799,9 @@ export default function Logs() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">ระดับ</Label>
+              <Label className="block text-xs text-muted-foreground">ระดับ</Label>
               <Select value={level} onValueChange={setLevel}>
-                <SelectTrigger className="h-8 w-[112px] text-xs">
+                <SelectTrigger className="h-10 w-full text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -778,7 +813,7 @@ export default function Logs() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">
+              <Label className="block text-xs text-muted-foreground">
                 วันที่
               </Label>
               <DateRangePicker
@@ -786,11 +821,11 @@ export default function Logs() {
                 to={dateTo}
                 onFromChange={setDateFrom}
                 onToChange={setDateTo}
-                className="h-8 min-w-[190px] text-xs"
+                className="h-10 w-full min-w-0 text-sm"
               />
             </div>
             {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={resetFilters} className="ml-auto h-8 text-xs">
+              <Button variant="ghost" size="sm" onClick={resetFilters} className="h-10 justify-self-start text-xs lg:justify-self-end">
                 <Filter className="h-3.5 w-3.5" />
                 ล้างตัวกรอง
               </Button>

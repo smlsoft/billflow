@@ -38,7 +38,8 @@
 | LINE OA | human chat inbox: text/image/file/audio → `/messages` | บิลขาย | Phase 3 + session 13+ | ✅ chat 2 ทาง + เปิดบิลจาก chat |
 | Email IMAP | multi-account attachment/body pipeline | บิลขาย/ซื้อตาม routing | Phase 5 + session 6+ | ✅ deployed |
 | Shopee Excel | Export จาก Shopee Seller Center | บิลขาย | Phase 4a | ✅ deployed; SML send via Retry route |
-| Lazada Excel | Export จาก Lazada | บิลขาย + บิลซื้อ | Phase 4b | รอไฟล์จากลูกค้า |
+| Lazada Excel | Export จาก Lazada Seller Center | บิลขาย | Phase 4b | ✅ deployed main + Henna |
+| TikTok Excel/CSV | Export จาก TikTok Seller Center | บิลขาย | Phase 4c | ✅ deployed main + Henna |
 
 
 **Output:** สร้างบิลใน SML ERP ผ่าน JSON-RPC API + บันทึก log ลง PostgreSQL + แจ้ง admin ผ่าน LINE เมื่อเกิด error
@@ -121,7 +122,13 @@ Go Backend (Gin) :8090
   ├── GET  /api/dashboard/insights
   ├── POST /api/dashboard/insights/generate
   ├── GET  /api/logs                        ← Activity Log
-  ├── POST /api/import/upload               ← Lazada Excel (Phase 4b WIP)
+  ├── POST /api/import/upload               ← generic legacy Excel import
+  ├── GET  /api/settings/lazada-config      ← Lazada SML route summary
+  ├── POST /api/import/lazada/preview       ← Lazada Excel preview + dedup
+  ├── POST /api/import/lazada/confirm       ← create local Lazada sale bills
+  ├── GET  /api/settings/tiktok-config      ← TikTok SML route summary
+  ├── POST /api/import/tiktok/preview       ← TikTok Excel/CSV preview + dedup
+  ├── POST /api/import/tiktok/confirm       ← create local TikTok sale bills
   ├── GET  /api/settings/shopee-config
   ├── POST /api/import/shopee/preview       ← parse + dedup check
   ├── POST /api/import/shopee/confirm       ← ส่ง SML 248
@@ -505,7 +512,7 @@ test-connection button, list-folders button.
 
 **ข้อจำกัด Gmail:** poll ถี่เกินไป → `unexpected EOF` — min interval 5 min (enforced by DB CHECK)
 
-### File Import — Lazada/Shopee (Phase 4)
+### File Import — Shopee/Lazada/TikTok (Phase 4)
 
 ดูรายละเอียดที่ [Section 16](#16-file-import-lazadashopee)
 
@@ -745,10 +752,21 @@ URL: /import/shopee
 
 **ดูรายละเอียด:** [docs/shopee-import.md](docs/shopee-import.md)
 
-### Lazada Excel Import (Phase 4b) ⏳ รอไฟล์จากลูกค้า
+### Lazada Excel Import (Phase 4b) ✅ Local Implementation
 
-Column mapping เก็บใน DB → admin แก้ได้จาก `/settings`
-(ไม่ hardcode เพราะ Lazada format อาจต่างกันตาม seller)
+Dedicated flow now mirrors Shopee Excel:
+- `/api/import/lazada/preview` parses Lazada Seller Center export, groups by `orderNumber`, checks duplicates, and filters sale-ready statuses (`confirmed`, `shipped`, `delivered`).
+- `/api/import/lazada/confirm` creates local sale bills with `source='lazada'`; SML send happens later through Bill Detail Retry.
+- `/import/lazada` is enabled for Phase 1+ sales instances. Deploy target: BillFlow main + Henna, not Thaisunsport Phase 1.
+
+### TikTok Excel/CSV Import (Phase 4c) ✅ Deployed Main + Henna
+
+Dedicated flow mirrors Shopee/Lazada Excel:
+- `/api/import/tiktok/preview` parses TikTok Seller Center `.csv` or `.xlsx`, groups by `Order ID`, checks duplicates, and filters sale-ready statuses (`จัดส่งแล้ว`, `shipped`, `delivered`).
+- Uses `SKU ID` as source SKU fallback when `Seller SKU` is empty, and uses `SKU Subtotal After Discount / Quantity` as item price.
+- Keeps `Order Amount` at order level so multi-row orders are not double-counted.
+- `/api/import/tiktok/confirm` creates local sale bills with `source='tiktok'`; SML send happens later through Bill Detail Retry.
+- Deployed target: BillFlow main + Henna, not Thaisunsport Phase 1.
 
 ---
 
@@ -840,7 +858,8 @@ sudo systemctl start cloudflared
 | 2 | Core AI pipeline: OpenRouter, MapperService (F1), AnomalyService (F2), SML client, WorkerPool | ✅ Done |
 | 3 | LINE integration: human inbox, multi-OA, Reply/Push, media, quick replies, notes/tags, create bill from chat | ✅ Done |
 | 4a | Shopee import: Excel → local bills → Retry default SML 248 saleorder | ✅ Done |
-| 4b | Lazada import: Excel parser + Web UI | ⏳ รอไฟล์จากลูกค้า |
+| 4b | Lazada import: Excel parser + Web UI | ✅ Deployed main + Henna |
+| 4c | TikTok import: Excel/CSV parser + Web UI | ✅ Deployed main + Henna |
 | 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped → PO) | ✅ Done |
 | 5+ | Manual-confirm flow — auto-send removed; user confirms in BillDetail UI | ✅ Done |
 | 6 | Web UI complete. Session 6: Tailwind/shadcn redesign + multi-account IMAP + artifacts. Session 7: channel_defaults + /settings/channels + SML party cache. Session 7-10: saleorder default + endpoint URL + doc_no generator + /logs redesign. Session 11: per-channel WH/Shelf/VAT override + ShopeeImport dialog removed + scrollable EditDialog. Session 12: marshalASCII permanent SML mojibake fix + catalog per-row Refresh/Delete. Session 13: LINE chatbot → human chat inbox + multi-OA (/messages, /settings/line-oa, webhook /webhook/line/:oaId, ~900 LOC chatbot removed) + Phase 4 quick wins (4.4 quick replies, 4.5 customer history panel, 4.11 browser notifications + chime). Session 14: composer redesign (auto-grow, paste, drag-drop) + admin send-image via Cloudflare Quick Tunnel + HMAC-signed /public/media/ URLs + conversation status (open/resolved/archived + auto-revive) + server-side inbox/thread search + CRM lite (phone detect, internal notes, tags + /settings/chat-tags). Session 15: hybrid Reply+Push API saving the 200/mo Free OA push quota (cached replyToken from inbound webhook → admin reply uses free Reply API; falls back to Push only when token expires). Session 16: closed audit log gaps for chat metadata (notes/tags/quick-reply CRUD + phone) — 17 new Thai-labeled actions in /logs; archived chats now disable composer with banner; CreateBillPanel auto-prefills phone from conversation; tag filter in inbox (multi-select with chips). Session 17: real-time inbox via Server-Sent Events (in-process broker + HMAC-signed token + EventSource singleton) — sub-second updates without WebSocket; polling kept at 30/60s safety net. Connection state indicator dot in sidebar. LINE markAsRead opt-in toggle per OA (Premium feature). Hourly stale reply-token cleanup. Server-restart pending-message recovery on boot. Self-tab dedup logic prevents duplicate bubbles when admin sends. Fixed major useEffect bug that was spamming mark-read every 30s and on every search keystroke. Session 18: 6-phase UX polish — /logs shows actual message content + Reply/Push chip; bill failures get a structured card (route badge + monospace error + copy-for-dev); sidebar reorganized into 5 domain groups (Overview / Bills / Chat / Master Data / System) with Thai labels + English tooltip hints; per-bill timeline reuses /logs ACTION_META; inline Retry button on /logs sml_failed rows; Dashboard "ต้อง action" widget with 4 click-through cards (บิลรอตรวจ / บิลล้มเหลว / ข้อความใหม่ / Email มีปัญหา) + URL-filter deep links. Session 19: heuristic evaluation pass — 16 fixes across all admin pages. Sprint A: lib/labels.ts SSOT (single status name everywhere), /settings rewrite with live multi-account status (LINE OA + IMAP counts) + Lazada column mapping moved into /import, composer disabled visual + Messages mobile responsive (back button), Catalog ↔ Mappings explainer banners, inline Retry on collapsed /logs rows. Sprint B: ShopeeImport preflight blocks file picker when channel config missing, Mappings empty-state CTA, tag-flow cross-links, Extract→CreateBill toast bridge, sidebar hints visible in expanded mode, BillDetail breathing room, Quick Setup tooltip. Sprint C: composer attachment count, catalog embedding async explainer, conversation freshness (relative time). Session 20: Send-to-SML validation guard (BillTotal disabled when items have unmapped item_code/unit_code, qty=0, or price=0; warning card lists each issue + "ดู →" jump-to-row; per-row AlertCircle icon in tiny status column). Route preview chip below Send button surfaces SML route + doc_no pattern so admins catch misconfigured channels before retry. Cloudflare Quick Tunnel drift monitor — daily 9am cron pings PUBLIC_BASE_URL/health and LINE-alerts admin (with inline recovery commands) when the tunnel URL has rolled. | ✅ Done |
@@ -899,7 +918,8 @@ Backup cron (2026-04-27):
 ✅ 20 MB .sql.gz file produced + accessible on host volume mount
 
 ยังไม่ test / ยังต้องรอข้อมูลจริง:
-⬜ Lazada Excel import (Phase 4b — รอไฟล์ลูกค้า)
+✅ Lazada Excel import deployed to main + Henna (Phase 4b)
+✅ TikTok Excel/CSV import deployed to main + Henna (Phase 4c)
 ⬜ Shopee Excel end-to-end with real customer file/SKU set
 ```
 

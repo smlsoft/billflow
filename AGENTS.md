@@ -19,7 +19,8 @@
 | LINE OA (human chat) | text/image/file/audio → admin inbox `/messages` → reply ผ่าน Reply API/Push API | บิลขาย (sale) | Phase 3 + session 13+ | ✅ chat 2 ทาง + เปิดบิลขายจาก chat |
 | Email (IMAP) | multi-account body/attachment PDF/Excel/รูป | sale/purchase ตาม routing | Phase 5 + session 6+ | ✅ deployed |
 | Shopee Excel | Export จาก Shopee Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4a | ✅ deployed |
-| Lazada Excel | Export จาก Lazada | บิลขาย + บิลซื้อ | Phase 4b | รอไฟล์จริงจากลูกค้า |
+| Lazada Excel | Export จาก Lazada Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4b | ✅ deployed main + Henna |
+| TikTok Excel/CSV | Export จาก TikTok Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4c | ✅ deployed main + Henna |
 
 > ⚠️ ใช้ IMAP แทน Gmail API สำหรับ demo — ง่ายกว่า ไม่ต้องผ่าน Google OAuth2 consent
 > Gmail API อาจเพิ่มใน Phase ถัดไปหลัง demo ลูกค้าแล้ว
@@ -135,8 +136,14 @@ billflow-postgres  → 5438
 │    POST /api/bills/:id/items/:iid/confirm-match  ← legacy   │
 │                                                             │
 │    Imports:                                                 │
-│    POST /api/import/upload         ← generic Lazada (WIP)   │
+│    POST /api/import/upload         ← generic legacy import  │
 │    POST /api/import/confirm        ← generic Lazada confirm │
+│    GET  /api/settings/lazada-config← Lazada SML defaults    │
+│    POST /api/import/lazada/preview ← parse Excel + dedup    │
+│    POST /api/import/lazada/confirm ← create local bills     │
+│    GET  /api/settings/tiktok-config← TikTok SML defaults    │
+│    POST /api/import/tiktok/preview ← parse Excel/CSV+dedup  │
+│    POST /api/import/tiktok/confirm ← create local bills     │
 │    GET  /api/settings/shopee-config← Shopee SML defaults    │
 │    POST /api/import/shopee/preview ← parse Excel + dedup    │
 │    POST /api/import/shopee/confirm ← send to SML 248        │
@@ -241,7 +248,7 @@ billflow-postgres  → 5438
 │  /bills            ← รายการบิล + filter + anomaly badge    │
 │  /bills/:id        ← รายละเอียด + status + retry           │
 │  /messages         ← LINE OA inbox (human chat) ✨session 13│
-│  /import           ← upload Lazada/Shopee                  │
+│  /import           ← upload Lazada/Shopee/TikTok           │
 │  /mappings         ← จัดการ mapping + F1 learning stats    │
 │  /settings         ← LINE, SML, threshold, columns         │
 │  /settings/email   ← Email Inboxes (admin only)            │
@@ -2068,11 +2075,17 @@ Phase 4a — Shopee Import ← ✅ DEPLOYED (SML 248 API confirmed working)
   [ ] 4a.5 ทดสอบ end-to-end กับ SKU จริง ← ต้องแก้ไฟล์ Excel + ตั้ง UNIT_CODE
   [ ] 4a.6 เพิ่ม SHOPEE_SML_UNIT_CODE=ถุง ใน server .env
 
-Phase 4b — Lazada Import (รอไฟล์จริงจากลูกค้า)
-  [ ] 4b.1 Go: Excel parser (column mapping จาก DB)
-  [ ] 4b.2 React: Import page + preview + anomaly badge
-  [ ] 4b.3 React: Settings → column mapping editor
-  [ ] 4b.4 ✅ ทดสอบ bulk import + error report
+Phase 4b — Lazada Import (deployed main + Henna)
+  [x] 4b.1 Go: Lazada Excel parser (orderNumber grouping, status filter, paidPrice)
+  [x] 4b.2 React: `/import/lazada` preview + confirm flow
+  [x] 4b.3 SML route: `/settings/channels` lazada sale → saleorder/saleinvoice
+  [x] 4b.4 Browser/API test against local backend with real `lazada.xlsx`
+
+Phase 4c — TikTok Import (deployed main + Henna)
+  [x] 4c.1 Go: TikTok Excel/CSV parser (`Order ID`, `SKU ID`, status filter, order-level amount)
+  [x] 4c.2 React: `/import/tiktok` preview + confirm flow
+  [x] 4c.3 SML route: `/settings/channels` tiktok sale → saleorder/saleinvoice
+  [x] 4c.4 Unit test with real TikTok CSV shape
 
 Phase 5 — Email IMAP
   [x] 5.1 Go: IMAP poller (single account, .env-driven) ✅
@@ -2384,7 +2397,7 @@ Core Flow — ยังไม่ test:
 [x] แก้จำนวนรายการที่ N เป็น Y ✅
 [ ] Email มี PO attachment → บิลสร้างอัตโนมัติ ← Phase 5 กำลัง test
 [ ] Upload Shopee Excel → bulk import สำเร็จ ← Phase 4a (รอ SML 224 เปิด)
-[ ] Upload Lazada Excel → bulk import สำเร็จ ← Phase 4b
+[x] Upload Lazada Excel local parser/unit test สำเร็จ ← Phase 4b
 
 AI Features:
 [ ] item map ไม่ได้ → confirm → ระบบเรียนรู้ (F1)
@@ -2554,7 +2567,7 @@ Phases:
 
 Pending (carry-over):
   ⏳ Phase 3 — test รูป/PDF/voice ใน LINE chat (auto-extract removed; manual extract works)
-  ⏳ Phase 4b — Lazada Excel import (waiting customer files)
+  ⏳ Phase 4b — Lazada Excel import deploy/test on main + Henna
   ⏳ Phase 8 — cloudflared named tunnel + systemd (Quick Tunnel works for now)
   ⏳ Phase 4 carry-over: 4.6 LINE↔SML party link, 4.12 keyboard shortcuts (j/k/e/),
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)

@@ -4,6 +4,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   line: 'LINE OA',
   email: 'Email',
   lazada: 'Lazada',
+  tiktok: 'TikTok Excel',
   shopee: 'Shopee',
   shopee_email: 'Shopee Email',
   shopee_shipped: 'Email บิลซื้อ Shopee',
@@ -37,6 +38,11 @@ export const FLOW_META: Record<
     icon: '📊',
     variant: 'bg-green-100 text-green-700',
   },
+  tiktok_excel: {
+    label: 'TikTok Excel',
+    icon: '📊',
+    variant: 'bg-slate-100 text-slate-700',
+  },
 }
 
 export const KIND_META: Record<
@@ -65,8 +71,13 @@ export const KIND_META: Record<
   },
   xlsx: {
     icon: '📊',
-    label: 'Shopee Excel',
+    label: 'Marketplace Excel',
     desc: 'ไฟล์ Excel ต้นฉบับที่ผู้ใช้อัปโหลด',
+  },
+  csv: {
+    icon: '📊',
+    label: 'Marketplace CSV',
+    desc: 'ไฟล์ CSV ต้นฉบับที่ผู้ใช้อัปโหลด',
   },
   image: {
     icon: '🖼️',

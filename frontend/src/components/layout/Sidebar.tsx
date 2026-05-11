@@ -47,11 +47,11 @@ import { ThemeToggle } from '@/components/common/ThemeToggle'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/lib/ui-store'
 import { cn } from '@/lib/utils'
-import { ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
+import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import client from '@/api/client'
 
 // VITE_PHASE controls which nav items are visible.
-//   1  = Phase 1 only (Email → PO) — hides LINE chat, Shopee/Lazada import
+//   1  = Phase 1 only (Email → PO) — hides LINE chat, marketplace imports
 //   99 = all features (default when unset)
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
@@ -120,8 +120,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'งานฝั่งขาย',
     items: [
-      { to: '/sales-orders', label: 'ใบสั่งขาย', icon: ShoppingBag, hasBadge: 'saleorder', hint: 'Shopee Excel → ขาย -> ใบสั่งขาย', enabled: ENABLE_SALES_ORDERS },
-      { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, hasBadge: 'saleinvoice', hint: 'Shopee Excel → ขาย -> ขายสินค้าและบริการ', enabled: ENABLE_SALES_ORDERS },
+      { to: '/sales-orders', label: 'ใบสั่งขาย', icon: ShoppingBag, hasBadge: 'saleorder', hint: 'Marketplace Excel → ขาย -> ใบสั่งขาย', enabled: ENABLE_SALES_ORDERS },
+      { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, hasBadge: 'saleinvoice', hint: 'Marketplace Excel → ขาย -> ขายสินค้าและบริการ', enabled: ENABLE_SALES_ORDERS },
     ],
   },
   {
@@ -129,7 +129,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail, hint: 'Email → ใบสั่งซื้อ' },
       { to: '/import/shopee', label: 'Shopee Excel', icon: Upload, hint: 'นำเข้า Excel จาก Shopee', enabled: ENABLE_SHOPEE_EXCEL },
-      { to: '/import', label: 'Lazada Excel', icon: Upload, end: true, hint: 'Excel จาก Lazada', minPhase: 2 },
+      { to: '/import/lazada', label: 'Lazada Excel', icon: Upload, hint: 'Excel จาก Lazada', enabled: ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS },
+      { to: '/import/tiktok', label: 'TikTok Excel', icon: Upload, hint: 'Excel/CSV จาก TikTok', enabled: ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS },
     ],
   },
   {
@@ -187,8 +188,8 @@ export default function Sidebar() {
       const [stats, purchase, saleorder, saleinvoice] = await Promise.all([
         client.get<{ unread_messages?: number }>('/api/dashboard/stats'),
         countDocumentQueue({ source: 'shopee_shipped', bill_type: 'purchase' }),
-        countDocumentQueue({ source: 'shopee', bill_type: 'sale', document_route: 'saleorder' }),
-        countDocumentQueue({ source: 'shopee', bill_type: 'sale', document_route: 'saleinvoice' }),
+        countDocumentQueue({ bill_type: 'sale', document_route: 'saleorder' }),
+        countDocumentQueue({ bill_type: 'sale', document_route: 'saleinvoice' }),
       ])
       setQueueCounts({ purchase, saleorder, saleinvoice })
       setUnreadMessages(stats.data.unread_messages ?? 0)

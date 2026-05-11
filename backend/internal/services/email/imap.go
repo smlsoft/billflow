@@ -17,13 +17,22 @@ import (
 	"go.uber.org/zap"
 )
 
+// MailSource identifies which configured inbox produced a message.
+type MailSource struct {
+	AccountID   string `json:"imap_account_id,omitempty"`
+	AccountName string `json:"imap_account_name,omitempty"`
+	Username    string `json:"imap_username,omitempty"`
+	Mailbox     string `json:"imap_mailbox,omitempty"`
+	EmailDate   string `json:"email_date,omitempty"`
+}
+
 // AttachmentProcessor is called once per qualifying attachment found in email.
-type AttachmentProcessor func(data []byte, mimeType, filename, messageID, subject, fromAddr string) error
+type AttachmentProcessor func(data []byte, mimeType, filename, messageID, subject, fromAddr string, source MailSource) error
 
 // ShopeeBodyProcessor is called when an email from a Shopee domain is detected.
 // bodyText is the plain-text part (sent to AI); bodyHTML is the original HTML
 // (stored in raw_data for display in BillDetail).
-type ShopeeBodyProcessor func(subject, from, bodyText, bodyHTML, messageID string) error
+type ShopeeBodyProcessor func(subject, from, bodyText, bodyHTML, messageID string, source MailSource) error
 
 // PollConfig holds everything one IMAP poll cycle needs.
 // Re-built per cycle from the account's current DB state, so admin edits
@@ -56,6 +65,14 @@ type PollResult struct {
 	FailureStage    string // "connect" | "authenticate" | "select" | "search" | "" if ok
 }
 
+type imapMessageSummary struct {
+	UID      imap.UID
+	Envelope *imap.Envelope
+	FromAddr string
+}
+
+const imapFetchBatchSize = 25
+
 // Status returns a short tag suitable for `imap_accounts.last_poll_status`.
 func (r *PollResult) Status() string {
 	if r.Err == nil {
@@ -82,6 +99,12 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	mailbox := cfg.Mailbox
 	if mailbox == "" {
 		mailbox = "INBOX"
+	}
+	source := MailSource{
+		AccountID:   cfg.AccountID,
+		AccountName: cfg.AccountName,
+		Username:    cfg.Username,
+		Mailbox:     mailbox,
 	}
 	lookback := cfg.LookbackDays
 	if lookback <= 0 {
@@ -122,9 +145,17 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	}
 
 	since := time.Now().AddDate(0, 0, -lookback)
+	// Search both read and unread messages. Admins often open/forward Gmail
+	// messages before BillFlow polls them; duplicate guards in the processors
+	// prevent re-created bills when already-processed read messages are seen
+	// again within the lookback window.
 	criteria := &imap.SearchCriteria{Since: since}
 	if cfg.FilterFrom != "" {
 		criteria.Header = []imap.SearchCriteriaHeaderField{{Key: "From", Value: cfg.FilterFrom}}
+	}
+	if len(cfg.FilterSubjects) > 0 {
+		subjectCriteria := subjectSearchCriteria(cfg.FilterSubjects)
+		criteria.And(&subjectCriteria)
 	}
 
 	searchData, err := c.UIDSearch(criteria, nil).Wait()
@@ -147,24 +178,9 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 
 	logger.Info("imap_messages_found", zap.String("trace_id", res.TraceID), zap.Int("count", len(uids)))
 
-	var uidSet imap.UIDSet
-	for _, u := range uids {
-		uidSet.AddNum(u)
-	}
-
-	bodySection := &imap.FetchItemBodySection{}
-	fetchOptions := &imap.FetchOptions{
-		UID:         true,
-		Envelope:    true,
-		BodySection: []*imap.FetchItemBodySection{bodySection},
-	}
-	fetchCmd := c.Fetch(uidSet, fetchOptions)
-	defer fetchCmd.Close()
-
 	var processedUIDs imap.UIDSet
 
-	for {
-		// Cancel mid-fetch if context was cancelled (e.g. account removed).
+	for start := 0; start < len(uids); start += imapFetchBatchSize {
 		select {
 		case <-ctx.Done():
 			res.Err = ctx.Err()
@@ -172,80 +188,95 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		default:
 		}
 
-		msg := fetchCmd.Next()
-		if msg == nil {
-			break
+		end := start + imapFetchBatchSize
+		if end > len(uids) {
+			end = len(uids)
 		}
 
-		var msgUID imap.UID
-		var envelope *imap.Envelope
-		var bodyBytes []byte
-		for {
-			item := msg.Next()
-			if item == nil {
-				break
+		summaries, err := fetchEnvelopeBatch(c, uids[start:end])
+		if err != nil {
+			res.Err = fmt.Errorf("IMAP fetch envelope: %w", err)
+			res.FailureStage = "fetch"
+			return res
+		}
+
+		var batchProcessedUIDs imap.UIDSet
+		batchProcessed := 0
+		for _, summary := range summaries {
+			envelope := summary.Envelope
+			if envelope == nil {
+				res.Skipped++
+				continue
 			}
-			switch v := item.(type) {
-			case imapclient.FetchItemDataUID:
-				msgUID = v.UID
-			case imapclient.FetchItemDataEnvelope:
-				envelope = v.Envelope
-			case imapclient.FetchItemDataBodySection:
-				bodyBytes, _ = io.ReadAll(v.Literal)
+
+			if !matchesSubject(envelope.Subject, cfg.FilterSubjects) {
+				logger.Info("imap_message_skipped",
+					zap.String("trace_id", res.TraceID),
+					zap.String("subject", envelope.Subject),
+					zap.String("reason", "subject_filter_mismatch"),
+				)
+				res.Skipped++
+				continue
 			}
-		}
 
-		if envelope == nil || len(bodyBytes) == 0 {
-			res.Skipped++
-			continue
-		}
+			if cfg.Channel == "shopee" && !isShopeeFrom(summary.FromAddr, cfg.ShopeeDomains) {
+				logger.Info("imap_message_skipped",
+					zap.String("trace_id", res.TraceID),
+					zap.String("from", summary.FromAddr),
+					zap.String("reason", "shopee_channel_non_shopee_from"),
+				)
+				res.Skipped++
+				continue
+			}
 
-		if !matchesSubject(envelope.Subject, cfg.FilterSubjects) {
-			logger.Info("imap_message_skipped",
-				zap.String("trace_id", res.TraceID),
-				zap.String("subject", envelope.Subject),
-				zap.String("reason", "subject_filter_mismatch"),
-			)
-			res.Skipped++
-			continue
-		}
-
-		messageID := envelope.MessageID
-		fromAddr := ""
-		if len(envelope.From) > 0 {
-			fromAddr = envelope.From[0].Addr()
-		}
-
-		logger.Info("imap_message_received",
-			zap.String("trace_id", res.TraceID),
-			zap.String("message_id", messageID),
-			zap.String("subject", envelope.Subject),
-		)
-
-		ok, warning := dispatch(cfg, p, envelope, fromAddr, bodyBytes, messageID, logger, res.TraceID)
-		if ok && msgUID != 0 {
-			processedUIDs.AddNum(msgUID)
-			res.Processed++
-		} else {
-			if warning != "" {
+			bodyBytes, err := fetchBodyForUID(c, summary.UID)
+			if err != nil {
+				warning := fmt.Sprintf("fetch body uid %d: %v", summary.UID, err)
+				logger.Warn("imap_message_fetch_body_failed",
+					zap.String("trace_id", res.TraceID),
+					zap.Uint32("uid", uint32(summary.UID)),
+					zap.Error(err),
+				)
 				res.ProcessWarnings = append(res.ProcessWarnings, warning)
+				res.Skipped++
+				continue
 			}
-			res.Skipped++
-		}
-	}
+			if len(bodyBytes) == 0 {
+				res.Skipped++
+				continue
+			}
 
-	if err := fetchCmd.Close(); err != nil {
-		res.Err = fmt.Errorf("IMAP fetch close: %w", err)
-		res.FailureStage = "fetch"
-		return res
+			messageID := envelope.MessageID
+			logger.Info("imap_message_received",
+				zap.String("trace_id", res.TraceID),
+				zap.String("message_id", messageID),
+				zap.String("subject", envelope.Subject),
+			)
+
+			msgSource := source
+			if !envelope.Date.IsZero() {
+				msgSource.EmailDate = envelope.Date.Format(time.RFC3339)
+			}
+
+			ok, warning := dispatch(cfg, p, envelope, summary.FromAddr, bodyBytes, messageID, msgSource, logger, res.TraceID)
+			if ok && summary.UID != 0 {
+				processedUIDs.AddNum(summary.UID)
+				batchProcessedUIDs.AddNum(summary.UID)
+				batchProcessed++
+				res.Processed++
+			} else {
+				if warning != "" {
+					res.ProcessWarnings = append(res.ProcessWarnings, warning)
+				}
+				res.Skipped++
+			}
+		}
+		if len(batchProcessedUIDs) > 0 {
+			markRead(c, batchProcessedUIDs, batchProcessed, logger, res.TraceID)
+		}
 	}
 
 	if len(processedUIDs) > 0 {
-		c.Store(processedUIDs, &imap.StoreFlags{
-			Op:     imap.StoreFlagsAdd,
-			Flags:  []imap.Flag{imap.FlagSeen},
-			Silent: true,
-		}, nil).Close() //nolint:errcheck
 		logger.Info("imap_mark_read", zap.String("trace_id", res.TraceID), zap.Int("count", res.Processed))
 	}
 
@@ -261,6 +292,100 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	return res
 }
 
+func fetchEnvelopeBatch(c *imapclient.Client, uids []imap.UID) ([]imapMessageSummary, error) {
+	if len(uids) == 0 {
+		return nil, nil
+	}
+
+	var uidSet imap.UIDSet
+	for _, u := range uids {
+		uidSet.AddNum(u)
+	}
+
+	fetchCmd := c.Fetch(uidSet, &imap.FetchOptions{UID: true, Envelope: true})
+	summaries := make([]imapMessageSummary, 0, len(uids))
+	for {
+		msg := fetchCmd.Next()
+		if msg == nil {
+			break
+		}
+
+		var summary imapMessageSummary
+		for {
+			item := msg.Next()
+			if item == nil {
+				break
+			}
+			switch v := item.(type) {
+			case imapclient.FetchItemDataUID:
+				summary.UID = v.UID
+			case imapclient.FetchItemDataEnvelope:
+				summary.Envelope = v.Envelope
+			}
+		}
+		if summary.Envelope != nil && len(summary.Envelope.From) > 0 {
+			summary.FromAddr = summary.Envelope.From[0].Addr()
+		}
+		summaries = append(summaries, summary)
+	}
+	if err := fetchCmd.Close(); err != nil {
+		return summaries, err
+	}
+	return summaries, nil
+}
+
+func fetchBodyForUID(c *imapclient.Client, uid imap.UID) ([]byte, error) {
+	if uid == 0 {
+		return nil, fmt.Errorf("empty uid")
+	}
+
+	var uidSet imap.UIDSet
+	uidSet.AddNum(uid)
+	bodySection := &imap.FetchItemBodySection{}
+	fetchCmd := c.Fetch(uidSet, &imap.FetchOptions{
+		UID:         true,
+		BodySection: []*imap.FetchItemBodySection{bodySection},
+	})
+
+	var bodyBytes []byte
+	for {
+		msg := fetchCmd.Next()
+		if msg == nil {
+			break
+		}
+		for {
+			item := msg.Next()
+			if item == nil {
+				break
+			}
+			if body, ok := item.(imapclient.FetchItemDataBodySection); ok && body.Literal != nil {
+				bodyBytes, _ = io.ReadAll(body.Literal)
+			}
+		}
+	}
+	if err := fetchCmd.Close(); err != nil {
+		return bodyBytes, err
+	}
+	return bodyBytes, nil
+}
+
+func markRead(c *imapclient.Client, uidSet imap.UIDSet, count int, logger *zap.Logger, traceID string) {
+	if len(uidSet) == 0 {
+		return
+	}
+	if err := c.Store(uidSet, &imap.StoreFlags{
+		Op:     imap.StoreFlagsAdd,
+		Flags:  []imap.Flag{imap.FlagSeen},
+		Silent: true,
+	}, nil).Close(); err != nil {
+		logger.Warn("imap_mark_read_failed",
+			zap.String("trace_id", traceID),
+			zap.Int("count", count),
+			zap.Error(err),
+		)
+	}
+}
+
 // dispatch routes one fetched message to the right Processor based on
 // account channel + Shopee subject heuristics. Returns true if any
 // processor accepted the message (so it can be marked Seen).
@@ -271,6 +396,7 @@ func dispatch(
 	fromAddr string,
 	bodyBytes []byte,
 	messageID string,
+	source MailSource,
 	logger *zap.Logger,
 	traceID string,
 ) (bool, string) {
@@ -295,7 +421,7 @@ func dispatch(
 			plainText = bodyHTML
 		}
 		if isShippedSubject(envelope.Subject) && p.ShopeeShipped != nil {
-			if err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID); err != nil {
+			if err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
 				logger.Warn("imap_shopee_shipped_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
 				return false, err.Error()
@@ -303,7 +429,7 @@ func dispatch(
 			return true, ""
 		}
 		if p.ShopeeOrder != nil {
-			if err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID); err != nil {
+			if err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
 				logger.Warn("imap_shopee_order_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
 				return false, err.Error()
@@ -317,7 +443,7 @@ func dispatch(
 		if p.Attachment == nil {
 			return false, ""
 		}
-		return parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, p.Attachment, logger, traceID), ""
+		return parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, source, p.Attachment, logger, traceID), ""
 	}
 }
 
@@ -334,6 +460,29 @@ func matchesSubject(subject string, filters []string) bool {
 		}
 	}
 	return false
+}
+
+func subjectSearchCriteria(filters []string) imap.SearchCriteria {
+	clean := make([]string, 0, len(filters))
+	for _, f := range filters {
+		f = strings.TrimSpace(f)
+		if f != "" {
+			clean = append(clean, f)
+		}
+	}
+	if len(clean) == 0 {
+		return imap.SearchCriteria{}
+	}
+	if len(clean) == 1 {
+		return imap.SearchCriteria{
+			Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: clean[0]}},
+		}
+	}
+	first := imap.SearchCriteria{
+		Header: []imap.SearchCriteriaHeaderField{{Key: "Subject", Value: clean[0]}},
+	}
+	rest := subjectSearchCriteria(clean[1:])
+	return imap.SearchCriteria{Or: [][2]imap.SearchCriteria{{first, rest}}}
 }
 
 // isShippedSubject returns true if the subject indicates a Shopee
@@ -389,6 +538,7 @@ func isShopeeFrom(from string, domains []string) bool {
 func parseAndProcess(
 	rawMsg []byte,
 	messageID, subject, fromAddr string,
+	source MailSource,
 	processor AttachmentProcessor,
 	logger *zap.Logger,
 	traceID string,
@@ -439,7 +589,7 @@ func parseAndProcess(
 			zap.Int("size_bytes", len(data)),
 		)
 
-		if err := processor(data, mimeType, filename, messageID, subject, fromAddr); err == nil {
+		if err := processor(data, mimeType, filename, messageID, subject, fromAddr, source); err == nil {
 			processed = true
 		} else {
 			logger.Warn("imap_attachment_process_failed",

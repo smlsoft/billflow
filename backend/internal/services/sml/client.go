@@ -75,10 +75,11 @@ type saleReserveArgs struct {
 }
 
 type saleItemArgs struct {
-	ItemCode string  `json:"item_code"`
-	Qty      float64 `json:"qty"`
-	UnitCode string  `json:"unit_code"`
-	Price    float64 `json:"price"`
+	ItemCode   string  `json:"item_code"`
+	Qty        float64 `json:"qty"`
+	UnitCode   string  `json:"unit_code"`
+	Price      float64 `json:"price"`
+	IsGetPrice int     `json:"is_get_price"`
 }
 
 // SSE response: event: message\ndata: {"result":{"content":[{"type":"text","text":"..."}]},...}
@@ -203,10 +204,11 @@ func buildItems(items []SMLItem) []saleItemArgs {
 	out := make([]saleItemArgs, len(items))
 	for i, it := range items {
 		out[i] = saleItemArgs{
-			ItemCode: it.ItemCode,
-			Qty:      it.Qty,
-			UnitCode: it.UnitCode,
-			Price:    it.Price,
+			ItemCode:   it.ItemCode,
+			Qty:        it.Qty,
+			UnitCode:   it.UnitCode,
+			Price:      it.Price,
+			IsGetPrice: 1,
 		}
 	}
 	return out

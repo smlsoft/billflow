@@ -35,14 +35,30 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
     crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'Lazada Excel' }],
   },
   {
+    pattern: '/import/lazada',
+    crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'Lazada Excel' }],
+  },
+  {
     pattern: '/import/shopee',
     crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'Shopee Excel' }],
+  },
+  {
+    pattern: '/import/tiktok',
+    crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'TikTok Excel' }],
   },
   { pattern: '/mappings', crumbs: [{ label: 'ตารางจับคู่สินค้า' }] },
   { pattern: '/settings', crumbs: [{ label: 'ตั้งค่า' }] },
   {
     pattern: '/settings/catalog',
     crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'สินค้าใน SML' }],
+  },
+  {
+    pattern: '/settings/channels',
+    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'เส้นทางเอกสาร SML' }],
+  },
+  {
+    pattern: '/settings/ai-usage',
+    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'การใช้งาน AI' }],
   },
   {
     pattern: '/settings/instance',
