@@ -116,6 +116,14 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 11:34 +07: Audit actor + production log accountability deployed to all three instances.
+- Scope: backend `/api/logs` now returns `actor` with user name/email/role when `user_id` exists, classifies background entries as worker/system, and supports `user_id` filtering.
+- Scope: `/logs` shows the actor badge in each row, adds a `ผู้ทำรายการ` filter, removes playful emoji from action labels, and keeps DEV payload copyable for admins/devs.
+- Scope: SML send success/failure, bill item add/delete, and mapping feedback logs now write the current `user_id`; backend also blocks malformed `doc_no` with hidden/Thai mark characters before sending to SML.
+- Change type: Shared Phase 1+ audit/accountability/data-quality hardening.
+- Local verification: `npm run build` passed; `GOCACHE=... go test ./...` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend `/logs` HTTP 200 on `3010`, `3030`, `3020`; main `/api/logs` verified returning `actor` for Admin entries.
+- Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12 11:11 +07: Logs Action View deployed to all three instances.
 - Scope: `/logs` now has summary cards, quick filters, DEV toggle, grouped import runs, SML failure incident cards, copyable DEV payload, and data-quality warning for malformed/hidden-character `doc_no`.
 - Change type: Shared Phase 1+ frontend UX/debug clarity.

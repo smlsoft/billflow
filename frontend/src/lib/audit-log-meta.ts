@@ -8,6 +8,13 @@
 export interface AuditLog {
   id: string
   user_id?: string
+  actor?: {
+    id?: string
+    name: string
+    email?: string
+    role?: string
+    type: 'user' | 'system' | 'worker' | string
+  }
   action: string
   target_id?: string
   source?: string

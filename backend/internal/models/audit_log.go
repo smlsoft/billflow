@@ -8,6 +8,7 @@ import (
 type AuditLog struct {
 	ID         string          `json:"id"`
 	UserID     *string         `json:"user_id,omitempty"`
+	Actor      *AuditActor     `json:"actor,omitempty"`
 	Action     string          `json:"action"`
 	TargetID   *string         `json:"target_id,omitempty"`
 	Source     string          `json:"source,omitempty"`
@@ -16,6 +17,14 @@ type AuditLog struct {
 	TraceID    string          `json:"trace_id,omitempty"`
 	Detail     json.RawMessage `json:"detail,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
+}
+
+type AuditActor struct {
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
+	Role  string `json:"role,omitempty"`
+	Type  string `json:"type"` // user, system, worker
 }
 
 // AuditEntry is the input for writing a new audit log entry.
@@ -34,6 +43,7 @@ type AuditLogFilter struct {
 	Source   string `form:"source"`    // line, email, shopee_excel, etc.
 	Level    string `form:"level"`     // info, warn, error
 	Action   string `form:"action"`    // e.g. bill_created
+	UserID   string `form:"user_id"`   // actor user id
 	DateFrom string `form:"date_from"` // YYYY-MM-DD
 	DateTo   string `form:"date_to"`   // YYYY-MM-DD
 	Page     int    `form:"page,default=1"`

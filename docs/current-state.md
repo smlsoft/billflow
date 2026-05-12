@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-12 11:11 +07
+> Updated: 2026-05-12 11:34 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -79,6 +79,9 @@
   - `/logs` แสดงคำแนะนำว่า error นั้นผู้ใช้แก้เองได้หรือควรส่งให้ทีมดูแลระบบ/SML API
   - `/logs` error playbook แยกสาเหตุละเอียดขึ้น เช่น SML timeout/network, doc format, ลูกค้า/ผู้ขาย, VAT, คลัง/พื้นที่เก็บ, สินค้า/หน่วย, Gmail App Password, และ AI quota
   - `/logs` ล่าสุดปรับเป็น Action View: มี summary cards, quick filters, DEV mode, import grouping, incident card สำหรับ SML fail, และ data-quality warning เมื่อ `doc_no` มีอักขระซ่อน/ผิดรูปแบบ
+  - `/logs` ล่าสุดแสดงผู้ทำรายการจริงจาก backend แล้ว: user action จะเห็นชื่อ/อีเมล/role, background job จะแสดงเป็น Email worker/System, และ filter `ผู้ทำรายการ` ส่งค่า `user_id` เข้า `/api/logs`
+  - audit log สำคัญตอนส่ง SML สำเร็จ/ล้มเหลว, เพิ่ม/ลบรายการสินค้า, และยืนยัน mapping จะบันทึก `user_id` ของผู้กดใช้งาน ทำให้ตรวจสอบย้อนหลังได้ว่าใครทำอะไร
+  - backend เพิ่ม guardrail ก่อนส่ง SML: ถ้า `doc_no` มี hidden character หรือ Thai mark แปลก ๆ เช่นเลขเอกสารขึ้นต้นผิดเป็น `ฺBF-...` ระบบจะหยุดก่อนยิง SML และแนะนำเลขที่สะอาดแทน เพื่อลด duplicate/error จาก SML API
   - `/logs` แสดง `demo_test_data_reset` เป็น `ล้างข้อมูลทดสอบ` พร้อม badge `Setup`, summary ภาษาไทย, และคำอธิบายว่าเป็นการล้างข้อมูลทดสอบจากหน้า `/setup` ไม่ใช่ error
   - `/api/bills` รองรับทั้ง `per_page` และ `page_size`, และคืน `data: []` แทน `null` เมื่อไม่มีข้อมูล
 - Email accepted-sender update:

@@ -19,6 +19,7 @@ import {
   ScrollText,
   ShieldAlert,
   Sparkles,
+  UserRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -294,6 +295,19 @@ function orderIdOf(log: AuditLog): string {
   return String(d.order_id ?? d.shopee_order_id ?? d.tiktok_order_id ?? d.lazada_order_id ?? '')
 }
 
+function actorName(log: AuditLog): string {
+  if (log.actor?.name) return log.actor.name
+  if (log.user_id) return 'Unknown user'
+  if (log.source === 'email' || log.source === 'shopee_email' || log.source === 'shopee_shipped') return 'Email worker'
+  return 'System'
+}
+
+function actorRoleLabel(log: AuditLog): string {
+  if (log.actor?.type === 'user') return log.actor.role ? log.actor.role : 'user'
+  if (log.actor?.type === 'worker') return 'worker'
+  return 'system'
+}
+
 function makeFacts(log: AuditLog): LogFact[] {
   const d = log.detail ?? {}
   const parsedError = parseDetailError(log)
@@ -314,6 +328,12 @@ function makeFacts(log: AuditLog): LogFact[] {
       copyValue: log.target_id,
     })
   }
+
+  facts.push({
+    label: 'ผู้ทำรายการ',
+    value: `${actorName(log)}${log.actor?.email ? ` · ${log.actor.email}` : ''}`,
+    tone: log.actor?.type === 'user' ? 'normal' : 'muted',
+  })
 
   const docNo = d.doc_no ?? parsedError.doc_no_attempted
   if (docNo) facts.push({ label: 'เลขเอกสาร SML', value: docNo, mono: true, copyValue: String(docNo) })
@@ -390,6 +410,7 @@ function LogExpandedSummary({
     action: log.action,
     source: log.source,
     level: log.level,
+    actor: log.actor,
     target_id: log.target_id,
     trace_id: log.trace_id,
     created_at: log.created_at,
@@ -620,7 +641,7 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
       className={cn(
         'rounded-md border bg-card transition-colors',
         isError
-          ? 'border-destructive/30 bg-destructive/5'
+          ? 'border-destructive/25 border-l-4 bg-card'
           : expanded
             ? 'border-primary/25 bg-primary/[0.025]'
             : 'border-border hover:bg-accent/30',
@@ -650,8 +671,8 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-sm leading-none">{meta.emoji}</span>
             <span className="text-sm font-medium text-foreground">{meta.label}</span>
+            <ActorBadge log={log} />
             {source && SOURCE_LABELS[source] && (
               <Badge
                 variant="secondary"
@@ -1071,6 +1092,23 @@ function SummaryButton({
   )
 }
 
+function ActorBadge({ log }: { log: AuditLog }) {
+  return (
+    <Badge
+      variant="secondary"
+      className={cn(
+        'h-5 gap-1 px-1.5 text-[10px] font-medium',
+        log.actor?.type === 'user' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+      )}
+      title={log.actor?.email || actorName(log)}
+    >
+      <UserRound className="h-3 w-3" />
+      {actorName(log)}
+      <span className="opacity-60">· {actorRoleLabel(log)}</span>
+    </Badge>
+  )
+}
+
 export default function Logs() {
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [total, setTotal] = useState(0)
@@ -1079,6 +1117,7 @@ export default function Logs() {
   const [source, setSource] = useState<string>(ALL)
   const [action, setAction] = useState<string>(ALL)
   const [level, setLevel] = useState<string>(ALL)
+  const [userID, setUserID] = useState<string>(ALL)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [quickView, setQuickView] = useState<QuickView>('all')
@@ -1092,6 +1131,7 @@ export default function Logs() {
       if (source !== ALL) params.source = source
       if (action !== ALL) params.action = action
       if (level !== ALL) params.level = level
+      if (userID !== ALL) params.user_id = userID
       if (dateFrom) params.date_from = dateFrom
       if (dateTo) params.date_to = dateTo
       const res = await api.get<LogsResponse>('/api/logs', { params })
@@ -1106,16 +1146,17 @@ export default function Logs() {
   useEffect(() => {
     load(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, action, level, dateFrom, dateTo])
+  }, [source, action, level, userID, dateFrom, dateTo])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const hasFilters =
-    source !== ALL || action !== ALL || level !== ALL || !!dateFrom || !!dateTo || quickView !== 'all'
+    source !== ALL || action !== ALL || level !== ALL || userID !== ALL || !!dateFrom || !!dateTo || quickView !== 'all'
 
   const resetFilters = () => {
     setSource(ALL)
     setAction(ALL)
     setLevel(ALL)
+    setUserID(ALL)
     setDateFrom('')
     setDateTo('')
     setQuickView('all')
@@ -1144,6 +1185,18 @@ export default function Logs() {
     dataQuality: logs.filter(hasDocNoQualityIssue).length,
     sent: logs.filter((l) => l.action === 'sml_sent').length,
   }), [logs])
+
+  const actorOptions = useMemo(() => {
+    const seen = new Map<string, { id: string; label: string }>()
+    for (const log of logs) {
+      if (log.actor?.type !== 'user' || !log.actor.id) continue
+      seen.set(log.actor.id, {
+        id: log.actor.id,
+        label: `${log.actor.name}${log.actor.email ? ` · ${log.actor.email}` : ''}`,
+      })
+    }
+    return Array.from(seen.values()).sort((a, b) => a.label.localeCompare(b.label))
+  }, [logs])
 
   const grouped = useMemo(() => groupByDate(visibleLogs), [visibleLogs])
 
@@ -1239,7 +1292,7 @@ export default function Logs() {
         </div>
 
         <Card className="shadow-none">
-          <CardContent className="grid grid-cols-1 items-end gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[180px_minmax(220px,1fr)_150px_240px_auto]">
+          <CardContent className="grid grid-cols-1 items-end gap-3 p-3 sm:grid-cols-2 xl:grid-cols-[170px_minmax(220px,1fr)_160px_170px_240px_auto]">
             <div className="space-y-1.5">
               <Label className="block text-xs text-muted-foreground">ช่องทาง</Label>
               <Select value={source} onValueChange={setSource}>
@@ -1274,7 +1327,7 @@ export default function Logs() {
                     .filter(([key]) => PHASE >= 2 || !PHASE2_ACTIONS.has(key))
                     .map(([key, meta]) => (
                       <SelectItem key={key} value={key}>
-                        {meta.emoji} {meta.label}
+                        {meta.label}
                       </SelectItem>
                     ))}
                 </SelectContent>
@@ -1291,6 +1344,22 @@ export default function Logs() {
                   <SelectItem value="info">info</SelectItem>
                   <SelectItem value="warn">คำเตือน</SelectItem>
                   <SelectItem value="error">ผิดพลาด</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="block text-xs text-muted-foreground">ผู้ทำรายการ</Label>
+              <Select value={userID} onValueChange={setUserID}>
+                <SelectTrigger className="h-10 w-full text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>ทั้งหมด</SelectItem>
+                  {actorOptions.map((actor) => (
+                    <SelectItem key={actor.id} value={actor.id}>
+                      {actor.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

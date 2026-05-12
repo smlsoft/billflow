@@ -99,9 +99,45 @@ func (h *BillHandler) resolveDocNo(bill *models.Bill, def *models.ChannelDefault
 
 func (h *BillHandler) resolveRetryDocNo(req RetryRequest, bill *models.Bill, def *models.ChannelDefault, fallbackPrefix string) (string, error) {
 	if docNo := strings.TrimSpace(req.DocNo); docNo != "" {
+		if clean := cleanSMLDocNo(docNo); clean != docNo {
+			return "", fmt.Errorf("doc_no contains hidden or invalid Thai mark characters; use %q", clean)
+		}
 		return docNo, nil
 	}
-	return h.resolveDocNo(bill, def, fallbackPrefix)
+	docNo, err := h.resolveDocNo(bill, def, fallbackPrefix)
+	if err != nil {
+		return "", err
+	}
+	if clean := cleanSMLDocNo(docNo); clean != strings.TrimSpace(docNo) {
+		return "", fmt.Errorf("doc_no contains hidden or invalid Thai mark characters; use %q", clean)
+	}
+	return docNo, nil
+}
+
+func cleanSMLDocNo(docNo string) string {
+	replacer := strings.NewReplacer(
+		"\u200b", "",
+		"\u200c", "",
+		"\u200d", "",
+		"\ufeff", "",
+		"\u0e31", "",
+		"\u0e34", "",
+		"\u0e35", "",
+		"\u0e36", "",
+		"\u0e37", "",
+		"\u0e38", "",
+		"\u0e39", "",
+		"\u0e3a", "",
+		"\u0e47", "",
+		"\u0e48", "",
+		"\u0e49", "",
+		"\u0e4a", "",
+		"\u0e4b", "",
+		"\u0e4c", "",
+		"\u0e4d", "",
+		"\u0e4e", "",
+	)
+	return strings.TrimSpace(replacer.Replace(docNo))
 }
 
 func (h *BillHandler) peekDocNo(def *models.ChannelDefault, fallbackPrefix string) (string, error) {
@@ -1143,9 +1179,14 @@ func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON [
 	if h.auditRepo != nil {
 		billID := id
 		durMs := int(time.Since(start).Milliseconds())
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
 		_ = h.auditRepo.Log(models.AuditEntry{
 			Action:     "sml_failed",
 			TargetID:   &billID,
+			UserID:     userID,
 			Source:     source,
 			Level:      "error",
 			TraceID:    c.GetString("trace_id"),
@@ -1170,9 +1211,14 @@ func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, reqJSON, 
 	}
 	billID := id
 	durMs := int(time.Since(start).Milliseconds())
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
 	_ = h.auditRepo.Log(models.AuditEntry{
 		Action:     "sml_sent",
 		TargetID:   &billID,
+		UserID:     userID,
 		Source:     source,
 		Level:      "info",
 		TraceID:    c.GetString("trace_id"),
@@ -1234,9 +1280,14 @@ func (h *BillHandler) AddItem(c *gin.Context) {
 	}
 
 	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
 		_ = h.auditRepo.Log(models.AuditEntry{
 			Action:   "bill_item_added",
 			TargetID: &billID,
+			UserID:   userID,
 			Source:   bill.Source,
 			Level:    "info",
 			Detail: map[string]interface{}{
@@ -1273,9 +1324,14 @@ func (h *BillHandler) DeleteItemRow(c *gin.Context) {
 	}
 
 	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
 		_ = h.auditRepo.Log(models.AuditEntry{
 			Action:   "bill_item_deleted",
 			TargetID: &billID,
+			UserID:   userID,
 			Source:   bill.Source,
 			Level:    "info",
 			Detail: map[string]interface{}{
@@ -1380,9 +1436,14 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 						zap.Error(applyErr))
 				}
 				if h.auditRepo != nil {
+					var userID *string
+					if uid := c.GetString("user_id"); uid != "" {
+						userID = &uid
+					}
 					_ = h.auditRepo.Log(models.AuditEntry{
 						Action:   "mapping_feedback",
 						TargetID: &itemID,
+						UserID:   userID,
 						Source:   bill.Source,
 						Level:    "info",
 						Detail: map[string]interface{}{

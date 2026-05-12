@@ -56,37 +56,45 @@ func (r *AuditLogRepo) List(f models.AuditLogFilter) ([]models.AuditLog, int, er
 	n := 1
 
 	if f.Action != "" {
-		where += fmt.Sprintf(" AND action = $%d", n)
+		where += fmt.Sprintf(" AND a.action = $%d", n)
 		args = append(args, f.Action)
 		n++
 	}
 	if f.Source != "" {
-		where += fmt.Sprintf(" AND source = $%d", n)
+		where += fmt.Sprintf(" AND a.source = $%d", n)
 		args = append(args, f.Source)
 		n++
 	}
 	if f.Level != "" {
-		where += fmt.Sprintf(" AND level = $%d", n)
+		where += fmt.Sprintf(" AND a.level = $%d", n)
 		args = append(args, f.Level)
 		n++
 	}
+	if f.UserID != "" {
+		where += fmt.Sprintf(" AND a.user_id = $%d", n)
+		args = append(args, f.UserID)
+		n++
+	}
 	if f.DateFrom != "" {
-		where += fmt.Sprintf(" AND created_at >= $%d::date", n)
+		where += fmt.Sprintf(" AND a.created_at >= $%d::date", n)
 		args = append(args, f.DateFrom)
 		n++
 	}
 	if f.DateTo != "" {
-		where += fmt.Sprintf(" AND created_at < ($%d::date + INTERVAL '1 day')", n)
+		where += fmt.Sprintf(" AND a.created_at < ($%d::date + INTERVAL '1 day')", n)
 		args = append(args, f.DateTo)
 		n++
 	}
 
 	var total int
-	if err := r.db.QueryRow("SELECT COUNT(*) FROM audit_logs "+where, args...).Scan(&total); err != nil {
+	if err := r.db.QueryRow("SELECT COUNT(*) FROM audit_logs a "+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("audit count: %w", err)
 	}
 
-	query := "SELECT id, user_id, action, target_id, source, level, duration_ms, trace_id, detail, created_at FROM audit_logs " +
+	query := `SELECT a.id, a.user_id, COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(u.role, ''),
+	                 a.action, a.target_id, a.source, a.level, a.duration_ms, a.trace_id, a.detail, a.created_at
+	          FROM audit_logs a
+	          LEFT JOIN users u ON u.id = a.user_id ` +
 		where + fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", n, n+1)
 	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
 
@@ -101,13 +109,16 @@ func (r *AuditLogRepo) List(f models.AuditLogFilter) ([]models.AuditLog, int, er
 		var l models.AuditLog
 		var source, traceID sql.NullString
 		var detailRaw []byte
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.TargetID,
+		var actorName, actorEmail, actorRole string
+		if err := rows.Scan(&l.ID, &l.UserID, &actorName, &actorEmail, &actorRole,
+			&l.Action, &l.TargetID,
 			&source, &l.Level, &l.DurationMs, &traceID,
 			&detailRaw, &l.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		l.Source = source.String
 		l.TraceID = traceID.String
+		l.Actor = buildAuditActor(l.UserID, actorName, actorEmail, actorRole, l.Source)
 		if detailRaw != nil {
 			l.Detail = json.RawMessage(detailRaw)
 		}
@@ -122,10 +133,12 @@ func (r *AuditLogRepo) List(f models.AuditLogFilter) ([]models.AuditLog, int, er
 // pathological bill with many retries doesn't blow up the response.
 func (r *AuditLogRepo) ListByTarget(targetID string) ([]models.AuditLog, error) {
 	rows, err := r.db.Query(
-		`SELECT id, user_id, action, target_id, source, level, duration_ms,
-		        trace_id, detail, created_at
-		 FROM audit_logs
-		 WHERE target_id = $1
+		`SELECT a.id, a.user_id, COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(u.role, ''),
+		        a.action, a.target_id, a.source, a.level, a.duration_ms,
+		        a.trace_id, a.detail, a.created_at
+		 FROM audit_logs a
+		 LEFT JOIN users u ON u.id = a.user_id
+		 WHERE a.target_id = $1
 		 ORDER BY created_at ASC
 		 LIMIT 200`,
 		targetID,
@@ -140,17 +153,47 @@ func (r *AuditLogRepo) ListByTarget(targetID string) ([]models.AuditLog, error) 
 		var l models.AuditLog
 		var source, traceID sql.NullString
 		var detailRaw []byte
-		if err := rows.Scan(&l.ID, &l.UserID, &l.Action, &l.TargetID,
+		var actorName, actorEmail, actorRole string
+		if err := rows.Scan(&l.ID, &l.UserID, &actorName, &actorEmail, &actorRole,
+			&l.Action, &l.TargetID,
 			&source, &l.Level, &l.DurationMs, &traceID,
 			&detailRaw, &l.CreatedAt); err != nil {
 			return nil, err
 		}
 		l.Source = source.String
 		l.TraceID = traceID.String
+		l.Actor = buildAuditActor(l.UserID, actorName, actorEmail, actorRole, l.Source)
 		if detailRaw != nil {
 			l.Detail = json.RawMessage(detailRaw)
 		}
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+func buildAuditActor(userID *string, name, email, role, source string) *models.AuditActor {
+	if userID != nil && *userID != "" {
+		display := name
+		if display == "" {
+			display = email
+		}
+		if display == "" {
+			display = "Unknown user"
+		}
+		return &models.AuditActor{
+			ID:    *userID,
+			Name:  display,
+			Email: email,
+			Role:  role,
+			Type:  "user",
+		}
+	}
+	switch source {
+	case "email", "shopee_email", "shopee_shipped":
+		return &models.AuditActor{Name: "Email worker", Type: "worker"}
+	case "system", "setup":
+		return &models.AuditActor{Name: "System", Type: "system"}
+	default:
+		return &models.AuditActor{Name: "System", Type: "system"}
+	}
 }
