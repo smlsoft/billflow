@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { Link } from 'react-router-dom'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import 'dayjs/locale/th'
 import {
+  Activity,
   AlertTriangle,
+  Bug,
   ChevronDown,
   CheckCircle2,
   Code2,
@@ -12,8 +14,11 @@ import {
   Database,
   FileText,
   Filter,
+  Layers3,
   RotateCw,
   ScrollText,
+  ShieldAlert,
+  Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -29,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
@@ -65,6 +71,7 @@ interface LogsResponse {
 
 const ALL = '__all__'
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
+type QuickView = 'all' | 'actionable' | 'sml_failed' | 'imports' | 'mapping' | 'data_quality'
 
 // Action keys that belong to Phase 2+ (LINE chat, chat tags, etc.)
 const PHASE2_ACTIONS = new Set([
@@ -242,6 +249,51 @@ function compact(value: unknown, max = 90): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
+function cleanDocNo(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\u0300-\u036f\u0E31-\u0E4E\u200B-\u200D\uFEFF]/g, '')
+    .trim()
+}
+
+function docNoCandidates(log: AuditLog): string[] {
+  const d = log.detail ?? {}
+  const parsedError = parseDetailError(log)
+  const payload = (d.sml_payload && typeof d.sml_payload === 'object') ? d.sml_payload : {}
+  return [
+    d.doc_no,
+    parsedError.doc_no_attempted,
+    parsedError.doc_no,
+    payload.doc_no,
+  ]
+    .filter((v) => v != null && String(v) !== '')
+    .map(String)
+}
+
+function hasDocNoQualityIssue(log: AuditLog): boolean {
+  return docNoCandidates(log).some((docNo) => cleanDocNo(docNo) !== docNo.trim())
+}
+
+function primaryDocNo(log: AuditLog): string {
+  return docNoCandidates(log)[0] ?? ''
+}
+
+function isImportLog(log: AuditLog): boolean {
+  return log.action.includes('import') || log.action === 'bill_created'
+}
+
+function platformLabel(logs: AuditLog[]): string {
+  const source = logs.find((l) => l.source)?.source
+  if (source?.includes('tiktok')) return 'TikTok'
+  if (source?.includes('lazada')) return 'Lazada'
+  return 'Shopee'
+}
+
+function orderIdOf(log: AuditLog): string {
+  const d = log.detail ?? {}
+  return String(d.order_id ?? d.shopee_order_id ?? d.tiktok_order_id ?? d.lazada_order_id ?? '')
+}
+
 function makeFacts(log: AuditLog): LogFact[] {
   const d = log.detail ?? {}
   const parsedError = parseDetailError(log)
@@ -315,11 +367,13 @@ function LogExpandedSummary({
   onRetry,
   retrying,
   canRetry,
+  devMode,
 }: {
   log: AuditLog
   onRetry: (e: React.MouseEvent) => void
   retrying: boolean
   canRetry: boolean
+  devMode: boolean
 }) {
   const d = log.detail ?? {}
   const parsedError = parseDetailError(log)
@@ -328,9 +382,43 @@ function LogExpandedSummary({
   const guidance = guidanceFor(log)
   const isSmlSent = log.action === 'sml_sent'
   const isSmlFailed = log.action === 'sml_failed'
+  const docNoIssue = hasDocNoQualityIssue(log)
+  const originalDocNo = primaryDocNo(log)
+  const fixedDocNo = cleanDocNo(originalDocNo)
+  const devPayload = {
+    id: log.id,
+    action: log.action,
+    source: log.source,
+    level: log.level,
+    target_id: log.target_id,
+    trace_id: log.trace_id,
+    created_at: log.created_at,
+    duration_ms: log.duration_ms,
+    detail: log.detail ?? {},
+  }
+
+  const copyDevInfo = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    await navigator.clipboard?.writeText(JSON.stringify(devPayload, null, 2))
+    toast.success('คัดลอกข้อมูลสำหรับ DEV แล้ว')
+  }
 
   return (
     <div className="space-y-2">
+      {docNoIssue && (
+        <div className="flex items-start gap-2 rounded-md border border-warning/35 bg-warning/10 px-3 py-2">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-warning">พบเลขเอกสารมีอักขระแปลก</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              เลขที่เห็นอาจดูเหมือนถูกต้อง แต่มีอักขระซ่อนหรือวรรณยุกต์ติดหน้าเลขเอกสาร ควรแก้เป็น
+              <span className="mx-1 font-mono font-semibold text-foreground">{fixedDocNo}</span>
+              ก่อนส่งซ้ำหรือเทียบกับ SML
+            </p>
+          </div>
+        </div>
+      )}
+
       {isSmlSent && (
         <div className="flex items-start gap-2 rounded-md border border-success/25 bg-success/10 px-3 py-2">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
@@ -351,24 +439,35 @@ function LogExpandedSummary({
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-destructive">ส่งเข้า SML ไม่สำเร็จ</div>
                 {errorMessage && (
-                  <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-destructive">
-                    {String(errorMessage)}
+                  <p className="mt-1 whitespace-pre-wrap break-words text-xs text-destructive">
+                    {compact(errorMessage, 260)}
                   </p>
                 )}
               </div>
             </div>
-            {canRetry && (
+            <div className="flex shrink-0 flex-col gap-1.5">
+              {canRetry && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onRetry}
+                  disabled={retrying}
+                  className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
+                >
+                  <RotateCw className={cn('h-3 w-3', retrying && 'animate-spin')} />
+                  {retrying ? 'กำลัง retry…' : 'Retry'}
+                </Button>
+              )}
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
-                onClick={onRetry}
-                disabled={retrying}
-                className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
+                onClick={copyDevInfo}
+                className="h-7 gap-1.5 px-2 text-[11px]"
               >
-                <RotateCw className={cn('h-3 w-3', retrying && 'animate-spin')} />
-                {retrying ? 'กำลัง retry…' : 'Retry'}
+                <Copy className="h-3 w-3" />
+                DEV
               </Button>
-            )}
+            </div>
           </div>
         </div>
       )}
@@ -462,11 +561,25 @@ function LogExpandedSummary({
           <span>ดูข้อมูลที่ส่งและผลตอบกลับฉบับเต็มได้ในหน้ารายละเอียดบิล</span>
         </div>
       )}
+
+      {devMode && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed bg-background px-3 py-2">
+          <Bug className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">DEV mode:</span>
+          {log.trace_id && <CopyChip value={log.trace_id} label="trace" />}
+          {log.target_id && <CopyChip value={log.target_id} label="bill" />}
+          {originalDocNo && <CopyChip value={originalDocNo} label="doc" />}
+          <Button variant="ghost" size="sm" onClick={copyDevInfo} className="h-6 gap-1 px-2 text-[11px]">
+            <Copy className="h-3 w-3" />
+            คัดลอก JSON
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
 
-function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
+function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => void; devMode: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
   const [retrying, setRetrying] = useState(false)
@@ -479,7 +592,8 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
   const summary = summarize(log)
   const isError = log.level === 'error'
   const source = log.source ?? ''
-  const docNo = String(log.detail?.doc_no ?? '')
+  const docNo = primaryDocNo(log)
+  const docNoIssue = hasDocNoQualityIssue(log)
   // Inline retry available only on sml_failed rows that have a bill target.
   const canRetry = log.action === 'sml_failed' && !!log.target_id
 
@@ -553,6 +667,14 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
               <span className="font-mono text-[11px] font-medium text-foreground">
                 {docNo}
               </span>
+            )}
+            {docNoIssue && (
+              <Badge
+                variant="secondary"
+                className="h-5 bg-warning/15 px-1.5 text-[10px] font-medium text-warning"
+              >
+                doc_no ผิดรูปแบบ
+              </Badge>
             )}
             {/* Delivery-method chip for LINE outgoing — tells admin at a glance
                 whether the message used the free Reply API or paid Push quota. */}
@@ -661,8 +783,10 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
             onRetry={handleRetry}
             retrying={retrying}
             canRetry={canRetry}
+            devMode={devMode}
           />
 
+          {devMode && (
           <div>
             <button
               type="button"
@@ -681,6 +805,7 @@ function LogRow({ log, onRetried }: { log: AuditLog; onRetried: () => void }) {
               </div>
             )}
           </div>
+          )}
         </div>
       )}
     </div>
@@ -691,6 +816,167 @@ interface DateGroup {
   key: string
   label: string
   items: AuditLog[]
+}
+
+interface ImportGroup {
+  kind: 'import'
+  key: string
+  logs: AuditLog[]
+  created: AuditLog[]
+  done?: AuditLog
+  preview?: AuditLog
+}
+
+type ActivityItem =
+  | { kind: 'log'; key: string; log: AuditLog }
+  | ImportGroup
+
+function buildActivityItems(logs: AuditLog[]): ActivityItem[] {
+  const groups = new Map<string, AuditLog[]>()
+  for (const log of logs) {
+    if (!isImportLog(log) || !log.trace_id) continue
+    const list = groups.get(log.trace_id) ?? []
+    list.push(log)
+    groups.set(log.trace_id, list)
+  }
+
+  const used = new Set<string>()
+  const items: ActivityItem[] = []
+  for (const log of logs) {
+    const groupLogs = log.trace_id ? groups.get(log.trace_id) : undefined
+    if (groupLogs && groupLogs.length > 1 && !used.has(log.trace_id ?? '')) {
+      const trace = log.trace_id ?? log.id
+      used.add(trace)
+      items.push({
+        kind: 'import',
+        key: trace,
+        logs: groupLogs,
+        created: groupLogs.filter((l) => l.action === 'bill_created'),
+        done: groupLogs.find((l) => l.action.endsWith('_import_done')),
+        preview: groupLogs.find((l) => l.action.endsWith('_import_preview')),
+      })
+      continue
+    }
+    if (log.trace_id && used.has(log.trace_id)) continue
+    items.push({ kind: 'log', key: log.id, log })
+  }
+  return items
+}
+
+function ImportGroupCard({
+  group,
+  devMode,
+  onRetried,
+}: {
+  group: ImportGroup
+  devMode: boolean
+  onRetried: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const platform = platformLabel(group.logs)
+  const doneDetail = group.done?.detail ?? {}
+  const previewDetail = group.preview?.detail ?? {}
+  const success = Number(doneDetail.success_count ?? group.created.length ?? 0)
+  const failed = Number(doneDetail.fail_count ?? 0)
+  const total = Number(doneDetail.total ?? previewDetail.total_orders ?? success + failed)
+  const skipped = Number(previewDetail.skipped_count ?? Math.max(total - success - failed, 0))
+  const orders = group.created.map(orderIdOf).filter(Boolean)
+  const firstAt = group.logs[group.logs.length - 1]?.created_at ?? group.logs[0]?.created_at
+
+  return (
+    <div className="rounded-md border border-info/20 bg-info/[0.035]">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded((v) => !v)
+          }
+        }}
+        className="flex cursor-pointer items-start gap-3 px-3 py-2.5"
+      >
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-info/10 text-info">
+          <Layers3 className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-foreground">นำเข้า {platform}</span>
+            <Badge variant="secondary" className="h-5 bg-success/15 px-1.5 text-[10px] text-success">
+              สร้าง {success}
+            </Badge>
+            {failed > 0 && (
+              <Badge variant="secondary" className="h-5 bg-destructive/10 px-1.5 text-[10px] text-destructive">
+                ล้มเหลว {failed}
+              </Badge>
+            )}
+            {skipped > 0 && (
+              <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                ข้าม {skipped}
+              </Badge>
+            )}
+            {group.logs[0]?.trace_id && <CopyChip value={group.logs[0].trace_id ?? ''} label="trace" />}
+          </div>
+          <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+            {previewDetail.filename ? `${previewDetail.filename} · ` : ''}
+            พบ {total.toLocaleString()} order
+            {orders.length ? ` · ${orders.slice(0, 4).join(', ')}${orders.length > 4 ? '…' : ''}` : ''}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 text-right">
+          <span className="text-[11px] tabular-nums text-muted-foreground">{relTime(firstAt)}</span>
+          <ChevronDown className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="space-y-2 border-t bg-muted/20 px-3 py-2.5">
+          <div className="grid gap-2 sm:grid-cols-4">
+            <MiniMetric label="พบ" value={total} tone="info" />
+            <MiniMetric label="สร้างบิล" value={success} tone="success" />
+            <MiniMetric label="ข้าม" value={skipped} tone={skipped > 0 ? 'warning' : 'muted'} />
+            <MiniMetric label="ล้มเหลว" value={failed} tone={failed > 0 ? 'danger' : 'muted'} />
+          </div>
+          <div className="space-y-1.5">
+            {group.created.map((log) => (
+              <LogRow key={log.id} log={log} onRetried={onRetried} devMode={devMode} />
+            ))}
+            {devMode && group.logs.filter((log) => log.action !== 'bill_created').map((log) => (
+              <LogRow key={log.id} log={log} onRetried={onRetried} devMode={devMode} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MiniMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone: Tone
+}) {
+  const cls =
+    tone === 'success'
+      ? 'border-success/25 bg-success/10 text-success'
+      : tone === 'danger'
+        ? 'border-destructive/25 bg-destructive/10 text-destructive'
+        : tone === 'warning'
+          ? 'border-warning/25 bg-warning/10 text-warning'
+          : tone === 'info'
+            ? 'border-info/25 bg-info/10 text-info'
+            : 'border-border bg-background text-muted-foreground'
+  return (
+    <div className={cn('rounded-md border px-3 py-2', cls)}>
+      <div className="text-[10px] font-semibold uppercase tracking-wide opacity-80">{label}</div>
+      <div className="mt-0.5 text-lg font-semibold tabular-nums">{value.toLocaleString()}</div>
+    </div>
+  )
 }
 
 function groupByDate(logs: AuditLog[]): DateGroup[] {
@@ -719,6 +1005,72 @@ function groupByDate(logs: AuditLog[]): DateGroup[] {
   return Object.values(groups)
 }
 
+function quickViewMatch(log: AuditLog, quickView: QuickView): boolean {
+  switch (quickView) {
+    case 'actionable':
+      return log.level === 'error' || log.level === 'warn' || hasDocNoQualityIssue(log)
+    case 'sml_failed':
+      return log.action === 'sml_failed'
+    case 'imports':
+      return isImportLog(log)
+    case 'mapping':
+      return log.action === 'mapping_feedback'
+    case 'data_quality':
+      return hasDocNoQualityIssue(log)
+    default:
+      return true
+  }
+}
+
+function SummaryButton({
+  label,
+  value,
+  icon: Icon,
+  active,
+  tone,
+  onClick,
+}: {
+  label: string
+  value: number
+  icon: ComponentType<{ className?: string }>
+  active: boolean
+  tone: Tone
+  onClick: () => void
+}) {
+  const toneClass =
+    tone === 'danger'
+      ? 'text-destructive'
+      : tone === 'warning'
+        ? 'text-warning'
+        : tone === 'success'
+          ? 'text-success'
+          : tone === 'info'
+            ? 'text-info'
+            : tone === 'primary'
+              ? 'text-primary'
+              : 'text-muted-foreground'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex min-w-[132px] items-center gap-3 rounded-md border bg-card px-3 py-2 text-left transition-colors hover:bg-accent/40',
+        active && 'border-primary/40 bg-primary/[0.04]',
+      )}
+    >
+      <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted', toneClass)}>
+        <Icon className="h-4 w-4" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[11px] text-muted-foreground">{label}</span>
+        <span className="block text-lg font-semibold leading-5 tabular-nums text-foreground">
+          {value.toLocaleString()}
+        </span>
+      </span>
+    </button>
+  )
+}
+
 export default function Logs() {
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [total, setTotal] = useState(0)
@@ -729,6 +1081,8 @@ export default function Logs() {
   const [level, setLevel] = useState<string>(ALL)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [quickView, setQuickView] = useState<QuickView>('all')
+  const [devMode, setDevMode] = useState(false)
   const pageSize = 50
 
   const load = async (p = page) => {
@@ -756,7 +1110,7 @@ export default function Logs() {
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const hasFilters =
-    source !== ALL || action !== ALL || level !== ALL || !!dateFrom || !!dateTo
+    source !== ALL || action !== ALL || level !== ALL || !!dateFrom || !!dateTo || quickView !== 'all'
 
   const resetFilters = () => {
     setSource(ALL)
@@ -764,19 +1118,34 @@ export default function Logs() {
     setLevel(ALL)
     setDateFrom('')
     setDateTo('')
+    setQuickView('all')
   }
+
+  const visibleLogs = useMemo(
+    () => logs.filter((log) => quickViewMatch(log, quickView)),
+    [logs, quickView],
+  )
 
   // Stats: count errors + warnings within current page result for quick scan
   const errorCount = useMemo(
-    () => logs.filter((l) => l.level === 'error').length,
-    [logs],
+    () => visibleLogs.filter((l) => l.level === 'error').length,
+    [visibleLogs],
   )
   const warnCount = useMemo(
-    () => logs.filter((l) => l.level === 'warn').length,
-    [logs],
+    () => visibleLogs.filter((l) => l.level === 'warn' || hasDocNoQualityIssue(l)).length,
+    [visibleLogs],
   )
+  const pageStats = useMemo(() => ({
+    all: logs.length,
+    actionable: logs.filter((l) => quickViewMatch(l, 'actionable')).length,
+    smlFailed: logs.filter((l) => l.action === 'sml_failed').length,
+    imports: logs.filter(isImportLog).length,
+    mapping: logs.filter((l) => l.action === 'mapping_feedback').length,
+    dataQuality: logs.filter(hasDocNoQualityIssue).length,
+    sent: logs.filter((l) => l.action === 'sml_sent').length,
+  }), [logs])
 
-  const grouped = useMemo(() => groupByDate(logs), [logs])
+  const grouped = useMemo(() => groupByDate(visibleLogs), [visibleLogs])
 
   return (
     <TooltipProvider>
@@ -785,18 +1154,89 @@ export default function Logs() {
           title="ประวัติการทำงาน"
           description="ตรวจย้อนหลังว่าระบบดึงอีเมล สร้างบิล และส่งเข้า SML สำเร็จหรือไม่"
           actions={
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => load(page)}
-              disabled={loading}
-            >
-              <RotateCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-              รีเฟรช
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex h-9 items-center gap-2 rounded-md border bg-card px-2.5">
+                <Bug className="h-3.5 w-3.5 text-muted-foreground" />
+                <Label htmlFor="logs-dev-mode" className="cursor-pointer text-xs text-muted-foreground">
+                  DEV
+                </Label>
+                <Switch id="logs-dev-mode" checked={devMode} onCheckedChange={setDevMode} />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => load(page)}
+                disabled={loading}
+              >
+                <RotateCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+                รีเฟรช
+              </Button>
+            </div>
           }
         />
+
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-7">
+          <SummaryButton
+            label="ทั้งหมดในหน้านี้"
+            value={pageStats.all}
+            icon={Activity}
+            tone="muted"
+            active={quickView === 'all'}
+            onClick={() => setQuickView('all')}
+          />
+          <SummaryButton
+            label="ต้องแก้"
+            value={pageStats.actionable}
+            icon={AlertTriangle}
+            tone={pageStats.actionable > 0 ? 'danger' : 'muted'}
+            active={quickView === 'actionable'}
+            onClick={() => setQuickView('actionable')}
+          />
+          <SummaryButton
+            label="SML ล้มเหลว"
+            value={pageStats.smlFailed}
+            icon={ShieldAlert}
+            tone={pageStats.smlFailed > 0 ? 'danger' : 'muted'}
+            active={quickView === 'sml_failed'}
+            onClick={() => setQuickView('sml_failed')}
+          />
+          <SummaryButton
+            label="ส่งสำเร็จ"
+            value={pageStats.sent}
+            icon={CheckCircle2}
+            tone="success"
+            active={false}
+            onClick={() => {
+              setQuickView('all')
+              setAction('sml_sent')
+            }}
+          />
+          <SummaryButton
+            label="นำเข้าไฟล์"
+            value={pageStats.imports}
+            icon={Layers3}
+            tone="info"
+            active={quickView === 'imports'}
+            onClick={() => setQuickView('imports')}
+          />
+          <SummaryButton
+            label="Mapping"
+            value={pageStats.mapping}
+            icon={Sparkles}
+            tone="primary"
+            active={quickView === 'mapping'}
+            onClick={() => setQuickView('mapping')}
+          />
+          <SummaryButton
+            label="Doc No แปลก"
+            value={pageStats.dataQuality}
+            icon={Bug}
+            tone={pageStats.dataQuality > 0 ? 'warning' : 'muted'}
+            active={quickView === 'data_quality'}
+            onClick={() => setQuickView('data_quality')}
+          />
+        </div>
 
         <Card className="shadow-none">
           <CardContent className="grid grid-cols-1 items-end gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[180px_minmax(220px,1fr)_150px_240px_auto]">
@@ -877,7 +1317,8 @@ export default function Logs() {
 
         <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
           <span>
-            พบ <span className="font-medium text-foreground">{total.toLocaleString()}</span> รายการ
+            แสดง <span className="font-medium text-foreground">{visibleLogs.length.toLocaleString()}</span>
+            {' '}จาก <span className="font-medium text-foreground">{total.toLocaleString()}</span> รายการ
           </span>
           {errorCount > 0 && (
             <span className="text-destructive">· ผิดพลาด {errorCount}</span>
@@ -892,7 +1333,7 @@ export default function Logs() {
                 <Skeleton key={i} className="h-16 w-full rounded-lg" />
               ))}
             </div>
-          ) : logs.length === 0 ? (
+          ) : visibleLogs.length === 0 ? (
             <EmptyState
               icon={ScrollText}
               title="ยังไม่มีประวัติ"
@@ -911,9 +1352,23 @@ export default function Logs() {
                   <div className="h-px flex-1 bg-border" />
                 </div>
                 <div className="space-y-1">
-                  {g.items.map((log) => (
-                    <LogRow key={log.id} log={log} onRetried={() => load(page)} />
-                  ))}
+                  {buildActivityItems(g.items).map((item) =>
+                    item.kind === 'import' ? (
+                      <ImportGroupCard
+                        key={item.key}
+                        group={item}
+                        devMode={devMode}
+                        onRetried={() => load(page)}
+                      />
+                    ) : (
+                      <LogRow
+                        key={item.key}
+                        log={item.log}
+                        onRetried={() => load(page)}
+                        devMode={devMode}
+                      />
+                    ),
+                  )}
                 </div>
               </div>
             ))

@@ -116,6 +116,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 11:11 +07: Logs Action View deployed to all three instances.
+- Scope: `/logs` now has summary cards, quick filters, DEV toggle, grouped import runs, SML failure incident cards, copyable DEV payload, and data-quality warning for malformed/hidden-character `doc_no`.
+- Change type: Shared Phase 1+ frontend UX/debug clarity.
+- Local verification: `npm run build` passed; browser check on local `/logs` confirmed new summary/DEV/filter controls render.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend `/logs` HTTP 200 on `3010`, `3030`, `3020`.
+- Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12 10:50 +07: Docs/status update for next phase; no application deploy.
 - Scope: documented latest production status and Shopee API direct handoff plan.
 - Current import readiness: Shopee Excel, Lazada Excel, and TikTok Excel/CSV are ready for BillFlow main + Henna UAT; Thaisunsport remains Phase 1 purchase-only.

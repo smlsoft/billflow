@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-12 10:50 +07
+> Updated: 2026-05-12 11:11 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -78,6 +78,7 @@
   - `/settings/email` แสดง `ผู้ส่ง Shopee ที่ยอมรับ` ในตาราง และ backend จะบันทึกคำเตือนภาษาไทยเมื่ออีเมลถูกข้ามเพราะผู้ส่งไม่ตรง
   - `/logs` แสดงคำแนะนำว่า error นั้นผู้ใช้แก้เองได้หรือควรส่งให้ทีมดูแลระบบ/SML API
   - `/logs` error playbook แยกสาเหตุละเอียดขึ้น เช่น SML timeout/network, doc format, ลูกค้า/ผู้ขาย, VAT, คลัง/พื้นที่เก็บ, สินค้า/หน่วย, Gmail App Password, และ AI quota
+  - `/logs` ล่าสุดปรับเป็น Action View: มี summary cards, quick filters, DEV mode, import grouping, incident card สำหรับ SML fail, และ data-quality warning เมื่อ `doc_no` มีอักขระซ่อน/ผิดรูปแบบ
   - `/logs` แสดง `demo_test_data_reset` เป็น `ล้างข้อมูลทดสอบ` พร้อม badge `Setup`, summary ภาษาไทย, และคำอธิบายว่าเป็นการล้างข้อมูลทดสอบจากหน้า `/setup` ไม่ใช่ error
   - `/api/bills` รองรับทั้ง `per_page` และ `page_size`, และคืน `data: []` แทน `null` เมื่อไม่มีข้อมูล
 - Email accepted-sender update:
