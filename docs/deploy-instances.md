@@ -25,6 +25,14 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 
 ก่อน deploy ทุกครั้งต้องระบุ `Change type`, `Deploy targets`, และ instance ที่ตั้งใจ skip ให้ชัดเจนในข้อความสรุป.
 
+## Next Planned Phase — Shopee API Direct
+
+- เริ่ม development/test บน `billflow` ก่อน เพราะเป็น demo หลักและใช้ตรวจ flow ใหม่ได้เร็วที่สุด.
+- เมื่อ stable แล้ว deploy ไป `billflow` + `billflow-henna` เพราะ Henna ต้องเทียบเท่า main สำหรับ Phase 1+ / งานฝั่งขาย.
+- ยังไม่ deploy ไป `billflow-thaisunsport` เพราะ instance นี้ยังเป็น Phase 1 ฝั่งซื้อ และปิด sales/import channel ด้วย feature flags.
+- Shopee API direct ต้อง feed เข้า review/SML retry pipeline เดิมเหมือน Shopee Excel; ห้ามสร้าง SML send flow แยกถ้าไม่จำเป็น.
+- Shopee Excel ต้องคงไว้เป็น fallback/manual import ระหว่าง UAT ของ API direct.
+
 ## Container Names
 
 | Instance | Frontend container | Backend container | PostgreSQL container |
@@ -108,6 +116,10 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 10:50 +07: Docs/status update for next phase; no application deploy.
+- Scope: documented latest production status and Shopee API direct handoff plan.
+- Current import readiness: Shopee Excel, Lazada Excel, and TikTok Excel/CSV are ready for BillFlow main + Henna UAT; Thaisunsport remains Phase 1 purchase-only.
+- Next deploy policy: Shopee API direct starts on `billflow`, then `billflow` + `billflow-henna` after UAT; skip Thaisunsport until sales features are explicitly enabled.
 - 2026-05-12 10:35 +07: Action Center and expanded error playbook deployed to all three instances.
 - Scope: Dashboard now has `Action Center` that ranks next-best actions across setup, email errors, SML failures, mapping review, and pending SML sends.
 - Scope: `/logs` guidance now classifies more failure causes: SML timeout/network, doc format, customer/supplier, VAT, warehouse/shelf, item/unit, Gmail App Password, and AI quota/credit.

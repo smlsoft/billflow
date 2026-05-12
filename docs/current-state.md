@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-12 10:35 +07
+> Updated: 2026-05-12 10:50 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -140,6 +140,37 @@
   - ตอน backend start ระบบ retry ดึงรายชื่อลูกค้า/ผู้ขายจาก SML หลายรอบแบบ backoff แทนการ fail ครั้งเดียว
   - `/api/sml/parties/last-sync` และ party picker ส่ง/แสดง `status`, `last_attempt`, `last_sync`, `error` เพื่อให้ผู้ใช้รู้ว่าควรกดรีเฟรชหรือตรวจ SML API
   - ตรวจ production ล่าสุดแล้ว `status=ok`, ลูกค้า 1,004 รายการ, ผู้ขาย 500 รายการ
+
+## Next Phase — Shopee API Direct
+
+สถานะก่อนเริ่ม phase ถัดไป:
+
+- Marketplace Excel ทั้ง 3 ช่องทางพร้อมสำหรับ UAT บน BillFlow main + Henna:
+  - Shopee Excel
+  - Lazada Excel
+  - TikTok Excel/CSV
+- Thaisunsport ยังเป็น Phase 1 ฝั่งซื้อเท่านั้น และยังไม่ควรเปิด sales/import channel.
+- Phase ถัดไปคือเชื่อม Shopee Open Platform API โดยตรง เพื่อดึง order เข้า BillFlow โดยไม่ต้อง export Excel.
+
+แนวทางที่ควรรักษาไว้:
+
+- Shopee API direct ควรสร้าง local bills เข้า pipeline เดิมเหมือน Shopee Excel:
+  - `source='shopee'`
+  - `bill_type='sale'`
+  - `document_route='saleorder'` หรือ `saleinvoice` ตาม `/settings/channels`
+  - ใช้ mapping/catalog/review/retry SML flow เดิมทั้งหมด
+- Shopee Excel ควรยังคงอยู่เป็น fallback/manual import จนกว่า API direct จะ stable.
+- เริ่ม implement/test บน BillFlow main ก่อน แล้วค่อย deploy main + Henna เมื่อผ่าน UAT.
+- ไม่ deploy ไป Thaisunsport เว้นแต่ผู้ใช้สั่งเปิด Phase 1+ / งานฝั่งขายให้ร้านนี้.
+
+สิ่งที่ต้องเตรียม/ยืนยันก่อน coding Shopee API:
+
+- Shopee Open Platform app credentials, partner ID/key, redirect URL, และ shop authorization flow.
+- Token storage/refresh design: access token, refresh token, expiry, shop_id, shop_name, enabled flag.
+- Order statuses ที่ต้อง sync เช่น `READY_TO_SHIP`, `SHIPPED`, `COMPLETED`, และ policy ว่าจะข้าม `CANCELLED` หรือเก็บเป็น skipped run detail.
+- Date range/cursor/pagination/rate limit ของ API และ dedup key หลัก (`order_sn` + shop/channel).
+- Mapping ระหว่าง Shopee API item fields กับ `bill_items`: item name, variation, model SKU, seller SKU, qty, price, discount, image URL.
+- Import run detail ควรแสดงเหมือน Excel/Email: พบกี่ order, สร้างกี่ bill, ข้ามเพราะอะไร.
 
 ## Latest Deploy Notes — 2026-05-11
 

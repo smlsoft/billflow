@@ -1,6 +1,6 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-05-11 20:00 +07
+> อัพเดตล่าสุด: 2026-05-12 10:50 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
@@ -9,7 +9,7 @@
 
 BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
 
-สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow และ Shopee Excel sale flow: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้.
+สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow และ marketplace Excel sale flow: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Phase ถัดไปคือเชื่อม Shopee API โดยตรง โดยยังใช้ review/SML retry pipeline เดิม.
 
 ---
 
@@ -137,6 +137,7 @@ billflow/
 | Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
 | Lazada Excel | ✅ local implementation for sale Excel: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
 | TikTok Excel/CSV | ✅ local-ready for sale Excel/CSV: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
+| Shopee API direct | ⏭️ next phase; sync orders from Shopee Open Platform into the same local bills/review/SML retry flow as Shopee Excel |
 
 ## Current Document Menus
 
