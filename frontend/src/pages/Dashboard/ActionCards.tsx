@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { ENABLE_SALES_ORDERS } from '@/lib/featureFlags'
+import { ENABLE_CHAT, ENABLE_SALES_ORDERS } from '@/lib/featureFlags'
 import type { DashboardStats } from '@/types'
 
 // VITE_PHASE mirrors the same constant in Sidebar.tsx.
@@ -88,6 +88,7 @@ export function ActionCards({ stats, loading }: Props) {
       to: '/messages',
       tone: 'neutral',
       minPhase: 2,
+      enabled: ENABLE_CHAT,
     },
     {
       label: 'อีเมลต้องดู',

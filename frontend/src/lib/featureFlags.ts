@@ -9,3 +9,6 @@ export const ENABLE_LAZADA_EXCEL =
 
 export const ENABLE_TIKTOK_EXCEL =
   import.meta.env.VITE_ENABLE_TIKTOK_EXCEL !== 'false'
+
+export const ENABLE_CHAT =
+  import.meta.env.VITE_ENABLE_CHAT !== 'false'

@@ -18,6 +18,7 @@ import { PageHeader } from '@/components/common/PageHeader'
 import client from '@/api/client'
 import { cn } from '@/lib/utils'
 import { PAGE_TITLE } from '@/lib/labels'
+import { ENABLE_CHAT } from '@/lib/featureFlags'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
@@ -167,7 +168,7 @@ export default function Settings() {
         </CardHeader>
         <CardContent className="space-y-1 px-2 pb-3 pt-0">
           {/* LINE OA — hidden in Phase 1 (VITE_PHASE < 2) */}
-          {PHASE >= 2 && (lineOA ? (
+          {ENABLE_CHAT && PHASE >= 2 && (lineOA ? (
             <SubsystemRow
               icon={MessageSquare}
               label="LINE OA"

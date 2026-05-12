@@ -21,7 +21,8 @@
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
   - Latest QA fix deploy 2026-05-12 13:05 +07:
-    - Henna frontend rebuilt as Phase 1+ (`VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled). Built asset check shows Phase constants `=99`.
+    - Henna frontend rebuilt as Phase 1+ (`VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled) but chat is explicitly disabled with `VITE_ENABLE_CHAT=false`.
+    - Policy clarification: Henna Phase 1+ means purchase + sales + marketplace Excel, not LINE/chat features.
     - Backend health `8110` = `{"database":"ok","env":"production","status":"ok"}`.
     - `shopee/sale` SML defaults updated to current SML cache: `wh_code=AB-2`, `shelf_code=002`, `vat_type=0`, `vat_rate=7`, `doc_time=09:00`.
     - Auto saleinvoice send retest succeeded without passing WH/Shelf/VAT/time in request; SML doc `BF-INV26050008`.

@@ -48,7 +48,7 @@ import { ThemeToggle } from '@/components/common/ThemeToggle'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/lib/ui-store'
 import { cn } from '@/lib/utils'
-import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
+import { ENABLE_CHAT, ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import client from '@/api/client'
 
 // VITE_PHASE controls which nav items are visible.
@@ -137,10 +137,10 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'แชทลูกค้า',
     items: [
-      { to: '/messages', label: 'ข้อความลูกค้า', icon: MessageSquare, hasBadge: 'messages', hint: 'Inbox รวมทุก OA', minPhase: 2 },
-      { to: '/settings/line-oa', label: 'บัญชี LINE OA', icon: MessageSquare, end: true, hint: 'LINE OA Accounts', minPhase: 2 },
-      { to: '/settings/quick-replies', label: 'ข้อความสำเร็จรูป', icon: MessageSquareQuote, end: true, hint: 'Quick Replies', minPhase: 2 },
-      { to: '/settings/chat-tags', label: 'ป้ายลูกค้า', icon: Tag, end: true, hint: 'Chat Tags', minPhase: 2 },
+      { to: '/messages', label: 'ข้อความลูกค้า', icon: MessageSquare, hasBadge: 'messages', hint: 'Inbox รวมทุก OA', minPhase: 2, enabled: ENABLE_CHAT },
+      { to: '/settings/line-oa', label: 'บัญชี LINE OA', icon: MessageSquare, end: true, hint: 'LINE OA Accounts', minPhase: 2, enabled: ENABLE_CHAT },
+      { to: '/settings/quick-replies', label: 'ข้อความสำเร็จรูป', icon: MessageSquareQuote, end: true, hint: 'Quick Replies', minPhase: 2, enabled: ENABLE_CHAT },
+      { to: '/settings/chat-tags', label: 'ป้ายลูกค้า', icon: Tag, end: true, hint: 'Chat Tags', minPhase: 2, enabled: ENABLE_CHAT },
     ],
   },
   {
@@ -391,7 +391,7 @@ export default function Sidebar() {
             events-store; tooltip explains what each state means. Hidden
             when sidebar collapsed — the dot still shows so admins notice
             'reconnecting' / 'offline'. */}
-        {PHASE >= 2 && (
+        {ENABLE_CHAT && PHASE >= 2 && (
           <div className={cn('px-2 py-1.5', collapsed ? 'flex justify-center' : '')}>
             <ConnectionDot collapsed={collapsed} />
           </div>

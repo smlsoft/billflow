@@ -47,6 +47,9 @@ services:
         VITE_PHASE: ${VITE_PHASE:-99}
         VITE_ENABLE_SALES_ORDERS: ${VITE_ENABLE_SALES_ORDERS:-true}
         VITE_ENABLE_SHOPEE_EXCEL: ${VITE_ENABLE_SHOPEE_EXCEL:-true}
+        VITE_ENABLE_LAZADA_EXCEL: ${VITE_ENABLE_LAZADA_EXCEL:-true}
+        VITE_ENABLE_TIKTOK_EXCEL: ${VITE_ENABLE_TIKTOK_EXCEL:-true}
+        VITE_ENABLE_CHAT: ${VITE_ENABLE_CHAT:-true}
     container_name: billflow-frontend
     ports:
       - "3010:80"

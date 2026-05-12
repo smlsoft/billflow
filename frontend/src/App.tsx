@@ -23,7 +23,7 @@ import LineOA from './pages/LineOA'
 import Messages from './pages/Messages'
 import QuickReplies from './pages/QuickReplies'
 import Showcase from './pages/Showcase'
-import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from './lib/featureFlags'
+import { ENABLE_CHAT, ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from './lib/featureFlags'
 import SetupCenter from './pages/SetupCenter'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
@@ -59,7 +59,7 @@ export default function App() {
           <Route path="bills/:id" element={<BillDetail />} />
           <Route path="sales-orders/:id" element={ENABLE_SALES_ORDERS ? <BillDetail /> : <Navigate to="/dashboard" replace />} />
           <Route path="sale-invoices/:id" element={ENABLE_SALES_ORDERS ? <BillDetail /> : <Navigate to="/dashboard" replace />} />
-          <Route path="messages" element={<Messages />} />
+          <Route path="messages" element={ENABLE_CHAT ? <Messages /> : <Navigate to="/dashboard" replace />} />
           <Route path="import" element={<Import />} />
           <Route path="import/shopee" element={ENABLE_SHOPEE_EXCEL ? <ShopeeImport /> : <Navigate to="/dashboard" replace />} />
           <Route path="import/lazada" element={ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <LazadaImport /> : <Navigate to="/dashboard" replace />} />
@@ -73,9 +73,9 @@ export default function App() {
           <Route path="settings/instance" element={<InstanceSettings />} />
           <Route path="settings/ai-usage" element={<AIUsage />} />
           <Route path="settings/users" element={<UserSettings />} />
-          <Route path="settings/line-oa" element={<LineOA />} />
-          <Route path="settings/quick-replies" element={<QuickReplies />} />
-          <Route path="settings/chat-tags" element={<ChatTags />} />
+          <Route path="settings/line-oa" element={ENABLE_CHAT ? <LineOA /> : <Navigate to="/settings/instance" replace />} />
+          <Route path="settings/quick-replies" element={ENABLE_CHAT ? <QuickReplies /> : <Navigate to="/settings/instance" replace />} />
+          <Route path="settings/chat-tags" element={ENABLE_CHAT ? <ChatTags /> : <Navigate to="/settings/instance" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
