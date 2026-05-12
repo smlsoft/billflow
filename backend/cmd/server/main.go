@@ -377,6 +377,7 @@ func main() {
 	smlWarehouseH := handlers.NewSMLWarehouseHandler(warehouseCache, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
 	aiUsageH := handlers.NewAIUsageHandler(aiUsageRepo, logger)
+	userSettingsH := handlers.NewUserSettingsHandler(userRepo, auditLogRepo, logger)
 
 	// Webhooks (no auth)
 	// Webhook routes:
@@ -441,7 +442,7 @@ func main() {
 		api.POST("/settings/instance/restart", middleware.RequireRole("admin"), instanceSettingsH.Restart)
 
 		// Logs (Activity Log)
-		api.GET("/logs", logH.List)
+		api.GET("/logs", middleware.RequireRole("admin", "staff"), logH.List)
 		api.GET("/ai-usage/summary", middleware.RequireRole("admin"), aiUsageH.Summary)
 		api.GET("/ai-usage/logs", middleware.RequireRole("admin"), aiUsageH.Logs)
 
@@ -496,6 +497,11 @@ func main() {
 		api.PUT("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Update)
 		api.DELETE("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Delete)
 		api.POST("/settings/imap-accounts/:id/poll", middleware.RequireRole("admin"), imapSettingsH.PollNow)
+
+		api.GET("/settings/users", middleware.RequireRole("admin"), userSettingsH.List)
+		api.POST("/settings/users", middleware.RequireRole("admin"), userSettingsH.Create)
+		api.PUT("/settings/users/:id", middleware.RequireRole("admin"), userSettingsH.Update)
+		api.DELETE("/settings/users/:id", middleware.RequireRole("admin"), userSettingsH.Delete)
 
 		// Catalog (SML product catalog + smart matching)
 		api.GET("/catalog", catalogH.List)

@@ -17,6 +17,7 @@ import EmailAccounts from './pages/EmailAccounts'
 import ChannelDefaults from './pages/ChannelDefaults'
 import InstanceSettings from './pages/InstanceSettings'
 import AIUsage from './pages/AIUsage'
+import UserSettings from './pages/UserSettings'
 import ChatTags from './pages/ChatTags'
 import LineOA from './pages/LineOA'
 import Messages from './pages/Messages'
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="settings/channels" element={<ChannelDefaults />} />
           <Route path="settings/instance" element={<InstanceSettings />} />
           <Route path="settings/ai-usage" element={<AIUsage />} />
+          <Route path="settings/users" element={<UserSettings />} />
           <Route path="settings/line-oa" element={<LineOA />} />
           <Route path="settings/quick-replies" element={<QuickReplies />} />
           <Route path="settings/chat-tags" element={<ChatTags />} />

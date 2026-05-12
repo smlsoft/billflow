@@ -496,6 +496,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 	}
 	documentRoute := shopeeImportRoute(req.Config)
 	destinationName := shopeeImportDocumentName(req.Config)
+	reviewPath := shopeeImportReviewPath(req.Config)
 
 	// Default unit code from the request config; used as a fallback when
 	// catalog matching doesn't pick a specific unit.
@@ -773,7 +774,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			OrderID: order.OrderID,
 			Success: true,
 			BillID:  bill.ID,
-			Message: fmt.Sprintf("สร้าง%sแล้ว (status=%s) — รอตรวจสอบใน /sales-orders", destinationName, status),
+			Message: fmt.Sprintf("สร้าง%sแล้ว (status=%s) — รอตรวจสอบใน %s", destinationName, status, reviewPath),
 		})
 		h.logger.Info("shopee_excel: bill created",
 			zap.String("order_id", order.OrderID),
@@ -812,7 +813,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		"success_count": successCount,
 		"fail_count":    len(results) - successCount,
 		"total":         len(results),
-		"message":       destinationName + "ถูกสร้างแล้ว — กรุณาเข้าไปตรวจสอบและกดยืนยันส่งใน /sales-orders",
+		"message":       destinationName + "ถูกสร้างแล้ว — กรุณาเข้าไปตรวจสอบและกดยืนยันส่งใน " + reviewPath,
 	})
 }
 
@@ -1158,6 +1159,13 @@ func shopeeImportDocumentName(cfg ShopeeConfigRequest) string {
 		return "เอกสารขายสินค้าและบริการ"
 	}
 	return "ใบสั่งขาย"
+}
+
+func shopeeImportReviewPath(cfg ShopeeConfigRequest) string {
+	if shopeeImportRoute(cfg) == "saleinvoice" {
+		return "/sale-invoices"
+	}
+	return "/sales-orders"
 }
 
 func shopeeImportRoute(cfg ShopeeConfigRequest) string {

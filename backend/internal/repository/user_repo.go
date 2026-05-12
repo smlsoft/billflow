@@ -78,3 +78,57 @@ func (r *UserRepo) List() ([]models.User, error) {
 	}
 	return users, rows.Err()
 }
+
+func (r *UserRepo) Update(id, email, name, role string, passwordHash *string) (*models.User, error) {
+	u := &models.User{}
+	if passwordHash != nil {
+		err := r.db.QueryRow(
+			`UPDATE users
+			 SET email = $2, name = $3, role = $4, password_hash = $5
+			 WHERE id = $1
+			 RETURNING id, email, name, role, password_hash, created_at`,
+			id, email, name, role, *passwordHash,
+		).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Update user: %w", err)
+		}
+		return u, nil
+	}
+	err := r.db.QueryRow(
+		`UPDATE users
+		 SET email = $2, name = $3, role = $4
+		 WHERE id = $1
+		 RETURNING id, email, name, role, password_hash, created_at`,
+		id, email, name, role,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Update user: %w", err)
+	}
+	return u, nil
+}
+
+func (r *UserRepo) Delete(id string) error {
+	_, err := r.db.Exec(`DELETE FROM users WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("Delete user: %w", err)
+	}
+	return nil
+}
+
+func (r *UserRepo) CountAdmins(exceptID string) (int, error) {
+	var n int
+	err := r.db.QueryRow(
+		`SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> $1`,
+		exceptID,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("CountAdmins: %w", err)
+	}
+	return n, nil
+}

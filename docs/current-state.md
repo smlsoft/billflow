@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-12 11:34 +07
+> Updated: 2026-05-12 13:05 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -17,9 +17,20 @@
   - สำหรับ demo Thaisunsport ตอนนี้อย่าเปิด Phase 1+ / Shopee Excel / ใบสั่งขาย จนกว่าลูกค้าจะผ่าน demo ฝั่งซื้อ.
 - Henna customer trial ถูกสร้างใหม่จาก BillFlow ปกติ ไม่ใช่ Thaisunsport:
   - Public URL: `https://aurora-enjoyed-backup-lines.trycloudflare.com/login`
-  - Frontend `3030`, backend `8110`, postgres `5458`
+  - Frontend `3030`, backend `8110`, postgres `5440`
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
+  - Latest QA fix deploy 2026-05-12 13:05 +07:
+    - Henna frontend rebuilt as Phase 1+ (`VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled). Built asset check shows Phase constants `=99`.
+    - Backend health `8110` = `{"database":"ok","env":"production","status":"ok"}`.
+    - `shopee/sale` SML defaults updated to current SML cache: `wh_code=AB-2`, `shelf_code=002`, `vat_type=0`, `vat_rate=7`, `doc_time=09:00`.
+    - Auto saleinvoice send retest succeeded without passing WH/Shelf/VAT/time in request; SML doc `BF-INV26050008`.
+    - `doc_counters` for `BF-INV/202605` = `8`; local duplicate `BF-INV2605%` count = `0`.
+    - `/api/logs` now admin/staff only; viewer gets 403.
+    - `/api/settings/users` admin-only CRUD added and retested with temporary QA user.
+    - `/api/settings/imap-accounts` returns `data: []` when empty.
+    - Hidden-character `doc_no` guardrail now returns HTTP 400 with the clean suggested number.
+    - Full report: [qa-full-system-audit-2026-05-12.md](qa-full-system-audit-2026-05-12.md).
 - Instance/port registry อยู่ที่ [deploy-instances.md](deploy-instances.md). ใช้ไฟล์นี้เป็น source of truth เมื่อต้องจำ port/tunnel ของแต่ละร้าน.
 - Local Codex skill `buddhist-method` ติดตั้งและอัปเดตแล้วที่ `/Users/nontawatwongnuk/.codex/skills/buddhist-method`; skill ใช้งานได้ใน session นี้และ session ใหม่ควรเห็นจาก skill list.
 - `/setup` ถูกยกระดับเป็นหน้าเริ่มต้นใช้งาน:
@@ -82,6 +93,7 @@
   - `/logs` ล่าสุดแสดงผู้ทำรายการจริงจาก backend แล้ว: user action จะเห็นชื่อ/อีเมล/role, background job จะแสดงเป็น Email worker/System, และ filter `ผู้ทำรายการ` ส่งค่า `user_id` เข้า `/api/logs`
   - audit log สำคัญตอนส่ง SML สำเร็จ/ล้มเหลว, เพิ่ม/ลบรายการสินค้า, และยืนยัน mapping จะบันทึก `user_id` ของผู้กดใช้งาน ทำให้ตรวจสอบย้อนหลังได้ว่าใครทำอะไร
   - backend เพิ่ม guardrail ก่อนส่ง SML: ถ้า `doc_no` มี hidden character หรือ Thai mark แปลก ๆ เช่นเลขเอกสารขึ้นต้นผิดเป็น `ฺBF-...` ระบบจะหยุดก่อนยิง SML และแนะนำเลขที่สะอาดแทน เพื่อลด duplicate/error จาก SML API
+  - guardrail ล่าสุดคืน HTTP 400 พร้อมข้อความ user-correctable ไม่ใช่ 500 แล้ว
   - `/logs` แสดง `demo_test_data_reset` เป็น `ล้างข้อมูลทดสอบ` พร้อม badge `Setup`, summary ภาษาไทย, และคำอธิบายว่าเป็นการล้างข้อมูลทดสอบจากหน้า `/setup` ไม่ใช่ error
   - `/api/bills` รองรับทั้ง `per_page` และ `page_size`, และคืน `data: []` แทน `null` เมื่อไม่มีข้อมูล
 - Email accepted-sender update:
@@ -144,6 +156,13 @@
   - ตอน backend start ระบบ retry ดึงรายชื่อลูกค้า/ผู้ขายจาก SML หลายรอบแบบ backoff แทนการ fail ครั้งเดียว
   - `/api/sml/parties/last-sync` และ party picker ส่ง/แสดง `status`, `last_attempt`, `last_sync`, `error` เพื่อให้ผู้ใช้รู้ว่าควรกดรีเฟรชหรือตรวจ SML API
   - ตรวจ production ล่าสุดแล้ว `status=ok`, ลูกค้า 1,004 รายการ, ผู้ขาย 500 รายการ
+- Admin users update:
+  - เพิ่ม `/settings/users` และ `/api/settings/users` สำหรับ admin จัดการผู้ใช้ระบบ
+  - รองรับ create/update/delete, เปลี่ยน role `admin/staff/viewer`, reset password โดยกรอกรหัสใหม่, ป้องกันลบตัวเองและป้องกันระบบไม่มี admin เหลือ
+  - ทุก create/update/delete เขียน audit log source `settings`
+- Logs permission update:
+  - `/api/logs` เปิดเฉพาะ `admin` และ `staff`
+  - `viewer` ยังอ่านข้อมูลธุรกิจที่อนุญาตได้ แต่ไม่เห็น activity/error payload ใน logs แล้ว
 
 ## Next Phase — Shopee API Direct
 

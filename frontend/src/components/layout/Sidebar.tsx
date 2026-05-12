@@ -19,6 +19,7 @@ import {
   ShoppingBag,
   Tag,
   Upload,
+  UsersRound,
   Workflow,
   type LucideIcon,
 } from 'lucide-react'
@@ -154,6 +155,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
       { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
       { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot, hint: 'ค่าใช้จ่าย / รุ่น AI' },
+      { to: '/settings/users', label: 'ผู้ใช้ระบบ', icon: UsersRound, hint: 'Roles and access' },
       { to: '/settings/instance', label: 'การเชื่อมต่อระบบ', icon: Settings2, hint: 'SML / OpenRouter / ร้านนี้' },
       { to: '/settings', label: 'ตั้งค่าทั่วไป', icon: Settings, end: true, hint: 'General Settings', minPhase: 2 },
     ],
@@ -287,7 +289,11 @@ export default function Sidebar() {
           {NAV_GROUPS
             .map((group) => ({
               ...group,
-              items: group.items.filter((i) => i.enabled !== false && (!i.minPhase || PHASE >= i.minPhase)),
+              items: group.items.filter((i) =>
+                i.enabled !== false &&
+                (!i.minPhase || PHASE >= i.minPhase) &&
+                (i.to !== '/settings/users' || user?.role === 'admin')
+              ),
             }))
             .filter((group) => group.items.length > 0)
             .map((group, gi) => (

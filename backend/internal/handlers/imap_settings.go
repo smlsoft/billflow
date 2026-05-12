@@ -38,6 +38,9 @@ func (h *IMAPSettingsHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if accounts == nil {
+		accounts = []*models.IMAPAccount{}
+	}
 	for _, a := range accounts {
 		a.Password = ""
 	}
