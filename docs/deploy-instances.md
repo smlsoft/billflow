@@ -108,6 +108,13 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 10:12 +07: Bulk send summary/results and mapping hotspot dashboard deployed to all three instances.
+- Scope: bulk send dialog now shows a pre-send summary, clearer post-send success/fail/skip result panel, copyable SML error summary, and direct link to the first failed bill.
+- Scope: `/mappings` now shows top raw product names still blocking `needs_review` bills, with counts and a link to the first affected bill for faster mapping cleanup.
+- Change type: Shared frontend UX/workflow clarity.
+- Local verification: `npm run build` passed; browser check confirmed `/mappings` renders the new hotspot panel and `/sale-invoices` loads.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend route ok on main/Henna `/sale-invoices` and Thaisunsport `/bills`.
+- Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12 09:48 +07: Bulk Send dialog readability follow-up deployed to all three instances.
 - Scope: `/bills`, `/sales-orders`, and `/sale-invoices` bulk-send dialog uses a wider modal, reduces noisy helper text, and shows ready rows as a table with send sequence, order no, expected `doc_no`, and status.
 - Fix: frontend computes sequential expected `doc_no` from the backend preview so bulk rows no longer all appear to use the same next document number before the real send reserves numbers.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BookOpen, Check, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BookOpen, Check, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -22,16 +22,25 @@ import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MapItemModal } from '@/pages/BillDetail/components/MapItemModal'
+import { getBill } from '@/hooks/useBills'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 import client from '@/api/client'
 import { PAGE_TITLE } from '@/lib/labels'
-import type { Mapping, MappingStats } from '@/types'
+import type { Bill, BillListResponse, Mapping, MappingStats } from '@/types'
 
 interface MappingDraft {
   raw_name: string
   item_code: string
   unit_code: string
+}
+
+interface ReviewHotspot {
+  rawName: string
+  count: number
+  billCount: number
+  firstBillId: string
+  firstRoute: string
 }
 
 const emptyDraft: MappingDraft = { raw_name: '', item_code: '', unit_code: '' }
@@ -46,6 +55,57 @@ export default function Mappings() {
   const [adding, setAdding] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [showAddMapModal, setShowAddMapModal] = useState(false)
+  const [reviewHotspots, setReviewHotspots] = useState<ReviewHotspot[]>([])
+  const [hotspotLoading, setHotspotLoading] = useState(false)
+
+  const detailPathFor = (billId: string, route: string) => {
+    if (route === 'saleinvoice') return `/sale-invoices/${billId}`
+    if (route === 'saleorder') return `/sales-orders/${billId}`
+    return `/bills/${billId}`
+  }
+
+  const fetchReviewHotspots = async () => {
+    setHotspotLoading(true)
+    try {
+      const res = await client.get<BillListResponse>('/api/bills?status=needs_review&page=1&per_page=50')
+      const list = res.data.data ?? []
+      const details = await Promise.all(list.slice(0, 30).map((bill) => getBill(bill.id)))
+      const grouped = new Map<string, ReviewHotspot>()
+
+      details.forEach((bill: Bill) => {
+        const route = bill.document_route || bill.preview?.route || (bill.bill_type === 'sale' ? 'saleorder' : 'purchaseorder')
+        const seenInBill = new Set<string>()
+        ;(bill.items ?? []).forEach((item) => {
+          if (item.mapped && item.item_code) return
+          const rawName = item.raw_name.trim()
+          if (!rawName) return
+          const existing = grouped.get(rawName) ?? {
+            rawName,
+            count: 0,
+            billCount: 0,
+            firstBillId: bill.id,
+            firstRoute: route,
+          }
+          existing.count += 1
+          if (!seenInBill.has(rawName)) {
+            existing.billCount += 1
+            seenInBill.add(rawName)
+          }
+          grouped.set(rawName, existing)
+        })
+      })
+
+      setReviewHotspots(
+        [...grouped.values()]
+          .sort((a, b) => b.billCount - a.billCount || b.count - a.count || a.rawName.localeCompare(b.rawName))
+          .slice(0, 5),
+      )
+    } catch {
+      setReviewHotspots([])
+    } finally {
+      setHotspotLoading(false)
+    }
+  }
 
   const fetchAll = async () => {
     setLoading(true)
@@ -56,6 +116,7 @@ export default function Mappings() {
       ])
       setMappings(mRes.data.data ?? [])
       setStats(sRes.data)
+      void fetchReviewHotspots()
     } catch {
       toast.error('โหลด mapping ไม่สำเร็จ')
     } finally {
@@ -324,6 +385,53 @@ export default function Mappings() {
 
         {/* Sidebar */}
         <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+                <AlertTriangle className="h-4 w-4 text-warning" />
+                จุดที่ยังต้องจับคู่
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="text-xs leading-relaxed text-muted-foreground">
+                รวมจากบิลสถานะต้องตรวจสินค้า เพื่อให้เห็นชื่อสินค้าที่ควรยืนยันก่อน จะลดงานเลือกซ้ำในบิลถัดไป
+              </div>
+              {hotspotLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-10 w-full" />
+                  ))}
+                </div>
+              ) : reviewHotspots.length === 0 ? (
+                <div className="rounded-md border border-success/25 bg-success/[0.06] px-3 py-2 text-xs text-success">
+                  ตอนนี้ยังไม่พบชื่อสินค้าค้างจับคู่ในบิลที่ต้องตรวจ
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {reviewHotspots.map((item) => (
+                    <Link
+                      key={item.rawName}
+                      to={detailPathFor(item.firstBillId, item.firstRoute)}
+                      className="group block rounded-md border border-border bg-background px-3 py-2 transition-colors hover:bg-accent/60"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="line-clamp-2 text-xs font-medium text-foreground">
+                            {item.rawName}
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            {item.count} แถว · {item.billCount} บิล
+                          </div>
+                        </div>
+                        <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-sm font-semibold">

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Loader2, Send } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { AlertTriangle, CheckCircle2, Clipboard, ExternalLink, Loader2, Send } from 'lucide-react'
+import { toast } from 'sonner'
 
 import client from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -59,12 +61,31 @@ function incrementTrailingNumber(value: string, offset: number) {
   return `${prefix}${next}${suffix}`
 }
 
+function vatTypeLabel(value: string) {
+  if (value === '0') return 'แยกนอก'
+  if (value === '1') return 'รวมใน'
+  if (value === '2') return 'ศูนย์%'
+  return 'ยังไม่เลือก'
+}
+
+function billDetailPath(bill: Bill) {
+  if (bill.bill_type !== 'sale') return `/bills/${bill.id}`
+  const route = bill.document_route || bill.preview?.route
+  return route === 'saleinvoice' ? `/sale-invoices/${bill.id}` : `/sales-orders/${bill.id}`
+}
+
 type Candidate = {
   bill: Bill
   ready: boolean
   issues: string[]
   result?: 'sent' | 'failed' | 'skipped'
   message?: string
+}
+
+type DisplayRow = Candidate & {
+  sequence: number | null
+  orderNo: string
+  docNo: string
 }
 
 interface Props {
@@ -134,7 +155,7 @@ export function BulkSendDialog({
         orderNo: sourceOrderNo(row.bill),
         docNo,
       }
-    })
+    }) satisfies DisplayRow[]
   }, [candidates])
   const firstDocNo = displayRows.find((row) => row.ready && row.docNo)?.docNo
   const lastDocNo = [...displayRows].reverse().find((row) => row.ready && row.docNo)?.docNo
@@ -161,6 +182,10 @@ export function BulkSendDialog({
     vatRateStr.trim() === '' || !Number.isFinite(vatRateNum) ? 'อัตราภาษี' : '',
     docTime.trim() === '' ? 'เวลาเอกสาร' : '',
   ].filter(Boolean)
+  const failedRows = displayRows.filter((row) => row.result === 'failed')
+  const completedRows = displayRows.filter((row) => row.result)
+  const resultSkippedCount = candidates.filter((c) => c.result === 'skipped').length
+  const finished = completedRows.length > 0 && !sending
 
   const destination = useMemo(() => {
     if (filters.document_route === 'saleinvoice') {
@@ -250,6 +275,28 @@ export function BulkSendDialog({
     vat_rate: vatRateNum,
   })
 
+  const copyFailureSummary = async () => {
+    if (failedRows.length === 0) return
+    const text = [
+      `Bulk Send SML failed: ${title}`,
+      `ปลายทาง: ${destination.label} (${destination.code})`,
+      `ส่งสำเร็จ: ${sentCount}, ไม่สำเร็จ: ${failedCount}, ข้าม: ${resultSkippedCount}`,
+      '',
+      ...failedRows.map((row) => [
+        `Order: ${row.orderNo}`,
+        row.docNo ? `doc_no: ${row.docNo}` : '',
+        `Bill: ${row.bill.id}`,
+        `Error: ${row.message ?? 'ไม่ทราบสาเหตุ'}`,
+      ].filter(Boolean).join('\n')),
+    ].join('\n\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success('คัดลอก error summary แล้ว')
+    } catch {
+      toast.error('คัดลอกไม่สำเร็จ')
+    }
+  }
+
   const handleSend = async () => {
     if (!canSend) return
     setSending(true)
@@ -299,6 +346,36 @@ export function BulkSendDialog({
               หลังส่งชุดแรกเสร็จ ให้เปิด dialog นี้อีกครั้งเพื่อส่งรายการที่เหลือ
             </div>
           )}
+
+          <div className="rounded-md border border-border bg-card px-3 py-2.5 text-xs">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="font-medium text-foreground">สรุปก่อนส่ง</div>
+              <div className="text-muted-foreground">
+                พร้อมส่ง {readyCount} · ข้าม {skippedCount}
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <SummaryItem
+                label={billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'}
+                value={party?.code ? `${party.code} · ${party.name}` : 'ยังไม่เลือก'}
+                muted={!party?.code}
+              />
+              <SummaryItem label="ปลายทาง" value={`${destination.label} · ${destination.code}`} />
+              <SummaryItem label="doc_no" value={docNoRange || 'รอ preview'} mono muted={!docNoRange} />
+              <SummaryItem
+                label="คลัง / พื้นที่เก็บ"
+                value={whCode && shelfCode ? `${whCode} / ${shelfCode}` : 'ยังไม่ครบ'}
+                mono
+                muted={!whCode || !shelfCode}
+              />
+              <SummaryItem
+                label="VAT"
+                value={`${vatTypeLabel(vatTypeStr)} · ${vatRateStr || '-'}%`}
+                muted={!vatTypeStr || !vatRateStr}
+              />
+              <SummaryItem label="เวลาเอกสาร" value={docTime || 'ยังไม่ระบุ'} mono muted={!docTime} />
+            </div>
+          </div>
 
           <div className="space-y-1.5">
             <Label>{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'} <span className="text-destructive">*</span></Label>
@@ -485,6 +562,57 @@ export function BulkSendDialog({
               )}
             </div>
           </div>
+          {finished && (
+            <div className={[
+              'rounded-md border px-3 py-2.5 text-xs',
+              failedCount > 0
+                ? 'border-destructive/35 bg-destructive/[0.06]'
+                : 'border-success/35 bg-success/[0.06]',
+            ].join(' ')}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="font-medium text-foreground">ผลการส่งรอบนี้</div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    สำเร็จ {sentCount} · ไม่สำเร็จ {failedCount} · ข้าม {resultSkippedCount}
+                  </div>
+                </div>
+                {failedRows.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={copyFailureSummary}>
+                      <Clipboard className="h-3.5 w-3.5" />
+                      คัดลอก error
+                    </Button>
+                    <Button asChild size="sm" variant="outline" className="h-8 gap-1.5">
+                      <Link to={billDetailPath(failedRows[0].bill)}>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        ดูบิลแรกที่ไม่สำเร็จ
+                      </Link>
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {failedRows.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {failedRows.slice(0, 3).map((row) => (
+                    <div key={row.bill.id} className="rounded-md border border-border/70 bg-background/70 px-2 py-1.5">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="font-mono font-medium text-foreground">{row.orderNo}</span>
+                        {row.docNo && <span className="font-mono text-muted-foreground">{row.docNo}</span>}
+                      </div>
+                      <div className="mt-0.5 line-clamp-2 text-destructive">
+                        {row.message ?? 'ส่งไม่สำเร็จ'}
+                      </div>
+                    </div>
+                  ))}
+                  {failedRows.length > 3 && (
+                    <div className="text-muted-foreground">
+                      ยังมีรายการไม่สำเร็จอีก {failedRows.length - 3} รายการ ใช้ปุ่มคัดลอก error เพื่อส่งให้ทีมตรวจได้
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {missingFields.length > 0 && (
             <div className="flex items-start gap-2 rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -495,7 +623,7 @@ export function BulkSendDialog({
 
         <DialogFooter className="items-center gap-2 sm:justify-between">
           <div className="text-xs text-muted-foreground">
-            {sending ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
+            {sending ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount}` : finished ? `สำเร็จ ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
           </div>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
@@ -509,5 +637,30 @@ export function BulkSendDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function SummaryItem({
+  label,
+  value,
+  mono,
+  muted,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+  muted?: boolean
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-border/70 bg-background px-2.5 py-2">
+      <div className="text-[10px] font-medium uppercase text-muted-foreground">{label}</div>
+      <div className={[
+        'mt-0.5 truncate font-medium',
+        mono ? 'font-mono' : '',
+        muted ? 'text-muted-foreground' : 'text-foreground',
+      ].join(' ')}>
+        {value}
+      </div>
+    </div>
   )
 }

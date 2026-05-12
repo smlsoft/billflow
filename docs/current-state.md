@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-12 09:48 +07
+> Updated: 2026-05-12 10:12 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -46,6 +46,8 @@
 - ทั้ง 3 หน้าเอกสารมีปุ่ม `ส่ง SML ทั้งหมด` สำหรับสถานะ `pending` พร้อม bulk preview/validation ก่อนส่งจริง.
   - Dialog ล่าสุดจัดรายการเอกสารเป็นตารางอ่านง่ายขึ้น แสดงลำดับส่ง, order no, สถานะ, และ `doc_no` ที่คาดว่าจะได้ต่อแถว.
   - เมื่อ backend preview คืนเลขเริ่มต้นเดียวกันหลายบิล frontend จะคำนวณเลขคาดการณ์ตามลำดับส่ง เช่น `...001`, `...002`, `...003`; backend ยังเป็นผู้จองเลขจริงตอนกดส่ง.
+  - เพิ่ม `สรุปก่อนส่ง` ให้ตรวจลูกค้า/ผู้ขาย, ปลายทาง, ช่วง doc_no, คลัง/พื้นที่เก็บ, VAT, เวลาเอกสาร ก่อนกดส่ง.
+  - หลัง bulk send จบ dialog แสดงผลสำเร็จ/ไม่สำเร็จ/ข้าม พร้อมปุ่มคัดลอก error summary และลิงก์ไปบิลแรกที่ส่งไม่สำเร็จ.
 - Shopee Excel import ล่าสุดรองรับปลายทาง SML ทั้ง `saleorder` และ `saleinvoice`; เมื่อ channel default เปลี่ยน endpoint เมนูและข้อความจะเปลี่ยนตาม.
 - Shopee Excel status filter ล่าสุดนำเข้าแถวสถานะ `ที่ต้องจัดส่ง` แล้ว; filter ออกเฉพาะ `ยกเลิกแล้ว`.
 - Lazada Excel import deployed on BillFlow main + Henna:
@@ -345,6 +347,7 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Shopee shipped email | Routes to purchase bill and SML 248 `purchaseorder`. |
 | Bill Retry | 4-way dispatch: `sale_reserve`, `saleorder`, `saleinvoice`, `purchaseorder`, selected by source/bill type plus `channel_defaults.endpoint`. Phase 1 purchase send uses the Bill Detail confirmation dialog for supplier, warehouse, shelf, VAT, document time, branch/sale code, and remark. |
 | Bulk SML send | `/bills`, `/sales-orders`, and `/sale-invoices` have `ส่ง SML ทั้งหมด` for `pending` documents. It loads a preview, validates each bill, skips invalid rows, shows expected sequential `doc_no` per ready row, and sends ready bills one-by-one using shared dialog values. |
+| Mapping dashboard | `/mappings` shows the saved mapping table plus a sidebar hotspot panel for raw product names still appearing in `needs_review` bills, so admins can fix repeated names before they cause more manual review. |
 | หน้าเริ่มต้นใช้งาน | `/setup` checks required setup steps, shows shop/system counters, and provides an admin-only test-data reset dialog that preserves settings/catalog/mappings/AI usage by default. |
 | Sidebar navigation | Sidebar groups document work by purchase/sale: `งานฝั่งซื้อ` and `งานฝั่งขาย`. Badges are per-document-route queue counts, not global pending count. |
 | Bill detail | Shows route preview, blocks send when item validation fails, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML request/response before raw JSON. |
