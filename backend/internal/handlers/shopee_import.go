@@ -138,8 +138,7 @@ var shopeeColCandidates = map[string][]string{
 }
 
 var excludeStatuses = map[string]bool{
-	"ที่ต้องจัดส่ง": true,
-	"ยกเลิกแล้ว":    true,
+	"ยกเลิกแล้ว": true,
 }
 
 // ─── Request / Response types ─────────────────────────────────────────────────
@@ -993,7 +992,7 @@ foundHeader:
 			fmt.Sprintf("พบ %d รายการสินค้าใน %d order ที่ไม่มี SKU — ระบบจะใช้ชื่อสินค้า + ตัวเลือกสินค้าในการจับคู่แทน", noSKUItemCount, len(noSKUOrderIDs)))
 	}
 	if skippedCount > 0 {
-		warnings = append([]string{fmt.Sprintf("กรอง %d แถว (สถานะ: ที่ต้องจัดส่ง, ยกเลิกแล้ว)", skippedCount)}, warnings...)
+		warnings = append([]string{fmt.Sprintf("กรอง %d แถว (สถานะ: ยกเลิกแล้ว)", skippedCount)}, warnings...)
 	}
 
 	return orders, warnings, skippedCount, nil

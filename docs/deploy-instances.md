@@ -108,6 +108,10 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 09:40 +07: Shopee Excel status filter updated on `billflow` and `billflow-henna`.
+- Scope: `/import/shopee` now imports rows with status `ที่ต้องจัดส่ง`; only `ยกเลิกแล้ว` remains filtered out.
+- Added parser test `TestParseShopeeExcelKeepsReadyToShipStatus`.
+- Skipped `billflow-thaisunsport` intentionally because Shopee Excel remains disabled in Phase 1.
 - 2026-05-12 09:24 +07: Shared Phase 1 IMAP poll detail UX deployed to all three instances.
 - Scope: migration `031_imap_poll_details.sql` adds `imap_accounts.last_poll_details`; `/settings/email` can expand `ผลรอบล่าสุด` to show subject/from/date plus processed/skipped reason per email.
 - Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.

@@ -45,6 +45,7 @@
   - นับเฉพาะ `pending + needs_review + failed`
 - ทั้ง 3 หน้าเอกสารมีปุ่ม `ส่ง SML ทั้งหมด` สำหรับสถานะ `pending` พร้อม bulk preview/validation ก่อนส่งจริง.
 - Shopee Excel import ล่าสุดรองรับปลายทาง SML ทั้ง `saleorder` และ `saleinvoice`; เมื่อ channel default เปลี่ยน endpoint เมนูและข้อความจะเปลี่ยนตาม.
+- Shopee Excel status filter ล่าสุดนำเข้าแถวสถานะ `ที่ต้องจัดส่ง` แล้ว; filter ออกเฉพาะ `ยกเลิกแล้ว`.
 - Lazada Excel import deployed on BillFlow main + Henna:
   - เพิ่ม `/import/lazada`, `/api/settings/lazada-config`, `/api/import/lazada/preview`, `/api/import/lazada/confirm`, และ `/api/import/lazada/runs`
   - parser อ่านไฟล์ Lazada export จาก `lazada.xlsx`, group ตาม `orderNumber`, ใช้ `paidPrice`, รวมรายการซ้ำเป็น qty, ใช้ `createTime` เป็น `doc_date`, และกรองเฉพาะ `confirmed`, `shipped`, `delivered`
