@@ -23,7 +23,7 @@ interface Props {
   currentPrice: number
   sourceImageUrl?: string
   rawNameLabel?: string
-  onPick: (code: string, unitCode: string) => void
+  onPick: (code: string, unitCode: string, picked?: CatalogMatch) => void
   onClose: () => void
 }
 
@@ -124,7 +124,12 @@ export function MapItemModal({
         '/api/catalog/products',
         payload,
       )
-      onPick(res.data.code, res.data.unit_code)
+      onPick(res.data.code, res.data.unit_code, {
+        item_code: res.data.code,
+        item_name: payload.name,
+        unit_code: res.data.unit_code || payload.unit_code,
+        score: 1,
+      })
       onClose()
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
@@ -223,7 +228,7 @@ export function MapItemModal({
                   key={r.item_code}
                   type="button"
                   onClick={() => {
-                    onPick(r.item_code, r.unit_code)
+                    onPick(r.item_code, r.unit_code, r)
                     onClose()
                   }}
                   className={cn(

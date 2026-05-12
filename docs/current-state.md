@@ -102,6 +102,11 @@
   - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100` และ frontend `/settings/email` HTTP 200 ทั้ง `3010`, `3030`, `3020`
   - แก้ migration เก่า `002_sml_catalog.sql` และ `004_shopee_shipped.sql` ให้รวม `tiktok` ใน `bills_source_check` ด้วย เพื่อให้ idempotent เมื่อ re-run หลังมีข้อมูล TikTok แล้ว
   - บน BillFlow main เคลียร์ `processed_email_keys` เฉพาะ message/order `260404V08VQU10` แล้ว poll ใหม่สร้างบิล `67c0be5b-9247-4945-9dc0-85ad498243cf` สถานะ `pending`, source `shopee_shipped`, order `#260404V08VQU10`
+- Bill Detail item mapping UI update:
+  - ในหน้า detail ของบิล เมื่อกดแก้ไขรายการสินค้าแล้วเลือกสินค้าใหม่จาก SML ระบบแสดงรหัส/ชื่อ/คะแนนของสินค้าที่เลือกทันทีในแถวแก้ไข
+  - หลังบันทึก ตารางรายการสินค้าจะอัปเดตชื่อสินค้า SML จากตัวเลือกใหม่ทันที ไม่ต้อง refresh หน้า
+  - ใช้ร่วมกันกับ purchase, saleorder, และ saleinvoice เพราะเป็น component รายการสินค้าเดียวกัน
+  - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100` และ frontend `/bills` HTTP 200 ทั้ง `3010`, `3030`, `3020`
 - Shopee product image update:
   - Email extractor ตัด tracking/open pixel URL ของ Shopee ออก และจัดลำดับให้ product CDN เช่น `cf.shopee.co.th/file/th-*` มาก่อน logo/app/social assets
   - เพิ่ม backend test สำหรับเคสที่อีเมลมี tracking pixel ก่อน product image

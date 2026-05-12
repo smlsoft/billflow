@@ -108,6 +108,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12: Shared Bill Detail item mapping UI fix deployed to all three instances.
+- Scope: when editing a bill item and selecting a new SML product, the edit row and saved item table now show the newly selected product name/score immediately without requiring a page refresh.
+- Change type: Shared Bill Detail UX bug, applies to purchase, saleorder, and saleinvoice item rows.
+- Local verification: `npm run build` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend `/bills` returns HTTP 200 on `3010`, `3030`, `3020`.
+- Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12 09:40 +07: Shopee Excel status filter updated on `billflow` and `billflow-henna`.
 - Scope: `/import/shopee` now imports rows with status `ที่ต้องจัดส่ง`; only `ยกเลิกแล้ว` remains filtered out.
 - Added parser test `TestParseShopeeExcelKeepsReadyToShipStatus`.

@@ -7,7 +7,7 @@ import { TableRow, TableCell } from '@/components/ui/table'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { cn } from '@/lib/utils'
 import api from '@/api/client'
-import type { BillItem } from '@/types'
+import type { BillItem, CatalogMatch } from '@/types'
 import { useMatchInfo } from '../hooks/useMatchInfo'
 import { scoreStyle } from '../utils/formatters'
 import { rowIssueReason } from '../utils/validation'
@@ -86,6 +86,7 @@ export function BillItemRow({
   const [saving, setSaving] = useState(false)
   const [showMapModal, setShowMapModal] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [pickedMatch, setPickedMatch] = useState<CatalogMatch | null>(null)
   const [draft, setDraft] = useState({
     item_code: item.item_code ?? '',
     unit_code: item.unit_code ?? '',
@@ -93,13 +94,15 @@ export function BillItemRow({
     price: String(item.price ?? 0),
   })
 
-  const reset = () =>
+  const reset = () => {
+    setPickedMatch(null)
     setDraft({
       item_code: item.item_code ?? '',
       unit_code: item.unit_code ?? '',
       qty: String(item.qty ?? 0),
       price: String(item.price ?? 0),
     })
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -119,6 +122,15 @@ export function BillItemRow({
         })
       }
 
+      const candidates = pickedMatch
+        ? [
+            pickedMatch,
+            ...(item.candidates ?? []).filter(
+              (candidate) => candidate.item_code !== pickedMatch.item_code,
+            ),
+          ]
+        : item.candidates
+
       onUpdated({
         ...item,
         item_code: draft.item_code,
@@ -126,8 +138,10 @@ export function BillItemRow({
         qty: Number(draft.qty),
         price: Number(draft.price),
         mapped: draft.item_code !== '',
+        candidates,
       })
       setEditing(false)
+      setPickedMatch(null)
     } catch (err) {
       console.error('update item failed', err)
       toast.error('บันทึกไม่สำเร็จ')
@@ -142,6 +156,14 @@ export function BillItemRow({
   }
 
   const matchInfo = useMatchInfo(item)
+  const editMatchInfo =
+    pickedMatch && pickedMatch.item_code === draft.item_code
+      ? {
+          itemName: pickedMatch.item_name,
+          score: pickedMatch.score,
+          catalogPrice: null,
+        }
+      : matchInfo
   const billPrice = item.price ?? 0
   const catalogPrice = matchInfo.catalogPrice ?? 0
   const priceMismatch =
@@ -256,9 +278,10 @@ export function BillItemRow({
           currentPrice={Number(draft.price) || 0}
           sourceImageUrl={item.source_image_url}
           rawNameLabel={rawNameLabel}
-          onPick={(code, unit) =>
+          onPick={(code, unit, picked) => {
             setDraft((d) => ({ ...d, item_code: code, unit_code: unit || d.unit_code }))
-          }
+            setPickedMatch(picked ?? null)
+          }}
           onClose={() => setShowMapModal(false)}
         />
       )}
@@ -291,15 +314,15 @@ export function BillItemRow({
                     <span className="font-mono text-xs">
                       {draft.item_code || 'เลือกสินค้า'}
                     </span>
-                    {matchInfo.itemName && (
+                    {editMatchInfo.itemName && (
                       <span className="truncate text-sm font-normal text-muted-foreground">
-                        {matchInfo.itemName}
+                        {editMatchInfo.itemName}
                       </span>
                     )}
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
-                  <MatchBadge score={matchInfo.score} />
+                  <MatchBadge score={editMatchInfo.score} />
                   <span className="text-xs text-muted-foreground">
                     ระบบจะจดจำคู่จับคู่นี้หลังบันทึก
                   </span>
