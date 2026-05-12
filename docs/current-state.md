@@ -113,6 +113,11 @@
   - แก้ปัญหา Shopee/Lazada/TikTok ที่ชื่อ marketplace ไม่ตรงกับ SML และไฟล์ไม่มี SKU: user ควรจับคู่ครั้งเดียวต่อชื่อสินค้า/ตัวเลือก ไม่ต้องไล่เลือกซ้ำทุกบิล
   - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100`
   - Henna production data follow-up: applied existing confirmed Shopee mapping to 3 open item rows; promoted 3 saleinvoice bills to `pending`; remaining `needs_review` = 3 raw names/options that still need their first user confirmation
+- Bulk Send dialog UX update:
+  - Dialog `ส่ง SML ทั้งหมด` ในหน้า `/bills`, `/sales-orders`, และ `/sale-invoices` ปรับ layout ให้สอดคล้องกับ dialog ส่ง SML ใน Bill Detail
+  - ใช้กล่องปลายทาง SML, party picker, กล่องตั้งค่าเอกสาร, helper text, advanced Branch/Sale code, หมายเหตุ, และ warning field ที่ขาดในรูปแบบเดียวกัน
+  - ส่วนตรวจรายการพร้อมส่งยังคงอยู่เฉพาะ bulk dialog เพราะต้องแสดงจำนวนรายการที่พร้อมส่ง/ต้องข้าม/ผลส่งต่อบิล
+  - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100`; verified frontend routes main/Henna `/sale-invoices` และ Thaisunsport `/bills`
 - Shopee product image update:
   - Email extractor ตัด tracking/open pixel URL ของ Shopee ออก และจัดลำดับให้ product CDN เช่น `cf.shopee.co.th/file/th-*` มาก่อน logo/app/social assets
   - เพิ่ม backend test สำหรับเคสที่อีเมลมี tracking pixel ก่อน product image

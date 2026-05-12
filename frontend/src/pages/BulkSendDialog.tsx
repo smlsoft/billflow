@@ -104,9 +104,13 @@ export function BulkSendDialog({
   ].filter(Boolean)
 
   const destination = useMemo(() => {
-    if (filters.document_route === 'saleinvoice') return 'ขาย -> ขายสินค้าและบริการ'
-    if (filters.document_route === 'saleorder') return 'ขาย -> ใบสั่งขาย'
-    return 'ซื้อ -> ใบสั่งซื้อ'
+    if (filters.document_route === 'saleinvoice') {
+      return { label: 'ขาย -> ขายสินค้าและบริการ', code: 'SI' }
+    }
+    if (filters.document_route === 'saleorder') {
+      return { label: 'ขาย -> ใบสั่งขาย', code: 'SO' }
+    }
+    return { label: 'ซื้อ -> ใบสั่งซื้อ', code: 'PO' }
   }, [filters.document_route])
 
   useEffect(() => {
@@ -216,14 +220,16 @@ export function BulkSendDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!sending) onOpenChange(v) }}>
-      <DialogContent className="grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-3xl">
+      <DialogContent className="grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>ส่ง SML ทั้งหมด: {title}</DialogTitle>
         </DialogHeader>
 
         <div className="-mx-6 space-y-4 overflow-y-auto px-6 py-2">
           <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2 text-xs text-muted-foreground">
-            <div className="font-medium text-foreground">ปลายทาง SML: {destination}</div>
+            <div className="font-medium text-foreground">
+              ปลายทาง SML: {destination.label} · {destination.code}
+            </div>
             <div className="mt-0.5">
               ระบบจะส่งเฉพาะเอกสารสถานะพร้อมส่ง และใช้ค่าชุดนี้ร่วมกันทุกเอกสารในรอบนี้
             </div>
@@ -235,28 +241,28 @@ export function BulkSendDialog({
             </div>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label>{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'} <span className="text-destructive">*</span></Label>
-              <PartyPicker billType={billType} value={party} onChange={setParty} />
-            </div>
+          <div className="space-y-1.5">
+            <Label>{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'} <span className="text-destructive">*</span></Label>
+            <PartyPicker billType={billType} value={party} onChange={setParty} />
+            {!party?.code && (
+              <p className="text-[11px] text-warning">
+                ต้องเลือก{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'}ก่อนส่งเข้า SML
+              </p>
+            )}
+          </div>
 
+          <div className="grid gap-2.5 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
             <div className="space-y-1">
               <Label className="text-xs">เวลาเอกสาร <span className="text-destructive">*</span></Label>
-              <Input value={docTime} onChange={(e) => setDocTime(e.target.value)} className="font-mono" />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">ประเภทภาษี <span className="text-destructive">*</span></Label>
-              <Select value={vatTypeStr} onValueChange={setVatTypeStr}>
-                <SelectTrigger className="h-9 text-sm">
-                  <SelectValue placeholder="เลือกประเภทภาษี" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="0">0 — แยกนอก</SelectItem>
-                  <SelectItem value="1">1 — รวมใน</SelectItem>
-                  <SelectItem value="2">2 — ศูนย์%</SelectItem>
-                </SelectContent>
-              </Select>
+              <Input
+                value={docTime}
+                onChange={(e) => setDocTime(e.target.value)}
+                placeholder="เช่น 09:00"
+                className="font-mono"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                ใช้เวลาปัจจุบันตอนเปิด dialog
+              </p>
             </div>
 
             <div className="space-y-1">
@@ -285,6 +291,9 @@ export function BulkSendDialog({
                   }}
                 />
               )}
+              <p className="text-[10px] text-muted-foreground">
+                เลือกจากคลังใน SML หรือพิมพ์เองถ้า service ยังไม่พร้อม
+              </p>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">พื้นที่เก็บ <span className="text-destructive">*</span></Label>
@@ -298,30 +307,59 @@ export function BulkSendDialog({
               ) : (
                 <ShelfPicker warehouseCode={whCode} value={shelfCode} onChange={(shelf) => setShelfCode(shelf.code)} />
               )}
+              <p className="text-[10px] text-muted-foreground">
+                พื้นที่เก็บจะถูกกรองตามคลังที่เลือก
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs">ประเภทภาษี <span className="text-destructive">*</span></Label>
+              <Select value={vatTypeStr} onValueChange={setVatTypeStr}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="เลือกประเภทภาษี" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">0 — แยกนอก</SelectItem>
+                  <SelectItem value="1">1 — รวมใน</SelectItem>
+                  <SelectItem value="2">2 — ศูนย์%</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-1">
               <Label className="text-xs">อัตราภาษี (%) <span className="text-destructive">*</span></Label>
               <Input type="number" step="0.001" value={vatRateStr} onChange={(e) => setVatRateStr(e.target.value)} className="font-mono" />
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Branch code</Label>
-              <Input value={branchCode} onChange={(e) => setBranchCode(e.target.value)} className="font-mono" placeholder="ไม่บังคับ" />
+            <details className="space-y-2 rounded-md border border-border bg-background px-3 py-2 sm:col-span-2">
+              <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                ตัวเลือกเพิ่มเติม: Branch code / Sale code (ไม่บังคับ)
+              </summary>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">Branch code</Label>
+                  <Input value={branchCode} onChange={(e) => setBranchCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Sale code</Label>
+                  <Input value={saleCode} onChange={(e) => setSaleCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" />
+                </div>
+              </div>
+            </details>
+            <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
+              เลขเอกสารจะ running แยกต่อใบตอนส่งจริง ถ้า SML แจ้งเลขซ้ำ ให้เปิดบิลใบนั้นแล้วแก้ doc_no ในหน้า detail
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Sale code</Label>
-              <Input value={saleCode} onChange={(e) => setSaleCode(e.target.value)} className="font-mono" placeholder="ไม่บังคับ" />
-            </div>
-            <div className="space-y-1 sm:col-span-2">
-              <Label className="text-xs">หมายเหตุ</Label>
-              <textarea
-                value={remark}
-                onChange={(e) => setRemark(e.target.value)}
-                rows={2}
-                className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder="หมายเหตุสำหรับ SML (ถ้ามี)"
-              />
-            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="bulk-remark">หมายเหตุ</Label>
+            <textarea
+              id="bulk-remark"
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
+              rows={3}
+              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              placeholder="หมายเหตุสำหรับ SML (ถ้ามี)"
+            />
           </div>
 
           <div className="rounded-md border border-border">
@@ -367,8 +405,9 @@ export function BulkSendDialog({
             </div>
           </div>
           {missingFields.length > 0 && (
-            <div className="rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
-              ต้องกรอกเพิ่มก่อนส่ง: {missingFields.join(', ')}
+            <div className="flex items-start gap-2 rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>ต้องกรอกเพิ่มก่อนส่ง: {missingFields.join(', ')}</div>
             </div>
           )}
         </div>

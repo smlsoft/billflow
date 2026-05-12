@@ -108,6 +108,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12: Bulk Send dialog UI parity deployed to all three instances.
+- Scope: `/bills`, `/sales-orders`, and `/sale-invoices` bulk-send dialog now follows the same structure and visual language as the Bill Detail send dialog while keeping the bulk-only ready/skipped result list.
+- Change type: Shared frontend UX parity.
+- Local verification: `npm run build` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend route ok on main/Henna `/sale-invoices` and Thaisunsport `/bills`.
+- Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12: Verified Mapping Loop backend fix deployed to all three instances.
 - Scope: saving a bill item now learns mapping even when the AI-prefilled code did not change, then applies the verified mapping to open bills with the same source/bill_type/raw_name and promotes fully mapped bills from `needs_review` to `pending`.
 - Change type: Shared mapping workflow bug for marketplace/import/email bill detail review.
