@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"billflow/internal/models"
+
 	gomail "github.com/emersion/go-message/mail"
 
 	"github.com/emersion/go-imap/v2"
@@ -59,6 +61,7 @@ type PollResult struct {
 	MessagesFound   int
 	Processed       int
 	Skipped         int
+	Details         []models.IMAPPollDetail
 	ProcessWarnings []string
 	Duration        time.Duration
 	Err             error
@@ -205,6 +208,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		for _, summary := range summaries {
 			envelope := summary.Envelope
 			if envelope == nil {
+				res.addDetail(summary, "skipped", "missing_envelope", "อ่านข้อมูลหัวอีเมลไม่ได้")
 				res.Skipped++
 				continue
 			}
@@ -215,6 +219,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					zap.String("subject", envelope.Subject),
 					zap.String("reason", "subject_filter_mismatch"),
 				)
+				res.addDetail(summary, "skipped", "subject_filter_mismatch", "หัวข้ออีเมลไม่ตรงคำกรอง")
 				res.Skipped++
 				continue
 			}
@@ -225,6 +230,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					zap.String("from", summary.FromAddr),
 					zap.String("reason", "shopee_channel_non_shopee_from"),
 				)
+				res.addDetail(summary, "skipped", "sender_not_allowed", "ผู้ส่งไม่อยู่ในรายชื่อที่ยอมรับ")
 				res.Skipped++
 				continue
 			}
@@ -238,10 +244,12 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					zap.Error(err),
 				)
 				res.ProcessWarnings = append(res.ProcessWarnings, warning)
+				res.addDetail(summary, "skipped", "fetch_body_failed", "ดึงเนื้อหาอีเมลไม่สำเร็จ")
 				res.Skipped++
 				continue
 			}
 			if len(bodyBytes) == 0 {
+				res.addDetail(summary, "skipped", "empty_body", "อีเมลไม่มีเนื้อหาที่ระบบอ่านได้")
 				res.Skipped++
 				continue
 			}
@@ -264,9 +272,16 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				batchProcessedUIDs.AddNum(summary.UID)
 				batchProcessed++
 				res.Processed++
+				res.addDetail(summary, "processed", "accepted", "ส่งเข้ากระบวนการสร้างบิลแล้ว")
 			} else {
 				if warning != "" {
-					res.ProcessWarnings = append(res.ProcessWarnings, warning)
+					code, label, userSkipped := classifyDispatchWarning(warning)
+					if !userSkipped {
+						res.ProcessWarnings = append(res.ProcessWarnings, warning)
+					}
+					res.addDetail(summary, "skipped", code, label)
+				} else {
+					res.addDetail(summary, "skipped", "not_processed", "ไม่เข้าเงื่อนไขการสร้างบิล")
 				}
 				res.Skipped++
 			}
@@ -290,6 +305,31 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	)
 
 	return res
+}
+
+func (r *PollResult) addDetail(summary imapMessageSummary, status, code, label string) {
+	if r == nil {
+		return
+	}
+	const maxPollDetails = 100
+	if len(r.Details) >= maxPollDetails {
+		return
+	}
+	d := models.IMAPPollDetail{
+		UID:         uint32(summary.UID),
+		From:        summary.FromAddr,
+		Status:      status,
+		ReasonCode:  code,
+		ReasonLabel: label,
+	}
+	if summary.Envelope != nil {
+		d.MessageID = summary.Envelope.MessageID
+		d.Subject = summary.Envelope.Subject
+		if !summary.Envelope.Date.IsZero() {
+			d.EmailDate = summary.Envelope.Date.Format(time.RFC3339)
+		}
+	}
+	r.Details = append(r.Details, d)
 }
 
 func fetchEnvelopeBatch(c *imapclient.Client, uids []imap.UID) ([]imapMessageSummary, error) {
@@ -422,6 +462,9 @@ func dispatch(
 		}
 		if isShippedSubject(envelope.Subject) && p.ShopeeShipped != nil {
 			if err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
+				if skip, ok := err.(*MessageSkipError); ok {
+					return false, skip.Error()
+				}
 				logger.Warn("imap_shopee_shipped_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
 				return false, err.Error()
@@ -430,6 +473,9 @@ func dispatch(
 		}
 		if p.ShopeeOrder != nil {
 			if err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
+				if skip, ok := err.(*MessageSkipError); ok {
+					return false, skip.Error()
+				}
 				logger.Warn("imap_shopee_order_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
 				return false, err.Error()
@@ -443,7 +489,27 @@ func dispatch(
 		if p.Attachment == nil {
 			return false, ""
 		}
-		return parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, source, p.Attachment, logger, traceID), ""
+		return parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, source, p.Attachment, logger, traceID)
+	}
+}
+
+func classifyDispatchWarning(warning string) (code, label string, userSkipped bool) {
+	lower := strings.ToLower(strings.TrimSpace(warning))
+	switch {
+	case lower == "":
+		return "not_processed", "ไม่เข้าเงื่อนไขการสร้างบิล", true
+	case strings.Contains(lower, "duplicate") || strings.Contains(warning, "เคย"):
+		return "duplicate", "เมลนี้เคยประมวลผลหรือเคยสร้างบิลแล้ว", true
+	case strings.Contains(lower, "no supported attachment"):
+		return "no_supported_attachment", "ไม่พบไฟล์แนบที่รองรับ", true
+	case strings.Contains(lower, "empty items") || strings.Contains(lower, "no items extracted"):
+		return "empty_items", "อ่านเมลได้ แต่ไม่พบรายการสินค้า", false
+	case strings.Contains(lower, "empty orders"):
+		return "empty_orders", "อ่านเมลได้ แต่ไม่พบเลขคำสั่งซื้อหรือรายการคำสั่งซื้อ", false
+	case strings.Contains(lower, "catalog service not configured"):
+		return "catalog_not_ready", "ระบบสินค้า SML ยังไม่พร้อมสำหรับการจับคู่สินค้า", false
+	default:
+		return "processing_failed", warning, false
 	}
 }
 
@@ -542,15 +608,16 @@ func parseAndProcess(
 	processor AttachmentProcessor,
 	logger *zap.Logger,
 	traceID string,
-) bool {
+) (bool, string) {
 	mr, err := gomail.CreateReader(bytes.NewReader(rawMsg))
 	if err != nil {
 		logger.Warn("imap_message_parse_failed",
 			zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
-		return false
+		return false, err.Error()
 	}
 
 	processed := false
+	var warnings []string
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
@@ -592,12 +659,23 @@ func parseAndProcess(
 		if err := processor(data, mimeType, filename, messageID, subject, fromAddr, source); err == nil {
 			processed = true
 		} else {
+			if skip, ok := err.(*MessageSkipError); ok {
+				warnings = append(warnings, skip.Error())
+				continue
+			}
+			warnings = append(warnings, err.Error())
 			logger.Warn("imap_attachment_process_failed",
 				zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
 		}
 	}
 
-	return processed
+	if processed {
+		return true, ""
+	}
+	if len(warnings) > 0 {
+		return false, strings.Join(warnings, "\n")
+	}
+	return false, "no supported attachment"
 }
 
 func isSupportedAttachment(mimeType, filename string) bool {

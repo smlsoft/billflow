@@ -143,6 +143,7 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 		"skipped":        res.Skipped,
 		"duration_ms":    res.Duration.Milliseconds(),
 		"status":         res.Status(),
+		"details":        res.Details,
 	}
 	if res.Err != nil {
 		resp["error"] = res.Err.Error()

@@ -53,7 +53,19 @@ interface IMAPAccountFull extends IMAPAccount {
   last_poll_found?: number | null
   last_poll_processed?: number | null
   last_poll_skipped?: number | null
+  last_poll_details?: IMAPPollDetail[]
   consecutive_failures?: number
+}
+
+interface IMAPPollDetail {
+  uid?: number
+  message_id?: string
+  subject?: string
+  from?: string
+  email_date?: string
+  status: 'processed' | 'skipped' | string
+  reason_code?: string
+  reason_label?: string
 }
 
 const CHANNEL_META: Record<string, { label: string; cls: string }> = {
@@ -213,6 +225,80 @@ function compactList(value?: string | null, maxItems = 2): string {
   if (items.length === 0) return 'ยังไม่กำหนด'
   if (items.length <= maxItems) return items.join(', ')
   return `${items.slice(0, maxItems).join(', ')} +${items.length - maxItems}`
+}
+
+function pollDetailStatusLabel(status: string): string {
+  switch (status) {
+    case 'processed':
+      return 'ประมวลผล'
+    case 'skipped':
+      return 'ข้าม'
+    default:
+      return status || 'ไม่ทราบสถานะ'
+  }
+}
+
+function pollDetailStatusClass(status: string): string {
+  switch (status) {
+    case 'processed':
+      return 'bg-success/10 text-success'
+    case 'skipped':
+      return 'bg-warning/15 text-warning'
+    default:
+      return 'bg-muted text-muted-foreground'
+  }
+}
+
+function LatestPollDetails({ account }: { account: IMAPAccountFull }) {
+  const details = account.last_poll_details ?? []
+  const [open, setOpen] = useState(false)
+  if (details.length === 0) {
+    return null
+  }
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="mt-1 h-6 w-fit gap-1 px-1.5 text-[11px] text-muted-foreground"
+        >
+          รายละเอียด {details.length} เมล
+          <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1 max-h-64 w-[420px] max-w-[72vw] space-y-1 overflow-y-auto rounded-md border border-border bg-background p-2 shadow-sm">
+          {details.map((d, idx) => (
+            <div key={`${d.message_id || d.uid || idx}-${idx}`} className="rounded border border-border/70 bg-muted/20 p-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium text-foreground" title={d.subject || 'ไม่มีหัวข้อ'}>
+                    {d.subject || 'ไม่มีหัวข้อ'}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={d.from || undefined}>
+                    {d.from || 'ไม่พบผู้ส่ง'}
+                    {d.email_date && (
+                      <span className="ml-1 tabular-nums">
+                        · {dayjs(d.email_date).format('DD/MM/YY HH:mm')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold', pollDetailStatusClass(d.status))}>
+                  {pollDetailStatusLabel(d.status)}
+                </span>
+              </div>
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                {d.reason_label || d.reason_code || 'ไม่มีรายละเอียดเพิ่มเติม'}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
 }
 
 export default function EmailAccounts() {
@@ -469,6 +555,7 @@ export default function EmailAccounts() {
                           <span>ข้าม</span> <span className="font-mono">{skipped}</span>
                         </span>
                       )}
+                      <LatestPollDetails account={a} />
                     </div>
                   )
                 },

@@ -1,7 +1,7 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-11 20:19 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, and migration logs for BillFlow main + Henna.
+> Updated: 2026-05-12 09:20 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
 
@@ -97,6 +97,9 @@
   - `imap_accounts` มี runtime fields เพิ่ม: `last_poll_found`, `last_poll_processed`, `last_poll_skipped`
   - `/settings/email` เปลี่ยนคอลัมน์จาก `สร้างบิล` เป็น `ผลรอบล่าสุด` และแสดง `พบ / ประมวลผล / ข้าม`
   - `last_poll_messages` ยังเก็บไว้เพื่อ compatibility แต่ความหมายจริงคือจำนวนที่ processor รับไปทำงาน ไม่ใช่จำนวนบิลที่สร้างเสมอ
+  - เพิ่ม `last_poll_details` ผ่าน migration `031_imap_poll_details.sql`; UI กดดูรายละเอียดแต่ละเมลได้ว่า subject/from/date คืออะไร, ประมวลผลหรือข้าม, และข้ามเพราะอะไร เช่น เคยประมวลผลแล้ว, ผู้ส่งไม่อยู่ในรายชื่อที่ยอมรับ, หัวข้อไม่ตรงคำกรอง, ไม่พบไฟล์แนบ, หรืออ่านแล้วไม่พบรายการสินค้า
+  - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100` และ frontend `/settings/email` HTTP 200 ทั้ง `3010`, `3030`, `3020`
+  - แก้ migration เก่า `002_sml_catalog.sql` และ `004_shopee_shipped.sql` ให้รวม `tiktok` ใน `bills_source_check` ด้วย เพื่อให้ idempotent เมื่อ re-run หลังมีข้อมูล TikTok แล้ว
   - บน BillFlow main เคลียร์ `processed_email_keys` เฉพาะ message/order `260404V08VQU10` แล้ว poll ใหม่สร้างบิล `67c0be5b-9247-4945-9dc0-85ad498243cf` สถานะ `pending`, source `shopee_shipped`, order `#260404V08VQU10`
 - Shopee product image update:
   - Email extractor ตัด tracking/open pixel URL ของ Shopee ออก และจัดลำดับให้ product CDN เช่น `cf.shopee.co.th/file/th-*` มาก่อน logo/app/social assets
@@ -335,8 +338,8 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 
 Local migrations currently run through:
 
-- `001_init.sql` through `030_tiktok_import.sql`
-- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, `bills.document_route`, `bill_items.source_sku`, and `bill_items.source_image_url`.
+- `001_init.sql` through `031_imap_poll_details.sql`
+- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, `bills.document_route`, `bill_items.source_sku`, `bill_items.source_image_url`, and `imap_accounts.last_poll_details`.
 
 Production PostgreSQL also contains `system_settings` and `sml_settings`. These tables are not present in the current local migrations and are not referenced by the current codebase, so treat them as legacy leftovers until a future migration either formalizes or removes them.
 

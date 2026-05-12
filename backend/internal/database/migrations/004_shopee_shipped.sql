@@ -3,4 +3,4 @@
 
 ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_source_check;
 ALTER TABLE bills ADD CONSTRAINT bills_source_check
-  CHECK (source IN ('line','email','lazada','shopee','shopee_email','shopee_shipped','manual'));
+  CHECK (source IN ('line','email','lazada','tiktok','shopee','shopee_email','shopee_shipped','manual'));

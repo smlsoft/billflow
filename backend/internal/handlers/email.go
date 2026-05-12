@@ -254,7 +254,7 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 			h.logger.Warn("email: dedup check failed", zap.String("message_id", messageID), zap.Error(err))
 		} else if exists {
 			h.logger.Info("email: skipping duplicate", zap.String("message_id", messageID))
-			return nil
+			return emailservice.SkipMessage("duplicate", "เมลนี้เคยสร้างบิลแล้ว")
 		}
 	}
 	var extracted *ai.ExtractedBill
@@ -520,7 +520,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 			h.logger.Warn("shopee_email: dedup check failed", zap.String("message_id", messageID), zap.Error(err))
 		} else if exists {
 			h.logger.Info("shopee_email: skipping duplicate", zap.String("message_id", messageID))
-			return nil
+			return emailservice.SkipMessage("duplicate", "เมลนี้เคยสร้างบิลแล้ว")
 		}
 	}
 
@@ -550,7 +550,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		existsByOrderID, _ := h.billRepo.FindByShopeeOrderID(shopeeOrderID)
 		if existsByOrderID {
 			h.logger.Info("shopee_email: skipping duplicate order", zap.String("order_id", shopeeOrderID))
-			return nil
+			return emailservice.SkipMessage("duplicate_order", "คำสั่งซื้อนี้เคยสร้างบิลแล้ว")
 		}
 	}
 

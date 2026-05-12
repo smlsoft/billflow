@@ -576,6 +576,7 @@ CREATE TABLE imap_accounts (
   last_poll_status      TEXT CHECK (last_poll_status IN ('ok','error')),
   last_poll_error       TEXT,
   last_poll_messages    INT,
+  last_poll_details     JSONB NOT NULL DEFAULT '[]'::jsonb,
   consecutive_failures  INT NOT NULL DEFAULT 0,
   last_admin_alert_at   TIMESTAMPTZ,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),

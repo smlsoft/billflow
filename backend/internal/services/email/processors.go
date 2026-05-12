@@ -1,5 +1,35 @@
 package emailservice
 
+import "fmt"
+
+type MessageSkipError struct {
+	Code  string
+	Label string
+}
+
+func (e *MessageSkipError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Label != "" {
+		return e.Label
+	}
+	if e.Code != "" {
+		return e.Code
+	}
+	return "message skipped"
+}
+
+func SkipMessage(code, label string) error {
+	if code == "" {
+		code = "skipped"
+	}
+	if label == "" {
+		label = fmt.Sprintf("ข้ามเมลนี้ (%s)", code)
+	}
+	return &MessageSkipError{Code: code, Label: label}
+}
+
 // Processors bundles the three downstream message handlers that the
 // coordinator dispatches to based on each account's channel + the
 // message's subject. One bundle is shared by all account pollers.

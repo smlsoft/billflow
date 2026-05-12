@@ -1,12 +1,11 @@
 -- 002_sml_catalog.sql — SML Product Catalog + Smart Matching
 
--- 1. Add shopee_email (and forward-compat: shopee_shipped from 004) to bills.source.
--- Including shopee_shipped here keeps this DROP+ADD idempotent across re-runs:
--- once rows with source='shopee_shipped' exist, a narrower CHECK would fail with
--- "check constraint violated by some row" and block startup.
+-- 1. Add marketplace email/import sources to bills.source.
+-- Include later sources here because this migration is intentionally
+-- idempotent and can re-run after rows from newer channels already exist.
 ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_source_check;
 ALTER TABLE bills ADD CONSTRAINT bills_source_check
-  CHECK (source IN ('line','email','lazada','shopee','shopee_email','shopee_shipped','manual'));
+  CHECK (source IN ('line','email','lazada','tiktok','shopee','shopee_email','shopee_shipped','manual'));
 
 -- 2. Add needs_review to bills.status
 ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_status_check;

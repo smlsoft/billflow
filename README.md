@@ -292,7 +292,9 @@ chat_tags / chat_conversation_tags -- CRM tags
 
 Key columns in `imap_accounts`: name, host, port, username, password, mailbox, filter_from,
 filter_subjects[], channel (general/shopee/lazada), shopee_domains[], lookback_days (1-90),
-poll_interval_seconds (≥300), enabled, last_polled_at, last_poll_status, consecutive_failures.
+poll_interval_seconds (≥300), enabled, last_polled_at, last_poll_status,
+last_poll_found, last_poll_processed, last_poll_skipped, last_poll_details,
+consecutive_failures.
 
 Migrations (run in order, all idempotent):
 - [001_init.sql](backend/internal/database/migrations/001_init.sql) — initial schema

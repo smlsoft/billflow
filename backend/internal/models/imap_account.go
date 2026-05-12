@@ -2,6 +2,17 @@ package models
 
 import "time"
 
+type IMAPPollDetail struct {
+	UID         uint32 `json:"uid,omitempty"`
+	MessageID   string `json:"message_id,omitempty"`
+	Subject     string `json:"subject,omitempty"`
+	From        string `json:"from,omitempty"`
+	EmailDate   string `json:"email_date,omitempty"`
+	Status      string `json:"status"` // processed | skipped
+	ReasonCode  string `json:"reason_code,omitempty"`
+	ReasonLabel string `json:"reason_label,omitempty"`
+}
+
 // IMAPAccount is one mailbox the email coordinator polls.
 //
 // Channel routes a poll's processed messages to the right body handler:
@@ -9,31 +20,32 @@ import "time"
 //   - "shopee"  → Shopee email order/shipped flow (subject decides which)
 //   - "lazada"  → reserved (Phase 4b WIP, currently routes like general)
 type IMAPAccount struct {
-	ID                  string     `json:"id"`
-	Name                string     `json:"name"`
-	Host                string     `json:"host"`
-	Port                int        `json:"port"`
-	Username            string     `json:"username"`
-	Password            string     `json:"password,omitempty"`
-	Mailbox             string     `json:"mailbox"`
-	FilterFrom          string     `json:"filter_from"`
-	FilterSubjects      string     `json:"filter_subjects"`
-	Channel             string     `json:"channel"`
-	ShopeeDomains       string     `json:"shopee_domains"`
-	LookbackDays        int        `json:"lookback_days"`
-	PollIntervalSeconds int        `json:"poll_interval_seconds"`
-	Enabled             bool       `json:"enabled"`
-	LastPolledAt        *time.Time `json:"last_polled_at"`
-	LastPollStatus      *string    `json:"last_poll_status"`
-	LastPollError       *string    `json:"last_poll_error"`
-	LastPollMessages    *int       `json:"last_poll_messages"`
-	LastPollFound       *int       `json:"last_poll_found"`
-	LastPollProcessed   *int       `json:"last_poll_processed"`
-	LastPollSkipped     *int       `json:"last_poll_skipped"`
-	ConsecutiveFailures int        `json:"consecutive_failures"`
-	LastAdminAlertAt    *time.Time `json:"last_admin_alert_at"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                  string           `json:"id"`
+	Name                string           `json:"name"`
+	Host                string           `json:"host"`
+	Port                int              `json:"port"`
+	Username            string           `json:"username"`
+	Password            string           `json:"password,omitempty"`
+	Mailbox             string           `json:"mailbox"`
+	FilterFrom          string           `json:"filter_from"`
+	FilterSubjects      string           `json:"filter_subjects"`
+	Channel             string           `json:"channel"`
+	ShopeeDomains       string           `json:"shopee_domains"`
+	LookbackDays        int              `json:"lookback_days"`
+	PollIntervalSeconds int              `json:"poll_interval_seconds"`
+	Enabled             bool             `json:"enabled"`
+	LastPolledAt        *time.Time       `json:"last_polled_at"`
+	LastPollStatus      *string          `json:"last_poll_status"`
+	LastPollError       *string          `json:"last_poll_error"`
+	LastPollMessages    *int             `json:"last_poll_messages"`
+	LastPollFound       *int             `json:"last_poll_found"`
+	LastPollProcessed   *int             `json:"last_poll_processed"`
+	LastPollSkipped     *int             `json:"last_poll_skipped"`
+	LastPollDetails     []IMAPPollDetail `json:"last_poll_details,omitempty"`
+	ConsecutiveFailures int              `json:"consecutive_failures"`
+	LastAdminAlertAt    *time.Time       `json:"last_admin_alert_at"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
 }
 
 // IMAPAccountUpsert is the user-editable subset (no runtime status fields).

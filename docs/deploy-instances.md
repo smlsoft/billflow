@@ -108,6 +108,13 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 09:24 +07: Shared Phase 1 IMAP poll detail UX deployed to all three instances.
+- Scope: migration `031_imap_poll_details.sql` adds `imap_accounts.last_poll_details`; `/settings/email` can expand `ผลรอบล่าสุด` to show subject/from/date plus processed/skipped reason per email.
+- Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+- Also patched old source-check migrations `002_sml_catalog.sql` and `004_shopee_shipped.sql` to include `tiktok`, so boot migrations remain idempotent after TikTok bills exist.
+- Verified backend health: `8090`, `8110`, `8100`.
+- Verified frontend route `/settings/email`: HTTP 200 on `3010`, `3030`, `3020`.
+- Verified `last_poll_details` column exists in all three PostgreSQL containers; latest poll details stored on main and Thaisunsport.
 - 2026-05-11 20:19 +07: TikTok Excel/CSV import deployed to `billflow` and `billflow-henna` only.
 - Scope: `/import/tiktok`, TikTok preview/confirm API, `tiktok` channel sale routing, migration `030_tiktok_import.sql`, and parser tests for real TikTok CSV shape.
 - Verified backend health: `8090`, `8110`.

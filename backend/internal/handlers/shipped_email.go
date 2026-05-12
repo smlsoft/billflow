@@ -45,7 +45,7 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 				zap.String("message_id", messageID),
 				zap.Int("existing_bills", count),
 			)
-			return nil
+			return emailservice.SkipMessage("duplicate", "เมลนี้เคยประมวลผลแล้ว")
 		}
 	}
 
@@ -103,6 +103,9 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	)
 	if messageID != "" && failedCount == 0 {
 		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+	}
+	if createdCount == 0 && skippedCount > 0 && failedCount == 0 {
+		return emailservice.SkipMessage("duplicate_or_empty", "ไม่มีบิลใหม่จากเมลนี้ อาจซ้ำหรือไม่มีรายการสินค้าที่ใช้ได้")
 	}
 	return nil
 }
