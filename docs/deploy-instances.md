@@ -108,6 +108,13 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 09:48 +07: Bulk Send dialog readability follow-up deployed to all three instances.
+- Scope: `/bills`, `/sales-orders`, and `/sale-invoices` bulk-send dialog uses a wider modal, reduces noisy helper text, and shows ready rows as a table with send sequence, order no, expected `doc_no`, and status.
+- Fix: frontend computes sequential expected `doc_no` from the backend preview so bulk rows no longer all appear to use the same next document number before the real send reserves numbers.
+- Change type: Shared frontend UX/preview clarity.
+- Local verification: `npm run build` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend route ok on main/Henna `/sale-invoices` and Thaisunsport `/bills`.
+- Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12: Bulk Send dialog UI parity deployed to all three instances.
 - Scope: `/bills`, `/sales-orders`, and `/sale-invoices` bulk-send dialog now follows the same structure and visual language as the Bill Detail send dialog while keeping the bulk-only ready/skipped result list.
 - Follow-up: each ready/skipped row now shows upstream order number plus `doc_no` preview so users can verify document numbers before bulk sending.

@@ -50,6 +50,15 @@ function previewDocNo(bill: Bill) {
   return bill.sml_doc_no || bill.preview?.doc_no || ''
 }
 
+function incrementTrailingNumber(value: string, offset: number) {
+  if (!value || offset <= 0) return value
+  const match = value.match(/^(.*?)(\d+)(\D*)$/)
+  if (!match) return value
+  const [, prefix, digits, suffix] = match
+  const next = String(Number(digits) + offset).padStart(digits.length, '0')
+  return `${prefix}${next}${suffix}`
+}
+
 type Candidate = {
   bill: Bill
   ready: boolean
@@ -98,6 +107,41 @@ export function BulkSendDialog({
   const skippedCount = candidates.length - readyCount
   const sentCount = candidates.filter((c) => c.result === 'sent').length
   const failedCount = candidates.filter((c) => c.result === 'failed').length
+  const displayRows = useMemo(() => {
+    const previewOffsets = new Map<string, number>()
+    let readySeq = 0
+    return candidates.map((row) => {
+      const baseDocNo = previewDocNo(row.bill)
+      let docNo = ''
+      let sequence: number | null = null
+
+      if (row.ready) {
+        readySeq += 1
+        sequence = readySeq
+      }
+
+      if (row.bill.sml_doc_no) {
+        docNo = row.bill.sml_doc_no
+      } else if (row.ready && baseDocNo) {
+        const offset = previewOffsets.get(baseDocNo) ?? 0
+        docNo = incrementTrailingNumber(baseDocNo, offset)
+        previewOffsets.set(baseDocNo, offset + 1)
+      }
+
+      return {
+        ...row,
+        sequence,
+        orderNo: sourceOrderNo(row.bill),
+        docNo,
+      }
+    })
+  }, [candidates])
+  const firstDocNo = displayRows.find((row) => row.ready && row.docNo)?.docNo
+  const lastDocNo = [...displayRows].reverse().find((row) => row.ready && row.docNo)?.docNo
+  const docNoRange =
+    firstDocNo && lastDocNo && firstDocNo !== lastDocNo
+      ? `${firstDocNo} - ${lastDocNo}`
+      : firstDocNo || ''
   const vatRateNum = Number(vatRateStr)
   const canSend =
     readyCount > 0 &&
@@ -235,7 +279,7 @@ export function BulkSendDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!sending) onOpenChange(v) }}>
-      <DialogContent className="grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
+      <DialogContent className="grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>ส่ง SML ทั้งหมด: {title}</DialogTitle>
         </DialogHeader>
@@ -275,9 +319,6 @@ export function BulkSendDialog({
                 placeholder="เช่น 09:00"
                 className="font-mono"
               />
-              <p className="text-[10px] text-muted-foreground">
-                ใช้เวลาปัจจุบันตอนเปิด dialog
-              </p>
             </div>
 
             <div className="space-y-1">
@@ -306,9 +347,6 @@ export function BulkSendDialog({
                   }}
                 />
               )}
-              <p className="text-[10px] text-muted-foreground">
-                เลือกจากคลังใน SML หรือพิมพ์เองถ้า service ยังไม่พร้อม
-              </p>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">พื้นที่เก็บ <span className="text-destructive">*</span></Label>
@@ -322,9 +360,6 @@ export function BulkSendDialog({
               ) : (
                 <ShelfPicker warehouseCode={whCode} value={shelfCode} onChange={(shelf) => setShelfCode(shelf.code)} />
               )}
-              <p className="text-[10px] text-muted-foreground">
-                พื้นที่เก็บจะถูกกรองตามคลังที่เลือก
-              </p>
             </div>
 
             <div className="space-y-1">
@@ -361,7 +396,7 @@ export function BulkSendDialog({
               </div>
             </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
-              เลขเอกสารของแต่ละบิลแสดงในรายการด้านล่าง เป็นเลข preview ก่อนส่งจริง ถ้า SML แจ้งเลขซ้ำ ให้เปิดบิลใบนั้นแล้วแก้ doc_no ในหน้า detail
+              เลือกคลังจาก SML หรือพิมพ์รหัสเองได้ เลข doc_no ด้านล่างเป็นเลขคาดการณ์ตามลำดับส่งจริงและจะถูกจองเมื่อกดส่ง
             </div>
           </div>
 
@@ -377,21 +412,30 @@ export function BulkSendDialog({
             />
           </div>
 
-          <div className="rounded-md border border-border">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
+          <div className="overflow-hidden rounded-md border border-border">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs">
               <div>
                 <div className="font-medium text-foreground">ตรวจรายการพร้อมส่งและเลขเอกสาร</div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  doc_no เป็นเลขที่จะใช้ตอนส่ง ถ้ายังไม่แสดงให้เปิดบิลเพื่อตรวจเส้นทาง SML
+                  doc_no เป็นเลขคาดการณ์ตามลำดับส่ง ถ้า SML แจ้งเลขซ้ำให้แก้ที่หน้า detail ของบิลนั้น
                 </div>
               </div>
-              <div className="flex gap-2 text-muted-foreground">
+              <div className="flex flex-wrap justify-end gap-2 text-muted-foreground">
                 <span>พร้อมส่ง {readyCount}</span>
                 <span>ต้องข้าม {skippedCount}</span>
+                {docNoRange && <span className="font-mono text-foreground">{docNoRange}</span>}
                 {totalPending > candidates.length && <span>โหลด 100/{totalPending}</span>}
               </div>
             </div>
-            <div className="max-h-56 overflow-y-auto divide-y divide-border">
+            {!loading && candidates.length > 0 && (
+              <div className="hidden grid-cols-[54px_minmax(0,1fr)_180px_86px] gap-2 border-b border-border bg-background px-3 py-2 text-[11px] font-medium text-muted-foreground sm:grid">
+                <div>ลำดับ</div>
+                <div>เอกสาร</div>
+                <div>doc_no ที่จะได้</div>
+                <div className="text-right">สถานะ</div>
+              </div>
+            )}
+            <div className="max-h-64 overflow-y-auto divide-y divide-border">
               {loading ? (
                 <div className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -400,20 +444,29 @@ export function BulkSendDialog({
               ) : candidates.length === 0 ? (
                 <div className="px-3 py-4 text-sm text-muted-foreground">ไม่มีเอกสารสถานะพร้อมส่งในเมนูนี้</div>
               ) : (
-                candidates.map((row) => (
-                  <div key={row.bill.id} className="grid gap-3 px-3 py-2.5 text-xs sm:grid-cols-[minmax(0,1fr)_minmax(140px,auto)_auto]">
+                displayRows.map((row) => (
+                  <div key={row.bill.id} className="grid gap-2 px-3 py-2.5 text-xs sm:grid-cols-[54px_minmax(0,1fr)_180px_86px] sm:items-center">
+                    <div className="hidden sm:block">
+                      {row.sequence ? (
+                        <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-info/10 px-2 font-mono font-semibold text-info">
+                          {row.sequence}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </div>
                     <div className="min-w-0 space-y-0.5">
                       <div className="truncate font-medium text-foreground">
-                        Order <span className="font-mono">{sourceOrderNo(row.bill)}</span>
+                        {row.sequence ? <span className="mr-1 text-muted-foreground sm:hidden">#{row.sequence}</span> : null}
+                        Order <span className="font-mono">{row.orderNo}</span>
                       </div>
                       <div className="truncate text-muted-foreground">
                         {row.message ?? (row.ready ? 'ผ่านการตรวจความพร้อม' : row.issues.join(' · '))}
                       </div>
                     </div>
-                    <div className="min-w-0 rounded-md border border-border bg-muted/25 px-2 py-1 text-left sm:text-right">
-                      <div className="text-[10px] text-muted-foreground">doc_no</div>
-                      <div className="truncate font-mono font-semibold text-foreground">
-                        {previewDocNo(row.bill) || 'รอออกเลข'}
+                    <div className="min-w-0">
+                      <div className="inline-flex max-w-full items-center rounded-md border border-border bg-background px-2.5 py-1 font-mono font-semibold text-foreground">
+                        <span className="truncate">{row.ready ? (row.docNo || 'รอออกเลข') : 'ไม่ส่ง'}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 justify-end">
