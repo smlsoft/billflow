@@ -35,6 +35,21 @@ function errorMessage(err: unknown) {
   return maybe.response?.data?.error ?? maybe.message ?? 'ส่งไม่สำเร็จ'
 }
 
+function sourceOrderNo(bill: Bill) {
+  const raw = bill.raw_data ?? {}
+  const value =
+    bill.sml_order_id ||
+    raw.order_id ||
+    raw.shopee_order_id ||
+    raw.lazada_order_id ||
+    raw.tiktok_order_id
+  return typeof value === 'string' && value.trim() ? value.trim() : bill.id.slice(0, 8)
+}
+
+function previewDocNo(bill: Bill) {
+  return bill.sml_doc_no || bill.preview?.doc_no || ''
+}
+
 type Candidate = {
   bill: Bill
   ready: boolean
@@ -346,7 +361,7 @@ export function BulkSendDialog({
               </div>
             </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
-              เลขเอกสารจะ running แยกต่อใบตอนส่งจริง ถ้า SML แจ้งเลขซ้ำ ให้เปิดบิลใบนั้นแล้วแก้ doc_no ในหน้า detail
+              เลขเอกสารของแต่ละบิลแสดงในรายการด้านล่าง เป็นเลข preview ก่อนส่งจริง ถ้า SML แจ้งเลขซ้ำ ให้เปิดบิลใบนั้นแล้วแก้ doc_no ในหน้า detail
             </div>
           </div>
 
@@ -364,7 +379,12 @@ export function BulkSendDialog({
 
           <div className="rounded-md border border-border">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
-              <div className="font-medium text-foreground">ตรวจรายการพร้อมส่ง</div>
+              <div>
+                <div className="font-medium text-foreground">ตรวจรายการพร้อมส่งและเลขเอกสาร</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  doc_no เป็นเลขที่จะใช้ตอนส่ง ถ้ายังไม่แสดงให้เปิดบิลเพื่อตรวจเส้นทาง SML
+                </div>
+              </div>
               <div className="flex gap-2 text-muted-foreground">
                 <span>พร้อมส่ง {readyCount}</span>
                 <span>ต้องข้าม {skippedCount}</span>
@@ -381,11 +401,19 @@ export function BulkSendDialog({
                 <div className="px-3 py-4 text-sm text-muted-foreground">ไม่มีเอกสารสถานะพร้อมส่งในเมนูนี้</div>
               ) : (
                 candidates.map((row) => (
-                  <div key={row.bill.id} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[1fr_auto]">
-                    <div className="min-w-0">
-                      <div className="font-mono text-foreground">{row.bill.sml_doc_no || row.bill.id.slice(0, 8)}</div>
+                  <div key={row.bill.id} className="grid gap-3 px-3 py-2.5 text-xs sm:grid-cols-[minmax(0,1fr)_minmax(140px,auto)_auto]">
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="truncate font-medium text-foreground">
+                        Order <span className="font-mono">{sourceOrderNo(row.bill)}</span>
+                      </div>
                       <div className="truncate text-muted-foreground">
                         {row.message ?? (row.ready ? 'ผ่านการตรวจความพร้อม' : row.issues.join(' · '))}
+                      </div>
+                    </div>
+                    <div className="min-w-0 rounded-md border border-border bg-muted/25 px-2 py-1 text-left sm:text-right">
+                      <div className="text-[10px] text-muted-foreground">doc_no</div>
+                      <div className="truncate font-mono font-semibold text-foreground">
+                        {previewDocNo(row.bill) || 'รอออกเลข'}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 justify-end">
@@ -414,7 +442,7 @@ export function BulkSendDialog({
 
         <DialogFooter className="items-center gap-2 sm:justify-between">
           <div className="text-xs text-muted-foreground">
-            {sending ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'doc_no จะ running แยกต่อใบตอนส่งจริง'}
+            {sending ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
           </div>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>

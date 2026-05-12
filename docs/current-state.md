@@ -116,8 +116,9 @@
 - Bulk Send dialog UX update:
   - Dialog `ส่ง SML ทั้งหมด` ในหน้า `/bills`, `/sales-orders`, และ `/sale-invoices` ปรับ layout ให้สอดคล้องกับ dialog ส่ง SML ใน Bill Detail
   - ใช้กล่องปลายทาง SML, party picker, กล่องตั้งค่าเอกสาร, helper text, advanced Branch/Sale code, หมายเหตุ, และ warning field ที่ขาดในรูปแบบเดียวกัน
+  - แสดง `doc_no` preview ต่อบิลในรายการพร้อมส่ง พร้อมเลข order ต้นทาง เพื่อให้ user ตรวจเลขเอกสารก่อนกดส่ง SML ทั้งหมด
   - ส่วนตรวจรายการพร้อมส่งยังคงอยู่เฉพาะ bulk dialog เพราะต้องแสดงจำนวนรายการที่พร้อมส่ง/ต้องข้าม/ผลส่งต่อบิล
-  - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100`; verified frontend routes main/Henna `/sale-invoices` และ Thaisunsport `/bills`
+  - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100`; verified frontend routes main/Henna `/sale-invoices` และ Thaisunsport `/bills`; Thaisunsport flags ยังเป็น Phase 1
 - Shopee product image update:
   - Email extractor ตัด tracking/open pixel URL ของ Shopee ออก และจัดลำดับให้ product CDN เช่น `cf.shopee.co.th/file/th-*` มาก่อน logo/app/social assets
   - เพิ่ม backend test สำหรับเคสที่อีเมลมี tracking pixel ก่อน product image
