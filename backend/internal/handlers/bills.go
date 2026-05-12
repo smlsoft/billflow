@@ -1343,16 +1343,17 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 		return
 	}
 
-	// F1 learning loop: if the user supplied a non-empty item_code that's
-	// different from what we previously had, save the (raw_name → item_code)
-	// pair as an ai_learned mapping. Future bills with similar raw_name will
-	// auto-resolve.
+	// F1 learning loop: if the user supplies a non-empty item_code, treat the
+	// save as human confirmation when the code changed OR when the row was still
+	// an unconfirmed low-confidence match. This covers marketplace imports where
+	// AI prefilled the same code but still left the bill in needs_review.
 	if req.ItemCode != nil && *req.ItemCode != "" && existingItem.RawName != "" {
 		prev := ""
 		if existingItem.ItemCode != nil {
 			prev = *existingItem.ItemCode
 		}
-		if prev != *req.ItemCode {
+		wasUnconfirmed := !existingItem.Mapped || existingItem.MappingID == nil || *existingItem.MappingID == ""
+		if prev != *req.ItemCode || wasUnconfirmed {
 			unit := ""
 			if req.UnitCode != nil {
 				unit = *req.UnitCode
@@ -1362,20 +1363,40 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 					zap.String("raw_name", existingItem.RawName),
 					zap.String("item_code", *req.ItemCode),
 					zap.Error(err))
-			} else if h.auditRepo != nil {
-				_ = h.auditRepo.Log(models.AuditEntry{
-					Action:   "mapping_feedback",
-					TargetID: &itemID,
-					Source:   bill.Source,
-					Level:    "info",
-					Detail: map[string]interface{}{
-						"raw_name":  existingItem.RawName,
-						"prev_code": prev,
-						"new_code":  *req.ItemCode,
-						"unit_code": unit,
-						"bill_id":   billID,
-					},
-				})
+			} else {
+				appliedItems, readyBills, applyErr := h.billRepo.ApplyVerifiedMappingToOpenItems(
+					bill.Source,
+					bill.BillType,
+					existingItem.RawName,
+					*req.ItemCode,
+					unit,
+				)
+				if applyErr != nil {
+					h.log.Warn("UpdateItem: apply learned mapping to open bills failed",
+						zap.String("source", bill.Source),
+						zap.String("bill_type", bill.BillType),
+						zap.String("raw_name", existingItem.RawName),
+						zap.String("item_code", *req.ItemCode),
+						zap.Error(applyErr))
+				}
+				if h.auditRepo != nil {
+					_ = h.auditRepo.Log(models.AuditEntry{
+						Action:   "mapping_feedback",
+						TargetID: &itemID,
+						Source:   bill.Source,
+						Level:    "info",
+						Detail: map[string]interface{}{
+							"raw_name":           existingItem.RawName,
+							"prev_code":          prev,
+							"new_code":           *req.ItemCode,
+							"unit_code":          unit,
+							"bill_id":            billID,
+							"confirmed_existing": prev == *req.ItemCode,
+							"applied_items":      appliedItems,
+							"ready_bills":        readyBills,
+						},
+					})
+				}
 			}
 		}
 	}

@@ -108,6 +108,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12: Verified Mapping Loop backend fix deployed to all three instances.
+- Scope: saving a bill item now learns mapping even when the AI-prefilled code did not change, then applies the verified mapping to open bills with the same source/bill_type/raw_name and promotes fully mapped bills from `needs_review` to `pending`.
+- Change type: Shared mapping workflow bug for marketplace/import/email bill detail review.
+- Local verification: `GOCACHE=... go test ./...` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`.
+- Henna data follow-up: applied existing Shopee saleinvoice mapping to 3 open item rows and promoted 3 bills to `pending`; remaining `needs_review` bills are 3 distinct raw names/options with no confirmed mapping yet.
 - 2026-05-12: Shared Bill Detail item mapping UI fix deployed to all three instances.
 - Scope: when editing a bill item and selecting a new SML product, the edit row and saved item table now show the newly selected product name/score immediately without requiring a page refresh.
 - Change type: Shared Bill Detail UX bug, applies to purchase, saleorder, and saleinvoice item rows.

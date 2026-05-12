@@ -321,6 +321,73 @@ func (r *BillRepo) UpdateBillItemFields(itemID string, itemCode, unitCode *strin
 	return err
 }
 
+// ApplyVerifiedMappingToOpenItems applies a human-confirmed raw_name mapping to
+// other open bills from the same source/bill_type. It also promotes any
+// needs_review bill to pending once all of its rows are mapped.
+func (r *BillRepo) ApplyVerifiedMappingToOpenItems(source, billType, rawName, itemCode, unitCode string) (int, int, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	itemResult, err := tx.Exec(
+		`UPDATE bill_items bi
+		 SET item_code = $1,
+		     unit_code = $2,
+		     mapped = TRUE,
+		     mapping_id = (SELECT id FROM mappings WHERE raw_name = $3 LIMIT 1)
+		 FROM bills b
+		 WHERE bi.bill_id = b.id
+		   AND b.source = $4
+		   AND b.bill_type = $5
+		   AND b.status IN ('pending', 'needs_review')
+		   AND bi.raw_name = $3
+		   AND (
+		     COALESCE(bi.item_code, '') IS DISTINCT FROM $1 OR
+		     COALESCE(bi.unit_code, '') IS DISTINCT FROM $2 OR
+		     bi.mapped IS DISTINCT FROM TRUE OR
+		     bi.mapping_id IS DISTINCT FROM (SELECT id FROM mappings WHERE raw_name = $3 LIMIT 1)
+		   )`,
+		itemCode, unitCode, rawName, source, billType,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+	applied64, _ := itemResult.RowsAffected()
+
+	readyResult, err := tx.Exec(
+		`UPDATE bills b
+		 SET status = 'pending',
+		     error_msg = NULL
+		 WHERE b.source = $1
+		   AND b.bill_type = $2
+		   AND b.status = 'needs_review'
+		   AND EXISTS (
+		     SELECT 1
+		     FROM bill_items bi
+		     WHERE bi.bill_id = b.id
+		       AND bi.raw_name = $3
+		   )
+		   AND NOT EXISTS (
+		     SELECT 1
+		     FROM bill_items bi
+		     WHERE bi.bill_id = b.id
+		       AND (COALESCE(bi.item_code, '') = '' OR bi.mapped IS DISTINCT FROM TRUE)
+		   )`,
+		source, billType, rawName,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+	ready64, _ := readyResult.RowsAffected()
+
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return int(applied64), int(ready64), nil
+}
+
 // DashboardStats returns aggregated counts for dashboard
 func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 	stats := map[string]interface{}{}

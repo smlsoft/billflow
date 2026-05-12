@@ -107,6 +107,12 @@
   - หลังบันทึก ตารางรายการสินค้าจะอัปเดตชื่อสินค้า SML จากตัวเลือกใหม่ทันที ไม่ต้อง refresh หน้า
   - ใช้ร่วมกันกับ purchase, saleorder, และ saleinvoice เพราะเป็น component รายการสินค้าเดียวกัน
   - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100` และ frontend `/bills` HTTP 200 ทั้ง `3010`, `3030`, `3020`
+- Verified Mapping Loop update:
+  - เมื่อ user กดบันทึกรายการสินค้า ระบบจะถือเป็นการยืนยัน mapping แม้ `item_code` เป็น code เดิมที่ AI เติมไว้แล้ว แต่แถวนั้นยัง `mapped=false` หรือยังไม่มี `mapping_id`
+  - หลังเรียน mapping แล้ว backend จะ apply mapping ไปยังบิลค้าง source/bill_type เดียวกันที่มี `raw_name` ตรงกัน และเลื่อนบิลจาก `needs_review` เป็น `pending` เมื่อทุก item mapped แล้ว
+  - แก้ปัญหา Shopee/Lazada/TikTok ที่ชื่อ marketplace ไม่ตรงกับ SML และไฟล์ไม่มี SKU: user ควรจับคู่ครั้งเดียวต่อชื่อสินค้า/ตัวเลือก ไม่ต้องไล่เลือกซ้ำทุกบิล
+  - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100`
+  - Henna production data follow-up: applied existing confirmed Shopee mapping to 3 open item rows; promoted 3 saleinvoice bills to `pending`; remaining `needs_review` = 3 raw names/options that still need their first user confirmation
 - Shopee product image update:
   - Email extractor ตัด tracking/open pixel URL ของ Shopee ออก และจัดลำดับให้ product CDN เช่น `cf.shopee.co.th/file/th-*` มาก่อน logo/app/social assets
   - เพิ่ม backend test สำหรับเคสที่อีเมลมี tracking pixel ก่อน product image
