@@ -147,6 +147,13 @@ function guidanceFor(log: AuditLog): LogGuidance | null {
   }
 
   if (log.action === 'sml_failed') {
+    if (errorText.includes('timeout') || errorText.includes('deadline') || errorText.includes('eof') || errorText.includes('connection refused')) {
+      return {
+        title: 'ส่งให้ทีมระบบ/SML API ตรวจ: เชื่อมต่อหรือรอคำตอบไม่สำเร็จ',
+        description: 'คัดลอก error พร้อม Trace และเวลาที่เกิดเหตุให้ทีมตรวจ network, service SML, หรือ timeout ของ API ก่อน retry ซ้ำ',
+        tone: 'danger',
+      }
+    }
     if (errorText.includes('duplicate key') || errorText.includes('already exists')) {
       return {
         title: 'ผู้ใช้แก้ได้: เลขเอกสาร SML ซ้ำ',
@@ -154,10 +161,31 @@ function guidanceFor(log: AuditLog): LogGuidance | null {
         tone: 'warning',
       }
     }
+    if (errorText.includes('doc_format') || errorText.includes('format_code') || errorText.includes('doc format')) {
+      return {
+        title: 'ผู้ดูแลตั้งค่าได้: ตรวจรูปแบบเลขเอกสาร',
+        description: 'ไปที่เส้นทางเอกสาร SML แล้วตรวจ doc format / prefix / running format ของปลายทางนี้ ก่อนส่งใหม่',
+        tone: 'warning',
+      }
+    }
+    if (errorText.includes('customer') || errorText.includes('cust_code') || errorText.includes('supplier') || errorText.includes('party')) {
+      return {
+        title: 'ผู้ใช้แก้ได้: ตรวจลูกค้าหรือผู้ขาย',
+        description: 'เปิดบิลนี้แล้วเลือกลูกค้า/ผู้ขายจาก SML ให้ถูกต้อง ถ้าไม่พบให้ sync รายชื่อคู่ค้าหรือตรวจรหัสใน SML',
+        tone: 'warning',
+      }
+    }
     if (errorText.includes('warehouse') || errorText.includes('wh_code') || errorText.includes('shelf')) {
       return {
         title: 'ผู้ใช้แก้ได้: ตรวจคลังหรือพื้นที่เก็บ',
         description: 'เปิดบิลนี้แล้วกรอกรหัสคลังและพื้นที่เก็บให้ตรงกับ SML ก่อนส่งใหม่',
+        tone: 'warning',
+      }
+    }
+    if (errorText.includes('vat') || errorText.includes('tax')) {
+      return {
+        title: 'ผู้ใช้แก้ได้: ตรวจประเภทภาษีและอัตราภาษี',
+        description: 'เปิดบิลนี้แล้วเลือก VAT type และ VAT rate ให้ตรงกับเอกสาร/นโยบายร้านก่อนส่งใหม่',
         tone: 'warning',
       }
     }
@@ -176,6 +204,20 @@ function guidanceFor(log: AuditLog): LogGuidance | null {
   }
 
   if (log.level === 'error') {
+    if (errorText.includes('authenticationfailed') || errorText.includes('invalid credentials') || errorText.includes('app password')) {
+      return {
+        title: 'ผู้ดูแลแก้ได้: รหัสผ่านอีเมลหรือ App Password ไม่ถูกต้อง',
+        description: 'ไปที่กล่องอีเมลรับบิล ตรวจ 2-Step Verification, Gmail App Password 16 ตัว และสถานะ IMAP ก่อนทดสอบเชื่อมต่อใหม่',
+        tone: 'warning',
+      }
+    }
+    if (errorText.includes('openrouter') || errorText.includes('ai') || errorText.includes('quota') || errorText.includes('credit')) {
+      return {
+        title: 'ผู้ดูแลแก้ได้: ตรวจเครดิตหรือการเชื่อมต่อ AI',
+        description: 'ไปที่การเชื่อมต่อระบบหรือการใช้งาน AI แล้วตรวจ API key, model, quota/credit และ retry งานที่อ่านไม่สำเร็จ',
+        tone: 'warning',
+      }
+    }
     return {
       title: 'ต้องให้ผู้ดูแลระบบตรวจ',
       description: 'เหตุการณ์นี้เป็น error ของระบบ ให้แนบ Trace หรือข้อมูลดิบในรายการนี้เวลาส่งต่อทีมดูแล',

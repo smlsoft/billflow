@@ -108,6 +108,13 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-12 10:35 +07: Action Center and expanded error playbook deployed to all three instances.
+- Scope: Dashboard now has `Action Center` that ranks next-best actions across setup, email errors, SML failures, mapping review, and pending SML sends.
+- Scope: `/logs` guidance now classifies more failure causes: SML timeout/network, doc format, customer/supplier, VAT, warehouse/shelf, item/unit, Gmail App Password, and AI quota/credit.
+- Change type: Shared frontend UX/workflow clarity.
+- Local verification: `npm run build` passed; browser check confirmed Dashboard `Action Center` and Logs page render.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend Dashboard ok on `3010`, `3030`, `3020`, and main `/logs` ok.
+- Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12 10:12 +07: Bulk send summary/results and mapping hotspot dashboard deployed to all three instances.
 - Scope: bulk send dialog now shows a pre-send summary, clearer post-send success/fail/skip result panel, copyable SML error summary, and direct link to the first failed bill.
 - Scope: `/mappings` now shows top raw product names still blocking `needs_review` bills, with counts and a link to the first affected bill for faster mapping cleanup.
