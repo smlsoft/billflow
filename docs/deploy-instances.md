@@ -126,9 +126,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
-- 2026-05-13 18:00 +07: Local cleanup completed after checkpoint `97d73bf`; deploy pending.
+- 2026-05-13 18:20 +07: Channel Defaults legacy cleanup deployed to `billflow` and `billflow-henna`; `billflow-thaisunsport` skipped intentionally.
+- Commit deployed: `92f32a4 Remove legacy channel defaults code`; rollback checkpoint before cleanup: `97d73bf`.
 - Scope: remove unused frontend files/symbols, remove legacy channel-default delete/quick-setup endpoints, keep per-bill SML party picker and DB compatibility columns.
 - Local verification: strict TypeScript unused-symbol check passed, frontend production build passed, backend `go test ./...` passed, and `git diff --check` passed.
+- Deploy verification: main backend `8090` and Henna backend `8110` health ok; `/settings/channels` HTTP 200 on `3010` and `3030`; both serve frontend asset `index-B84xDgtQ.js`; server source guard found no active `channel: 'email'` slot in deployed Channel Defaults source and deleted frontend orphan files are absent.
+- Skipped verification: Thaisunsport was not rebuilt/restarted; backend `8100` health ok, `/settings/channels` HTTP 200 on `3020`, asset remains `index-CpcZFriL.js`.
 - 2026-05-13 17:45 +07: Removed remaining legacy `/settings/channels` UI on main + Henna.
 - Scope: no delete action in the channel settings table; dialog uses tested SML destination dropdown only and no longer exposes free-form API URL/path; `doc_format_code` is derived from the selected destination.
 - Deploy targets: frontend rebuild/restart for `billflow` and `billflow-henna` only; Thaisunsport skipped.

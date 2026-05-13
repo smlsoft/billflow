@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-13 18:00 +07
+> Updated: 2026-05-13 18:20 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -8,7 +8,15 @@
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
-- Latest all-instance deploy verified 2026-05-13 17:25 +07:
+- Latest main/Henna cleanup deploy verified 2026-05-13 18:20 +07:
+  - Commit deployed: `92f32a4 Remove legacy channel defaults code` after checkpoint `97d73bf`.
+  - Deploy targets: `billflow`, `billflow-henna`; skipped `billflow-thaisunsport` intentionally because it remains Phase 1 purchase-only.
+  - BillFlow main: backend `8090` health ok, frontend `3010/settings/channels` HTTP 200, asset `index-B84xDgtQ.js`.
+  - Henna: backend `8110` health ok, frontend `3030/settings/channels` HTTP 200, asset `index-B84xDgtQ.js`.
+  - Thaisunsport was not rebuilt/restarted by this cleanup deploy; backend `8100` health ok, frontend `3020/settings/channels` HTTP 200, asset remains `index-CpcZFriL.js`.
+  - Server source guard: no active `channel: 'email'` slot in deployed `/settings/channels` source for main/Henna; deleted frontend orphan files are absent on both folders.
+  - Cleanup removed legacy channel-default delete/quick-setup runtime endpoints and unused frontend files; audit labels for historical quick-setup/delete logs remain readable.
+- Previous all-instance deploy verified 2026-05-13 17:25 +07:
   - BillFlow main: backend `8090` health ok, frontend `3010` HTTP 200, `.env` flags `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`.
   - Henna: backend `8110` health ok, frontend `3030` HTTP 200, `.env` flags `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`.
   - Thaisunsport: backend `8100` health ok, frontend `3020` HTTP 200, `.env` flags `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel disabled, `VITE_ENABLE_CHAT=false`.
@@ -26,9 +34,10 @@
   - Frontend `3030`, backend `8110`, postgres `5458`
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
-  - Latest deploy verified 2026-05-13 17:25 +07:
+  - Latest deploy verified 2026-05-13 18:20 +07:
     - Henna frontend rebuilt as Phase 1+ (`VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled), matching BillFlow main for purchase + sales work.
     - LINE/chat features are explicitly disabled with `VITE_ENABLE_CHAT=false`.
+    - Cleanup deploy asset `index-B84xDgtQ.js`; `/settings/channels` no longer exposes generic Email rows, customer/supplier config, delete action, free-form endpoint, or legacy quick-setup runtime.
     - Backend health `8110` = `{"database":"ok","env":"production","status":"ok"}`.
     - `shopee/sale` SML defaults updated to current SML cache: `wh_code=AB-2`, `shelf_code=002`, `vat_type=0`, `vat_rate=7`, `doc_time=09:00`.
     - Auto saleinvoice send retest succeeded without passing WH/Shelf/VAT/time in request; SML doc `BF-INV26050008`.
@@ -273,8 +282,9 @@
 
 ### Cleanup — Channel Defaults Legacy + Unused Frontend Code
 
-- Time verified: 2026-05-13 18:00 +07.
-- Change type: local cleanup after checkpoint commit `97d73bf`; deploy pending.
+- Time verified: 2026-05-13 18:20 +07.
+- Change type: cleanup after checkpoint commit `97d73bf`; deployed commit `92f32a4`.
+- Deploy targets: `billflow`, `billflow-henna`; skipped `billflow-thaisunsport`.
 - Scope:
   - Removed unused frontend files with no importers: `AnomalyBadge`, `StatsCard`, `ui/sheet`, and old `AddItemForm`.
   - Removed unused props/imports caught by strict one-off TypeScript checks.
@@ -287,6 +297,9 @@
   - `go test ./...` passed in `backend`.
   - `git diff --check` passed.
   - Source guard found no active references to legacy Channel Defaults quick-setup/delete helpers or removed frontend imports; the only remaining `free-form URL/path` text is a historical migration comment.
+  - Deploy verification: main/Henna backend health ok on `8090`/`8110`; `/settings/channels` HTTP 200 on `3010`/`3030`; both serve asset `index-B84xDgtQ.js`.
+  - Thaisunsport was not rebuilt/restarted by this cleanup; backend `8100` health ok, `/settings/channels` HTTP 200 on `3020`, asset remains `index-CpcZFriL.js`.
+  - Server cleanup: deleted frontend orphan files are absent on main/Henna; stray `/home/bosscatdog/frontend` and `/home/bosscatdog/backend` folders from a failed quote attempt were removed.
 
 ### All Instances — Channel Defaults Visibility Fix
 
