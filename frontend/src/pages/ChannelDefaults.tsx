@@ -26,7 +26,6 @@ import { EditDialog } from './ChannelDefaults/EditDialog'
 import {
   CHANNEL_LABELS,
   destinationFor,
-  endpointFor,
   type ChannelDefaultRow,
   type ChannelKey,
 } from './ChannelDefaults/labels'
@@ -86,7 +85,6 @@ function workMenuFor(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type' | 'end
 
 function EndpointCell({ row }: { row: ChannelDefaultRow }) {
   const [open, setOpen] = useState(false)
-  const ep = endpointFor(row.channel as ChannelKey, row.bill_type, row.endpoint ?? '')
   const destination = destinationFor(
     row.channel as ChannelKey,
     row.bill_type,
@@ -98,7 +96,7 @@ function EndpointCell({ row }: { row: ChannelDefaultRow }) {
     <div className="min-w-[220px] space-y-1">
       <div className="flex items-center gap-1.5">
         <span className="text-xs font-medium text-foreground">
-          {destination?.label ?? ep.label}
+          {destination?.label ?? 'ยังไม่ตั้งปลายทาง'}
         </span>
       </div>
       <button
@@ -112,13 +110,13 @@ function EndpointCell({ row }: { row: ChannelDefaultRow }) {
         <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
         {open ? 'ซ่อนรายละเอียดขั้นสูง' : 'รายละเอียดขั้นสูง'}
       </button>
-      {open && (
+      {open && destination && (
         <div className="rounded-md border border-border/70 bg-muted/35 px-2 py-1.5">
           <div className="text-[10px] font-medium uppercase text-muted-foreground">
             API path
           </div>
           <code className="mt-0.5 block break-all text-[10px] leading-4 text-muted-foreground">
-            {ep.apiPath}
+            {destination.apiPath}
           </code>
         </div>
       )}
@@ -129,6 +127,12 @@ function EndpointCell({ row }: { row: ChannelDefaultRow }) {
 function HelpBanner() {
   const [open, setOpen] = useState(true)
   const phase1 = PHASE < 2
+  const enabledSourceLabels = [
+    ENABLE_CHAT ? 'LINE' : '',
+    'Shopee',
+    ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? 'Lazada' : '',
+    ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? 'TikTok' : '',
+  ].filter(Boolean).join(' / ')
   return (
     <Card className="border-info/30 bg-info/5">
       <Collapsible open={open} onOpenChange={setOpen}>
@@ -153,7 +157,7 @@ function HelpBanner() {
               </p>
             ) : (
               <p className="text-muted-foreground">
-                บิลทุกใบที่ระบบรับเข้ามา (LINE / Email / Shopee / Lazada / TikTok) สุดท้ายต้องส่งเข้า{' '}
+                บิลทุกใบที่ระบบรับเข้ามา ({enabledSourceLabels}) สุดท้ายต้องส่งเข้า{' '}
                 <b>SML ERP</b> เพื่อบันทึก. หน้านี้กำหนดว่า <b>"แต่ละช่องทาง"</b> จะ:
               </p>
             )}
@@ -262,8 +266,7 @@ export default function ChannelDefaults() {
   }, [rows])
 
   const isRouteUnset = (r: ChannelDefaultRow) => {
-    const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
-    return !r.endpoint || (ep.takesDocFormat && !r.doc_format_code) || !r.doc_prefix || !r.doc_running_format
+    return !r.endpoint || !r.doc_format_code || !r.doc_prefix || !r.doc_running_format
   }
 
   return (
@@ -334,10 +337,6 @@ export default function ChannelDefaults() {
             key: 'doc_format',
             header: 'รหัสเอกสาร',
             cell: (r) => {
-              const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
-              if (!ep.takesDocFormat) {
-                return <span className="text-xs text-muted-foreground/60">—</span>
-              }
               return r.doc_format_code ? (
                 <span className="font-mono text-xs font-medium text-foreground">
                   {r.doc_format_code}

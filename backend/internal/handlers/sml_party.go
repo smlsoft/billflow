@@ -13,7 +13,7 @@ import (
 )
 
 // SMLPartyHandler proxies the SML 248 party master through an in-memory cache.
-// Admin-only — used by /settings/channels picker and any future supplier UI.
+// Admin/staff SML party lookup for the per-bill SML send dialogs.
 type SMLPartyHandler struct {
 	cache  *sml.PartyCache
 	logger *zap.Logger

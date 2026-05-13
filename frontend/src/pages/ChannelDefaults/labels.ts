@@ -68,66 +68,12 @@ export function docNoPatternWarning(prefix: string, format: string): string {
 }
 
 export type EndpointKind =
-  | ''  // auto by (channel, bill_type)
   | 'saleorder'
   | 'saleinvoice'
   | 'purchaseorder'
-  | 'sale_reserve'
-
-export const ENDPOINT_OPTIONS: Array<{
-  value: EndpointKind
-  label: string
-  apiPath: string
-  takesDocFormat: boolean
-  docFormatHint: string
-  description: string
-}> = [
-  {
-    value: 'saleorder',
-    label: 'ขาย -> ใบสั่งขาย',
-    apiPath: '/SMLJavaRESTService/v3/api/saleorder',
-    takesDocFormat: true,
-    docFormatHint: 'SR',
-    description: 'SML 248 — สำหรับบิลขาย Marketplace Excel → เก็บที่เมนู "ใบสั่งขาย" ใน SML',
-  },
-  {
-    value: 'saleinvoice',
-    label: 'ขาย -> ขายสินค้าและบริการ',
-    apiPath: '/SMLJavaRESTService/saleinvoice/v4',
-    takesDocFormat: true,
-    docFormatHint: 'SI',
-    description: 'SML 248 — สำหรับบิลขาย Marketplace Excel → เก็บที่เมนู "ขายสินค้าและบริการ" ใน SML',
-  },
-  {
-    value: 'purchaseorder',
-    label: 'ซื้อ -> ใบสั่งซื้อ',
-    apiPath: '/SMLJavaRESTService/v3/api/purchaseorder',
-    takesDocFormat: true,
-    docFormatHint: 'PO',
-    description: 'SML 248 — สำหรับบิลซื้อ (Shopee shipped/pay-now) → เมนู "ใบสั่งซื้อ"',
-  },
-  {
-    value: 'sale_reserve',
-    label: 'ใบจอง (sale_reserve)',
-    apiPath: '/api/sale_reserve',
-    takesDocFormat: false,
-    docFormatHint: '',
-    description: 'SML 213 — JSON-RPC สำหรับ LINE OA / Email → เมนู "ใบจอง" ใน SML',
-  },
-]
-
-// EndpointInfo describes which SML API a (channel, bill_type) bill posts to.
-// Used as read-only metadata in the UI so admins can see the routing without
-// digging into code.
-export interface EndpointInfo {
-  label: string         // ใบสั่งขาย / ซื้อ -> ใบสั่งซื้อ / ใบจอง
-  apiPath: string       // /SMLJavaRESTService/v3/api/saleorder
-  takesDocFormat: boolean
-  docFormatHint: string // suggested values, e.g. "SR / RU"
-}
 
 export interface SmlDestinationOption {
-  value: Exclude<EndpointKind, ''>
+  value: EndpointKind
   billType: 'sale' | 'purchase'
   label: string
   apiPath: string
@@ -187,7 +133,7 @@ export function destinationFor(
   endpoint = '',
   docFormatCode = '',
 ): SmlDestinationOption | undefined {
-  const kind = resolveEndpointKind(endpoint, channel, billType)
+  const kind = destinationKindFor(endpoint, channel, billType)
   return SML_DESTINATION_OPTIONS.find((option) => {
     if (option.value !== kind) return false
     if (!docFormatCode) return true
@@ -203,47 +149,22 @@ export function destinationOptionsFor(
   ))
 }
 
-// resolveEndpointKind mirrors resolveEndpoint() in handlers/bills.go. The UI
-// now uses tested dropdown destinations, but this still resolves existing rows
-// and backend-compatible endpoint values by keyword.
-export function resolveEndpointKind(
+// destinationKindFor resolves existing backend rows to one of the tested
+// dropdown destinations. Empty / unknown endpoints fall back to the default
+// destination for the channel and bill type.
+export function destinationKindFor(
   override: string,
   channel: ChannelKey,
   billType: 'sale' | 'purchase',
-): Exclude<EndpointKind, ''> {
+): EndpointKind {
   const lower = (override || '').toLowerCase()
   if (lower.includes('purchaseorder')) return 'purchaseorder'
   if (lower.includes('saleinvoice')) return 'saleinvoice'
   if (lower.includes('saleorder')) return 'saleorder'
-  if (lower.includes('sale_reserve')) return 'sale_reserve'
   // No keyword match → default by channel+bill_type
   if (channel === 'shopee_shipped' || billType === 'purchase') return 'purchaseorder'
   if (channel === 'shopee' || channel === 'shopee_email' || channel === 'lazada' || channel === 'tiktok') return 'saleorder'
-  return 'sale_reserve'
-}
-
-// endpointFor returns the resolved SML routing metadata for display.
-export function endpointFor(
-  channel: ChannelKey,
-  billType: 'sale' | 'purchase',
-  override = '',
-): EndpointInfo {
-  const kind = resolveEndpointKind(override, channel, billType)
-  const opt = ENDPOINT_OPTIONS.find((o) => o.value === kind)
-  if (!opt) {
-    return {
-      label: 'sale_reserve',
-      apiPath: '/api/sale_reserve',
-      takesDocFormat: false,
-      docFormatHint: '',
-    }
-  }
-  return {
-    label: opt.label,
-    apiPath: opt.apiPath,
-    takesDocFormat: opt.takesDocFormat,
-    docFormatHint: opt.docFormatHint,
-  }
+  return 'saleorder'
 }
 
 export const CHANNEL_LABELS: Record<ChannelKey, string> = {

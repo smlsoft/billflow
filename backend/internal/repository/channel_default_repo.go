@@ -130,14 +130,6 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 	return nil
 }
 
-func (r *ChannelDefaultRepo) Delete(channel, billType string) error {
-	_, err := r.db.Exec(
-		`DELETE FROM channel_defaults WHERE channel=$1 AND bill_type=$2`,
-		channel, billType,
-	)
-	return err
-}
-
 // IsEmpty reports whether the table has zero rows. Used by main.go to decide
 // whether to run seedChannelDefaultsFromEnv on first boot.
 func (r *ChannelDefaultRepo) IsEmpty() (bool, error) {

@@ -8,28 +8,24 @@ import (
 
 	"billflow/internal/models"
 	"billflow/internal/repository"
-	"billflow/internal/services/sml"
 )
 
-// ChannelDefaultsHandler exposes CRUD + quick-setup for channel_defaults. Admin only.
+// ChannelDefaultsHandler exposes route/document defaults for channel_defaults.
 type ChannelDefaultsHandler struct {
-	repo       *repository.ChannelDefaultRepo
-	auditRepo  *repository.AuditLogRepo
-	partyCache *sml.PartyCache
-	logger     *zap.Logger
+	repo      *repository.ChannelDefaultRepo
+	auditRepo *repository.AuditLogRepo
+	logger    *zap.Logger
 }
 
 func NewChannelDefaultsHandler(
 	repo *repository.ChannelDefaultRepo,
 	auditRepo *repository.AuditLogRepo,
-	partyCache *sml.PartyCache,
 	logger *zap.Logger,
 ) *ChannelDefaultsHandler {
 	return &ChannelDefaultsHandler{
-		repo:       repo,
-		auditRepo:  auditRepo,
-		partyCache: partyCache,
-		logger:     logger,
+		repo:      repo,
+		auditRepo: auditRepo,
+		logger:    logger,
 	}
 }
 
@@ -85,127 +81,14 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 	}
 
 	h.audit(c, "channel_default_updated", map[string]interface{}{
-		"channel":    in.Channel,
-		"bill_type":  in.BillType,
-		"party_code": in.PartyCode,
-		"party_name": in.PartyName,
+		"channel":            in.Channel,
+		"bill_type":          in.BillType,
+		"endpoint":           in.Endpoint,
+		"doc_format_code":    in.DocFormatCode,
+		"doc_prefix":         in.DocPrefix,
+		"doc_running_format": in.DocRunningFormat,
 	})
 	c.JSON(http.StatusOK, d)
-}
-
-// DELETE /api/settings/channel-defaults/:channel/:bill_type
-func (h *ChannelDefaultsHandler) Delete(c *gin.Context) {
-	channel := c.Param("channel")
-	billType := c.Param("bill_type")
-	if err := h.repo.Delete(channel, billType); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	h.audit(c, "channel_default_deleted", map[string]interface{}{
-		"channel":   channel,
-		"bill_type": billType,
-	})
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-// quickSetupMapping pairs each channel/bill_type with the placeholder name to
-// look up in the customer master ("ลูกค้า จาก AI/Line/Email/Shopee" rows that
-// production SML 248 already has) plus the SML doc_format_code that channel
-// posts with.
-type quickSetupMapping struct {
-	Channel          string
-	BillType         string
-	PlaceholderName  string
-	DocFormatCode    string // SML doc_format_code (empty = endpoint doesn't take one)
-	DocPrefix        string // BillFlow doc_no prefix
-	DocRunningFormat string // running counter format (YYMM####, etc.)
-}
-
-var quickSetupMappings = []quickSetupMapping{
-	// SML 213 sale_reserve auto-generates its own doc_no — prefix/format unused
-	{"line", "sale", "ลูกค้า จาก Line", "", "", ""},
-	{"email", "sale", "ลูกค้า จาก Email", "", "", ""},
-	// SML 248 saleorder — BF-SO + YYMM + 4-digit running counter (resets monthly)
-	{"shopee", "sale", "ลูกค้า จาก Shopee", "SR", "BF-SO", "YYMM####"},
-	{"shopee_email", "sale", "ลูกค้า จาก Shopee", "SR", "BF-SO", "YYMM####"},
-	{"lazada", "sale", "ลูกค้า จาก Lazada", "SR", "BF-SO", "YYMM####"},
-	{"tiktok", "sale", "ลูกค้า จาก TikTok", "SR", "BF-SO", "YYMM####"},
-}
-
-// QuickSetupResult describes what happened in one row of POST /quick-setup.
-type QuickSetupResult struct {
-	Channel   string `json:"channel"`
-	BillType  string `json:"bill_type"`
-	Applied   bool   `json:"applied"`
-	PartyCode string `json:"party_code,omitempty"`
-	PartyName string `json:"party_name,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-}
-
-// POST /api/settings/channel-defaults/quick-setup
-// One-click pairing of LINE/Email/Shopee with the AR00001-04 placeholder
-// customers. Skips channels whose placeholder is missing or already set.
-func (h *ChannelDefaultsHandler) QuickSetup(c *gin.Context) {
-	if h.partyCache == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "party cache not configured"})
-		return
-	}
-	userID := c.GetString("user_id")
-	results := make([]QuickSetupResult, 0, len(quickSetupMappings))
-	appliedCount := 0
-	for _, m := range quickSetupMappings {
-		party := h.partyCache.FindByExactName("sale", m.PlaceholderName)
-		if party == nil {
-			results = append(results, QuickSetupResult{
-				Channel:  m.Channel,
-				BillType: m.BillType,
-				Applied:  false,
-				Reason:   "ไม่พบลูกค้า placeholder ชื่อ \"" + m.PlaceholderName + "\" ใน SML",
-			})
-			continue
-		}
-		d := &models.ChannelDefault{
-			Channel:          m.Channel,
-			BillType:         m.BillType,
-			PartyCode:        party.Code,
-			PartyName:        party.Name,
-			PartyPhone:       party.Telephone,
-			PartyAddress:     party.Address,
-			PartyTaxID:       party.TaxID,
-			DocFormatCode:    m.DocFormatCode,
-			DocPrefix:        m.DocPrefix,
-			DocRunningFormat: m.DocRunningFormat,
-			// Sentinel: -1 / '' = "use server .env default" — quick-setup
-			// never wants to lock a channel to a specific WH/VAT.
-			VATType: -1,
-			VATRate: -1,
-		}
-		if err := h.repo.Upsert(d, userID); err != nil {
-			results = append(results, QuickSetupResult{
-				Channel:  m.Channel,
-				BillType: m.BillType,
-				Applied:  false,
-				Reason:   "บันทึกล้มเหลว: " + err.Error(),
-			})
-			continue
-		}
-		appliedCount++
-		results = append(results, QuickSetupResult{
-			Channel:   m.Channel,
-			BillType:  m.BillType,
-			Applied:   true,
-			PartyCode: party.Code,
-			PartyName: party.Name,
-		})
-	}
-	h.audit(c, "channel_default_quick_setup", map[string]interface{}{
-		"applied_count": appliedCount,
-		"results":       results,
-	})
-	c.JSON(http.StatusOK, gin.H{
-		"applied": appliedCount,
-		"results": results,
-	})
 }
 
 // validChannelBillTypeCombo enforces UI-level rules so admins can't save

@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-13 17:45 +07
+> Updated: 2026-05-13 18:00 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -270,6 +270,23 @@
   - Main and Henna serve frontend asset `index-B-g165c4.js`.
   - Server-side source check found no delete UI, free-form SML API/path input, old endpoint override state, old channel help, customer/supplier column wording, or custom-route badge in the deployed Channel Defaults files.
   - Thaisunsport remains on asset `index-CpcZFriL.js`; backend health ok on `8090`, `8110`, `8100`.
+
+### Cleanup — Channel Defaults Legacy + Unused Frontend Code
+
+- Time verified: 2026-05-13 18:00 +07.
+- Change type: local cleanup after checkpoint commit `97d73bf`; deploy pending.
+- Scope:
+  - Removed unused frontend files with no importers: `AnomalyBadge`, `StatsCard`, `ui/sheet`, and old `AddItemForm`.
+  - Removed unused props/imports caught by strict one-off TypeScript checks.
+  - Simplified `/settings/channels` helpers to tested SML dropdown destinations only.
+  - Removed backend channel-default delete and quick-setup endpoints from the router/handler/repository.
+  - Kept `PartyPicker`, SML party APIs, chat/LINE code, and DB columns because they are still used or require a separate removal phase.
+- Verification:
+  - `npx tsc --noEmit --noUnusedLocals true --noUnusedParameters true` passed in `frontend`.
+  - `npm run build` passed in `frontend`.
+  - `go test ./...` passed in `backend`.
+  - `git diff --check` passed.
+  - Source guard found no active references to legacy Channel Defaults quick-setup/delete helpers or removed frontend imports; the only remaining `free-form URL/path` text is a historical migration comment.
 
 ### All Instances — Channel Defaults Visibility Fix
 

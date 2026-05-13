@@ -329,11 +329,10 @@ func fallbackDocPrefix(route string) string {
 
 // resolveEndpoint figures out which SML client to use for a channel.
 //
-// The admin-supplied `endpoint` is now a free-form URL/path (e.g.
-// "/SMLJavaRESTService/v3/api/saleorder" or "https://sml/.../saleinvoice").
-// We pick the client by keyword match — saleorder/saleinvoice/purchaseorder/
-// sale_reserve in the URL — and pass the URL through as override so the
-// client posts to the admin's chosen path.
+// The saved `endpoint` comes from tested SML destination choices in the
+// channel settings UI. Older rows may still contain a token/path/URL, so we
+// continue to resolve the client by keyword match and pass path/URL values
+// through as overrides for backward compatibility.
 //
 // Returns:
 //

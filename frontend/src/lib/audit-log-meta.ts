@@ -58,6 +58,8 @@ export const ACTION_META: Record<string, ActionMeta> = {
   demo_test_data_reset: { label: 'ล้างข้อมูลทดสอบ', emoji: '🧹', tone: 'warning' },
   // Channel defaults
   channel_default_updated: { label: 'แก้ไขเส้นทาง SML', emoji: '⚙️', tone: 'info' },
+  // Historical actions only. The runtime endpoints were removed, but old logs
+  // can still contain these action names and should remain readable.
   channel_default_deleted: { label: 'ลบเส้นทาง SML', emoji: '🗑️', tone: 'muted' },
   channel_default_quick_setup: { label: 'ตั้งค่าเส้นทาง SML อัตโนมัติ', emoji: '🚀', tone: 'primary' },
   // LINE chat — admin actions (session 13-15)
@@ -177,6 +179,7 @@ export function summarize(log: AuditLog): string {
     case 'channel_default_quick_setup':
       return `ตั้งค่า ${d.applied_count ?? 0} channel`
     case 'channel_default_updated':
+      return [d.channel, d.bill_type, d.endpoint, d.doc_format_code].filter(Boolean).join(' / ')
     case 'channel_default_deleted':
       return [d.channel, d.bill_type, d.party_code].filter(Boolean).join(' / ')
     case 'product_created':

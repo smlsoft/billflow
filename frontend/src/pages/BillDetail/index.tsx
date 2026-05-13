@@ -142,13 +142,6 @@ export default function BillDetail() {
     })
   }
 
-  const handleItemAdded = (newItem: BillItem) => {
-    setBill((prev) => {
-      if (!prev) return prev
-      return { ...prev, items: [...(prev.items ?? []), newItem] }
-    })
-  }
-
   return (
     <div className="space-y-4">
       <BillHeader bill={bill} />
@@ -174,7 +167,6 @@ export default function BillDetail() {
         canEdit={canEdit}
         onItemUpdated={handleItemUpdated}
         onItemDeleted={handleItemDeleted}
-        onItemAdded={handleItemAdded}
         highlightItemId={highlightItemId}
       />
 

@@ -15,7 +15,6 @@ interface Props {
   canEdit: boolean
   onItemUpdated: (updated: BillItem) => void
   onItemDeleted: (itemId: string) => void
-  onItemAdded: (item: BillItem) => void
   // BillTotal's "ดู →" link sets this to the offending item id; the matching
   // row briefly flashes (1.5s) so admin's eye is drawn to the right place
   // even when the items list is long.
@@ -27,7 +26,6 @@ export function BillItemsTable({
   canEdit,
   onItemUpdated,
   onItemDeleted,
-  onItemAdded,
   highlightItemId,
 }: Props) {
   const items = bill.items ?? []

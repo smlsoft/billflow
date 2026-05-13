@@ -58,7 +58,7 @@ export interface BillRoutePreview {
   channel: string
   bill_type: string
   route?: string             // sale_reserve / saleorder / saleinvoice / purchaseorder
-  endpoint?: string          // free-form URL/path the admin set in /settings/channels
+  endpoint?: string          // tested SML destination path from /settings/channels
   doc_no?: string            // existing failed doc_no or next running preview (not reserved)
   doc_format?: string        // e.g. "BF-SO" + "YYMM####"
   doc_format_code?: string   // e.g. "SR", "INV", "PO"

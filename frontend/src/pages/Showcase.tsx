@@ -2,7 +2,6 @@ import { useState } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
-  FileText,
   Inbox,
   Search,
 } from 'lucide-react'

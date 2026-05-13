@@ -39,7 +39,7 @@ interface Props {
 }
 
 export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
-  const [selectedDestination, setSelectedDestination] = useState<Exclude<EndpointKind, ''>>('purchaseorder')
+  const [selectedDestination, setSelectedDestination] = useState<EndpointKind>('purchaseorder')
   const [docPrefix, setDocPrefix] = useState('')
   const [docRunningFormat, setDocRunningFormat] = useState('')
   const [saving, setSaving] = useState(false)
@@ -74,7 +74,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     destinationFor(row.channel as ChannelKey, row.bill_type, row.endpoint ?? '', row.doc_format_code ?? '') ??
     destinationOptions[0]
 
-  const handleDestinationChange = (value: Exclude<EndpointKind, ''>) => {
+  const handleDestinationChange = (value: EndpointKind) => {
     const destination = destinationOptions.find((option) => option.value === value)
     setSelectedDestination(value)
     if (!destination) return
