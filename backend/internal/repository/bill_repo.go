@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"billflow/internal/models"
 	"github.com/lib/pq"
@@ -115,6 +116,14 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	}
 	b.Items = items
 	enrichShopeeBillRawData(b, len(items), false)
+	events, err := r.ListShopeeOrderEventsForBill(id)
+	if err != nil {
+		return nil, err
+	}
+	b.ShopeeEvents = events
+	if len(events) > 0 {
+		b.ShopeeStatus = &events[0]
+	}
 	return b, nil
 }
 
@@ -170,10 +179,12 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		argN++
 	}
 
-	countQuery := "SELECT COUNT(*) FROM bills b " + where
 	var total int
-	if err := r.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count: %w", err)
+	if f.ShopeeStatus == "" {
+		countQuery := "SELECT COUNT(*) FROM bills b " + where
+		if err := r.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count: %w", err)
+		}
 	}
 
 	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
@@ -185,9 +196,11 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 	          ` + where + `
 	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
 	                   b.anomalies, b.error_msg, b.created_at, b.sent_at
-	          ORDER BY b.created_at DESC` +
-		fmt.Sprintf(" LIMIT $%d OFFSET $%d", argN, argN+1)
-	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
+	          ORDER BY b.created_at DESC`
+	if f.ShopeeStatus == "" {
+		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argN, argN+1)
+		args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
+	}
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
@@ -210,7 +223,297 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		enrichShopeeBillRawData(&b, itemCount, true)
 		bills = append(bills, b)
 	}
-	return bills, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	latestByBill, err := r.LatestShopeeOrderEventsForBills(billIDs(bills))
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range bills {
+		bills[i].ShopeeStatus = latestByBill[bills[i].ID]
+	}
+	if f.ShopeeStatus != "" {
+		filtered := make([]models.Bill, 0, len(bills))
+		for _, b := range bills {
+			if b.ShopeeStatus != nil && b.ShopeeStatus.EventType == f.ShopeeStatus {
+				filtered = append(filtered, b)
+			}
+		}
+		total = len(filtered)
+		start := (f.Page - 1) * f.PageSize
+		if start >= len(filtered) {
+			return []models.Bill{}, total, nil
+		}
+		end := start + f.PageSize
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		bills = filtered[start:end]
+	}
+	return bills, total, nil
+}
+
+func billIDs(bills []models.Bill) []string {
+	ids := make([]string, 0, len(bills))
+	for _, b := range bills {
+		ids = append(ids, b.ID)
+	}
+	return ids
+}
+
+type shopeeOrderEventScan struct {
+	ID          sql.NullString
+	BillID      sql.NullString
+	OrderID     sql.NullString
+	EventType   sql.NullString
+	StatusLabel sql.NullString
+	Subject     sql.NullString
+	FromAddr    sql.NullString
+	MessageID   sql.NullString
+	EmailDate   sql.NullTime
+	RawData     []byte
+	CreatedAt   sql.NullTime
+}
+
+func (s shopeeOrderEventScan) event() *models.ShopeeOrderEvent {
+	if !s.ID.Valid {
+		return nil
+	}
+	var billID *string
+	if s.BillID.Valid {
+		v := s.BillID.String
+		billID = &v
+	}
+	var emailDate *time.Time
+	if s.EmailDate.Valid {
+		v := s.EmailDate.Time
+		emailDate = &v
+	}
+	return &models.ShopeeOrderEvent{
+		ID:          s.ID.String,
+		BillID:      billID,
+		OrderID:     s.OrderID.String,
+		EventType:   s.EventType.String,
+		StatusLabel: s.StatusLabel.String,
+		Subject:     s.Subject.String,
+		FromAddr:    s.FromAddr.String,
+		MessageID:   s.MessageID.String,
+		EmailDate:   emailDate,
+		RawData:     json.RawMessage(s.RawData),
+		CreatedAt:   s.CreatedAt.Time,
+	}
+}
+
+func (r *BillRepo) UpsertShopeeOrderEvent(e *models.ShopeeOrderEvent) error {
+	if e == nil {
+		return nil
+	}
+	if strings.TrimSpace(e.MessageID) == "" {
+		e.MessageID = fmt.Sprintf("local-%s-%s-%d", e.OrderID, e.EventType, time.Now().UnixNano())
+	}
+	e.OrderID = normalizeShopeeOrderID(e.OrderID)
+	raw := e.RawData
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	if e.BillID == nil && strings.TrimSpace(e.OrderID) != "" {
+		var billID string
+		err := r.db.QueryRow(
+			`SELECT id
+			   FROM bills
+			  WHERE ltrim(COALESCE(sml_order_id, ''), '#') = $1
+			     OR ltrim(COALESCE(raw_data->>'order_id', ''), '#') = $1
+			     OR ltrim(COALESCE(raw_data->>'shopee_order_id', ''), '#') = $1
+			     OR ltrim(COALESCE(raw_data->>'order_no', ''), '#') = $1
+			  ORDER BY created_at DESC
+			  LIMIT 1`,
+			e.OrderID,
+		).Scan(&billID)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("find shopee event bill: %w", err)
+		}
+		if billID != "" {
+			e.BillID = &billID
+		}
+	}
+	err := r.db.QueryRow(
+		`INSERT INTO shopee_order_events
+		   (bill_id, order_id, event_type, status_label, subject, from_addr, message_id, email_date, raw_data)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (message_id, order_id, event_type) DO UPDATE SET
+		   bill_id = COALESCE(EXCLUDED.bill_id, shopee_order_events.bill_id),
+		   status_label = EXCLUDED.status_label,
+		   subject = EXCLUDED.subject,
+		   from_addr = EXCLUDED.from_addr,
+		   email_date = EXCLUDED.email_date,
+		   raw_data = EXCLUDED.raw_data
+		 RETURNING id, created_at`,
+		e.BillID, e.OrderID, e.EventType, e.StatusLabel, e.Subject, e.FromAddr, e.MessageID, e.EmailDate, raw,
+	).Scan(&e.ID, &e.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert shopee order event: %w", err)
+	}
+	return nil
+}
+
+func (r *BillRepo) LatestShopeeOrderEventForBill(billID string) (*models.ShopeeOrderEvent, error) {
+	events, err := r.listShopeeOrderEventsForBill(billID, 1)
+	if err != nil || len(events) == 0 {
+		return nil, err
+	}
+	return &events[0], nil
+}
+
+func (r *BillRepo) LatestShopeeOrderEventsForBills(billIDs []string) (map[string]*models.ShopeeOrderEvent, error) {
+	out := map[string]*models.ShopeeOrderEvent{}
+	if len(billIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(
+		`SELECT DISTINCT ON (e.bill_id)
+		        e.bill_id AS owner_bill_id,
+		        e.id, e.bill_id, e.order_id, e.event_type, e.status_label,
+		        e.subject, e.from_addr, e.message_id, e.email_date, e.raw_data, e.created_at
+		   FROM shopee_order_events e
+		  WHERE e.bill_id = ANY($1)
+		  ORDER BY e.bill_id, COALESCE(e.email_date, e.created_at) DESC, e.created_at DESC`,
+		pq.Array(billIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("latest shopee events for bills: %w", err)
+	}
+	defer rows.Close()
+
+	if err := scanLatestShopeeRows(rows, out); err != nil {
+		return nil, err
+	}
+	missingIDs := missingBillIDs(billIDs, out)
+	if len(missingIDs) == 0 {
+		return out, nil
+	}
+
+	fallbackRows, err := r.db.Query(
+		`WITH target AS (
+		   SELECT id, COALESCE(sml_order_id, '') AS sml_order_id, raw_data
+		     FROM bills
+		    WHERE id = ANY($1)
+		 )
+		 SELECT DISTINCT ON (t.id)
+		        t.id AS owner_bill_id,
+		        e.id, e.bill_id, e.order_id, e.event_type, e.status_label,
+		        e.subject, e.from_addr, e.message_id, e.email_date, e.raw_data, e.created_at
+		   FROM target t
+		   JOIN shopee_order_events e
+		     ON e.bill_id IS NULL
+		    AND e.order_id <> ''
+		    AND e.order_id IN (
+		      NULLIF(ltrim(t.sml_order_id, '#'), ''),
+		      NULLIF(ltrim(COALESCE(t.raw_data->>'order_id', ''), '#'), ''),
+		      NULLIF(ltrim(COALESCE(t.raw_data->>'shopee_order_id', ''), '#'), ''),
+		      NULLIF(ltrim(COALESCE(t.raw_data->>'order_no', ''), '#'), ''),
+		      NULLIF(ltrim(COALESCE(t.raw_data->>'doc_ref', ''), '#'), '')
+		    )
+		  ORDER BY t.id, COALESCE(e.email_date, e.created_at) DESC, e.created_at DESC`,
+		pq.Array(missingIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("fallback latest shopee events for bills: %w", err)
+	}
+	defer fallbackRows.Close()
+	if err := scanLatestShopeeRows(fallbackRows, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func scanLatestShopeeRows(rows *sql.Rows, out map[string]*models.ShopeeOrderEvent) error {
+	for rows.Next() {
+		var ownerBillID string
+		var e models.ShopeeOrderEvent
+		var raw []byte
+		if err := rows.Scan(
+			&ownerBillID, &e.ID, &e.BillID, &e.OrderID, &e.EventType, &e.StatusLabel,
+			&e.Subject, &e.FromAddr, &e.MessageID, &e.EmailDate, &raw, &e.CreatedAt,
+		); err != nil {
+			return err
+		}
+		if len(raw) > 0 {
+			e.RawData = json.RawMessage(raw)
+		}
+		event := e
+		out[ownerBillID] = &event
+	}
+	return rows.Err()
+}
+
+func missingBillIDs(billIDs []string, events map[string]*models.ShopeeOrderEvent) []string {
+	missing := make([]string, 0)
+	for _, id := range billIDs {
+		if events[id] == nil {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+func (r *BillRepo) ListShopeeOrderEventsForBill(billID string) ([]models.ShopeeOrderEvent, error) {
+	return r.listShopeeOrderEventsForBill(billID, 50)
+}
+
+func (r *BillRepo) listShopeeOrderEventsForBill(billID string, limit int) ([]models.ShopeeOrderEvent, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.db.Query(
+		`WITH target AS (
+		   SELECT id, COALESCE(sml_order_id, '') AS sml_order_id, raw_data
+		     FROM bills
+		    WHERE id = $1
+		 )
+		 SELECT e.id, e.bill_id, e.order_id, e.event_type, e.status_label,
+		        e.subject, e.from_addr, e.message_id, e.email_date, e.raw_data, e.created_at
+		   FROM shopee_order_events e, target t
+		  WHERE e.bill_id = t.id
+		     OR (
+		       e.order_id <> ''
+		       AND e.order_id IN (
+		         NULLIF(ltrim(t.sml_order_id, '#'), ''),
+		         NULLIF(ltrim(COALESCE(t.raw_data->>'order_id', ''), '#'), ''),
+		         NULLIF(ltrim(COALESCE(t.raw_data->>'shopee_order_id', ''), '#'), ''),
+		         NULLIF(ltrim(COALESCE(t.raw_data->>'order_no', ''), '#'), ''),
+		         NULLIF(ltrim(COALESCE(t.raw_data->>'doc_ref', ''), '#'), '')
+		       )
+		     )
+		  ORDER BY COALESCE(e.email_date, e.created_at) DESC, e.created_at DESC
+		  LIMIT $2`,
+		billID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list shopee order events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []models.ShopeeOrderEvent
+	for rows.Next() {
+		var e models.ShopeeOrderEvent
+		var raw []byte
+		if err := rows.Scan(
+			&e.ID, &e.BillID, &e.OrderID, &e.EventType, &e.StatusLabel,
+			&e.Subject, &e.FromAddr, &e.MessageID, &e.EmailDate, &raw, &e.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if len(raw) > 0 {
+			e.RawData = json.RawMessage(raw)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func normalizeShopeeOrderID(orderID string) string {
+	return strings.TrimLeft(strings.TrimSpace(orderID), "#")
 }
 
 func (r *BillRepo) UpdateStatus(id, status string, smlDocNo *string, smlResponse json.RawMessage, errMsg *string) error {

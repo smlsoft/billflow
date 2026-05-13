@@ -30,10 +30,17 @@ func SkipMessage(code, label string) error {
 	return &MessageSkipError{Code: code, Label: label}
 }
 
+// MessagePrecheck can skip a message after its envelope is fetched but before
+// downloading the body. This keeps large inbox backfills fast when most old
+// messages are already represented by durable duplicate tombstones.
+type MessagePrecheck func(channel, subject, messageID string) error
+
 // Processors bundles the three downstream message handlers that the
 // coordinator dispatches to based on each account's channel + the
 // message's subject. One bundle is shared by all account pollers.
 type Processors struct {
+	Precheck MessagePrecheck
+
 	// Attachment is the generic PDF/image/Excel pipeline used by
 	// channel="general" and channel="lazada" (until the dedicated
 	// Lazada handler ships).
@@ -48,4 +55,8 @@ type Processors struct {
 	// (purchaseorder flow). Used for channel="shopee" when the subject
 	// contains "ถูกจัดส่งแล้ว".
 	ShopeeShipped ShopeeBodyProcessor
+
+	// ShopeeStatus handles Shopee marketplace status notifications. It records
+	// an informational timeline event only; it must not create SML documents.
+	ShopeeStatus ShopeeBodyProcessor
 }

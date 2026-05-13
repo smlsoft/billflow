@@ -14,6 +14,7 @@ import { BillItemsTable } from './components/BillItemsTable'
 import { BillTimeline } from './components/BillTimeline'
 import { RawDataCard } from './components/RawDataCard'
 import { ArtifactList } from './components/ArtifactList'
+import { ShopeeOrderEvents } from './components/ShopeeOrderEvents'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
 import { SendPurchaseDialog } from './components/SendPurchaseDialog'
 import { validateForSML } from './utils/validation'
@@ -201,6 +202,7 @@ export default function BillDetail() {
           )}
 
           <div className="min-w-0 space-y-4">
+            <ShopeeOrderEvents events={bill.shopee_events} />
             <ArtifactList billId={bill.id} />
             <BillTimeline billId={bill.id} />
             <SmlPayloadSection

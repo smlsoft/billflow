@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import BillStatusBadge from '@/components/BillStatusBadge'
+import { ShopeeOrderStatusBadge } from '@/components/BillTable'
 import type { Bill } from '@/types'
 import { isShopeeSalesBill, rawNumber, rawString, shopeeOrderID } from '@/lib/shopeeBill'
 import { SOURCE_LABELS } from '../utils/formatters'
@@ -37,6 +38,7 @@ export function BillHeader({ bill }: Props) {
   const trackingNo = rawString(rawData, 'tracking_no')
   const docDate = (rawData?.doc_date as string) || ''
   const rawItemCount = rawNumber(rawData, 'item_count')
+  const shopeeStatus = bill.shopee_status
   const itemCount = bill.items?.length ?? 0
   const issueCount = (bill.items ?? []).filter((item) => {
     return !item.item_code || !item.unit_code || !item.qty || item.qty <= 0 || item.price == null || item.price <= 0
@@ -141,6 +143,19 @@ export function BillHeader({ bill }: Props) {
               <InfoRow
                 label="เลขพัสดุ"
                 value={<span className="font-mono text-xs">{trackingNo}</span>}
+              />
+            )}
+            {shopeeStatus && (
+              <InfoRow
+                label="สถานะคำสั่งซื้อ"
+                value={
+                  <div className="flex items-center gap-2">
+                    <ShopeeOrderStatusBadge event={shopeeStatus} />
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      {dayjs(shopeeStatus.email_date || shopeeStatus.created_at).format('DD/MM HH:mm')}
+                    </span>
+                  </div>
+                }
               />
             )}
             <InfoRow

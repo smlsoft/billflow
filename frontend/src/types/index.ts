@@ -104,6 +104,22 @@ export interface Bill {
   // Only present in single-bill GET (not in list response).
   preview?: BillRoutePreview
   remark?: string
+  shopee_status?: ShopeeOrderEvent | null
+  shopee_events?: ShopeeOrderEvent[]
+}
+
+export interface ShopeeOrderEvent {
+  id: string
+  bill_id?: string | null
+  order_id: string
+  event_type: string
+  status_label: string
+  subject: string
+  from_addr: string
+  message_id: string
+  email_date?: string | null
+  raw_data?: Record<string, unknown> | null
+  created_at: string
 }
 
 export interface BillListResponse {

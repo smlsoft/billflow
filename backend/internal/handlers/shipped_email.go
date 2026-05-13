@@ -129,6 +129,9 @@ func (h *EmailHandler) processOneShippedOrder(
 		)
 		return false, nil
 	}
+	if err := h.recordShopeeOrderEvent(subject, from, bodyText, messageID, source, orderID); err != nil {
+		return false, err
+	}
 
 	validItems := make([]ai.ExtractedItem, 0, len(order.Items))
 	for _, extItem := range order.Items {

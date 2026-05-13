@@ -1,6 +1,6 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-05-12 10:50 +07
+> อัพเดตล่าสุด: 2026-05-13 17:25 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
@@ -21,7 +21,7 @@ LINE OA / Email / Excel Upload
         ▼
 Ingest
   - LINE webhook: /webhook/line/:oaId หรือ /webhook/line
-  - EmailCoordinator: one goroutine per enabled imap_accounts row
+  - EmailCoordinator: one goroutine per enabled imap_accounts row, bounded IMAP batch/backlog processing
   - Import handlers: Lazada generic / Shopee/Lazada/TikTok preview+confirm
         │
         ▼
@@ -70,13 +70,15 @@ billflow/
 │
 ├── Email Pipeline
 │   ├── services/email/coordinator.go    per-account pollers
-│   ├── services/email/imap.go           connect/search/fetch/mark seen
+│   ├── services/email/imap.go           connect/search/fetch, batch cursor/backlog, mark seen
 │   ├── handlers/email.go                attachment AI pipeline
 │   └── /settings/email                  IMAP account admin UI
 │
 ├── Import
 │   ├── handlers/import.go               generic Lazada WIP
-│   └── handlers/shopee_import.go        Shopee preview/confirm into local bills
+│   ├── handlers/shopee_import.go        Shopee preview/confirm into local bills
+│   ├── handlers/lazada_import.go        Lazada preview/confirm into local bills
+│   └── handlers/tiktok_import.go        TikTok Excel/CSV preview/confirm into local bills
 │
 ├── SML + Catalog
 │   ├── services/sml/client.go           SML #1 JSON-RPC sale_reserve
@@ -108,7 +110,7 @@ billflow/
 | Email settings | `/api/settings/imap-accounts...` |
 | Channel defaults | `/api/settings/channel-defaults...` |
 | Catalog | `/api/catalog...` |
-| Imports | `/api/import/upload`, `/api/import/confirm`, `/api/import/shopee/preview`, `/api/import/shopee/confirm` |
+| Imports | `/api/import/upload`, `/api/import/confirm`, `/api/import/shopee/preview`, `/api/import/shopee/confirm`, `/api/import/lazada/preview`, `/api/import/lazada/confirm`, `/api/import/tiktok/preview`, `/api/import/tiktok/confirm` |
 | Logs | `GET /api/logs` |
 
 ---
@@ -132,12 +134,22 @@ billflow/
 | Channel | สถานะ |
 |---|---|
 | Shopee purchase email | ✅ Phase 1 customer-test focus; sends SML `purchaseorder` through `192.168.2.248:8080` |
-| Email IMAP | ✅ multi-account DB-driven, Shopee email routing, artifacts, logs |
+| Email IMAP | ✅ multi-account DB-driven, Shopee email routing, batch/backlog progress, searchable poll details, skipped-reason summary, reset cursor/lookback control, artifacts, logs |
 | LINE OA | ✅ code exists for human chat 2 ทาง, multi-OA, media, quick replies, status, notes, tags, create bill from chat; hidden/not central in Phase 1 |
 | Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
-| Lazada Excel | ✅ local implementation for sale Excel: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
-| TikTok Excel/CSV | ✅ local-ready for sale Excel/CSV: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
+| Lazada Excel | ✅ deployed on BillFlow main + Henna: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
+| TikTok Excel/CSV | ✅ deployed on BillFlow main + Henna: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
 | Shopee API direct | ⏭️ next phase; sync orders from Shopee Open Platform into the same local bills/review/SML retry flow as Shopee Excel |
+
+## Current Deployment Snapshot
+
+| Instance | Purpose | Frontend | Backend | Current feature set |
+|---|---|---:|---:|---|
+| BillFlow main | demo หลัก / ทดสอบงานใหม่ | `3010` | `8090` | Phase 1+ + marketplace Excel, chat disabled |
+| Henna | customer trial Phase 1+ | `3030` | `8110` | Purchase + sales + Shopee/Lazada/TikTok Excel, chat disabled |
+| Thaisunsport | customer demo Phase 1 | `3020` | `8100` | Purchase/email only, sales/import/chat disabled |
+
+Latest all-instance deploy verified 2026-05-13 17:25 +07. ดูรายละเอียด port/folder/flags ที่ [deploy-instances.md](deploy-instances.md).
 
 ## Current Document Menus
 

@@ -12,7 +12,7 @@ import {
   shopeeOrderID,
   shopeePayableTotal,
 } from '@/lib/shopeeBill'
-import type { Bill } from '@/types'
+import type { Bill, ShopeeOrderEvent } from '@/types'
 
 interface Props {
   bills: Bill[]
@@ -33,7 +33,7 @@ export default function BillTable({ bills, loading, onRowClick }: Props) {
           key: 'doc',
           header: 'บิล / คำสั่งซื้อ',
           className: 'py-2',
-          width: '52%',
+          width: '44%',
           cell: (b) => {
             const displayDate = billDisplayDate(b)
             return (
@@ -130,10 +130,25 @@ export default function BillTable({ bills, loading, onRowClick }: Props) {
         },
         {
           key: 'status',
-          header: 'สถานะ',
+          header: 'สถานะบิล',
           headerClassName: 'text-center',
           className: 'py-2 text-center',
-          cell: (b) => <BillStatusBadge status={b.status} />,
+          cell: (b) => (
+            <div className="flex justify-center">
+              <BillStatusBadge status={b.status} />
+            </div>
+          ),
+        },
+        {
+          key: 'shopee_status',
+          header: 'สถานะคำสั่งซื้อ',
+          headerClassName: 'text-center',
+          className: 'py-2 text-center',
+          cell: (b) => (
+            <div className="flex justify-center">
+              <ShopeeOrderStatusBadge event={b.shopee_status} title={shopeeStatusTitle(b)} />
+            </div>
+          ),
         },
       ]}
       rowClassName={(b) =>
@@ -145,6 +160,62 @@ export default function BillTable({ bills, loading, onRowClick }: Props) {
       }
     />
   )
+}
+
+export function ShopeeOrderStatusBadge({
+  event,
+  title,
+}: {
+  event?: ShopeeOrderEvent | null
+  title?: string
+}) {
+  if (!event) {
+    return (
+      <span className="inline-flex h-6 items-center rounded-full border border-border bg-muted/40 px-2 text-[11px] font-medium text-muted-foreground">
+        ยังไม่มีสถานะ
+      </span>
+    )
+  }
+  const cls = shopeeStatusClass(event.event_type)
+  return (
+    <Badge
+      variant="outline"
+      className={`max-w-[160px] truncate px-2 py-0.5 text-[11px] font-semibold ${cls}`}
+      title={title || [event.status_label, event.order_id, event.subject].filter(Boolean).join(' · ')}
+    >
+      {event.status_label}
+    </Badge>
+  )
+}
+
+function shopeeStatusClass(eventType: string): string {
+  switch (eventType) {
+    case 'delivered':
+      return 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-50'
+    case 'cancelled':
+      return 'border-red-300 bg-red-50 text-red-700 hover:bg-red-50'
+    case 'refund':
+    case 'return':
+      return 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-50'
+    case 'picked_up':
+      return 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-50'
+    case 'shipped':
+    case 'ready_to_ship':
+    case 'payment_confirmed':
+      return 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-50'
+    default:
+      return 'border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-50'
+  }
+}
+
+function shopeeStatusTitle(bill: Bill): string {
+  const event = bill.shopee_status
+  if (!event) return ''
+  const when = dayjs(event.email_date || event.created_at)
+  const date = when.isValid() ? when.format('DD/MM/YYYY HH:mm') : ''
+  return [event.status_label, event.order_id ? `Order ${event.order_id}` : '', date, event.subject]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 function billDisplayDate(bill: Bill): { short: string; long: string; title: string; prefix: string } {
@@ -183,7 +254,6 @@ function ShopeeSalesSummary({ bill }: { bill: Bill }) {
   const orderDate = rawString(raw, 'order_datetime') || rawString(raw, 'doc_date')
   const buyer = rawString(raw, 'customer_name') || rawString(raw, 'buyer_username')
   const itemCount = rawNumber(raw, 'item_count') ?? bill.items?.length ?? null
-  const status = rawString(raw, 'status')
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-5 text-muted-foreground">
@@ -206,11 +276,6 @@ function ShopeeSalesSummary({ bill }: { bill: Bill }) {
       {itemCount != null && (
         <span>
           <span className="tabular-nums text-foreground">{itemCount}</span> รายการ
-        </span>
-      )}
-      {status && (
-        <span>
-          สถานะ: <span className="text-foreground">{status}</span>
         </span>
       )}
     </div>

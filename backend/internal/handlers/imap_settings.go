@@ -144,6 +144,9 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 		"messages_found": res.MessagesFound,
 		"processed":      res.Processed,
 		"skipped":        res.Skipped,
+		"backlog":        res.Backlog,
+		"limited":        res.Limited,
+		"last_seen_uid":  res.LastSeenUID,
 		"duration_ms":    res.Duration.Milliseconds(),
 		"status":         res.Status(),
 		"details":        res.Details,
@@ -155,6 +158,59 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 		resp["warnings"] = res.ProcessWarnings
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+type resetIMAPProgressRequest struct {
+	LookbackDays *int `json:"lookback_days"`
+	PollNow      bool `json:"poll_now"`
+}
+
+// ResetProgress clears the stored IMAP cursor for one account. It does not
+// clear dedup history, so old messages are still skipped instead of duplicated.
+func (h *IMAPSettingsHandler) ResetProgress(c *gin.Context) {
+	id := c.Param("id")
+	var in resetIMAPProgressRequest
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if in.LookbackDays != nil && (*in.LookbackDays < 1 || *in.LookbackDays > 90) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lookback_days must be between 1 and 90"})
+		return
+	}
+	if err := h.repo.ResetPollProgress(id, in.LookbackDays); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.coordinator.ReloadAccount(id); err != nil {
+		h.logger.Warn("imap_reset_progress_reload_failed", zap.String("id", id), zap.Error(err))
+	}
+	if !in.PollNow {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	res, err := h.coordinator.PollNow(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "poll already running") {
+			c.JSON(http.StatusConflict, gin.H{"error": "กล่องเมลนี้กำลังดึงอีเมลอยู่แล้ว กรุณารอสักครู่แล้วรีเฟรชสถานะ"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"trace_id":       res.TraceID,
+		"messages_found": res.MessagesFound,
+		"processed":      res.Processed,
+		"skipped":        res.Skipped,
+		"backlog":        res.Backlog,
+		"limited":        res.Limited,
+		"last_seen_uid":  res.LastSeenUID,
+		"duration_ms":    res.Duration.Milliseconds(),
+		"status":         res.Status(),
+		"details":        res.Details,
+	})
 }
 
 // TestConnection runs a dry connect+auth+select cycle WITHOUT saving anything.

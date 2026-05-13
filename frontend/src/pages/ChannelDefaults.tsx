@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  AlertCircle,
   ChevronDown,
   Info,
   Pencil,
-  RefreshCw,
-  Sparkles,
-  Trash2,
 } from 'lucide-react'
 import dayjs from 'dayjs'
 import { toast } from 'sonner'
@@ -20,17 +16,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { DataTable } from '@/components/common/DataTable'
 import { PageHeader } from '@/components/common/PageHeader'
 import client from '@/api/client'
-import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
+import { ENABLE_CHAT, ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import { cn } from '@/lib/utils'
 
 import { EditDialog } from './ChannelDefaults/EditDialog'
 import {
   CHANNEL_LABELS,
-  CHANNEL_SLOTS,
   destinationFor,
   endpointFor,
   type ChannelDefaultRow,
@@ -44,6 +38,16 @@ const PHASE1_CHANNEL_SLOTS: Array<{
   bill_type: 'sale' | 'purchase'
 }> = [
   { channel: 'shopee_shipped', bill_type: 'purchase' },
+]
+
+const PHASE_PLUS_CHANNEL_SLOTS: Array<{
+  channel: ChannelKey
+  bill_type: 'sale' | 'purchase'
+}> = [
+  ...(ENABLE_CHAT
+    ? [{ channel: 'line' as ChannelKey, bill_type: 'sale' as const }]
+    : []),
+  { channel: 'shopee_shipped', bill_type: 'purchase' },
   ...(ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
     ? [{ channel: 'shopee' as ChannelKey, bill_type: 'sale' as const }]
     : []),
@@ -55,8 +59,12 @@ const PHASE1_CHANNEL_SLOTS: Array<{
     : []),
 ]
 
+function visibleChannelSlots() {
+  return PHASE < 2 ? PHASE1_CHANNEL_SLOTS : PHASE_PLUS_CHANNEL_SLOTS
+}
+
 function displayChannelLabel(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type'>) {
-  if (PHASE < 2 && row.channel === 'shopee_shipped' && row.bill_type === 'purchase') {
+  if (row.channel === 'shopee_shipped' && row.bill_type === 'purchase') {
     return 'Email บิลซื้อ Shopee'
   }
   return CHANNEL_LABELS[row.channel as ChannelKey] ?? row.channel
@@ -85,7 +93,6 @@ function EndpointCell({ row }: { row: ChannelDefaultRow }) {
     row.endpoint ?? '',
     row.doc_format_code ?? '',
   )
-  const overridden = PHASE >= 2 && !!row.endpoint
 
   return (
     <div className="min-w-[220px] space-y-1">
@@ -93,11 +100,6 @@ function EndpointCell({ row }: { row: ChannelDefaultRow }) {
         <span className="text-xs font-medium text-foreground">
           {destination?.label ?? ep.label}
         </span>
-        {overridden && (
-          <span className="rounded bg-info/10 px-1 py-0.5 text-[9px] font-medium uppercase text-info">
-            ตั้งเอง
-          </span>
-        )}
       </div>
       <button
         type="button"
@@ -170,15 +172,15 @@ function HelpBanner() {
                 <div className="mb-1 text-sm font-semibold">2. รหัสประเภทเอกสาร</div>
                 <p className="text-xs text-muted-foreground">
                 รหัสที่ SML ใช้แยกชนิดเอกสาร เช่น <code>PO</code> สำหรับใบสั่งซื้อ หรือ <code>SR</code> สำหรับใบสั่งขาย.
-                  ตั้งให้ตรงกับระบบของลูกค้า
+                  ตั้งให้ตรงกับระบบ SML
                 </p>
               </div>
               <div className="rounded-md border border-border bg-card p-3">
-                <div className="mb-1 text-sm font-semibold">{phase1 ? '3. เลขเอกสาร' : '3. ลูกค้า / ผู้ขาย'}</div>
+                <div className="mb-1 text-sm font-semibold">3. เลขเอกสาร</div>
                 <p className="text-xs text-muted-foreground">
                   {phase1
-                    ? 'ตั้ง prefix และรูปแบบเลขรัน doc_no ของช่องทางนี้ ส่วนผู้ขาย คลัง พื้นที่เก็บ และภาษีจะอยู่ใน dialog ก่อนส่ง SML'
-                    : 'เลือกรหัสลูกค้า (AR-xxx) หรือผู้ขาย (V-xxx) จาก SML — ทุกบิลที่มาจาก channel นี้จะ link ไปที่รหัสที่ตั้งไว้'}
+                    ? 'ตั้ง prefix และรูปแบบเลขรัน doc_no ของช่องทางนี้ ค่าประจำบิลอื่นจะอยู่ใน dialog ก่อนส่ง SML'
+                    : 'ตั้ง prefix และรูปแบบเลขรัน doc_no ของช่องทางนี้ ค่าประจำบิลอื่นจะเลือกตอนส่ง SML'}
                 </p>
               </div>
             </div>
@@ -189,10 +191,8 @@ function HelpBanner() {
               </p>
             ) : (
               <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
-                <b>⚠️ ถ้าตั้งไม่ครบ:</b> บิลที่ retry/auto-confirm จะ <b>fail</b>{' '}
-                ทันทีพร้อม error "ยังไม่ได้ตั้งค่าลูกค้า default" — ใช้ปุ่ม "ตั้งค่าอัตโนมัติ"
-                ให้ระบบ pair LINE/Email/Shopee กับ AR00001-04 ใน SML เป็น default แรก
-                แล้วค่อย edit แต่ละแถวต่อ
+                <b>ถ้าตั้งปลายทางหรือเลขเอกสารไม่ครบ:</b> ระบบจะยังไม่รู้ว่าจะส่งเอกสารเข้าเมนู SML ไหน
+                หรือควรออกเลขเอกสารรูปแบบใด. ค่าประจำบิลจะเลือกใน dialog ตอนส่ง SML.
               </p>
             )}
           </CardContent>
@@ -202,32 +202,11 @@ function HelpBanner() {
   )
 }
 
-interface QuickSetupResult {
-  channel: string
-  bill_type: string
-  applied: boolean
-  party_code?: string
-  party_name?: string
-  reason?: string
-}
-
-interface SyncStatus {
-  customers: number
-  suppliers: number
-  last_sync: string | null
-  last_attempt?: string | null
-  status?: 'ok' | 'error' | 'not_ready' | 'not_configured'
-  error?: string
-}
-
 export default function ChannelDefaults() {
   const [rows, setRows] = useState<ChannelDefaultRow[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<ChannelDefaultRow | null>(null)
   const [editOpen, setEditOpen] = useState(false)
-  const [deleting, setDeleting] = useState<ChannelDefaultRow | null>(null)
-  const [quickRunning, setQuickRunning] = useState(false)
-  const [sync, setSync] = useState<SyncStatus | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -243,24 +222,14 @@ export default function ChannelDefaults() {
     }
   }
 
-  const loadSync = async () => {
-    try {
-      const r = await client.get<SyncStatus>('/api/sml/parties/last-sync')
-      setSync(r.data)
-    } catch {
-      // ignore — not critical
-    }
-  }
-
   useEffect(() => {
     load()
-    loadSync()
   }, [])
 
   // Merge DB rows with the static slot list so unset channels show up too
   // (instead of "no data" — we need to nudge admin to set them).
   const tableRows = useMemo(() => {
-    const slots = PHASE < 2 ? PHASE1_CHANNEL_SLOTS : CHANNEL_SLOTS
+    const slots = visibleChannelSlots()
     const byKey = new Map<string, ChannelDefaultRow>()
     for (const r of rows) {
       byKey.set(`${r.channel}/${r.bill_type}`, r)
@@ -292,57 +261,9 @@ export default function ChannelDefaults() {
     })
   }, [rows])
 
-  const unsetCount = tableRows.filter((r) => {
-    if (PHASE < 2) {
-      const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
-      return !r.endpoint || (ep.takesDocFormat && !r.doc_format_code) || !r.doc_prefix || !r.doc_running_format
-    }
-    return !r.party_code
-  }).length
-
-  const handleQuickSetup = async () => {
-    setQuickRunning(true)
-    try {
-      const r = await client.post<{
-        applied: number
-        results: QuickSetupResult[]
-      }>('/api/settings/channel-defaults/quick-setup')
-      const applied = r.data.applied
-      const skipped = (r.data.results ?? []).filter((x) => !x.applied).length
-      toast.success(`ตั้งค่าสำเร็จ ${applied} channel · ข้าม ${skipped}`)
-      await load()
-    } catch (e: any) {
-      toast.error('ตั้งค่าอัตโนมัติล้มเหลว: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
-    } finally {
-      setQuickRunning(false)
-    }
-  }
-
-  const handleRefreshParties = async () => {
-    try {
-      const r = await client.post<SyncStatus>('/api/sml/refresh-parties')
-      setSync(r.data)
-      toast.success(
-        `ซิงก์เสร็จ — ${r.data.customers} ลูกค้า / ${r.data.suppliers} ผู้ขาย`,
-      )
-    } catch (e: any) {
-      setSync((prev) => prev ? { ...prev, status: 'error', error: e?.response?.data?.error ?? e?.message ?? 'unknown' } : prev)
-      toast.error('รีเฟรชไม่สำเร็จ: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
-    }
-  }
-
-  const handleDelete = async () => {
-    if (!deleting) return
-    try {
-      await client.delete(
-        `/api/settings/channel-defaults/${deleting.channel}/${deleting.bill_type}`,
-      )
-      toast.success('ลบสำเร็จ')
-      setDeleting(null)
-      await load()
-    } catch (e: any) {
-      toast.error('ลบไม่สำเร็จ: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
-    }
+  const isRouteUnset = (r: ChannelDefaultRow) => {
+    const ep = endpointFor(r.channel as ChannelKey, r.bill_type, r.endpoint ?? '')
+    return !r.endpoint || (ep.takesDocFormat && !r.doc_format_code) || !r.doc_prefix || !r.doc_running_format
   }
 
   return (
@@ -354,47 +275,11 @@ export default function ChannelDefaults() {
             ? ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
               ? 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee และบิลขาย Marketplace Excel'
               : 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee'
-            : 'กำหนดว่าแต่ละช่องทางจะส่งบิลเข้าเมนูไหนใน SML พร้อมคู่ค้าและรูปแบบเลขเอกสาร'
-        }
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={handleRefreshParties}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            รีเฟรชจาก SML
-          </Button>
+            : 'กำหนดว่าแต่ละช่องทางจะส่งบิลเข้าเมนูไหนใน SML พร้อมรหัสเอกสารและรูปแบบเลขเอกสาร'
         }
       />
 
       <HelpBanner />
-
-      {PHASE >= 2 && unsetCount > 0 && (
-        <Card className="border-warning/40 bg-warning/5">
-          <CardContent className="flex flex-wrap items-center gap-3 px-4 py-3">
-            <Sparkles className="h-5 w-5 shrink-0 text-warning" />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-foreground">
-                ตั้งค่าอัตโนมัติจากลูกค้า/ผู้ขายตั้งต้นใน SML
-              </div>
-              <div className="mt-0.5 text-xs text-muted-foreground">
-                ระบบจะค้นหาลูกค้าตั้งต้นใน SML แล้วผูกเข้าช่องทางที่ยังไม่ตั้งค่า
-                โดยไม่ทับรายการที่ตั้งค่าไว้แล้ว
-              </div>
-            </div>
-            <Button
-              onClick={handleQuickSetup}
-              disabled={quickRunning}
-              size="sm"
-              title="ค้นหา AR00001–04 ใน SML แล้วผูกกับ channel ที่ยังว่าง — ปลอดภัย ไม่ทับของเดิม"
-            >
-              {quickRunning ? 'กำลังตั้งค่า…' : 'ตั้งค่าอัตโนมัติ'}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
 
       <DataTable<ChannelDefaultRow>
         data={tableRows}
@@ -427,24 +312,6 @@ export default function ChannelDefaults() {
               </Badge>
             ),
           },
-          ...(PHASE >= 2 ? [{
-            key: 'party',
-            header: 'ลูกค้า / ผู้ขาย',
-            cell: (r: ChannelDefaultRow) =>
-              r.party_code ? (
-                <div className="flex flex-col">
-                  <span className="font-mono text-xs font-medium text-foreground">
-                    {r.party_code}
-                  </span>
-                  <span className="text-xs text-muted-foreground">{r.party_name}</span>
-                </div>
-              ) : (
-                <span className="flex items-center gap-1.5 text-xs text-warning">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  ยังไม่ตั้งค่า
-                </span>
-              ),
-          }] : []),
           {
             key: 'endpoint',
             header: 'ส่งเข้า SML',
@@ -500,7 +367,7 @@ export default function ChannelDefaults() {
             cell: (r) => (
               <div className="flex items-center justify-end gap-1.5">
                 <Button
-                  variant={r.party_code ? 'outline' : 'default'}
+                  variant="outline"
                   size="sm"
                   className="h-7 gap-1 px-2.5 text-xs"
                   onClick={(e) => {
@@ -508,87 +375,22 @@ export default function ChannelDefaults() {
                     setEditing(r)
                     setEditOpen(true)
                   }}
-                  title={PHASE < 2 ? 'แก้ไขปลายทาง SML, รหัสเอกสาร, prefix และเลขรัน' : 'แก้ไขปลายทาง API, ลูกค้า, รหัสเอกสาร, prefix และเลขรัน'}
+                  title="แก้ไขปลายทาง SML, รหัสเอกสาร, prefix และเลขรัน"
                 >
                   <Pencil className="h-3.5 w-3.5" />
-                  {PHASE < 2 ? 'ตั้งค่า' : r.party_code ? 'แก้ไข' : 'ตั้งค่า'}
+                  {isRouteUnset(r) ? 'ตั้งค่า' : 'แก้ไข'}
                 </Button>
-                {PHASE >= 2 && r.party_code && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-destructive hover:text-destructive"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleting(r)
-                    }}
-                    title="ลบการตั้งค่านี้"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
               </div>
             ),
           },
         ]}
       />
 
-      {sync && (
-        <div className={cn(
-          'rounded-md border px-3 py-2 text-xs',
-          sync.status === 'error' || sync.status === 'not_ready'
-            ? 'border-warning/35 bg-warning/[0.07] text-warning'
-            : 'border-border/70 bg-muted/25 text-muted-foreground',
-        )}>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-medium text-foreground">
-              รายชื่อลูกค้า/ผู้ขายจาก SML:
-            </span>
-            <span>{sync.customers.toLocaleString()} ลูกค้า</span>
-            <span>·</span>
-            <span>{sync.suppliers.toLocaleString()} ผู้ขาย</span>
-            {sync.last_sync ? (
-              <>
-                <span>·</span>
-                <span>ซิงก์ล่าสุด {dayjs(sync.last_sync).format('DD/MM/YY HH:mm')}</span>
-              </>
-            ) : (
-              <>
-                <span>·</span>
-                <span>ยังไม่เคยซิงก์สำเร็จ</span>
-              </>
-            )}
-          </div>
-          {(sync.status === 'error' || sync.status === 'not_ready') && (
-            <div className="mt-1 leading-relaxed">
-              ถ้าค้นหาลูกค้า/ผู้ขายไม่เจอ ให้กด “รีเฟรชจาก SML” หรือตรวจ SML API.
-              {sync.error ? <> รายละเอียด: {sync.error}</> : null}
-            </div>
-          )}
-        </div>
-      )}
-
       <EditDialog
         open={editOpen}
         onOpenChange={setEditOpen}
         row={editing}
         onSaved={load}
-      />
-
-      <ConfirmDialog
-        open={!!deleting}
-        onOpenChange={(v) => !v && setDeleting(null)}
-        title="ลบการตั้งค่า"
-        description={
-          deleting
-            ? `ลบการตั้งค่าของ ${displayChannelLabel(deleting)} (${
-                deleting.bill_type === 'purchase' ? 'บิลซื้อ' : 'บิลขาย'
-              })?`
-            : ''
-        }
-        confirmLabel="ลบ"
-        variant="destructive"
-        onConfirm={handleDelete}
       />
     </div>
   )

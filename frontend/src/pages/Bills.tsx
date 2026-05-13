@@ -40,6 +40,20 @@ const STATUS_OPTIONS = [
 // Valid filter values used to validate URL query string against typos.
 const VALID_STATUSES = STATUS_OPTIONS.map((o) => o.value)
 
+const SHOPEE_STATUS_OPTIONS = [
+  { value: ALL, label: 'ทุกสถานะคำสั่งซื้อ' },
+  { value: 'shipped', label: 'ถูกจัดส่งแล้ว' },
+  { value: 'payment_confirmed', label: 'ยืนยันการชำระเงินแล้ว' },
+  { value: 'ready_to_ship', label: 'เตรียมจัดส่ง' },
+  { value: 'picked_up', label: 'คนขับเข้ารับ' },
+  { value: 'delivered', label: 'จัดส่งสำเร็จ' },
+  { value: 'cancelled', label: 'ยกเลิก' },
+  { value: 'refund', label: 'คืนเงิน' },
+  { value: 'return', label: 'คืนสินค้า' },
+]
+
+const VALID_SHOPEE_STATUSES = SHOPEE_STATUS_OPTIONS.map((o) => o.value)
+
 type BillsMode = 'purchase-order' | 'sales-order' | 'sale-invoice'
 
 const MODE_CONFIG: Record<BillsMode, {
@@ -126,7 +140,7 @@ function readURLFilter(params: URLSearchParams, key: string, valid: string[]): s
 export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode }) {
   const config = MODE_CONFIG[mode]
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   // Seed filters from the URL so deep-links from the Dashboard ("บิลล้มเหลว"
   // shortcut → /bills?status=failed) land pre-filtered. After that, filters
   // are local state — admin can change them without bouncing the URL.
@@ -134,15 +148,20 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [status, setStatus] = useState<string>(() =>
     readURLFilter(searchParams, 'status', VALID_STATUSES),
   )
+  const [shopeeStatus, setShopeeStatus] = useState<string>(() =>
+    readURLFilter(searchParams, 'shopee_status', VALID_SHOPEE_STATUSES),
+  )
   const [emailAccountId, setEmailAccountId] = useState(ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
   const [search, setSearch] = useState('')
   const [bulkOpen, setBulkOpen] = useState(false)
+  const showShopeeStatusFilter = mode === 'purchase-order'
 
   const { data, loading, refetch } = useBills({
     page,
     per_page: PER_PAGE,
     status: status === ALL ? '' : status,
+    shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
     source: config.source,
     bill_type: config.billType,
     document_route: config.documentRoute,
@@ -203,6 +222,18 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       })
     return () => { alive = false }
   }, [])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (status === ALL) next.delete('status')
+    else next.set('status', status)
+    if (showShopeeStatusFilter && shopeeStatus !== ALL) next.set('shopee_status', shopeeStatus)
+    else next.delete('shopee_status')
+    const nextString = next.toString()
+    if (nextString !== searchParams.toString()) {
+      setSearchParams(next, { replace: true })
+    }
+  }, [status, shopeeStatus, showShopeeStatusFilter, searchParams, setSearchParams])
 
   return (
     <div className="space-y-5">
@@ -267,9 +298,25 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           />
         </div>
 
-        <span className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
-          {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
-        </span>
+        {mode !== 'purchase-order' && (
+          <span className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
+            {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
+          </span>
+        )}
+        {showShopeeStatusFilter && (
+          <select
+            value={shopeeStatus}
+            onChange={(e) => resetPage(() => setShopeeStatus(e.target.value))}
+            className="h-9 rounded-md border border-border bg-background px-2.5 text-xs text-foreground"
+            aria-label="กรองตามสถานะคำสั่งซื้อ Shopee"
+          >
+            {SHOPEE_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        )}
         {inboxes.length > 0 && config.routeTo === '/settings/email' && (
           <select
             value={emailAccountId}
@@ -298,7 +345,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
       </div>
 
-      {!loading && (data?.total ?? 0) === 0 && !search && status === ALL ? (
+      {!loading && (data?.total ?? 0) === 0 && !search && status === ALL && shopeeStatus === ALL ? (
         <EmptyState
           icon={mode === 'purchase-order' ? Mail : UploadCloud}
           title={config.emptyTitle}

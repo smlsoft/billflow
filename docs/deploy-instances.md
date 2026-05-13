@@ -88,34 +88,113 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Henna Notes
 
-- Latest deploy verified: 2026-05-11 16:49 +07.
+- Latest deploy verified: 2026-05-13 17:25 +07.
 - Created from current normal BillFlow version, not Thaisunsport branch/config.
 - Deployed as isolated Docker Compose project in `/home/bosscatdog/billflow-henna`.
 - Database is separate PostgreSQL volume `billflow-henna_billflow_henna_pgdata`.
 - `PUBLIC_BASE_URL` in `/home/bosscatdog/billflow-henna/.env` is set to the latest Henna Quick Tunnel URL.
+- Current feature flags:
+  - `VITE_PHASE=99`
+  - `VITE_ENABLE_SALES_ORDERS=true`
+  - `VITE_ENABLE_SHOPEE_EXCEL=true`
+  - `VITE_ENABLE_LAZADA_EXCEL=true`
+  - `VITE_ENABLE_TIKTOK_EXCEL=true`
+  - `VITE_ENABLE_CHAT=false`
 - App settings seeded:
   - `instance.name = BillFlow Henna`
   - `instance.slug = billflowhenna`
 
 ## Thaisunsport Notes
 
-- Latest deploy verified: 2026-05-11 15:32 +07.
+- Latest deploy verified: 2026-05-13 16:53 +07.
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
   - `VITE_PHASE=1`
   - `VITE_ENABLE_SALES_ORDERS=false`
   - `VITE_ENABLE_SHOPEE_EXCEL=false`
+  - `VITE_ENABLE_LAZADA_EXCEL=false`
+  - `VITE_ENABLE_TIKTOK_EXCEL=false`
+  - `VITE_ENABLE_CHAT=false`
 - AI model config on server:
   - `OPENROUTER_MODEL=google/gemini-2.5-flash-lite`
   - `OPENROUTER_FALLBACK_MODEL=google/gemini-2.5-flash`
 - Verified after latest deploy:
   - backend health on `8100` is ok
   - frontend on `3020` serves HTML
-  - frontend flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`
+  - frontend flags remain `VITE_PHASE=1`, sales/marketplace Excel/chat disabled
   - containers `billflow-thaisunsport-frontend`, `billflow-thaisunsport-backend`, and `billflow-thaisunsport-postgres` are up
 
 ## Latest Shared Deploy
 
+- 2026-05-13 17:45 +07: Removed remaining legacy `/settings/channels` UI on main + Henna.
+- Scope: no delete action in the channel settings table; dialog uses tested SML destination dropdown only and no longer exposes free-form API URL/path; `doc_format_code` is derived from the selected destination.
+- Deploy targets: frontend rebuild/restart for `billflow` and `billflow-henna` only; Thaisunsport skipped.
+- Local verification: `npm run build` passed.
+- Deploy verification: main and Henna serve `index-B-g165c4.js`; deployed source has no delete UI, free-form SML API/path input, old endpoint override state, old channel help, customer/supplier column wording, or custom-route badge in Channel Defaults; Thaisunsport remains on `index-CpcZFriL.js`; backend health ok on `8090`, `8110`, `8100`.
+- 2026-05-13 17:33 +07: Removed customer/supplier controls from `/settings/channels` on main + Henna.
+- Scope: channel defaults are route-only now: SML destination, `doc_format_code`, document prefix, and running format. Per-bill values remain in the SML send dialog.
+- Deploy targets: frontend rebuild/restart for `billflow` and `billflow-henna` only; Thaisunsport skipped.
+- Local verification: `npm run build` passed.
+- Deploy verification: main and Henna serve `index-Doi86S9A.js`; deployed Channel Defaults source has no customer/supplier picker, party refresh endpoint, or party sync status references; frontend containers are up on `3010` and `3030`; backend health ok on `8090`, `8110`, `8100`.
+- 2026-05-13 17:25 +07: Generic `Email` rows hidden from `/settings/channels` on main + Henna.
+- Scope: visible channel defaults now show `Email บิลซื้อ Shopee` (`shopee_shipped/purchase`) instead of generic `Email` sale/purchase rows; sales routes remain Shopee/Lazada/TikTok Excel.
+- Deploy targets: frontend rebuild/restart for `billflow` and `billflow-henna` only; Thaisunsport skipped.
+- Local verification: `npm run build` passed.
+- Deploy verification: main and Henna serve `index-CsDcDUth.js`; frontend containers are up on `3010` and `3030`; backend health ok on `8090`, `8110`, `8100`.
+- 2026-05-13 17:25 +07: Corrected main/Henna frontend feature flags after deploy-policy review.
+- Scope: `billflow` and `billflow-henna` are Phase 1+ (`VITE_PHASE=99`) with sales/Shopee/Lazada/TikTok Excel enabled and chat disabled; `billflow-thaisunsport` remains Phase 1 purchase-only.
+- Deploy targets: frontend rebuild/restart for `billflow` and `billflow-henna` only.
+- Deploy verification: main and Henna serve `index-qyZlCwSs.js`; Thaisunsport still serves Phase 1 asset `index-CpcZFriL.js`; backend health ok on `8090`, `8110`, `8100`.
+- 2026-05-13 16:53 +07: `/settings/channels` visibility fix deployed to all three instances.
+- Scope: channel settings table now derives visible rows from instance feature flags instead of showing every backend-supported channel slot. Thaisunsport Phase 1 shows only `Email บิลซื้อ Shopee`; main and Henna hide LINE/chat routing because chat is disabled while keeping Phase 1+ purchase/sales marketplace routes.
+- Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+- Local verification: `npm run build` passed.
+- Deploy verification: frontend `/settings/channels` HTTP 200 on `3010`, `3030`, `3020`.
+- 2026-05-13 16:31 +07: `/api/bills` Shopee status performance hotfix deployed to all three instances.
+- Scope: normal bill list/count no longer runs a latest-status lateral join before pagination; backend now batch-enriches Shopee status after selecting rows, and status-filtered lists use batch latest-event lookup.
+- Root cause: Thaisunsport purchase bill list scanned 975 bills and 979 status events through per-row lateral lookup, making the reported URL take about 7 seconds.
+- Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+- Local verification: `GOCACHE=/private/tmp/billflow-gocache go test ./...` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; `/api/bills` timing after deploy: main `0.007s`, Henna `0.022s`, Thaisunsport `0.051s`; backend logs clean for panic/fatal/list-bills SQL errors.
+- 2026-05-13 16:01 +07: Shopee order status filter + dedicated order-status column deployed to all three instances.
+- Scope: `/api/bills?shopee_status=...` filters by the latest matched `shopee_order_events` row; `/bills` separates `สถานะบิล` and `สถานะคำสั่งซื้อ`; status chips now have distinct visual tones; removed noisy `Email บิลซื้อ Shopee · บิลซื้อ` row label.
+- Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+- Local verification: `go test ./...` passed; `npm run build` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend `/bills` HTTP 200 on `3010`, `3030`, `3020`; backend logs clean for panic/fatal/migration/list-bills SQL errors.
+- Authenticated API verification: main `shopee_status=shipped` total `1`; Henna totals `0` because no status events exist yet; Thaisunsport `shipped=508`, `payment_confirmed=463`.
+- Thaisunsport flags remain `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel/chat disabled.
+- 2026-05-13 15:25 +07: Shopee order email status timeline deployed to all three instances.
+- Scope: migration `033_shopee_order_events.sql`, backend event storage/matching, Shopee status subject handling, `/bills` latest status badge, and bill detail status timeline.
+- Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+- Local verification: `GOCACHE=/private/tmp/billflow-gocache go test ./...` passed; `npm run build` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend HTTP 200 on `3010`, `3030`, `3020`; migration table exists in all three DBs.
+- Backfill: existing Shopee email bills were inserted into `shopee_order_events` where possible; Thaisunsport inserted 972 events and public `/api/bills` returns `shopee_status`.
+- Thaisunsport flags remain `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel/chat disabled.
+- 2026-05-13 13:20 +07: Shared Phase 1 IMAP support controls deployed to all three instances.
+- Scope: backend adds `POST /api/settings/imap-accounts/:id/reset-progress` to reset one inbox cursor and optionally update `lookback_days` without clearing dedup history.
+- Scope: `/settings/email` now has `ตั้งช่วงย้อนหลัง / อ่านใหม่`, plus skipped-reason summaries in the table and poll detail dialog.
+- Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+- Local verification: `npm run build` passed; `GOCACHE=... go test ./...` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; Thaisunsport `pd.thaisunsport2@gmail.com` status is now `ok`, `consecutive_failures=0`, backlog cleared.
+- Browser verification: Thaisunsport `/settings/email` confirmed reason summary, detail dialog, and reset lookback dialog.
+- Thaisunsport flags remain `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel/chat disabled.
+- 2026-05-13 13:05 +07: Shared Phase 1 IMAP large-mailbox reliability + email detail UX deployed to all three instances.
+- Scope: migration `032_imap_poll_progress.sql` adds poll cursor/backlog fields; IMAP now reads bounded batches (`IMAP_MAX_MESSAGES_PER_RUN`, default 150) and treats `backlog`/`partial` as progress statuses instead of failures.
+- Scope: Shopee duplicate precheck now happens before fetching message body/attachments when the envelope/message-id already proves it was processed.
+- Scope: `/settings/email` shows backlog as “กำลังทยอยอ่าน” with `ดูรายละเอียด` / `อ่านชุดถัดไป`, and the latest poll details open in a searchable/filterable dialog for 100+ email rows.
+- Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+- Local verification: `npm run build` passed; `GOCACHE=... go test ./...` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; Thaisunsport production `pd.thaisunsport2@gmail.com` now reports `backlog`, `consecutive_failures=0` instead of `fetch_failed`.
+- Browser verification: Thaisunsport `/settings/email` confirmed backlog banner, detail dialog, real Shopee rows, and order-number search.
+- Thaisunsport flags remain `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel/chat disabled.
+- 2026-05-12 14:35 +07: Latest codebase snapshot deployed and verified on all three instances before starting Shopee API direct phase.
+- Scope: synced backend/frontend/docs to `billflow`, `billflow-henna`, and `billflow-thaisunsport`, then rebuilt/restarted backend + frontend containers.
+- Verification: backend health ok on `8090`, `8110`, `8100`; frontend HTTP 200 on `3010`, `3030`, `3020`.
+- Flags verified in both `.env` and `docker-compose.yml` build args:
+  - Main: `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, chat disabled.
+  - Henna: `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, chat disabled.
+  - Thaisunsport: `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel disabled, chat disabled.
+- Next work: Shopee API direct starts on `billflow`; deploy to Henna only after UAT; skip Thaisunsport until sales features are explicitly enabled.
 - 2026-05-12 11:34 +07: Audit actor + production log accountability deployed to all three instances.
 - Scope: backend `/api/logs` now returns `actor` with user name/email/role when `user_id` exists, classifies background entries as worker/system, and supports `user_id` filtering.
 - Scope: `/logs` shows the actor badge in each row, adds a `ผู้ทำรายการ` filter, removes playful emoji from action labels, and keeps DEV payload copyable for admins/devs.

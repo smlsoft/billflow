@@ -269,6 +269,7 @@ func main() {
 		Attachment:    nil, // wired below once emailH is built
 		ShopeeOrder:   nil,
 		ShopeeShipped: nil,
+		ShopeeStatus:  nil,
 	}
 	imapCoordinator := emailservice.NewCoordinator(imapAccountRepo, imapProcessors, lineSvc, logger)
 
@@ -497,6 +498,7 @@ func main() {
 		api.PUT("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Update)
 		api.DELETE("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Delete)
 		api.POST("/settings/imap-accounts/:id/poll", middleware.RequireRole("admin"), imapSettingsH.PollNow)
+		api.POST("/settings/imap-accounts/:id/reset-progress", middleware.RequireRole("admin"), imapSettingsH.ResetProgress)
 
 		api.GET("/settings/users", middleware.RequireRole("admin"), userSettingsH.List)
 		api.POST("/settings/users", middleware.RequireRole("admin"), userSettingsH.Create)
@@ -625,8 +627,10 @@ func main() {
 	// spawns one goroutine per enabled row. Empty list = no polling, no
 	// errors — admin needs to add accounts via /settings/email.
 	imapProcessors.Attachment = emailH.ProcessAttachment
+	imapProcessors.Precheck = emailH.PrecheckIMAPMessage
 	imapProcessors.ShopeeOrder = emailH.ProcessShopeeEmailBody
 	imapProcessors.ShopeeShipped = emailH.ProcessShopeeShippedEmailBody
+	imapProcessors.ShopeeStatus = emailH.ProcessShopeeStatusEmailBody
 
 	if err := imapCoordinator.Start(context.Background()); err != nil {
 		logger.Error("imap coordinator start failed", zap.Error(err))

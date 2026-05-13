@@ -175,7 +175,18 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 	} else if len(res.ProcessWarnings) > 0 {
 		errMsg = strings.Join(compactWarnings(res.ProcessWarnings, 8), "\n")
 	}
-	if updateErr := p.repo.UpdatePollStatus(account.ID, res.Status(), errMsg, res.MessagesFound, res.Processed, res.Skipped, res.Details); updateErr != nil {
+	if updateErr := p.repo.UpdatePollStatus(
+		account.ID,
+		res.Status(),
+		errMsg,
+		res.MessagesFound,
+		res.Processed,
+		res.Skipped,
+		res.Details,
+		res.LastSeenUID,
+		res.Limited,
+		res.Backlog,
+	); updateErr != nil {
 		p.logger.Warn("imap_poller_status_update_failed", zap.Error(updateErr))
 	}
 
@@ -249,6 +260,10 @@ func compactWarnings(warnings []string, limit int) []string {
 // pollConfigFromAccount snapshots the DB row into a value struct so the
 // goroutine isn't holding the *IMAPAccount across a long-running poll.
 func pollConfigFromAccount(a *models.IMAPAccount) PollConfig {
+	filterSubjects := parseCSV(a.FilterSubjects, true)
+	if a.Channel == "shopee" {
+		filterSubjects = appendMissingStrings(filterSubjects, DefaultShopeeStatusSubjectKeywords())
+	}
 	return PollConfig{
 		AccountID:      a.ID,
 		AccountName:    a.Name,
@@ -258,11 +273,28 @@ func pollConfigFromAccount(a *models.IMAPAccount) PollConfig {
 		Password:       a.Password,
 		Mailbox:        a.Mailbox,
 		FilterFrom:     a.FilterFrom,
-		FilterSubjects: parseCSV(a.FilterSubjects, true),
+		FilterSubjects: filterSubjects,
 		LookbackDays:   a.LookbackDays,
 		Channel:        a.Channel,
 		ShopeeDomains:  parseCSV(a.ShopeeDomains, true),
+		LastSeenUID:    a.LastSeenUID,
 	}
+}
+
+func appendMissingStrings(base []string, extra []string) []string {
+	seen := map[string]bool{}
+	for _, s := range base {
+		seen[strings.ToLower(strings.TrimSpace(s))] = true
+	}
+	for _, s := range extra {
+		key := strings.ToLower(strings.TrimSpace(s))
+		if key == "" || seen[key] {
+			continue
+		}
+		base = append(base, key)
+		seen[key] = true
+	}
+	return base
 }
 
 // parseCSV splits a comma-separated string and trims whitespace + drops

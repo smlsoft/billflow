@@ -1,7 +1,7 @@
 # Shopee Excel Import — การทำงาน
 
-> อัพเดตล่าสุด: 2026-05-06
-> สถานะ: ✅ Deployed — SML 248 (`192.168.2.248`) configured on server
+> อัพเดตล่าสุด: 2026-05-12
+> สถานะ: ✅ Deployed on BillFlow main + Henna — SML 248 (`192.168.2.248`) configured on server
 
 ---
 
@@ -38,7 +38,8 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
   │         ▼
   │   Backend:
   │   - parse Excel (column names ภาษาไทย hardcoded)
-  │   - exclude สถานะ: "ที่ต้องจัดส่ง", "ยกเลิกแล้ว"
+  │   - include สถานะขายที่ยังต้องทำงาน เช่น "ที่ต้องจัดส่ง"
+  │   - exclude เฉพาะสถานะยกเลิก เช่น "ยกเลิกแล้ว"
   │   - dedup check: SELECT FROM bills WHERE source='shopee' AND order_id=?
   │   - ไม่ write DB ใน preview
   │         │
@@ -86,11 +87,16 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
 
 ---
 
-## สถานะที่ Exclude
+## สถานะที่ Import / Exclude
+
+ระบบไม่กรอง `ที่ต้องจัดส่ง` ออกแล้ว เพราะ user ต้องการให้รายการเหล่านี้เข้าคิวตรวจ/ส่ง SML ด้วย.
+
+สถานะที่นำเข้าได้:
+
+- `ที่ต้องจัดส่ง`
 
 orders ที่มีสถานะเหล่านี้จะถูกข้ามโดยอัตโนมัติ (ไม่แสดงใน preview):
 
-- `ที่ต้องจัดส่ง`
 - `ยกเลิกแล้ว`
 
 ---
@@ -204,7 +210,8 @@ Shopee sale bills ส่งผ่าน `saleorder_client.go` โดย default 
       "wh_code": "WH-01",
       "shelf_code": "SH-01",
       "qty": 2,
-      "price": 100
+      "price": 100,
+      "is_get_price": 1
     }
   ]
 }
@@ -228,7 +235,8 @@ Shopee sale bills ส่งผ่าน `saleorder_client.go` โดย default 
       "shelf_code": "SH-01",
       "qty": 2,
       "price_exclude_vat": 93.46,
-      "sum_amount_exclude_vat": 186.92
+      "sum_amount_exclude_vat": 186.92,
+      "is_get_price": 1
     }
   ]
 }
@@ -238,6 +246,7 @@ Shopee sale bills ส่งผ่าน `saleorder_client.go` โดย default 
 - key ต้องเป็น **`"details"`** ไม่ใช่ `"items"`
 - `is_permium` เป็น **int** (0/1) ไม่ใช่ bool — typo ตาม SML API จริง
 - ใช้ path `POST /SMLJavaRESTService/saleinvoice/v4` เมื่อ `channel_defaults.endpoint` มีคำว่า `saleinvoice`
+- ทุก line item/detail ที่ส่งเข้า SML hardcode `is_get_price: 1` ตาม requirement ล่าสุดจากทีม SML API.
 - ไม่มี `qty` field แยก (ราคาคำนวณไว้ใน `price_exclude_vat` และ `sum_amount_exclude_vat`)
 
 ---

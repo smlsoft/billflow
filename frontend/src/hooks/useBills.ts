@@ -6,6 +6,7 @@ interface BillsFilter {
   page?: number
   per_page?: number
   status?: string
+  shopee_status?: string
   source?: string
   bill_type?: string
   document_route?: string
@@ -43,6 +44,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.page) params.set('page', String(filter.page))
       if (filter.per_page) params.set('per_page', String(filter.per_page))
       if (filter.status) params.set('status', filter.status)
+      if (filter.shopee_status) params.set('shopee_status', filter.shopee_status)
       if (filter.source) params.set('source', filter.source)
       if (filter.bill_type) params.set('bill_type', filter.bill_type)
       if (filter.document_route) params.set('document_route', filter.document_route)

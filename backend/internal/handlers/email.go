@@ -544,6 +544,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 
 	// Extract Shopee order ID from subject (e.g. "คำสั่งซื้อ #2501234567890")
 	shopeeOrderID := extractShopeeOrderID(subject)
+	h.recordShopeeOrderEvent(subject, from, bodyText, messageID, source, shopeeOrderID)
 
 	// Dedup by order ID
 	if shopeeOrderID != "" {
@@ -730,6 +731,132 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		zap.Int("items", len(itemsWithCandidates)),
 	)
 
+	return nil
+}
+
+// ProcessShopeeStatusEmailBody records marketplace status emails for staff
+// visibility only. It intentionally does not create a Bill or call SML.
+func (h *EmailHandler) ProcessShopeeStatusEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) error {
+	body := bodyText
+	if strings.TrimSpace(body) == "" {
+		body = htmlToText(bodyHTML)
+	}
+	orderID := extractShopeeOrderID(subject)
+	if orderID == "" {
+		orderID = extractShopeeOrderID(body)
+	}
+	eventType, _ := classifyShopeeOrderEvent(subject, body)
+	if orderID == "" && eventType != "refund" && eventType != "return" {
+		return emailservice.SkipMessage("missing_order_id", "ไม่พบเลขคำสั่งซื้อในอีเมลสถานะ Shopee")
+	}
+	if err := h.recordShopeeOrderEvent(subject, from, body, messageID, source, orderID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *EmailHandler) recordShopeeOrderEvent(subject, from, body, messageID string, source emailservice.MailSource, orderID string) error {
+	if h == nil || h.billRepo == nil {
+		return nil
+	}
+	if orderID == "" {
+		orderID = extractShopeeOrderID(subject)
+	}
+	if orderID == "" {
+		orderID = extractShopeeOrderID(body)
+	}
+	eventType, label := classifyShopeeOrderEvent(subject, body)
+	if eventType == "" {
+		return nil
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"imap_account_id":   source.AccountID,
+		"imap_account_name": source.AccountName,
+		"imap_username":     source.Username,
+		"imap_mailbox":      source.Mailbox,
+	})
+	event := &models.ShopeeOrderEvent{
+		OrderID:     orderID,
+		EventType:   eventType,
+		StatusLabel: label,
+		Subject:     subject,
+		FromAddr:    from,
+		MessageID:   messageID,
+		RawData:     raw,
+	}
+	if err := h.billRepo.UpsertShopeeOrderEvent(event); err != nil {
+		h.logger.Warn("shopee_order_event_upsert_failed",
+			zap.String("order_id", orderID),
+			zap.String("event_type", eventType),
+			zap.String("message_id", messageID),
+			zap.Error(err),
+		)
+		return err
+	}
+	return nil
+}
+
+func classifyShopeeOrderEvent(subject, body string) (string, string) {
+	s := strings.ToLower(subject + "\n" + body)
+	switch {
+	case strings.Contains(s, "คืนเงิน"):
+		return "refund", "คืนเงิน"
+	case strings.Contains(s, "คืนสินค้า") || strings.Contains(s, "return"):
+		return "return", "คืนสินค้า"
+	case strings.Contains(s, "ยกเลิก") || strings.Contains(s, "cancel"):
+		return "cancelled", "ยกเลิก"
+	case strings.Contains(s, "จัดส่งสำเร็จ") || strings.Contains(s, "ส่งสำเร็จ") || strings.Contains(s, "delivered"):
+		return "delivered", "จัดส่งสำเร็จ"
+	case strings.Contains(s, "คนขับเข้ารับ") || strings.Contains(s, "เข้ารับพัสดุ"):
+		return "picked_up", "คนขับเข้ารับพัสดุแล้ว"
+	case strings.Contains(s, "เตรียมจัดส่ง"):
+		return "ready_to_ship", "เตรียมจัดส่งแล้ว"
+	case strings.Contains(s, "ถูกจัดส่งแล้ว"):
+		return "shipped", "ถูกจัดส่งแล้ว"
+	case strings.Contains(s, "ยืนยันการชำระเงิน"):
+		return "payment_confirmed", "ยืนยันการชำระเงินแล้ว"
+	case strings.Contains(s, "คำสั่งซื้อ"):
+		return "order_received", "รับคำสั่งซื้อ"
+	default:
+		return "", ""
+	}
+}
+
+// PrecheckIMAPMessage runs after IMAP envelope fetch but before body download.
+// It avoids downloading large old Shopee emails that durable dedup data already
+// proves were processed in an earlier poll.
+func (h *EmailHandler) PrecheckIMAPMessage(channel, subject, messageID string) error {
+	if messageID == "" {
+		return nil
+	}
+	if channel == "shopee" && (strings.Contains(subject, "ถูกจัดส่งแล้ว") || strings.Contains(subject, "ยืนยันการชำระเงิน")) {
+		var count int
+		err := h.billRepo.DB().QueryRow(
+			`SELECT
+			   (SELECT COUNT(*) FROM bills
+			     WHERE source='shopee_shipped'
+			       AND raw_data->>'email_message_id' = $1) +
+			   (SELECT COUNT(*) FROM processed_email_keys
+			     WHERE source='shopee_shipped'
+			       AND message_id = $1
+			       AND order_id = '')`,
+			messageID,
+		).Scan(&count)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return emailservice.SkipMessage("duplicate", "เมลนี้เคยประมวลผลแล้ว")
+		}
+		return nil
+	}
+	exists, err := h.billRepo.FindByEmailMessageID(messageID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return emailservice.SkipMessage("duplicate", "เมลนี้เคยสร้างบิลแล้ว")
+	}
 	return nil
 }
 

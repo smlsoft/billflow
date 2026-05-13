@@ -21,7 +21,7 @@ export interface ChannelDefaultRow {
   party_address: string
   party_tax_id: string
   doc_format_code: string
-  endpoint: string  // '' | URL or path; backend keyword-detects which client to use
+  endpoint: string  // tested API path selected from SML_DESTINATION_OPTIONS
   doc_prefix: string         // e.g. "BF-SO"
   doc_running_format: string // e.g. "YYMM####"
   branch_code: string
@@ -195,7 +195,7 @@ export function destinationFor(
   }) ?? SML_DESTINATION_OPTIONS.find((option) => option.value === kind)
 }
 
-export function phase1DestinationOptions(
+export function destinationOptionsFor(
   billType?: 'sale' | 'purchase',
 ): SmlDestinationOption[] {
   return SML_DESTINATION_OPTIONS.filter((option) => (
@@ -203,9 +203,9 @@ export function phase1DestinationOptions(
   ))
 }
 
-// resolveEndpointKind mirrors resolveEndpoint() in handlers/bills.go —
-// detects which SML client a free-form URL/path will dispatch to by keyword
-// match. Empty / no-match → fall back to channel+bill_type default.
+// resolveEndpointKind mirrors resolveEndpoint() in handlers/bills.go. The UI
+// now uses tested dropdown destinations, but this still resolves existing rows
+// and backend-compatible endpoint values by keyword.
 export function resolveEndpointKind(
   override: string,
   channel: ChannelKey,
@@ -255,45 +255,4 @@ export const CHANNEL_LABELS: Record<ChannelKey, string> = {
   lazada: 'Lazada Excel',
   tiktok: 'TikTok Excel',
   manual: 'Manual',
-}
-
-// All (channel, bill_type) combos the backend accepts. Order matters —
-// this is the order rows appear in the table when there's no DB row yet.
-export const CHANNEL_SLOTS: Array<{
-  channel: ChannelKey
-  bill_type: 'sale' | 'purchase'
-}> = [
-  { channel: 'line', bill_type: 'sale' },
-  { channel: 'email', bill_type: 'sale' },
-  { channel: 'email', bill_type: 'purchase' },
-  { channel: 'shopee', bill_type: 'sale' },
-  { channel: 'shopee_email', bill_type: 'sale' },
-  { channel: 'shopee_shipped', bill_type: 'purchase' },
-  { channel: 'lazada', bill_type: 'sale' },
-  { channel: 'lazada', bill_type: 'purchase' },
-  { channel: 'tiktok', bill_type: 'sale' },
-]
-
-export function channelHelp(channel: ChannelKey, isPurchase: boolean): string {
-  switch (channel) {
-    case 'line':
-      return 'ทุกบิลที่เข้ามาทางช่องทางนี้จะใช้ชื่อลูกค้านี้เสมอ — กันไม่ให้ SML สร้างลูกค้าใหม่ทุกครั้งที่ลูกค้าทักเข้ามา'
-    case 'email':
-      return isPurchase
-        ? 'Phase 1 ใช้แถวนี้สำหรับ Email → บิลซื้อ: เลือกผู้ขาย default ที่จะส่งเข้า SML purchaseorder'
-        : 'ทุกบิลขายที่เข้าทาง Email จะใช้ชื่อลูกค้านี้เสมอ'
-    case 'shopee':
-    case 'shopee_email':
-      return 'รหัสลูกค้านี้จะถูกส่งเป็น cust_code ตอนสร้างใบสั่งขาย (saleorder) ใน SML'
-    case 'shopee_shipped':
-      return 'Email บิลซื้อ Shopee จะส่งเข้า SML ตามปลายทางที่เลือก ส่วนผู้ขายจริงเลือกตอนส่งบิลแต่ละใบ'
-    case 'lazada':
-      return isPurchase
-        ? 'ใช้รหัสนี้กับบิลซื้อ Lazada (Phase 4b)'
-        : 'รหัสลูกค้านี้จะถูกส่งเป็น cust_code ตอนสร้างใบสั่งขาย Lazada ใน SML'
-    case 'tiktok':
-      return 'รหัสลูกค้านี้จะถูกส่งเป็น cust_code ตอนสร้างใบสั่งขาย TikTok ใน SML'
-    default:
-      return ''
-  }
 }
