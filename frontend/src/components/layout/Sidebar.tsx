@@ -50,6 +50,7 @@ import { ThemeToggle } from '@/components/common/ThemeToggle'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/lib/ui-store'
 import { cn } from '@/lib/utils'
+import { WORK_QUEUE_CHANGED_EVENT } from '@/lib/work-queue-events'
 import { ENABLE_CHAT, ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import client from '@/api/client'
 
@@ -251,6 +252,14 @@ export default function Sidebar() {
       if (intervalRef.current) clearInterval(intervalRef.current)
       document.removeEventListener('visibilitychange', onVisibility)
     }
+  }, [fetchStats])
+
+  useEffect(() => {
+    const onWorkQueueChanged = () => {
+      void fetchStats()
+    }
+    window.addEventListener(WORK_QUEUE_CHANGED_EVENT, onWorkQueueChanged)
+    return () => window.removeEventListener(WORK_QUEUE_CHANGED_EVENT, onWorkQueueChanged)
   }, [fetchStats])
 
   // SSE — instant unread badge updates. Server publishes UnreadChanged on

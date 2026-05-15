@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import client from '../api/client'
+import { notifyWorkQueueChanged } from '../lib/work-queue-events'
 import type { Bill, BillListResponse } from '../types'
 
 interface BillsFilter {
@@ -83,16 +84,20 @@ export async function retryBill(
   if (res.status !== 200) {
     throw new Error(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`)
   }
+  notifyWorkQueueChanged()
 }
 
 export async function archiveBill(id: string, reason?: string): Promise<void> {
   await client.post(`/api/bills/${id}/archive`, { reason })
+  notifyWorkQueueChanged()
 }
 
 export async function restoreBill(id: string): Promise<void> {
   await client.post(`/api/bills/${id}/restore`)
+  notifyWorkQueueChanged()
 }
 
 export async function deleteBill(id: string): Promise<void> {
   await client.delete(`/api/bills/${id}`, { data: { confirm: 'DELETE' } })
+  notifyWorkQueueChanged()
 }

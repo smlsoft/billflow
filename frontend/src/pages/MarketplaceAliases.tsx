@@ -26,6 +26,7 @@ import {
 import { MapItemModal } from '@/pages/BillDetail/components/MapItemModal'
 import type { CatalogMatch, MarketplaceAliasReviewGroup } from '@/types'
 import { cn } from '@/lib/utils'
+import { notifyWorkQueueChanged } from '@/lib/work-queue-events'
 
 const SOURCE_LABEL: Record<string, string> = {
   shopee: 'Shopee',
@@ -112,6 +113,7 @@ export default function MarketplaceAliases() {
         unit_code: match.unit_code,
       })
       toast.success(`ยืนยันแล้ว ${res.data.applied_items ?? 0} รายการ`)
+      notifyWorkQueueChanged()
       setSelected(null)
       await loadGroups()
     } catch {
