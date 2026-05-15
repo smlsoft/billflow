@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-13 18:20 +07
+> Updated: 2026-05-15 10:59 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -8,7 +8,21 @@
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
-- Latest main/Henna cleanup deploy verified 2026-05-13 18:20 +07:
+- Latest Phase naming deploy verified 2026-05-15 10:59 +07:
+  - Commit deployed: `a059111 Rename main and Henna phase to Phase 2`.
+  - Deploy targets: frontend rebuild/restart for `billflow`, `billflow-henna`; skipped `billflow-thaisunsport` intentionally because it remains Phase 1 purchase-only.
+  - BillFlow main: `.env` now has `VITE_PHASE=2`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`; backend `8090` health ok; frontend `3010/dashboard` HTTP 200.
+  - Henna: `.env` now has `VITE_PHASE=2`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`; backend `8110` health ok; frontend `3030/dashboard` HTTP 200.
+  - Thaisunsport was not rebuilt/restarted by this naming deploy; verified still `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel disabled, `VITE_ENABLE_CHAT=false`; backend `8100` health ok.
+  - UI/dashboard wording now shows `Phase 2` instead of old `Phase 1+`; docs and deploy policy now use `Phase 2` for main/Henna sales-enabled instances.
+- Latest all-instance UX guardrail deploy verified 2026-05-15 10:40 +07:
+  - Commit deployed: `10629d3 Harden marketplace matching and UX guardrails`.
+  - Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
+  - Scope: SKU-first marketplace matching when SKU exists in SML catalog; BulkSendDialog cannot resend after a completed bulk attempt; `/logs` opens bill detail instead of retrying SML directly; email poll/import/catalog actions have duplicate-click guards; item edit/channel/instance/email/user settings have stronger validation/confirmation.
+  - Verification before deploy: backend `go test ./...`, frontend `npm run build`, `git diff --check`.
+  - Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend route checks ok: main/Henna `/sale-invoices` HTTP 200, Thaisunsport `/bills` HTTP 200.
+  - Feature flags verified after deploy: main/Henna Phase 2 sales-enabled; Thaisunsport Phase 1 purchase-only.
+- Previous main/Henna cleanup deploy verified 2026-05-13 18:20 +07:
   - Commit deployed: `92f32a4 Remove legacy channel defaults code` after checkpoint `97d73bf`.
   - Deploy targets: `billflow`, `billflow-henna`; skipped `billflow-thaisunsport` intentionally because it remains Phase 1 purchase-only.
   - BillFlow main: backend `8090` health ok, frontend `3010/settings/channels` HTTP 200, asset `index-B84xDgtQ.js`.

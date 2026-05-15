@@ -88,7 +88,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Henna Notes
 
-- Latest deploy verified: 2026-05-13 17:25 +07.
+- Latest deploy verified: 2026-05-15 10:59 +07.
 - Created from current normal BillFlow version, not Thaisunsport branch/config.
 - Deployed as isolated Docker Compose project in `/home/bosscatdog/billflow-henna`.
 - Database is separate PostgreSQL volume `billflow-henna_billflow_henna_pgdata`.
@@ -106,7 +106,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Thaisunsport Notes
 
-- Latest deploy verified: 2026-05-13 16:53 +07.
+- Latest deploy verified: 2026-05-15 10:59 +07.
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 2 for this customer:
   - `VITE_PHASE=1`
@@ -126,6 +126,18 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-15 10:59 +07: Phase naming cleanup deployed to `billflow` and `billflow-henna`; `billflow-thaisunsport` skipped intentionally.
+- Commit deployed: `a059111 Rename main and Henna phase to Phase 2`.
+- Scope: rename main/Henna terminology from old `Phase 1+` to `Phase 2`; Dashboard badge now shows `Phase 2`; local/default frontend build args use `VITE_PHASE=2`; docs/deploy policy updated to match.
+- Deploy targets: frontend rebuild/restart for `billflow` and `billflow-henna` only.
+- Deploy verification: main `.env` and Henna `.env` now have `VITE_PHASE=2` with sales/Shopee/Lazada/TikTok enabled and chat disabled; `/dashboard` HTTP 200 on `3010` and `3030`; backend health ok on `8090`, `8110`, `8100`.
+- Skipped verification: Thaisunsport was not rebuilt/restarted by this naming deploy and remains `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok/chat disabled.
+- 2026-05-15 10:40 +07: Marketplace matching + UX guardrails deployed to all three instances.
+- Commit deployed: `10629d3 Harden marketplace matching and UX guardrails`.
+- Scope: SKU-first marketplace matching when SKU exists in SML catalog; BulkSendDialog locks after a completed send attempt; `/logs` no longer retries SML directly and instead opens bill detail for reviewed resend; email poll/import/catalog duplicate-click guards; stronger validation/confirmation in item edit, channel defaults, instance settings, email account settings, and user management.
+- Change type: shared UX/backend hardening. It was deployed to all three instances because the guardrails apply to Phase 1 purchase flows too; Thaisunsport stayed Phase 1 via its own `.env` build flags.
+- Local verification: backend `go test ./...` passed, frontend `npm run build` passed, and `git diff --check` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend route checks ok: main/Henna `/sale-invoices` HTTP 200 and Thaisunsport `/bills` HTTP 200; feature flags verified after deploy.
 - 2026-05-13 18:20 +07: Channel Defaults legacy cleanup deployed to `billflow` and `billflow-henna`; `billflow-thaisunsport` skipped intentionally.
 - Commit deployed: `92f32a4 Remove legacy channel defaults code`; rollback checkpoint before cleanup: `97d73bf`.
 - Scope: remove unused frontend files/symbols, remove legacy channel-default delete/quick-setup endpoints, keep per-bill SML party picker and DB compatibility columns.
