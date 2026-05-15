@@ -694,10 +694,18 @@ type OldDataSummary struct {
 	SentOlderThan180Days  int `json:"sent_older_than_180_days"`
 	SentOlderThan365Days  int `json:"sent_older_than_365_days"`
 	PurgeEligible730Days  int `json:"purge_eligible_730_days"`
+	ArchiveEligibleCount  int `json:"archive_eligible_count"`
+	PurgeEligibleCount    int `json:"purge_eligible_count"`
 	ArchivedArtifactCount int `json:"archived_artifact_count"`
 }
 
-func (r *BillRepo) OldDataSummary() (OldDataSummary, error) {
+func (r *BillRepo) OldDataSummary(archiveDays, purgeDays int) (OldDataSummary, error) {
+	if archiveDays <= 0 {
+		archiveDays = 180
+	}
+	if purgeDays <= 0 {
+		purgeDays = 730
+	}
 	var s OldDataSummary
 	err := r.db.QueryRow(`
 		SELECT
@@ -707,9 +715,12 @@ func (r *BillRepo) OldDataSummary() (OldDataSummary, error) {
 		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NULL AND b.status IN ('sent', 'skipped') AND b.created_at < NOW() - INTERVAL '180 days'),
 		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NULL AND b.status IN ('sent', 'skipped') AND b.created_at < NOW() - INTERVAL '365 days'),
 		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NOT NULL AND b.archived_at < NOW() - INTERVAL '730 days'),
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NULL AND b.status IN ('sent', 'skipped') AND b.created_at < NOW() - ($1 * INTERVAL '1 day')),
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NOT NULL AND b.archived_at < NOW() - ($2 * INTERVAL '1 day')),
 		  COUNT(ba.id) FILTER (WHERE b.archived_at IS NOT NULL)
 		FROM bills b
 		LEFT JOIN bill_artifacts ba ON ba.bill_id = b.id`,
+		archiveDays, purgeDays,
 	).Scan(
 		&s.ActiveTotal,
 		&s.ArchivedTotal,
@@ -717,6 +728,8 @@ func (r *BillRepo) OldDataSummary() (OldDataSummary, error) {
 		&s.SentOlderThan180Days,
 		&s.SentOlderThan365Days,
 		&s.PurgeEligible730Days,
+		&s.ArchiveEligibleCount,
+		&s.PurgeEligibleCount,
 		&s.ArchivedArtifactCount,
 	)
 	return s, err

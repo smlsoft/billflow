@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -27,14 +28,27 @@ func NewMarketplaceAliasHandler(
 }
 
 func (h *MarketplaceAliasHandler) ReviewGroups(c *gin.Context) {
-	billType := c.Query("bill_type")
-	groups, err := h.aliasRepo.ReviewGroups(billType, 300)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "50"))
+	result, err := h.aliasRepo.ReviewGroupsPaged(models.MarketplaceAliasReviewFilter{
+		BillType: c.Query("bill_type"),
+		Source:   c.Query("source"),
+		Query:    c.Query("q"),
+		Sort:     c.DefaultQuery("sort", "impact"),
+		Page:     page,
+		PerPage:  perPage,
+	})
 	if err != nil {
 		h.logger.Error("marketplace alias review groups", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load review groups"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": groups, "total": len(groups)})
+	c.JSON(http.StatusOK, gin.H{
+		"data":     result.Groups,
+		"total":    result.Total,
+		"page":     result.Page,
+		"per_page": result.PerPage,
+	})
 }
 
 func (h *MarketplaceAliasHandler) Confirm(c *gin.Context) {
@@ -58,7 +72,7 @@ func (h *MarketplaceAliasHandler) Confirm(c *gin.Context) {
 
 	unitCode := req.UnitCode
 	if unitCode == "" && h.catalogRepo != nil {
-		if cat, _ := h.catalogRepo.GetOne(req.ItemCode); cat != nil {
+		if cat, _ := h.catalogRepo.GetActiveOne(req.ItemCode); cat != nil {
 			unitCode = cat.UnitCode
 		}
 	}

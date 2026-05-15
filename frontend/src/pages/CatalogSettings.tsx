@@ -41,6 +41,8 @@ interface CatalogStats {
   embedded: number
   pending: number
   error: number
+  missing: number
+  last_sync_at?: string | null
   index_size: number
   embed_running: boolean
   sync_running?: boolean
@@ -49,6 +51,7 @@ interface CatalogStats {
     started_at?: string
     finished_at?: string
     count: number
+    missing?: number
     error?: string
   }
 }
@@ -65,8 +68,19 @@ interface InstanceSettingsStatus {
   pending_restart_settings?: string[]
 }
 
-type StatusFilter = '' | 'pending' | 'done' | 'error'
+type StatusFilter = '' | 'pending' | 'done' | 'error' | 'missing'
 interface FetchParams { page: number; filter: StatusFilter; query: string }
+
+function fmtDateTime(value?: string | null) {
+  if (!value) return '—'
+  return new Date(value).toLocaleString('th-TH', {
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 function Pagination({
   page,
@@ -242,8 +256,9 @@ export default function CatalogSettings() {
           fetchItems(params)
           if (s.sync_status?.error) {
             notify(`Sync ล้มเหลว: ${s.sync_status.error}`, false)
-          } else if (stats?.sync_running && s.sync_status?.count) {
-            notify(`Sync สำเร็จ ${s.sync_status.count} รายการ`)
+          } else if (stats?.sync_running && s.sync_status) {
+            const missing = s.sync_status.missing ? ` · ไม่พบใน SML ${s.sync_status.missing} รายการ` : ''
+            notify(`ซิงก์สินค้าสำเร็จ ${s.sync_status.count} รายการ${missing}`)
           }
         }
       }, 3000)
@@ -288,7 +303,7 @@ export default function CatalogSettings() {
     setSyncing(true)
     try {
       const res = await api.post<{ message?: string; sync_running?: boolean }>('/api/catalog/sync')
-      notify(res.data.message === 'catalog sync already running' ? 'กำลัง Sync สินค้าอยู่แล้ว' : 'เริ่ม Sync สินค้าแล้ว')
+      notify(res.data.message === 'catalog sync already running' ? 'กำลังซิงก์สินค้าอยู่แล้ว' : 'เริ่มซิงก์สินค้าจาก SML แล้ว')
       fetchStats()
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { error?: string; pending_restart?: boolean; pending_restart_settings?: string[] } } })?.response?.data
@@ -355,7 +370,9 @@ export default function CatalogSettings() {
     } catch (err: unknown) {
       const e = err as { response?: { status?: number; data?: { error?: string; not_found?: boolean } } }
       if (e?.response?.data?.not_found) {
-        notify(`ไม่พบ ${code} ใน SML — ลบจาก BillFlow ได้`, false)
+        notify(`ไม่พบ ${code} ใน SML — ทำเครื่องหมายว่าไม่พบใน SML แล้ว`, false)
+        fetchStats()
+        fetchItems(params)
       } else {
         notify(e?.response?.data?.error ?? `รีเฟรช ${code} ล้มเหลว`, false)
       }
@@ -393,18 +410,19 @@ export default function CatalogSettings() {
     { key: 'done', label: 'พร้อมจับคู่', count: stats?.embedded },
     { key: 'pending', label: 'รอเตรียมข้อมูล', count: stats?.pending },
     { key: 'error', label: 'มีปัญหา', count: stats?.error },
+    { key: 'missing', label: 'ไม่พบใน SML', count: stats?.missing },
   ]
 
   return (
     <div className="space-y-4">
       <PageHeader
         title={PAGE_TITLE.catalog}
-        description="รายการสินค้าจาก SML ที่ใช้จับคู่กับชื่อสินค้าจากอีเมล Shopee"
+        description="รายการสินค้าจาก SML สำหรับจับคู่สินค้าแบบ manual-first กดซิงก์เมื่อมีการเพิ่ม ลบ หรือแก้ไขสินค้าใน SML"
         actions={
           <>
             <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncBusy || pendingRestart}>
               <RotateCw className={cn('h-3.5 w-3.5', isSyncBusy && 'animate-spin')} />
-              {pendingRestart ? 'รอรีสตาร์ท SML' : isSyncBusy ? 'กำลังซิงก์…' : 'ซิงก์สินค้า'}
+              {pendingRestart ? 'รอรีสตาร์ท SML' : isSyncBusy ? 'กำลังซิงก์…' : 'ซิงก์สินค้าจาก SML'}
             </Button>
             <Button size="sm" onClick={handleEmbedAll} disabled={isEmbedBusy}>
               {isEmbedBusy ? (
@@ -460,13 +478,13 @@ export default function CatalogSettings() {
       )}
 
       {/* Catalog vs Mappings explainer — without this admins assume the two
-          features are the same. Catalog is the master + smart-match
-          backend; Mappings is the human-curated alias table. */}
+          features are the same. Catalog is the local SML product cache;
+          Mappings is the human-curated alias table. */}
       <details className="group rounded-lg border border-info/25 bg-info/[0.035] text-sm">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-2.5">
           <span className="inline-flex min-w-0 items-center gap-2.5">
             <BookOpen className="h-4 w-4 shrink-0 text-info" strokeWidth={2.25} />
-            <span className="font-medium text-foreground">Catalog คือฐานสินค้า SML สำหรับจับคู่กับชื่อจากอีเมล Shopee</span>
+            <span className="font-medium text-foreground">Catalog คือรายการสินค้า SML ที่ BillFlow เก็บไว้สำหรับค้นหาและจับคู่</span>
           </span>
           <span className="text-[11px] text-primary group-open:hidden">รายละเอียด</span>
           <span className="hidden text-[11px] text-muted-foreground group-open:inline">ย่อ</span>
@@ -477,17 +495,17 @@ export default function CatalogSettings() {
           <div className="min-w-0 flex-1 space-y-1.5">
             <p className="text-[13px] leading-relaxed text-muted-foreground">
               <span className="font-medium text-foreground">รายการสินค้าจาก SML</span>
-              ที่ BillFlow ใช้เทียบกับชื่อสินค้าจากอีเมล Shopee และแนะนำรหัสสินค้าในหน้าบิล
+              ที่ BillFlow ใช้เทียบกับชื่อสินค้าจากอีเมลและ marketplace แล้วแนะนำรหัสสินค้าในหน้าบิล
             </p>
             <div className="text-[12px] leading-relaxed text-muted-foreground">
-              <span className="font-medium text-foreground">เริ่มใช้งานครั้งแรก:</span>
+              <span className="font-medium text-foreground">เมื่อแก้สินค้าใน SML:</span>
               <span className="ml-1">
-                ① กด <span className="font-medium text-foreground">ซิงก์สินค้า</span> → ② กด{' '}
-                <span className="font-medium text-foreground">สร้างข้อมูลจับคู่</span> (อาจใช้เวลาหลายนาที)
+                กด <span className="font-medium text-foreground">ซิงก์สินค้าจาก SML</span> แล้วค่อยกด{' '}
+                <span className="font-medium text-foreground">สร้างข้อมูลจับคู่</span> เฉพาะรายการที่ยังรอเตรียมข้อมูล
               </span>
             </div>
             <p className="text-[12px] text-muted-foreground">
-              💡 ต่างจาก{' '}
+              ต่างจาก{' '}
               <Link to="/mappings" className="font-medium text-primary hover:underline">
                 ตารางจับคู่สินค้า
               </Link>{' '}
@@ -499,7 +517,7 @@ export default function CatalogSettings() {
       </details>
 
       <div className="rounded-lg border border-info/20 bg-info/[0.035] px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
-        ถ้าระบบถูก deploy หรือ restart ระหว่างสร้างข้อมูลจับคู่ งานที่ทำแล้วจะไม่หาย และ backend จะเริ่มทำต่อจากรายการที่ยังรออยู่ให้อัตโนมัติหลังกลับมาออนไลน์
+        ค่าเริ่มต้นเป็นแบบกดซิงก์เอง ไม่มีการดึงสินค้าทั้งหมดถี่ ๆ อัตโนมัติ เพื่อลดภาระ SML, database และ token เตรียมข้อมูลค้นหา
       </div>
 
       {message && (
@@ -518,10 +536,12 @@ export default function CatalogSettings() {
 
       {stats && (
         <div className="flex flex-wrap gap-2">
-          <StatChip label="สินค้าทั้งหมด" value={stats.total.toLocaleString()} variant="primary" />
+          <StatChip label="สินค้าใช้งานได้" value={stats.total.toLocaleString()} variant="primary" />
           <StatChip label="พร้อมจับคู่" value={stats.embedded.toLocaleString()} variant="success" />
           <StatChip label="รอเตรียมข้อมูล" value={stats.pending.toLocaleString()} variant="warning" />
           <StatChip label="โหลดไว้ใช้งาน" value={stats.index_size.toLocaleString()} variant="primary" />
+          <StatChip label="ไม่พบใน SML" value={stats.missing.toLocaleString()} variant={stats.missing > 0 ? 'danger' : 'muted'} />
+          <StatChip label="ซิงก์ล่าสุด" value={fmtDateTime(stats.last_sync_at)} variant="muted" />
           {stats.embed_running ? (
             <Card className="flex-1 border-primary/30 bg-primary/5">
               <CardContent className="flex items-center gap-3 px-4 py-3">
@@ -584,6 +604,7 @@ export default function CatalogSettings() {
                       'h-4 px-1 text-[10px] tabular-nums',
                       key === 'pending' && 'bg-warning/15 text-warning',
                       key === 'error' && 'bg-destructive/15 text-destructive',
+                      key === 'missing' && 'bg-destructive/15 text-destructive',
                     )}
                   >
                     {count > 9999 ? '9999+' : count}
@@ -637,7 +658,7 @@ export default function CatalogSettings() {
               <TableHead className="w-[80px]">หน่วย</TableHead>
               <TableHead className="w-[100px] text-right">ราคา</TableHead>
               <TableHead className="w-[120px]">สถานะ</TableHead>
-              <TableHead className="w-[120px]">เตรียมข้อมูลเมื่อ</TableHead>
+              <TableHead className="w-[140px]">ซิงก์ล่าสุด</TableHead>
               <TableHead className="w-[200px] text-right">จัดการ</TableHead>
             </TableRow>
           </TableHeader>
@@ -661,8 +682,11 @@ export default function CatalogSettings() {
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((item) => (
-                <TableRow key={item.item_code} className="h-12">
+              items.map((item) => {
+                const active = item.is_active !== false
+                const price = item.price ?? item.sale_price
+                return (
+                <TableRow key={item.item_code} className={cn('h-12', !active && 'bg-destructive/[0.03]')}>
                   <TableCell className="py-2 font-mono text-xs font-medium">
                     {item.item_code}
                   </TableCell>
@@ -678,23 +702,30 @@ export default function CatalogSettings() {
                     {item.unit_code || '—'}
                   </TableCell>
                   <TableCell className="py-2 text-right tabular-nums">
-                    {item.sale_price != null
-                      ? `฿${item.sale_price.toLocaleString()}`
+                    {price != null
+                      ? `฿${price.toLocaleString()}`
                       : '—'}
                   </TableCell>
                   <TableCell className="py-2">
                     <Badge
                       variant="secondary"
                       className={cn(
+                        !active &&
+                          'bg-destructive/15 text-destructive hover:bg-destructive/20',
+                        active &&
                         item.embedding_status === 'done' &&
                           'bg-success/15 text-success hover:bg-success/20',
+                        active &&
                         item.embedding_status === 'pending' &&
                           'bg-warning/15 text-warning hover:bg-warning/20',
+                        active &&
                         item.embedding_status === 'error' &&
                           'bg-destructive/15 text-destructive hover:bg-destructive/20',
                       )}
                     >
-                      {item.embedding_status === 'done'
+                      {!active
+                        ? 'ไม่พบใน SML'
+                        : item.embedding_status === 'done'
                         ? 'พร้อมจับคู่'
                         : item.embedding_status === 'pending'
                           ? 'รอเตรียมข้อมูล'
@@ -702,13 +733,11 @@ export default function CatalogSettings() {
                     </Badge>
                   </TableCell>
                   <TableCell className="py-2 text-xs tabular-nums text-muted-foreground">
-                    {item.embedded_at
-                      ? new Date(item.embedded_at).toLocaleDateString('th-TH')
-                      : '—'}
+                    {active ? fmtDateTime(item.synced_at) : fmtDateTime(item.missing_at)}
                   </TableCell>
                   <TableCell className="py-2 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {item.embedding_status !== 'done' && (
+                      {active && item.embedding_status !== 'done' && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -750,7 +779,7 @@ export default function CatalogSettings() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
+              )})
             )}
           </TableBody>
         </Table>

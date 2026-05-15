@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/artifact"
+	"billflow/internal/services/catalog"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/sml"
@@ -31,6 +33,8 @@ type BillHandler struct {
 	auditRepo       *repository.AuditLogRepo
 	aliasRepo       *repository.MarketplaceAliasRepo
 	catalogRepo     *repository.SMLCatalogRepo     // for unit_code defaults on item edit
+	catalogSvc      *catalog.SMLCatalogService     // targeted product refresh before REST SML send
+	catalogIdx      *catalog.CatalogIndex          // reload after a product is marked missing
 	channelDefaults *repository.ChannelDefaultRepo // per-(channel,bill_type) party config
 	docCounters     *repository.DocCounterRepo     // atomic doc_no generator
 	artifactSvc     *artifact.Service              // source-artifact storage (PDF/HTML/etc.)
@@ -50,6 +54,8 @@ func NewBillHandler(
 	auditRepo *repository.AuditLogRepo,
 	aliasRepo *repository.MarketplaceAliasRepo,
 	catalogRepo *repository.SMLCatalogRepo,
+	catalogSvc *catalog.SMLCatalogService,
+	catalogIdx *catalog.CatalogIndex,
 	channelDefaults *repository.ChannelDefaultRepo,
 	docCounters *repository.DocCounterRepo,
 	artifactSvc *artifact.Service,
@@ -68,6 +74,8 @@ func NewBillHandler(
 		auditRepo:       auditRepo,
 		aliasRepo:       aliasRepo,
 		catalogRepo:     catalogRepo,
+		catalogSvc:      catalogSvc,
+		catalogIdx:      catalogIdx,
 		channelDefaults: channelDefaults,
 		docCounters:     docCounters,
 		artifactSvc:     artifactSvc,
@@ -392,6 +400,93 @@ func (h *BillHandler) resolveItemName(itemCode, rawName string) string {
 	return rawName
 }
 
+type sendReadinessError struct {
+	status          int
+	message         string
+	markNeedsReview bool
+	itemCode        string
+}
+
+func (h *BillHandler) validateItemsReadyForSML(c *gin.Context, bill *models.Bill, kind string) *sendReadinessError {
+	for _, item := range bill.Items {
+		if !item.Mapped || item.ItemCode == nil || strings.TrimSpace(*item.ItemCode) == "" {
+			return &sendReadinessError{
+				status:          http.StatusConflict,
+				message:         "ต้องยืนยันการจับคู่สินค้าก่อนส่ง SML",
+				markNeedsReview: true,
+			}
+		}
+
+		// SML 248 REST documents must use product codes that are still present
+		// in the SML product master. SaleReserve uses the separate SML 213 path
+		// and keeps its legacy mapper behavior.
+		if kind == "sale_reserve" || h.catalogRepo == nil {
+			continue
+		}
+
+		code := strings.TrimSpace(*item.ItemCode)
+		local, err := h.catalogRepo.GetActiveOne(code)
+		if err != nil {
+			return &sendReadinessError{
+				status:  http.StatusInternalServerError,
+				message: "ตรวจสอบสินค้าใน BillFlow ไม่สำเร็จ: " + err.Error(),
+			}
+		}
+		if local == nil {
+			return &sendReadinessError{
+				status:          http.StatusConflict,
+				message:         fmt.Sprintf("สินค้า %s ไม่พบใน SML กรุณาเลือกสินค้าใหม่", code),
+				markNeedsReview: true,
+				itemCode:        code,
+			}
+		}
+
+		if h.catalogSvc == nil {
+			continue
+		}
+		refreshed, notFound, err := h.catalogSvc.EnsureActiveInSML(code)
+		if err != nil {
+			return &sendReadinessError{
+				status:  http.StatusBadGateway,
+				message: fmt.Sprintf("ตรวจสอบสินค้า %s กับ SML ไม่สำเร็จ: %v", code, err),
+			}
+		}
+		if notFound || refreshed == nil || !refreshed.IsActive {
+			if h.catalogIdx != nil {
+				if reloadErr := h.catalogIdx.Reload(h.catalogRepo); reloadErr != nil {
+					h.log.Warn("catalog: reload index after send guard mark missing", zap.Error(reloadErr))
+				}
+			}
+			if h.auditRepo != nil {
+				var userID *string
+				if uid := c.GetString("user_id"); uid != "" {
+					userID = &uid
+				}
+				_ = h.auditRepo.Log(models.AuditEntry{
+					Action:   "catalog_mark_missing",
+					TargetID: &bill.ID,
+					UserID:   userID,
+					Source:   "catalog",
+					Level:    "warning",
+					TraceID:  c.GetString("trace_id"),
+					Detail: map[string]interface{}{
+						"item_code": code,
+						"bill_id":   bill.ID,
+						"reason":    "send_guard_not_found_in_sml",
+					},
+				})
+			}
+			return &sendReadinessError{
+				status:          http.StatusConflict,
+				message:         fmt.Sprintf("สินค้า %s ไม่พบใน SML กรุณาเลือกสินค้าใหม่", code),
+				markNeedsReview: true,
+				itemCode:        code,
+			}
+		}
+	}
+	return nil
+}
+
 // GET /api/bills
 func (h *BillHandler) List(c *gin.Context) {
 	var f models.BillListFilter
@@ -499,7 +594,9 @@ func (h *BillHandler) Get(c *gin.Context) {
 
 // GET /api/bills/old-data/summary
 func (h *BillHandler) OldDataSummary(c *gin.Context) {
-	summary, err := h.billRepo.OldDataSummary()
+	archiveDays, _ := strconv.Atoi(c.DefaultQuery("archive_days", "180"))
+	purgeDays, _ := strconv.Atoi(c.DefaultQuery("purge_days", "730"))
+	summary, err := h.billRepo.OldDataSummary(archiveDays, purgeDays)
 	if err != nil {
 		h.log.Error("OldDataSummary", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -883,32 +980,11 @@ func (h *BillHandler) Retry(c *gin.Context) {
 	kind, urlOverride := resolveEndpoint(def, bill.Source, bill.BillType)
 	c.Set("sml_url_override", urlOverride)
 
-	// Verify all items mapped. For REST SML documents, the item_code must also
-	// exist in the local SML catalog; Shopee SKU is only a source hint, not
-	// proof that the SML product exists.
-	allMapped := true
-	missingCatalogCode := ""
-	for _, item := range bill.Items {
-		if !item.Mapped || item.ItemCode == nil || strings.TrimSpace(*item.ItemCode) == "" {
-			allMapped = false
-			break
+	if readiness := h.validateItemsReadyForSML(c, bill, kind); readiness != nil {
+		if readiness.markNeedsReview {
+			_ = h.billRepo.UpdateStatus(id, "needs_review", nil, nil, nil)
 		}
-		if kind != "sale_reserve" && h.catalogRepo != nil {
-			code := strings.TrimSpace(*item.ItemCode)
-			if cat, _ := h.catalogRepo.GetOne(code); cat == nil {
-				missingCatalogCode = code
-				allMapped = false
-				break
-			}
-		}
-	}
-	if !allMapped {
-		_ = h.billRepo.UpdateStatus(id, "needs_review", nil, nil, nil)
-		if missingCatalogCode != "" {
-			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("ไม่พบรหัสสินค้า %s ในสินค้า SML — ต้องตรวจสินค้าอีกครั้งก่อนส่ง SML", missingCatalogCode)})
-			return
-		}
-		c.JSON(http.StatusConflict, gin.H{"error": "ต้องยืนยันการจับคู่สินค้าก่อนส่ง SML"})
+		c.JSON(readiness.status, gin.H{"error": readiness.message, "item_code": readiness.itemCode})
 		return
 	}
 
@@ -1791,7 +1867,7 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 	// If user is changing item_code, fill unit_code from catalog if not provided.
 	// This makes the F1 feedback richer and the SML payload more correct.
 	if req.ItemCode != nil && *req.ItemCode != "" && (req.UnitCode == nil || *req.UnitCode == "") && h.catalogRepo != nil {
-		if cat, _ := h.catalogRepo.GetOne(*req.ItemCode); cat != nil && cat.UnitCode != "" {
+		if cat, _ := h.catalogRepo.GetActiveOne(*req.ItemCode); cat != nil && cat.UnitCode != "" {
 			u := cat.UnitCode
 			req.UnitCode = &u
 		}

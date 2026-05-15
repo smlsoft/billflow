@@ -67,6 +67,22 @@ type MarketplaceAliasReviewGroup struct {
 	Candidates     []CatalogMatch `json:"candidates,omitempty"`
 }
 
+type MarketplaceAliasReviewFilter struct {
+	BillType string
+	Source   string
+	Query    string
+	Sort     string
+	Page     int
+	PerPage  int
+}
+
+type MarketplaceAliasReviewResult struct {
+	Groups  []MarketplaceAliasReviewGroup `json:"data"`
+	Total   int                           `json:"total"`
+	Page    int                           `json:"page"`
+	PerPage int                           `json:"per_page"`
+}
+
 // PlatformColumnMapping maps a logical field name to the actual Excel column name
 // per platform (lazada | shopee). Stored in platform_column_mappings table.
 type PlatformColumnMapping struct {

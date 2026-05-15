@@ -1,16 +1,17 @@
-import { useEffect, useState } from 'react'
-import { Archive, Database, RefreshCw, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Archive, Database, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import client from '@/api/client'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { EmptyState } from '@/components/common/EmptyState'
-import { PageHeader } from '@/components/common/PageHeader'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/hooks/useAuth'
+import { cn } from '@/lib/utils'
 
 interface OldDataSummary {
   active_total: number
@@ -19,6 +20,8 @@ interface OldDataSummary {
   sent_older_than_180_days: number
   sent_older_than_365_days: number
   purge_eligible_730_days: number
+  archive_eligible_count: number
+  purge_eligible_count: number
   archived_artifact_count: number
 }
 
@@ -31,21 +34,27 @@ export default function OldDataManagement() {
   const [purgeDays, setPurgeDays] = useState(730)
   const [action, setAction] = useState<'archive' | 'purge' | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await client.get<{ data: OldDataSummary }>('/api/bills/old-data/summary')
+      const res = await client.get<{ data: OldDataSummary }>('/api/bills/old-data/summary', {
+        params: {
+          archive_days: archiveDays,
+          purge_days: purgeDays,
+        },
+      })
       setSummary(res.data.data)
     } catch {
       toast.error('โหลดข้อมูลเก่าไม่สำเร็จ')
     } finally {
       setLoading(false)
     }
-  }
+  }, [archiveDays, purgeDays])
 
   useEffect(() => {
-    void load()
-  }, [])
+    const timer = setTimeout(() => void load(), 250)
+    return () => clearTimeout(timer)
+  }, [load])
 
   const runAction = async () => {
     if (!action) return
@@ -73,88 +82,82 @@ export default function OldDataManagement() {
     }
   }
 
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="จัดการข้อมูลเก่า"
-        description="เก็บบิลเก่าออกจากหน้างานประจำ และลบถาวรเฉพาะข้อมูลที่เก็บไว้นานแล้ว"
-      />
+  const archiveEligible = summary?.archive_eligible_count ?? 0
+  const purgeEligible = summary?.purge_eligible_count ?? 0
 
-      <div className="grid gap-3 md:grid-cols-4">
-        <SummaryCard title="รายการปกติ" value={summary?.active_total} loading={loading} />
-        <SummaryCard title="บิลที่เก็บแล้ว" value={summary?.archived_total} loading={loading} />
-        <SummaryCard title="เก่ากว่า 6 เดือน" value={summary?.sent_older_than_180_days} loading={loading} />
-        <SummaryCard title="พร้อมลบถาวร" value={summary?.purge_eligible_730_days} loading={loading} />
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-normal text-foreground">จัดการข้อมูลเก่า</h1>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+            ใช้เคลียร์หน้าทำงานให้เบาลงโดยไม่เสียประวัติ: เก็บบิลคือซ่อนจากรายการปกติ ส่วนลบถาวรใช้กับบิลที่เก็บไว้นานแล้วเท่านั้น
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+          รีเฟรช
+        </Button>
       </div>
 
-      <Card>
-        <CardHeader className="border-b">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Archive className="h-4 w-4 text-primary" />
-            เก็บบิลที่ส่งสำเร็จแล้ว
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
-          <div className="space-y-2 text-sm text-muted-foreground">
-            <p>
-              เก็บบิลจะซ่อนบิลออกจากหน้างานประจำ แต่ยังเปิดดูย้อนหลัง ค้นหา และดูประวัติการทำงานได้
-            </p>
-            <p>
-              ระบบจะเก็บเฉพาะบิลสถานะส่งเข้า SML แล้วหรือข้ามแล้ว ไม่แตะบิลที่ยังต้องตรวจ/พร้อมส่ง/ส่งไม่สำเร็จ
-            </p>
-          </div>
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">เก่ากว่า (วัน)</label>
-            <Input
-              type="number"
-              min={30}
-              value={archiveDays}
-              onChange={(e) => setArchiveDays(Number(e.target.value) || 180)}
-            />
-            <Button className="w-full" onClick={() => setAction('archive')} disabled={!isAdmin}>
-              <Archive className="mr-2 h-4 w-4" />
-              เก็บบิลที่ส่งสำเร็จแล้ว
-            </Button>
-            {!isAdmin && <p className="text-xs text-muted-foreground">เฉพาะผู้ดูแลระบบเท่านั้น</p>}
-          </div>
-        </CardContent>
-      </Card>
+      <div className="rounded-lg border bg-card px-3 py-2">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <SummaryItem label="รายการปกติ" value={summary?.active_total} loading={loading} />
+          <SummaryItem label="บิลที่เก็บแล้ว" value={summary?.archived_total} loading={loading} />
+          <SummaryItem label="เก่ากว่า 6 เดือน" value={summary?.sent_older_than_180_days} loading={loading} />
+          <SummaryItem label="พร้อมลบถาวร" value={summary?.purge_eligible_730_days} loading={loading} />
+          {summary && summary.archived_artifact_count > 0 && (
+            <Badge variant="outline" className="h-6">
+              ไฟล์แนบในบิลที่เก็บแล้ว {summary.archived_artifact_count.toLocaleString()} รายการ
+            </Badge>
+          )}
+        </div>
+      </div>
 
-      <Card className="border-destructive/30">
-        <CardHeader className="border-b">
-          <CardTitle className="flex items-center gap-2 text-base text-destructive">
-            <Trash2 className="h-4 w-4" />
-            ลบถาวร
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
-          <div className="space-y-2 text-sm text-muted-foreground">
-            <p>
-              ลบถาวรจะลบข้อมูลบิลและไฟล์แนบ คืนไม่ได้ ใช้เฉพาะบิลที่เก็บไว้นานแล้วเท่านั้น
-            </p>
-            <p>
-              Logs จะยังอยู่พร้อมข้อมูลสำคัญ เช่น เลขบิล เลข SML ช่องทาง และผู้ทำรายการ
-            </p>
-            {summary && summary.archived_artifact_count > 0 && (
-              <p>มีไฟล์แนบในบิลที่เก็บแล้ว {summary.archived_artifact_count.toLocaleString()} รายการ</p>
-            )}
-          </div>
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">เก็บไว้นานกว่า (วัน)</label>
-            <Input
-              type="number"
-              min={365}
-              value={purgeDays}
-              onChange={(e) => setPurgeDays(Number(e.target.value) || 730)}
-            />
-            <Button variant="destructive" className="w-full" onClick={() => setAction('purge')} disabled={!isAdmin}>
-              <Trash2 className="mr-2 h-4 w-4" />
-              ลบถาวร
-            </Button>
-            {!isAdmin && <p className="text-xs text-muted-foreground">เฉพาะผู้ดูแลระบบเท่านั้น</p>}
-          </div>
-        </CardContent>
-      </Card>
+      <div className="rounded-lg border bg-card">
+        <OperationRow
+          icon={Archive}
+          title="เก็บบิล"
+          tone="primary"
+          description="ซ่อนบิลที่ส่ง SML สำเร็จแล้วหรือข้ามแล้วออกจากหน้างานประจำ แต่ยังค้นกลับมา เปิดดู และดู logs ได้"
+          helper="ไม่แตะบิลที่ยังต้องตรวจ พร้อมส่ง หรือส่งไม่สำเร็จ"
+          daysLabel="เก่ากว่า (วัน)"
+          days={archiveDays}
+          min={30}
+          onDaysChange={setArchiveDays}
+          previewCount={archiveEligible}
+          previewLabel="บิลที่จะถูกเก็บ"
+          buttonLabel="เก็บบิล"
+          disabled={!isAdmin || archiveEligible === 0}
+          onClick={() => setAction('archive')}
+        />
+
+        <div className="border-t" />
+
+        <OperationRow
+          icon={Trash2}
+          title="ลบถาวร"
+          tone="danger"
+          description="ลบข้อมูลบิลและไฟล์แนบ คืนไม่ได้ ใช้เฉพาะบิลที่เก็บไว้นานแล้วเพื่อลดข้อมูลสะสมระยะยาว"
+          helper="Logs สำคัญยังอยู่ เช่น เลขบิล เลข SML ช่องทาง และผู้ทำรายการ"
+          daysLabel="เก็บไว้นานกว่า (วัน)"
+          days={purgeDays}
+          min={365}
+          onDaysChange={setPurgeDays}
+          previewCount={purgeEligible}
+          previewLabel="บิลที่จะถูกลบถาวร"
+          buttonLabel="ลบถาวร"
+          disabled={!isAdmin || purgeEligible === 0}
+          onClick={() => setAction('purge')}
+        />
+      </div>
+
+      {!isAdmin && (
+        <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          <ShieldCheck className="h-4 w-4" />
+          เฉพาะผู้ดูแลระบบเท่านั้นที่ทำรายการเก็บบิลเก่าและลบถาวรได้
+        </div>
+      )}
 
       {!loading && !summary && (
         <EmptyState
@@ -171,8 +174,8 @@ export default function OldDataManagement() {
         title={action === 'purge' ? 'ยืนยันลบถาวร?' : 'ยืนยันเก็บบิลเก่า?'}
         description={
           action === 'purge'
-            ? `จะลบถาวรเฉพาะบิลที่เก็บแล้วเก่ากว่า ${purgeDays} วัน คืนไม่ได้`
-            : `จะเก็บบิลที่ส่งสำเร็จแล้วหรือข้ามแล้ว เก่ากว่า ${archiveDays} วัน`
+            ? `จะลบถาวรเฉพาะบิลที่เก็บแล้วเก่ากว่า ${purgeDays} วัน จำนวน ${purgeEligible.toLocaleString()} รายการ คืนไม่ได้`
+            : `จะเก็บบิลที่ส่งสำเร็จแล้วหรือข้ามแล้ว เก่ากว่า ${archiveDays} วัน จำนวน ${archiveEligible.toLocaleString()} รายการ`
         }
         confirmLabel={action === 'purge' ? 'ลบถาวร' : 'เก็บบิล'}
         variant={action === 'purge' ? 'destructive' : 'default'}
@@ -182,15 +185,87 @@ export default function OldDataManagement() {
   )
 }
 
-function SummaryCard({ title, value, loading }: { title: string; value?: number; loading: boolean }) {
+function SummaryItem({ label, value, loading }: { label: string; value?: number; loading: boolean }) {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {loading ? <Skeleton className="h-8 w-20" /> : <div className="text-2xl font-bold tabular-nums">{(value ?? 0).toLocaleString()}</div>}
-      </CardContent>
-    </Card>
+    <span className="inline-flex items-baseline gap-1.5">
+      {loading ? (
+        <Skeleton className="h-5 w-12" />
+      ) : (
+        <span className="text-lg font-semibold tabular-nums text-foreground">{(value ?? 0).toLocaleString()}</span>
+      )}
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </span>
+  )
+}
+
+function OperationRow({
+  icon: Icon,
+  title,
+  tone,
+  description,
+  helper,
+  daysLabel,
+  days,
+  min,
+  onDaysChange,
+  previewCount,
+  previewLabel,
+  buttonLabel,
+  disabled,
+  onClick,
+}: {
+  icon: LucideIcon
+  title: string
+  tone: 'primary' | 'danger'
+  description: string
+  helper: string
+  daysLabel: string
+  days: number
+  min: number
+  onDaysChange: (value: number) => void
+  previewCount: number
+  previewLabel: string
+  buttonLabel: string
+  disabled: boolean
+  onClick: () => void
+}) {
+  const isDanger = tone === 'danger'
+  return (
+    <div className="grid gap-3 p-3 lg:grid-cols-[minmax(0,1fr)_150px_160px_190px] lg:items-center">
+      <div className="min-w-0">
+        <div className={cn('flex items-center gap-2 font-medium', isDanger ? 'text-destructive' : 'text-foreground')}>
+          <Icon className={cn('h-4 w-4', isDanger ? 'text-destructive' : 'text-primary')} />
+          {title}
+        </div>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p>
+        <p className="text-xs text-muted-foreground">{helper}</p>
+      </div>
+
+      <div>
+        <label className="text-xs font-medium text-muted-foreground">{daysLabel}</label>
+        <Input
+          type="number"
+          min={min}
+          value={days}
+          onChange={(e) => onDaysChange(Number(e.target.value) || min)}
+          className="mt-1 h-9"
+        />
+      </div>
+
+      <div className="rounded-md border bg-muted/30 px-3 py-2">
+        <div className="text-lg font-semibold tabular-nums">{previewCount.toLocaleString()}</div>
+        <div className="text-xs text-muted-foreground">{previewLabel}</div>
+      </div>
+
+      <Button
+        variant={isDanger ? 'destructive' : 'default'}
+        className="w-full"
+        disabled={disabled}
+        onClick={onClick}
+      >
+        <Icon className="h-4 w-4" />
+        {buttonLabel}
+      </Button>
+    </div>
   )
 }

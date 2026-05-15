@@ -584,10 +584,14 @@ var tiktokColCandidates = map[string][]string{
 }
 
 var tiktokAllowedStatuses = map[string]bool{
-	"จัดส่งแล้ว": true,
-	"shipped":    true,
-	"delivered":  true,
-	"completed":  true,
+	"ที่จะจัดส่ง":       true,
+	"จัดส่งแล้ว":        true,
+	"shipped":           true,
+	"delivered":         true,
+	"completed":         true,
+	"to ship":           true,
+	"ready to ship":     true,
+	"awaiting shipment": true,
 }
 
 func parseTikTokExcel(src interface{ Read([]byte) (int, error) }) ([]ShopeeOrder, []string, int, error) {
@@ -790,7 +794,7 @@ foundHeader:
 			parts = append(parts, fmt.Sprintf("%s %d", status, n))
 		}
 		sort.Strings(parts)
-		warnings = append([]string{fmt.Sprintf("กรอง %d แถวเพราะสถานะไม่ใช่ จัดส่งแล้ว/shipped/delivered (%s)", skippedCount, strings.Join(parts, ", "))}, warnings...)
+		warnings = append([]string{fmt.Sprintf("กรอง %d แถวเพราะสถานะไม่ใช่ ที่จะจัดส่ง/จัดส่งแล้ว/shipped/delivered (%s)", skippedCount, strings.Join(parts, ", "))}, warnings...)
 	}
 	return orders, warnings, skippedCount, nil
 }
@@ -933,7 +937,7 @@ func (h *TikTokImportHandler) lookupCatalogItem(code string) *models.CatalogItem
 	if code == "" || h.catalogRepo == nil {
 		return nil
 	}
-	item, err := h.catalogRepo.GetOne(code)
+	item, err := h.catalogRepo.GetActiveOne(code)
 	if err != nil {
 		h.logger.Warn("tiktok_excel: catalog sku lookup failed", zap.String("sku", code), zap.Error(err))
 		return nil

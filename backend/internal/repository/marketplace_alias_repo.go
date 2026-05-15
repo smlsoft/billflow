@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"billflow/internal/marketplace"
@@ -106,23 +107,65 @@ func (r *MarketplaceAliasRepo) IncrementUsage(id string) error {
 }
 
 func (r *MarketplaceAliasRepo) ReviewGroups(billType string, limit int) ([]models.MarketplaceAliasReviewGroup, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 200
+	result, err := r.ReviewGroupsPaged(models.MarketplaceAliasReviewFilter{
+		BillType: billType,
+		Page:     1,
+		PerPage:  limit,
+		Sort:     "impact",
+	})
+	if err != nil {
+		return nil, err
 	}
+	return result.Groups, nil
+}
+
+func (r *MarketplaceAliasRepo) ReviewGroupsPaged(filter models.MarketplaceAliasReviewFilter) (models.MarketplaceAliasReviewResult, error) {
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	perPage := filter.PerPage
+	if perPage <= 0 {
+		perPage = 50
+	}
+	if perPage > 100 {
+		perPage = 100
+	}
+	sortKey := strings.TrimSpace(filter.Sort)
+	if sortKey == "" {
+		sortKey = "impact"
+	}
+
+	conditions := []string{
+		"b.source IN ('shopee','lazada','tiktok')",
+		"b.status IN ('pending', 'needs_review')",
+		"(bi.mapped IS DISTINCT FROM TRUE OR COALESCE(bi.item_code, '') = '')",
+	}
+	args := []interface{}{}
+	if filter.BillType != "" {
+		args = append(args, filter.BillType)
+		conditions = append(conditions, fmt.Sprintf("b.bill_type = $%d", len(args)))
+	}
+	if filter.Source != "" {
+		args = append(args, filter.Source)
+		conditions = append(conditions, fmt.Sprintf("b.source = $%d", len(args)))
+	}
+	if q := strings.TrimSpace(filter.Query); q != "" {
+		args = append(args, "%"+q+"%")
+		conditions = append(conditions, fmt.Sprintf("(bi.raw_name ILIKE $%d OR COALESCE(bi.source_sku, '') ILIKE $%d)", len(args), len(args)))
+	}
+
 	rows, err := r.db.Query(
-		`SELECT b.id, b.source, b.bill_type, bi.id, bi.raw_name,
+		fmt.Sprintf(`SELECT b.id, b.source, b.bill_type, bi.id, bi.raw_name,
 		        COALESCE(bi.source_sku, ''), COALESCE(bi.candidates, '[]')
 		   FROM bill_items bi
 		   JOIN bills b ON b.id = bi.bill_id
-		  WHERE b.source IN ('shopee','lazada','tiktok')
-		    AND b.status IN ('pending', 'needs_review')
-		    AND ($1 = '' OR b.bill_type = $1)
-		    AND (bi.mapped IS DISTINCT FROM TRUE OR COALESCE(bi.item_code, '') = '')
-		  ORDER BY b.created_at DESC
-		  LIMIT $2`, billType, limit,
+		  WHERE %s
+		  ORDER BY b.created_at DESC`, strings.Join(conditions, " AND ")),
+		args...,
 	)
 	if err != nil {
-		return nil, err
+		return models.MarketplaceAliasReviewResult{}, err
 	}
 	defer rows.Close()
 
@@ -135,7 +178,7 @@ func (r *MarketplaceAliasRepo) ReviewGroups(billType string, limit int) ([]model
 		var billID, source, bt, itemID, rawName, sourceSKU string
 		var candidatesRaw []byte
 		if err := rows.Scan(&billID, &source, &bt, &itemID, &rawName, &sourceSKU, &candidatesRaw); err != nil {
-			return nil, err
+			return models.MarketplaceAliasReviewResult{}, err
 		}
 		normalizedKey := marketplace.NormalizeKey(rawName, sourceSKU)
 		groupKey := source + "|name|" + normalizedKey
@@ -170,7 +213,7 @@ func (r *MarketplaceAliasRepo) ReviewGroups(billType string, limit int) ([]model
 		_ = itemID
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return models.MarketplaceAliasReviewResult{}, err
 	}
 
 	out := make([]models.MarketplaceAliasReviewGroup, 0, len(groups))
@@ -178,7 +221,58 @@ func (r *MarketplaceAliasRepo) ReviewGroups(billType string, limit int) ([]model
 		g.BillCount = len(g.bills)
 		out = append(out, g.MarketplaceAliasReviewGroup)
 	}
-	return out, nil
+	sortMarketplaceReviewGroups(out, sortKey)
+	total := len(out)
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return models.MarketplaceAliasReviewResult{
+		Groups:  out[start:end],
+		Total:   total,
+		Page:    page,
+		PerPage: perPage,
+	}, nil
+}
+
+func sortMarketplaceReviewGroups(groups []models.MarketplaceAliasReviewGroup, sortKey string) {
+	sort.SliceStable(groups, func(i, j int) bool {
+		a, b := groups[i], groups[j]
+		switch sortKey {
+		case "source":
+			if a.Source != b.Source {
+				return a.Source < b.Source
+			}
+		case "name":
+			if a.RawName != b.RawName {
+				return a.RawName < b.RawName
+			}
+		case "score":
+			return aliasSuggestedScore(a) < aliasSuggestedScore(b)
+		default:
+			if a.BillCount != b.BillCount {
+				return a.BillCount > b.BillCount
+			}
+			if a.ItemCount != b.ItemCount {
+				return a.ItemCount > b.ItemCount
+			}
+		}
+		if a.ItemCount != b.ItemCount {
+			return a.ItemCount > b.ItemCount
+		}
+		return a.GroupKey < b.GroupKey
+	})
+}
+
+func aliasSuggestedScore(g models.MarketplaceAliasReviewGroup) float64 {
+	if g.SuggestedMatch == nil {
+		return -1
+	}
+	return g.SuggestedMatch.Score
 }
 
 func (r *MarketplaceAliasRepo) ApplyToOpenItems(source, billType, sourceSKU, normalizedKey, rawName, itemCode, unitCode string) (int, int, error) {

@@ -319,7 +319,7 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, aliasRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, aliasRepo, catalogRepo, catalogSvc, catalogIdx, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	marketplaceAliasH := handlers.NewMarketplaceAliasHandler(aliasRepo, catalogRepo, auditLogRepo, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)

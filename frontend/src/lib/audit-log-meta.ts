@@ -60,6 +60,11 @@ export const ACTION_META: Record<string, ActionMeta> = {
   tiktok_import_done: { label: 'นำเข้า TikTok สำเร็จ', emoji: '📊', tone: 'success' },
   // Catalog
   product_created: { label: 'สร้างสินค้าใน SML', emoji: '🆕', tone: 'primary' },
+  catalog_sync_started: { label: 'เริ่มซิงก์สินค้า', emoji: '🔄', tone: 'info' },
+  catalog_sync_finished: { label: 'ซิงก์สินค้าเสร็จ', emoji: '✅', tone: 'success' },
+  catalog_mark_missing: { label: 'สินค้าไม่พบใน SML', emoji: '⚠️', tone: 'warning' },
+  catalog_embed_started: { label: 'เริ่มเตรียมข้อมูลค้นหา', emoji: '✨', tone: 'info' },
+  catalog_embed_one: { label: 'เตรียมข้อมูลค้นหารายสินค้า', emoji: '✨', tone: 'info' },
   // Setup / demo maintenance
   demo_test_data_reset: { label: 'ล้างข้อมูลทดสอบ', emoji: '🧹', tone: 'warning' },
   // Channel defaults
@@ -203,6 +208,20 @@ export function summarize(log: AuditLog): string {
       return [d.channel, d.bill_type, d.party_code].filter(Boolean).join(' / ')
     case 'product_created':
       return d.code ? `${d.code} — ${d.name ?? ''}` : ''
+    case 'catalog_sync_started':
+      return 'กดซิงก์สินค้าจาก SML'
+    case 'catalog_sync_finished':
+      return [
+        `ซิงก์ ${Number(d.synced_count ?? 0).toLocaleString()} รายการ`,
+        Number(d.missing_count ?? 0) > 0 ? `ไม่พบใน SML ${Number(d.missing_count ?? 0).toLocaleString()} รายการ` : '',
+        d.error ? `ผิดพลาด: ${d.error}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'catalog_mark_missing':
+      return [d.item_code, 'ไม่พบใน SML'].filter(Boolean).join(' · ')
+    case 'catalog_embed_started':
+      return 'เตรียมข้อมูลค้นหาสำหรับรายการที่ยังรออยู่'
+    case 'catalog_embed_one':
+      return d.item_code ? String(d.item_code) : ''
     case 'demo_test_data_reset': {
       const docs = d.before_documents ?? {}
       const imports = d.before_imports ?? {}

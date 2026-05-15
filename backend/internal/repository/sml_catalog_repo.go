@@ -47,8 +47,8 @@ func (r *SMLCatalogRepo) Upsert(item models.CatalogItem) error {
 	_, err := r.db.Exec(`
 		INSERT INTO sml_catalog
 		  (item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
-		   price, group_code, balance_qty, synced_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+		   price, group_code, balance_qty, synced_at, last_seen_at, is_active, missing_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW(),TRUE,NULL)
 		ON CONFLICT (item_code) DO UPDATE SET
 		  item_name   = EXCLUDED.item_name,
 		  item_name2  = EXCLUDED.item_name2,
@@ -59,6 +59,9 @@ func (r *SMLCatalogRepo) Upsert(item models.CatalogItem) error {
 		  group_code  = EXCLUDED.group_code,
 		  balance_qty = EXCLUDED.balance_qty,
 		  synced_at   = NOW(),
+		  last_seen_at = NOW(),
+		  is_active  = TRUE,
+		  missing_at = NULL,
 		  -- Reset embedding if name changed
 		  embedding_status = CASE
 		    WHEN sml_catalog.item_name != EXCLUDED.item_name
@@ -84,6 +87,42 @@ func (r *SMLCatalogRepo) Upsert(item models.CatalogItem) error {
 		item.Price, item.GroupCode, item.BalanceQty,
 	)
 	return err
+}
+
+// MarkMissing marks one catalog row as no longer present in SML. The row stays
+// in BillFlow so old bills and audit logs can still resolve its name.
+func (r *SMLCatalogRepo) MarkMissing(itemCode string) error {
+	res, err := r.db.Exec(`
+		UPDATE sml_catalog
+		SET is_active = FALSE,
+		    missing_at = COALESCE(missing_at, NOW())
+		WHERE item_code = $1
+	`, itemCode)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// MarkMissingNotSeenSince marks rows absent from a successful full SML sync.
+// Call this only after all pages were read successfully.
+func (r *SMLCatalogRepo) MarkMissingNotSeenSince(since time.Time) (int, error) {
+	res, err := r.db.Exec(`
+		UPDATE sml_catalog
+		SET is_active = FALSE,
+		    missing_at = COALESCE(missing_at, NOW())
+		WHERE is_active = TRUE
+		  AND last_seen_at < $1
+	`, since)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // SetEmbedding saves a computed embedding for one item
@@ -148,7 +187,9 @@ func (r *SMLCatalogRepo) LoadAllEmbeddings() ([]EmbeddedItem, error) {
 		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
 		       COALESCE(price, 0), embedding
 		FROM sml_catalog
-		WHERE embedding_status = 'done' AND embedding IS NOT NULL
+		WHERE is_active = TRUE
+		  AND embedding_status = 'done'
+		  AND embedding IS NOT NULL
 	`)
 	if err != nil {
 		return nil, err
@@ -184,7 +225,12 @@ func (r *SMLCatalogRepo) List(page, perPage int, statusFilter, q string) ([]mode
 	// Build WHERE clauses
 	conditions := []string{}
 	countArgs := []interface{}{}
-	if statusFilter != "" {
+	if statusFilter == "missing" {
+		conditions = append(conditions, "is_active = FALSE")
+	} else {
+		conditions = append(conditions, "is_active = TRUE")
+	}
+	if statusFilter != "" && statusFilter != "missing" {
 		conditions = append(conditions, fmt.Sprintf("embedding_status = $%d", len(countArgs)+1))
 		countArgs = append(countArgs, statusFilter)
 	}
@@ -209,7 +255,8 @@ func (r *SMLCatalogRepo) List(page, perPage int, statusFilter, q string) ([]mode
 	n := len(listArgs)
 	query := fmt.Sprintf(`
 		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
-		       price, group_code, balance_qty, embedding_status, embedded_at, synced_at, created_at
+		       price, group_code, balance_qty, embedding_status, embedded_at, synced_at,
+		       last_seen_at, is_active, missing_at, created_at
 		FROM sml_catalog
 		%s
 		ORDER BY item_code
@@ -230,7 +277,8 @@ func (r *SMLCatalogRepo) List(page, perPage int, statusFilter, q string) ([]mode
 			&it.UnitCode, &it.WHCode, &it.ShelfCode,
 			&it.Price, &it.GroupCode, &it.BalanceQty,
 			&it.EmbeddingStatus, &it.EmbeddedAt,
-			&it.SyncedAt, &it.CreatedAt,
+			&it.SyncedAt, &it.LastSeenAt, &it.IsActive,
+			&it.MissingAt, &it.CreatedAt,
 		); err != nil {
 			continue
 		}
@@ -250,16 +298,23 @@ func joinAnd(parts []string) string {
 	return result
 }
 
-// Stats returns count by embedding_status
-func (r *SMLCatalogRepo) Stats() (total, done, pending, errCount int, err error) {
+// Stats returns active catalog counts by embedding_status plus inactive rows.
+func (r *SMLCatalogRepo) Stats() (total, done, pending, errCount, missing int, lastSync *time.Time, err error) {
+	var lastSyncNull sql.NullTime
 	err = r.db.QueryRow(`
 		SELECT
-		  COUNT(*),
-		  COUNT(*) FILTER (WHERE embedding_status = 'done'),
-		  COUNT(*) FILTER (WHERE embedding_status = 'pending'),
-		  COUNT(*) FILTER (WHERE embedding_status = 'error')
+		  COUNT(*) FILTER (WHERE is_active = TRUE),
+		  COUNT(*) FILTER (WHERE is_active = TRUE AND embedding_status = 'done'),
+		  COUNT(*) FILTER (WHERE is_active = TRUE AND embedding_status = 'pending'),
+		  COUNT(*) FILTER (WHERE is_active = TRUE AND embedding_status = 'error'),
+		  COUNT(*) FILTER (WHERE is_active = FALSE),
+		  MAX(synced_at)
 		FROM sml_catalog
-	`).Scan(&total, &done, &pending, &errCount)
+	`).Scan(&total, &done, &pending, &errCount, &missing, &lastSyncNull)
+	if lastSyncNull.Valid {
+		t := lastSyncNull.Time
+		lastSync = &t
+	}
 	return
 }
 
@@ -284,14 +339,16 @@ func (r *SMLCatalogRepo) GetOne(itemCode string) (*models.CatalogItem, error) {
 	var it models.CatalogItem
 	err := r.db.QueryRow(`
 		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
-		       price, group_code, balance_qty, embedding_status, embedded_at, synced_at, created_at
+		       price, group_code, balance_qty, embedding_status, embedded_at, synced_at,
+		       last_seen_at, is_active, missing_at, created_at
 		FROM sml_catalog WHERE item_code = $1
 	`, itemCode).Scan(
 		&it.ItemCode, &it.ItemName, &it.ItemName2,
 		&it.UnitCode, &it.WHCode, &it.ShelfCode,
 		&it.Price, &it.GroupCode, &it.BalanceQty,
 		&it.EmbeddingStatus, &it.EmbeddedAt,
-		&it.SyncedAt, &it.CreatedAt,
+		&it.SyncedAt, &it.LastSeenAt, &it.IsActive,
+		&it.MissingAt, &it.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -299,10 +356,19 @@ func (r *SMLCatalogRepo) GetOne(itemCode string) (*models.CatalogItem, error) {
 	return &it, err
 }
 
+// GetActiveOne returns a catalog row only when it is still present in SML.
+func (r *SMLCatalogRepo) GetActiveOne(itemCode string) (*models.CatalogItem, error) {
+	item, err := r.GetOne(itemCode)
+	if err != nil || item == nil || !item.IsActive {
+		return nil, err
+	}
+	return item, nil
+}
+
 // CountPending returns number of items pending embedding
 func (r *SMLCatalogRepo) CountPending() (int, error) {
 	var n int
-	err := r.db.QueryRow(`SELECT COUNT(*) FROM sml_catalog WHERE embedding_status = 'pending'`).Scan(&n)
+	err := r.db.QueryRow(`SELECT COUNT(*) FROM sml_catalog WHERE is_active = TRUE AND embedding_status = 'pending'`).Scan(&n)
 	return n, err
 }
 
@@ -311,7 +377,8 @@ func (r *SMLCatalogRepo) GetPendingBatch(limit int) ([]models.CatalogItem, error
 	rows, err := r.db.Query(`
 		SELECT item_code, item_name, item_name2
 		FROM sml_catalog
-		WHERE embedding_status = 'pending'
+		WHERE is_active = TRUE
+		  AND embedding_status = 'pending'
 		ORDER BY item_code
 		LIMIT $1
 	`, limit)
@@ -334,6 +401,7 @@ func (r *SMLCatalogRepo) ListAllNames() ([]models.CatalogItem, error) {
 	rows, err := r.db.Query(`
 		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code, COALESCE(price, 0)
 		FROM sml_catalog
+		WHERE is_active = TRUE
 		ORDER BY item_code
 	`)
 	if err != nil {

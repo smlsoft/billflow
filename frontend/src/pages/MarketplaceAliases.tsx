@@ -1,16 +1,31 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, RefreshCw, Search, Sparkles, Tags } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { CheckCircle2, ChevronLeft, ChevronRight, RefreshCw, Search, Sparkles, Tags, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import client from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/common/EmptyState'
-import { PageHeader } from '@/components/common/PageHeader'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { MapItemModal } from '@/pages/BillDetail/components/MapItemModal'
 import type { CatalogMatch, MarketplaceAliasReviewGroup } from '@/types'
+import { cn } from '@/lib/utils'
 
 const SOURCE_LABEL: Record<string, string> = {
   shopee: 'Shopee',
@@ -18,32 +33,71 @@ const SOURCE_LABEL: Record<string, string> = {
   tiktok: 'TikTok',
 }
 
+type SourceFilter = 'all' | 'shopee' | 'lazada' | 'tiktok'
+type SortKey = 'impact' | 'score' | 'source' | 'name'
+
+interface ReviewResponse {
+  data: MarketplaceAliasReviewGroup[]
+  total: number
+  page: number
+  per_page: number
+}
+
+const PER_PAGE = 30
+
 export default function MarketplaceAliases() {
   const [groups, setGroups] = useState<MarketplaceAliasReviewGroup[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [source, setSource] = useState<SourceFilter>('all')
+  const [sort, setSort] = useState<SortKey>('impact')
+  const [draft, setDraft] = useState('')
+  const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
   const [selected, setSelected] = useState<MarketplaceAliasReviewGroup | null>(null)
 
-  const totalItems = useMemo(() => groups.reduce((sum, g) => sum + g.item_count, 0), [groups])
-  const totalBills = useMemo(() => groups.reduce((sum, g) => sum + g.bill_count, 0), [groups])
+  const totalItemsOnPage = useMemo(() => groups.reduce((sum, g) => sum + g.item_count, 0), [groups])
+  const totalBillsOnPage = useMemo(() => groups.reduce((sum, g) => sum + g.bill_count, 0), [groups])
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE))
 
-  const loadGroups = async () => {
+  const loadGroups = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await client.get<{ data: MarketplaceAliasReviewGroup[] }>('/api/marketplace-aliases/review-groups', {
-        params: { bill_type: 'sale' },
+      const res = await client.get<ReviewResponse>('/api/marketplace-aliases/review-groups', {
+        params: {
+          bill_type: 'sale',
+          page,
+          per_page: PER_PAGE,
+          source: source === 'all' ? undefined : source,
+          q: query || undefined,
+          sort,
+        },
       })
       setGroups(res.data.data ?? [])
+      setTotal(res.data.total ?? 0)
+      if ((res.data.page ?? page) !== page) setPage(res.data.page ?? 1)
     } catch {
       toast.error('โหลดสินค้ารอยืนยันไม่สำเร็จ')
     } finally {
       setLoading(false)
     }
-  }
+  }, [page, query, sort, source])
 
   useEffect(() => {
     void loadGroups()
-  }, [])
+  }, [loadGroups])
+
+  const commitSearch = () => {
+    setPage(1)
+    setQuery(draft.trim())
+  }
+
+  const clearSearch = () => {
+    setDraft('')
+    setQuery('')
+    setPage(1)
+  }
 
   const confirmGroup = async (group: MarketplaceAliasReviewGroup, match: CatalogMatch) => {
     setConfirmingKey(group.group_key)
@@ -68,124 +122,220 @@ export default function MarketplaceAliases() {
   }
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="สินค้ารอยืนยัน"
-        description="ยืนยันสินค้าจาก Shopee, TikTok, Lazada ครั้งเดียว แล้ว BillFlow จะจำเป็น alias ให้บิลถัดไป"
-      />
-
-      <div className="grid gap-3 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">กลุ่มที่ต้องยืนยัน</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-bold">{groups.length}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">รายการสินค้า</CardTitle>
-          </CardHeader>
-          <CardContent className="text-2xl font-bold">{totalItems}</CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">บิลที่เกี่ยวข้อง</CardTitle>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-2xl font-bold">{totalBills}</span>
-            <Button variant="outline" size="sm" onClick={loadGroups} disabled={loading}>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              รีเฟรช
-            </Button>
-          </CardContent>
-        </Card>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-normal text-foreground">สินค้ารอยืนยัน</h1>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
+            ใช้หน้านี้เมื่อชื่อสินค้าใน Shopee, TikTok, Lazada ไม่ตรงกับ SML เลือกสินค้า SML ให้หนึ่งครั้ง แล้ว BillFlow จะจำไว้ใช้กับบิลถัดไป
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => void loadGroups()} disabled={loading}>
+          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+          รีเฟรช
+        </Button>
       </div>
 
-      <Card>
-        <CardHeader className="border-b">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Tags className="h-4 w-4 text-primary" />
-            Marketplace alias review
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="space-y-3 p-4">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-24 w-full" />
-              ))}
-            </div>
-          ) : groups.length === 0 ? (
-            <div className="p-8">
-              <EmptyState
-                title="ไม่มีสินค้ารอยืนยัน"
-                description="เมื่อมีสินค้า marketplace ที่ยังไม่มั่นใจ ระบบจะรวมกลุ่มมาให้ยืนยันที่หน้านี้"
-              />
-            </div>
-          ) : (
-            <div className="divide-y">
-              {groups.map((group) => (
-                <div key={group.group_key} className="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_280px]">
-                  <div className="min-w-0 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="secondary">{SOURCE_LABEL[group.source] ?? group.source}</Badge>
-                      {group.source_sku && (
-                        <Badge variant="outline" className="font-mono">
-                          SKU {group.source_sku}
-                        </Badge>
-                      )}
-                      <span className="text-xs text-muted-foreground">
-                        {group.item_count} รายการ · {group.bill_count} บิล
-                      </span>
-                    </div>
-                    <div className="line-clamp-2 break-words text-sm font-medium">{group.raw_name}</div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      key: <code>{group.normalized_key}</code>
-                    </div>
-                  </div>
+      <div className="rounded-lg border bg-card px-3 py-2">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+          <SummaryItem label="กลุ่มรอยืนยัน" value={total} />
+          <SummaryItem label="รายการในหน้านี้" value={totalItemsOnPage} />
+          <SummaryItem label="บิลในหน้านี้" value={totalBillsOnPage} />
+          <span className="text-xs text-muted-foreground">
+            ถ้าระบบแนะนำคะแนนต่ำหรือสี/รุ่นไม่ตรง ให้กด <span className="font-medium text-foreground">เลือกจาก SML</span>
+          </span>
+        </div>
+      </div>
 
-                  <div className="flex flex-col justify-between gap-3 rounded-md border bg-muted/20 p-3">
-                    {group.suggested_match ? (
+      <div className="rounded-lg border bg-card">
+        <div className="flex flex-wrap items-center gap-2 border-b p-3">
+          <div className="relative min-w-[240px] flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitSearch()
+                if (e.key === 'Escape') clearSearch()
+              }}
+              placeholder="ค้นหาชื่อสินค้า / SKU"
+              className="h-9 pl-8 pr-8"
+            />
+            {(draft || query) && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="ล้างคำค้นหา"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <Button variant="outline" size="sm" onClick={commitSearch}>ค้นหา</Button>
+
+          <Select
+            value={source}
+            onValueChange={(value) => {
+              setSource(value as SourceFilter)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className="h-9 w-[150px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">ทุกช่องทาง</SelectItem>
+              <SelectItem value="shopee">Shopee</SelectItem>
+              <SelectItem value="tiktok">TikTok</SelectItem>
+              <SelectItem value="lazada">Lazada</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={sort}
+            onValueChange={(value) => {
+              setSort(value as SortKey)
+              setPage(1)
+            }}
+          >
+            <SelectTrigger className="h-9 w-[170px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="impact">บิลกระทบมากก่อน</SelectItem>
+              <SelectItem value="score">คะแนนต่ำก่อน</SelectItem>
+              <SelectItem value="source">เรียงตามช่องทาง</SelectItem>
+              <SelectItem value="name">เรียงตามชื่อ</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/40">
+                <TableHead className="w-[120px]">ช่องทาง</TableHead>
+                <TableHead>สินค้า marketplace</TableHead>
+                <TableHead className="w-[110px] text-right">กระทบ</TableHead>
+                <TableHead className="w-[260px]">ระบบแนะนำ</TableHead>
+                <TableHead className="w-[220px] text-right">จัดการ</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell colSpan={5} className="py-2">
+                      <Skeleton className="h-10 w-full" />
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : groups.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-10">
+                    <EmptyState
+                      icon={Tags}
+                      title="ไม่มีสินค้ารอยืนยัน"
+                      description="เมื่อมีสินค้า marketplace ที่ยังไม่มั่นใจ ระบบจะรวมกลุ่มมาให้ยืนยันที่หน้านี้"
+                    />
+                  </TableCell>
+                </TableRow>
+              ) : (
+                groups.map((group) => (
+                  <TableRow key={group.group_key} className="align-top">
+                    <TableCell className="py-3">
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                          <Sparkles className="h-3.5 w-3.5" />
-                          ระบบแนะนำ
-                        </div>
-                        <div className="text-sm font-semibold">{group.suggested_match.item_code}</div>
-                        <div className="line-clamp-1 text-xs text-muted-foreground">{group.suggested_match.item_name}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {Math.round(group.suggested_match.score * 100)}% · {group.suggested_match.unit_code || 'ไม่ระบุหน่วย'}
-                        </div>
+                        <Badge variant="secondary">{SOURCE_LABEL[group.source] ?? group.source}</Badge>
+                        {group.source_sku && (
+                          <div className="max-w-[160px] truncate rounded-full border px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+                            SKU {group.source_sku}
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Search className="h-4 w-4" />
-                        ยังไม่มี candidate
+                    </TableCell>
+                    <TableCell className="min-w-[360px] py-3">
+                      <div className="line-clamp-2 text-sm font-medium leading-5">{group.raw_name}</div>
+                      <div className="mt-1 truncate text-xs text-muted-foreground">
+                        key: <code>{group.normalized_key}</code>
                       </div>
-                    )}
-                    <div className="flex gap-2">
-                      {group.suggested_match && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={confirmingKey === group.group_key}
-                          onClick={() => confirmGroup(group, group.suggested_match as CatalogMatch)}
-                        >
-                          <CheckCircle2 className="mr-2 h-4 w-4" />
-                          ใช้ตัวนี้
-                        </Button>
+                    </TableCell>
+                    <TableCell className="py-3 text-right text-sm tabular-nums">
+                      <div className="font-medium">{group.item_count.toLocaleString()} รายการ</div>
+                      <div className="text-xs text-muted-foreground">{group.bill_count.toLocaleString()} บิล</div>
+                    </TableCell>
+                    <TableCell className="py-3">
+                      {group.suggested_match ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Sparkles className="h-3.5 w-3.5" />
+                            <span>{Math.round(group.suggested_match.score * 100)}%</span>
+                            {group.suggested_match.score < 0.8 && (
+                              <Badge variant="outline" className="h-5 border-warning/30 bg-warning/10 px-1.5 text-[10px] text-warning">
+                                ควรตรวจ
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="font-mono text-sm font-semibold">{group.suggested_match.item_code}</div>
+                          <div className="line-clamp-1 text-xs text-muted-foreground">{group.suggested_match.item_name}</div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">ยังไม่มีสินค้าแนะนำ</span>
                       )}
-                      <Button size="sm" onClick={() => setSelected(group)}>
-                        เลือกจาก SML
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {group.suggested_match && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={confirmingKey === group.group_key}
+                            onClick={() => confirmGroup(group, group.suggested_match as CatalogMatch)}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            ใช้ตัวนี้
+                          </Button>
+                        )}
+                        <Button size="sm" onClick={() => setSelected(group)}>
+                          เลือกจาก SML
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+          <span>
+            ทั้งหมด {total.toLocaleString()} กลุ่ม · หน้า {page} / {totalPages}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant="outline"
+              className="h-7 w-7"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              aria-label="หน้าก่อน"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="icon"
+              variant="outline"
+              className="h-7 w-7"
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              aria-label="หน้าถัดไป"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      </div>
 
       {selected && (
         <MapItemModal
@@ -207,5 +357,14 @@ export default function MarketplaceAliases() {
         />
       )}
     </div>
+  )
+}
+
+function SummaryItem({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      <span className="text-lg font-semibold tabular-nums text-foreground">{value.toLocaleString()}</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </span>
   )
 }

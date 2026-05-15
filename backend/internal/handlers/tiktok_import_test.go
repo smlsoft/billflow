@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestParseTikTokCSVGroupsOrdersAndSkipsNonShippedStatuses(t *testing.T) {
+func TestParseTikTokCSVGroupsOrdersAndIncludesToShipStatus(t *testing.T) {
 	csvData := "\ufeffOrder ID,Order Status,Order Substatus,Cancelation/Return Type,Normal or Pre-order,SKU ID,Seller SKU,Product Name,Variation,Quantity,SKU Subtotal After Discount,SKU Unit Original Price,Shipping Fee After Discount,Order Amount,Created Time,Paid Time,Tracking ID,Payment Method,Buyer Username,Recipient\n" +
 		"583870900000000001\t,จัดส่งแล้ว,จัดส่งสำเร็จ,,Normal,SKU-001\t,,Serum A,30ml,2,200,120,38,238,10/05/2026 22:05:43\t,10/05/2026 22:06:01\t,TH123,COD,buyer1,คุณเอ\n" +
 		"583870900000000001\t,จัดส่งแล้ว,จัดส่งสำเร็จ,,Normal,SKU-002\t,,Serum B,50ml,1,58,70,38,238,10/05/2026 22:05:43\t,10/05/2026 22:06:01\t,TH123,COD,buyer1,คุณเอ\n" +
@@ -16,14 +16,14 @@ func TestParseTikTokCSVGroupsOrdersAndSkipsNonShippedStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseTikTokCSV() error = %v", err)
 	}
-	if skipped != 2 {
-		t.Fatalf("skipped = %d, want 2", skipped)
+	if skipped != 1 {
+		t.Fatalf("skipped = %d, want 1", skipped)
 	}
-	if len(warnings) == 0 || !strings.Contains(warnings[0], "กรอง 2 แถว") {
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "กรอง 1 แถว") {
 		t.Fatalf("warnings = %#v, want skip warning", warnings)
 	}
-	if len(orders) != 1 {
-		t.Fatalf("orders = %d, want 1", len(orders))
+	if len(orders) != 2 {
+		t.Fatalf("orders = %d, want 2", len(orders))
 	}
 	o := orders[0]
 	if o.OrderID != "583870900000000001" {
@@ -46,5 +46,15 @@ func TestParseTikTokCSVGroupsOrdersAndSkipsNonShippedStatuses(t *testing.T) {
 	}
 	if o.Items[0].Price != 100 {
 		t.Fatalf("first item Price = %v, want subtotal/qty = 100", o.Items[0].Price)
+	}
+	toShip := orders[1]
+	if toShip.OrderID != "583870900000000003" {
+		t.Fatalf("to-ship OrderID = %q", toShip.OrderID)
+	}
+	if toShip.Status != "ที่จะจัดส่ง" {
+		t.Fatalf("to-ship Status = %q, want ที่จะจัดส่ง", toShip.Status)
+	}
+	if toShip.ItemCount != 1 || toShip.Items[0].RawName != "Pending / Default" {
+		t.Fatalf("to-ship item = %#v", toShip.Items)
 	}
 }

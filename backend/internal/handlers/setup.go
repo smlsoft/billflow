@@ -348,7 +348,8 @@ func (h *SetupHandler) catalogReady() (bool, string) {
 	_ = h.db.QueryRow(`
 		SELECT COUNT(*),
 		       COUNT(*) FILTER (WHERE embedding_status='done')
-		  FROM sml_catalog`,
+		  FROM sml_catalog
+		 WHERE is_active = TRUE`,
 	).Scan(&total, &embedded)
 	if total == 0 {
 		return false, "ยังไม่ได้ Sync สินค้า"

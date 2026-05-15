@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -36,6 +37,9 @@ type SMLCatalogService struct {
 	syncRunning atomic.Int32
 	syncMu      sync.RWMutex
 	syncStatus  SyncStatus
+	verifyMu    sync.Mutex
+	verifyCache map[string]catalogVerifyCacheEntry
+	verifyTTL   time.Duration
 }
 
 type SyncStatus struct {
@@ -43,7 +47,19 @@ type SyncStatus struct {
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	Count      int        `json:"count"`
+	Missing    int        `json:"missing"`
 	Error      string     `json:"error,omitempty"`
+}
+
+type SyncResult struct {
+	Count   int
+	Missing int
+}
+
+type catalogVerifyCacheEntry struct {
+	item     *models.CatalogItem
+	notFound bool
+	expires  time.Time
 }
 
 func NewSMLCatalogService(
@@ -53,11 +69,13 @@ func NewSMLCatalogService(
 	logger *zap.Logger,
 ) *SMLCatalogService {
 	return &SMLCatalogService{
-		repo:       repo,
-		smlBaseURL: smlBaseURL,
-		smlHeaders: smlHeaders,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		logger:     logger,
+		repo:        repo,
+		smlBaseURL:  smlBaseURL,
+		smlHeaders:  smlHeaders,
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		logger:      logger,
+		verifyCache: map[string]catalogVerifyCacheEntry{},
+		verifyTTL:   5 * time.Minute,
 	}
 }
 
@@ -96,17 +114,21 @@ type smlProductItem struct {
 }
 
 // SyncFromAPI syncs catalog from SML /product/v4 endpoint.
-// Returns (inserted+updated, error).
-func (s *SMLCatalogService) SyncFromAPI() (int, error) {
+// Returns rows seen plus rows marked missing after a successful full scan.
+func (s *SMLCatalogService) SyncFromAPI() (SyncResult, error) {
 	url := fmt.Sprintf("%s/SMLJavaRESTService/product/v4", s.smlBaseURL)
-	total := 0
+	result := SyncResult{}
+	// Compare against DB-side NOW() from Upsert with a tiny tolerance so clock
+	// skew between app and DB cannot mark freshly seen rows as missing.
+	syncStarted := time.Now().UTC().Add(-5 * time.Second)
 	page := 0
+	upsertErrors := 0
 
 	for {
 		pageURL := fmt.Sprintf("%s?page=%d", url, page)
 		req, err := http.NewRequest("GET", pageURL, nil)
 		if err != nil {
-			return total, fmt.Errorf("build request: %w", err)
+			return result, fmt.Errorf("build request: %w", err)
 		}
 		for k, v := range s.smlHeaders {
 			req.Header.Set(k, v)
@@ -114,18 +136,18 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
-			return total, fmt.Errorf("GET %s: %w", pageURL, err)
+			return result, fmt.Errorf("GET %s: %w", pageURL, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			return total, fmt.Errorf("SML API %d: %s", resp.StatusCode, string(body))
+			return result, fmt.Errorf("SML API %d: %s", resp.StatusCode, string(body))
 		}
 
 		items, _, maxPage, err := parseProductV4Response(body)
 		if err != nil {
-			return total, fmt.Errorf("parse page %d: %w", page, err)
+			return result, fmt.Errorf("parse page %d: %w", page, err)
 		}
 
 		for _, it := range items {
@@ -144,14 +166,17 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 				UnitCode:  unit,
 				Price:     &price,
 				GroupCode: it.GroupCode,
+				IsActive:  true,
 			}
 			qty := it.BalanceQty
 			ci.BalanceQty = &qty
 			if err := s.repo.Upsert(ci); err != nil {
 				s.logger.Warn("catalog: upsert failed",
 					zap.String("code", it.Code), zap.Error(err))
+				upsertErrors++
 			} else {
-				total++
+				result.Count++
+				s.rememberVerify(&ci, false)
 			}
 		}
 
@@ -161,8 +186,17 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 		page++
 	}
 
-	s.logger.Info("catalog: sync from API complete", zap.Int("count", total))
-	return total, nil
+	if upsertErrors > 0 {
+		return result, fmt.Errorf("catalog sync had %d upsert errors; skipped missing-product marking", upsertErrors)
+	}
+	missing, err := s.repo.MarkMissingNotSeenSince(syncStarted)
+	if err != nil {
+		return result, fmt.Errorf("mark missing products: %w", err)
+	}
+	result.Missing = missing
+
+	s.logger.Info("catalog: sync from API complete", zap.Int("count", result.Count), zap.Int("missing", result.Missing))
+	return result, nil
 }
 
 func (s *SMLCatalogService) BeginSync() bool {
@@ -176,12 +210,13 @@ func (s *SMLCatalogService) BeginSync() bool {
 	return true
 }
 
-func (s *SMLCatalogService) FinishSync(count int, err error) {
+func (s *SMLCatalogService) FinishSync(result SyncResult, err error) {
 	now := time.Now()
 	s.syncMu.Lock()
 	s.syncStatus.Running = false
 	s.syncStatus.FinishedAt = &now
-	s.syncStatus.Count = count
+	s.syncStatus.Count = result.Count
+	s.syncStatus.Missing = result.Missing
 	s.syncStatus.Error = ""
 	if err != nil {
 		s.syncStatus.Error = err.Error()
@@ -200,6 +235,67 @@ func (s *SMLCatalogService) SyncStatus() SyncStatus {
 	status := s.syncStatus
 	status.Running = s.IsSyncRunning()
 	return status
+}
+
+// EnsureActiveInSML verifies one product code against SML using the single-row
+// endpoint. A short cache prevents repeated checks for the same code during
+// bulk sends while still avoiding full catalog scans.
+func (s *SMLCatalogService) EnsureActiveInSML(itemCode string) (*models.CatalogItem, bool, error) {
+	code := strings.TrimSpace(itemCode)
+	if code == "" {
+		return nil, true, nil
+	}
+	if item, notFound, ok := s.cachedVerify(code); ok {
+		return item, notFound, nil
+	}
+	item, notFound, err := s.RefreshOne(code)
+	if err != nil {
+		return nil, false, err
+	}
+	return item, notFound, nil
+}
+
+func (s *SMLCatalogService) cachedVerify(itemCode string) (*models.CatalogItem, bool, bool) {
+	s.verifyMu.Lock()
+	defer s.verifyMu.Unlock()
+	entry, ok := s.verifyCache[itemCode]
+	if !ok || time.Now().After(entry.expires) {
+		if ok {
+			delete(s.verifyCache, itemCode)
+		}
+		return nil, false, false
+	}
+	return entry.item, entry.notFound, true
+}
+
+func (s *SMLCatalogService) rememberVerify(item *models.CatalogItem, notFound bool) {
+	if item == nil {
+		return
+	}
+	code := strings.TrimSpace(item.ItemCode)
+	if code == "" {
+		return
+	}
+	s.verifyMu.Lock()
+	s.verifyCache[code] = catalogVerifyCacheEntry{
+		item:     item,
+		notFound: notFound,
+		expires:  time.Now().Add(s.verifyTTL),
+	}
+	s.verifyMu.Unlock()
+}
+
+func (s *SMLCatalogService) rememberVerifyMissing(itemCode string) {
+	code := strings.TrimSpace(itemCode)
+	if code == "" {
+		return
+	}
+	s.verifyMu.Lock()
+	s.verifyCache[code] = catalogVerifyCacheEntry{
+		notFound: true,
+		expires:  time.Now().Add(s.verifyTTL),
+	}
+	s.verifyMu.Unlock()
 }
 
 // singleProductV3Response is the shape of GET /v3/api/product/{code}.
@@ -251,6 +347,10 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusNotFound {
+		if err := s.repo.MarkMissing(itemCode); err != nil && err != sql.ErrNoRows {
+			s.logger.Warn("catalog: mark missing after 404 failed", zap.String("code", itemCode), zap.Error(err))
+		}
+		s.rememberVerifyMissing(itemCode)
 		return nil, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -266,6 +366,10 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	//   - 200 {"success":true, "data":{"code":"", ...}}  (defensive)
 	// All three mean "no such product" → caller should offer Delete instead.
 	if !r.Success || r.Data.Code == "" {
+		if err := s.repo.MarkMissing(itemCode); err != nil && err != sql.ErrNoRows {
+			s.logger.Warn("catalog: mark missing after empty product failed", zap.String("code", itemCode), zap.Error(err))
+		}
+		s.rememberVerifyMissing(itemCode)
 		return nil, true, nil
 	}
 	d := r.Data
@@ -297,6 +401,7 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	if err != nil {
 		return nil, false, fmt.Errorf("readback: %w", err)
 	}
+	s.rememberVerify(out, false)
 	return out, false, nil
 }
 

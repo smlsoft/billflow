@@ -18,6 +18,9 @@ type CatalogItem struct {
 	EmbeddingStatus string     `json:"embedding_status"` // pending | done | error
 	EmbeddedAt      *time.Time `json:"embedded_at"`
 	SyncedAt        time.Time  `json:"synced_at"`
+	LastSeenAt      time.Time  `json:"last_seen_at"`
+	IsActive        bool       `json:"is_active"`
+	MissingAt       *time.Time `json:"missing_at"`
 	CreatedAt       time.Time  `json:"created_at"`
 }
 

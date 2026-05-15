@@ -20,9 +20,14 @@ export interface CatalogItem {
   item_name: string
   item_name2?: string
   unit_code: string
+  price?: number | null
   sale_price?: number | null
   embedding_status: 'pending' | 'done' | 'error'
   embedded_at?: string | null
+  synced_at?: string | null
+  last_seen_at?: string | null
+  is_active?: boolean
+  missing_at?: string | null
 }
 
 // ─── Bill ────────────────────────────────────────────────────────────────────

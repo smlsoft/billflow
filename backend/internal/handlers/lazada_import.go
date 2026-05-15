@@ -832,7 +832,7 @@ func (h *LazadaImportHandler) lookupCatalogItem(code string) *models.CatalogItem
 	if code == "" || h.catalogRepo == nil {
 		return nil
 	}
-	item, err := h.catalogRepo.GetOne(code)
+	item, err := h.catalogRepo.GetActiveOne(code)
 	if err != nil {
 		h.logger.Warn("lazada_excel: catalog sku lookup failed", zap.String("sku", code), zap.Error(err))
 		return nil

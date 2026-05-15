@@ -89,7 +89,7 @@ func (h *CatalogHandler) List(c *gin.Context) {
 
 // GET /api/catalog/stats
 func (h *CatalogHandler) Stats(c *gin.Context) {
-	total, done, pending, errCount, err := h.catalogRepo.Stats()
+	total, done, pending, errCount, missing, lastSync, err := h.catalogRepo.Stats()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -100,6 +100,8 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 		"embedded":      done,
 		"pending":       pending,
 		"error":         errCount,
+		"missing":       missing,
+		"last_sync_at":  lastSync,
 		"index_size":    h.catalogIdx.Size(),
 		"embed_running": h.catalogSvc.IsEmbedRunning(),
 		"sync_running":  syncStatus.Running,
@@ -116,9 +118,24 @@ func (h *CatalogHandler) SyncFromAPI(c *gin.Context) {
 		c.JSON(http.StatusAccepted, gin.H{"message": "catalog sync already running", "sync_running": true})
 		return
 	}
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	traceID := c.GetString("trace_id")
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "catalog_sync_started",
+			UserID:  userID,
+			Source:  "catalog",
+			Level:   "info",
+			TraceID: traceID,
+			Detail:  map[string]interface{}{"mode": "manual_full_sync"},
+		})
+	}
 	go func() {
 		h.logger.Info("catalog: sync from API started")
-		count, err := h.catalogSvc.SyncFromAPI()
+		result, err := h.catalogSvc.SyncFromAPI()
 		if err != nil {
 			h.logger.Error("catalog sync", zap.Error(err))
 		}
@@ -129,7 +146,26 @@ func (h *CatalogHandler) SyncFromAPI(c *gin.Context) {
 				h.logger.Warn("catalog: reload index after sync", zap.Error(reloadErr))
 			}
 		}
-		h.catalogSvc.FinishSync(count, err)
+		h.catalogSvc.FinishSync(result, err)
+		if h.auditRepo != nil {
+			level := "info"
+			detail := map[string]interface{}{
+				"synced_count":  result.Count,
+				"missing_count": result.Missing,
+			}
+			if err != nil {
+				level = "error"
+				detail["error"] = err.Error()
+			}
+			_ = h.auditRepo.Log(models.AuditEntry{
+				Action:  "catalog_sync_finished",
+				UserID:  userID,
+				Source:  "catalog",
+				Level:   level,
+				TraceID: traceID,
+				Detail:  detail,
+			})
+		}
 	}()
 	c.JSON(http.StatusAccepted, gin.H{"message": "catalog sync started", "sync_running": true})
 }
@@ -169,8 +205,25 @@ func (h *CatalogHandler) RefreshOne(c *gin.Context) {
 		return
 	}
 	if notFound {
+		if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
+			h.logger.Warn("catalog: reload index after missing mark", zap.Error(err))
+		}
+		if h.auditRepo != nil {
+			var userID *string
+			if uid := c.GetString("user_id"); uid != "" {
+				userID = &uid
+			}
+			_ = h.auditRepo.Log(models.AuditEntry{
+				Action:  "catalog_mark_missing",
+				UserID:  userID,
+				Source:  "catalog",
+				Level:   "warning",
+				TraceID: c.GetString("trace_id"),
+				Detail:  map[string]interface{}{"item_code": code, "reason": "not_found_in_sml"},
+			})
+		}
 		c.JSON(http.StatusNotFound, gin.H{
-			"error":     "ไม่พบสินค้า " + code + " ใน SML — อาจถูกลบจาก SML แล้ว",
+			"error":     "ไม่พบสินค้า " + code + " ใน SML — BillFlow ทำเครื่องหมายว่าไม่พบใน SML แล้ว",
 			"not_found": true,
 		})
 		return
@@ -277,6 +330,20 @@ func (h *CatalogHandler) EmbedOne(c *gin.Context) {
 	if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
 		h.logger.Warn("catalog: reload index after single embed", zap.Error(err))
 	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "catalog_embed_one",
+			UserID:  userID,
+			Source:  "catalog",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail:  map[string]interface{}{"item_code": code},
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -298,6 +365,20 @@ func (h *CatalogHandler) EmbedAll(c *gin.Context) {
 	if !started {
 		c.JSON(http.StatusOK, gin.H{"message": "no pending items"})
 		return
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "catalog_embed_started",
+			UserID:  userID,
+			Source:  "catalog",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail:  map[string]interface{}{"mode": "pending_only"},
+		})
 	}
 	c.JSON(http.StatusAccepted, gin.H{"message": "embedding started in background"})
 }
@@ -453,7 +534,7 @@ func (h *CatalogHandler) CreateProduct(c *gin.Context) {
 	}
 
 	// 1. Local dup-check — fast fail before SML round-trip
-	existing, _ := h.catalogRepo.GetOne(req.Code)
+	existing, _ := h.catalogRepo.GetActiveOne(req.Code)
 	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
 			"error":    "product code already exists",
@@ -586,7 +667,7 @@ func (h *CatalogHandler) ConfirmMatch(c *gin.Context) {
 	}
 
 	// Look up catalog item for defaults
-	catalogItem, _ := h.catalogRepo.GetOne(req.ItemCode)
+	catalogItem, _ := h.catalogRepo.GetActiveOne(req.ItemCode)
 	unitCode := req.UnitCode
 	whCode := req.WHCode
 	shelfCode := req.ShelfCode
