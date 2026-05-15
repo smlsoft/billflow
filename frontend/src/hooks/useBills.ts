@@ -75,5 +75,10 @@ export async function retryBill(
   id: string,
   body?: RetryBillPayload,
 ): Promise<void> {
-  await client.post(`/api/bills/${id}/retry`, body ?? {})
+  const res = await client.post<{ message?: string; error?: string }>(`/api/bills/${id}/retry`, body ?? {}, {
+    validateStatus: (status) => status >= 200 && status < 300,
+  })
+  if (res.status !== 200) {
+    throw new Error(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`)
+  }
 }

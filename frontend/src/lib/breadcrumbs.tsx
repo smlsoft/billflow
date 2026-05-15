@@ -47,6 +47,7 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
     crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'TikTok Excel' }],
   },
   { pattern: '/mappings', crumbs: [{ label: 'ตารางจับคู่สินค้า' }] },
+  { pattern: '/marketplace-aliases', crumbs: [{ label: 'สินค้ารอยืนยัน' }] },
   { pattern: '/settings', crumbs: [{ label: 'ตั้งค่า' }] },
   {
     pattern: '/settings/catalog',

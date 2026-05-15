@@ -3,6 +3,7 @@ package handlers
 import (
 	"strings"
 
+	"billflow/internal/marketplace"
 	"billflow/internal/models"
 )
 
@@ -23,6 +24,7 @@ func marketplaceBillItemFromMatch(
 	qty float64,
 	price *float64,
 	defaultUnit string,
+	alias *models.MarketplaceItemAlias,
 	learned *models.Mapping,
 	matches []models.CatalogMatch,
 	lookup marketplaceCatalogLookup,
@@ -51,13 +53,18 @@ func marketplaceBillItemFromMatch(
 	}
 
 	switch {
+	case alias != nil:
+		bi.ItemCode = &alias.ItemCode
+		bi.UnitCode = &alias.UnitCode
+		bi.Mapped = true
+		return bi, true
 	case learned != nil:
 		bi.ItemCode = &learned.ItemCode
 		bi.UnitCode = &learned.UnitCode
 		bi.MappingID = &learned.ID
 		bi.Mapped = true
 		return bi, true
-	case len(matches) > 0 && matches[0].Score >= highConfThreshold:
+	case len(matches) > 0 && matches[0].Score >= highConfThreshold && safeMarketplaceCandidate(rawName, matches):
 		bi.ItemCode = &matches[0].ItemCode
 		unit := matches[0].UnitCode
 		if unit == "" {
@@ -78,4 +85,17 @@ func marketplaceBillItemFromMatch(
 		bi.Mapped = false
 		return bi, false
 	}
+}
+
+func safeMarketplaceCandidate(rawName string, matches []models.CatalogMatch) bool {
+	if len(matches) == 0 {
+		return false
+	}
+	if marketplace.VariantConflict(rawName, matches[0].ItemName) {
+		return false
+	}
+	if len(matches) > 1 && matches[0].Score-matches[1].Score < 0.05 {
+		return false
+	}
+	return true
 }

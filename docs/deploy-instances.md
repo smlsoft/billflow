@@ -126,6 +126,11 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-15 12:19 +07: Marketplace alias learning + bulk product review deployed to all three instances.
+- Scope: migration `034_marketplace_item_aliases.sql`, alias repository/API, Shopee/Lazada/TikTok import alias lookup, variant/color guard, detail-edit alias learning, and `/marketplace-aliases` review page.
+- Change type: shared backend matching + UX guardrail. Deploy targets: `billflow`, `billflow-henna`, and `billflow-thaisunsport`; Thaisunsport remains Phase 1 through its existing `.env` build flags.
+- Local verification: backend `go test ./...` passed, frontend `npm run build` passed, and `git diff --check` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; `marketplace_item_aliases` exists in all three DBs; frontend `/marketplace-aliases` HTTP 200 on `3010`, `3030`, `3020`; main/Henna flags are Phase 2 sales-enabled, Thaisunsport flags remain Phase 1 sales-disabled.
 - 2026-05-15 10:59 +07: Phase naming cleanup deployed to `billflow` and `billflow-henna`; `billflow-thaisunsport` skipped intentionally.
 - Commit deployed: `a059111 Rename main and Henna phase to Phase 2`.
 - Scope: rename main/Henna terminology from old `Phase 1+` to `Phase 2`; Dashboard badge now shows `Phase 2`; local/default frontend build args use `VITE_PHASE=2`; docs/deploy policy updated to match.

@@ -149,6 +149,19 @@ export interface MappingStats {
   needs_review: number
 }
 
+export interface MarketplaceAliasReviewGroup {
+  group_key: string
+  source: string
+  bill_type: string
+  source_sku: string
+  raw_name: string
+  normalized_key: string
+  bill_count: number
+  item_count: number
+  suggested_match?: CatalogMatch | null
+  candidates?: CatalogMatch[]
+}
+
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 export interface DashboardStats {
   total_bills: number

@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-15 10:59 +07
+> Updated: 2026-05-15 12:19 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -8,6 +8,14 @@
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
+- Latest marketplace alias matching deploy verified 2026-05-15 12:19 +07:
+  - Scope: เพิ่ม `marketplace_item_aliases` สำหรับจำการจับคู่สินค้า marketplace → SML แบบยืนยันครั้งเดียว, เพิ่มหน้า `/marketplace-aliases` สำหรับรวมสินค้ารอยืนยันเป็นกลุ่ม, และปรับ Shopee/Lazada/TikTok import ให้ใช้ alias ก่อน raw-name mapping/AI candidate.
+  - Safety: SKU-first เดิมยังอยู่เมื่อ `source_sku` ตรง SML catalog จริง; ถ้า SKU marketplace ไม่ใช่ SML code จะใช้ alias lookup; AI/embedding เป็นตัวเสนอเท่านั้นเมื่อ variant/color ขัดกันหรือ top candidates ใกล้กัน.
+  - Detail edit: เมื่อ user แก้/ยืนยันสินค้าในบิล marketplace ระบบบันทึก alias และ apply ไปยังบิลเปิดที่ source/bill_type/key เดียวกัน พร้อมเลื่อน `needs_review` เป็น `pending` เมื่อทุก item confirmed.
+  - UX carry-over: รวมงานก่อนหน้าเรื่อง compact header, ซ่อน column สถานะคำสั่งซื้อในฝั่งขาย, bulk send รวม `pending + needs_review`, และบล็อกส่ง SML เมื่อ low-confidence item ยัง `mapped=false`.
+  - Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`; Thaisunsport verified still `VITE_PHASE=1` and sales/marketplace imports disabled.
+  - Local verification before deploy: `go test ./...`, `npm run build`, `git diff --check`.
+  - Deploy verification: backend health ok on `8090`, `8110`, `8100`; migration table `marketplace_item_aliases` exists in all three DBs; frontend `/marketplace-aliases` returns HTTP 200 on `3010`, `3030`, `3020`; served assets contain route code (`index-B5OixgOA.js` main/Henna, `index-BxTuyLio.js` Thaisunsport).
 - Latest Phase naming deploy verified 2026-05-15 10:59 +07:
   - Commit deployed: `a059111 Rename main and Henna phase to Phase 2`.
   - Deploy targets: frontend rebuild/restart for `billflow`, `billflow-henna`; skipped `billflow-thaisunsport` intentionally because it remains Phase 1 purchase-only.

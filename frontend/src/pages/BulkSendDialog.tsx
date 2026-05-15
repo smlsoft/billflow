@@ -74,6 +74,8 @@ function billDetailPath(bill: Bill) {
   return route === 'saleinvoice' ? `/sale-invoices/${bill.id}` : `/sales-orders/${bill.id}`
 }
 
+const BULK_CANDIDATE_STATUSES = ['pending', 'needs_review'] as const
+
 type Candidate = {
   bill: Bill
   ready: boolean
@@ -122,7 +124,7 @@ export function BulkSendDialog({
   const [saleCode, setSaleCode] = useState('')
   const [remark, setRemark] = useState('')
   const [candidates, setCandidates] = useState<Candidate[]>([])
-  const [totalPending, setTotalPending] = useState(0)
+  const [totalCandidates, setTotalCandidates] = useState(0)
   const [sendAttempted, setSendAttempted] = useState(false)
 
   const readyCount = candidates.filter((c) => c.ready && !c.result).length
@@ -217,21 +219,28 @@ export function BulkSendDialog({
     setSaleCode('')
     setRemark('')
     setCandidates([])
-    setTotalPending(0)
+    setTotalCandidates(0)
     setSendAttempted(false)
 
     async function load() {
       try {
-        const params = new URLSearchParams({
-          source: filters.source,
-          bill_type: filters.bill_type,
-          status: 'pending',
-          page: '1',
-          per_page: '100',
+        const responses = await Promise.all(BULK_CANDIDATE_STATUSES.map((status) => {
+          const params = new URLSearchParams({
+            source: filters.source,
+            bill_type: filters.bill_type,
+            status,
+            page: '1',
+            per_page: '100',
+          })
+          if (filters.document_route) params.set('document_route', filters.document_route)
+          return client.get<{ data: Bill[]; total: number }>(`/api/bills?${params}`)
+        }))
+        const seen = new Set<string>()
+        const list = responses.flatMap((res) => res.data.data ?? []).filter((bill) => {
+          if (seen.has(bill.id)) return false
+          seen.add(bill.id)
+          return true
         })
-        if (filters.document_route) params.set('document_route', filters.document_route)
-        const res = await client.get<{ data: Bill[]; total: number }>(`/api/bills?${params}`)
-        const list = res.data.data ?? []
         const details = await Promise.all(list.map((b) => getBill(b.id)))
         const rows = details.map((bill) => {
           const validation = validateForSML(bill)
@@ -242,7 +251,7 @@ export function BulkSendDialog({
           }
         })
         if (!alive) return
-        setTotalPending(res.data.total ?? rows.length)
+        setTotalCandidates(responses.reduce((sum, res) => sum + (res.data.total ?? 0), 0))
         setCandidates(rows)
       } catch (err) {
         if (!alive) return
@@ -350,12 +359,12 @@ export function BulkSendDialog({
               ปลายทาง SML: {destination.label} · {destination.code}
             </div>
             <div className="mt-0.5">
-              ระบบจะส่งเฉพาะเอกสารสถานะพร้อมส่ง และใช้ค่าชุดนี้ร่วมกันทุกเอกสารในรอบนี้
+              ระบบจะตรวจเอกสารสถานะพร้อมส่งและต้องตรวจสินค้า แล้วส่งเฉพาะรายการที่ผ่าน validation
             </div>
           </div>
-          {totalPending > candidates.length && (
+          {totalCandidates > candidates.length && (
             <div className="rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
-              รอบนี้โหลดมา {candidates.length} จาก {totalPending} รายการเพื่อให้ระบบทำงานนิ่ง
+              รอบนี้โหลดมา {candidates.length} จาก {totalCandidates} รายการเพื่อให้ระบบทำงานนิ่ง
               หลังส่งชุดแรกเสร็จ ให้เปิด dialog นี้อีกครั้งเพื่อส่งรายการที่เหลือ
             </div>
           )}
@@ -511,10 +520,10 @@ export function BulkSendDialog({
                 </div>
               </div>
               <div className="flex flex-wrap justify-end gap-2 text-muted-foreground">
-                <span>พร้อมส่ง {readyCount}</span>
+                <span>ผ่าน validation {readyCount}</span>
                 <span>ต้องข้าม {skippedCount}</span>
                 {docNoRange && <span className="font-mono text-foreground">{docNoRange}</span>}
-                {totalPending > candidates.length && <span>โหลด 100/{totalPending}</span>}
+                {totalCandidates > candidates.length && <span>โหลด {candidates.length}/{totalCandidates}</span>}
               </div>
             </div>
             {!loading && candidates.length > 0 && (
@@ -532,7 +541,7 @@ export function BulkSendDialog({
                   กำลังตรวจเอกสารพร้อมส่ง…
                 </div>
               ) : candidates.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-muted-foreground">ไม่มีเอกสารสถานะพร้อมส่งในเมนูนี้</div>
+                <div className="px-3 py-4 text-sm text-muted-foreground">ไม่มีเอกสารที่รอตรวจหรือพร้อมส่งในเมนูนี้</div>
               ) : (
                 displayRows.map((row) => (
                   <div key={row.bill.id} className="grid gap-2 px-3 py-2.5 text-xs sm:grid-cols-[54px_minmax(0,1fr)_180px_86px] sm:items-center">

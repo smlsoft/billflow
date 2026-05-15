@@ -6,6 +6,7 @@ import type { Bill, BillItem } from '@/types'
 export type IssueKind =
   | 'no_items'
   | 'unmapped_item_code'
+  | 'unconfirmed_item_match'
   | 'unmapped_unit_code'
   | 'qty_zero'
   | 'price_zero'
@@ -32,6 +33,7 @@ export interface ValidationResult {
 const ISSUE_LABEL: Record<IssueKind, string> = {
   no_items: 'ยังไม่มีรายการในบิล — เพิ่มอย่างน้อย 1 รายการก่อน',
   unmapped_item_code: 'ยังไม่ได้จับคู่กับสินค้าใน SML',
+  unconfirmed_item_match: 'ต้องยืนยันการจับคู่สินค้า',
   unmapped_unit_code: 'ยังไม่ได้ตั้งหน่วย',
   qty_zero: 'จำนวนต้องมากกว่า 0',
   price_zero: 'ราคาต้องมากกว่า 0',
@@ -42,6 +44,7 @@ const ISSUE_LABEL: Record<IssueKind, string> = {
 const ISSUE_TOOLTIP: Record<IssueKind, string> = {
   no_items: '',
   unmapped_item_code: 'ยังไม่ได้จับคู่สินค้า',
+  unconfirmed_item_match: 'ต้องยืนยันการจับคู่สินค้า',
   unmapped_unit_code: 'ยังไม่ได้ตั้งหน่วย',
   qty_zero: 'จำนวนต้องมากกว่า 0',
   price_zero: 'ราคา ≤ 0',
@@ -58,6 +61,8 @@ export function rowIssueReason(item: BillItem): string {
   const reasons: string[] = []
   if (!item.item_code || item.item_code.trim() === '') {
     reasons.push(item.source_sku ? `SKU ต้นทาง ${item.source_sku} ยังไม่พบในสินค้า SML` : ISSUE_TOOLTIP.unmapped_item_code)
+  } else if (!item.mapped) {
+    reasons.push(ISSUE_TOOLTIP.unconfirmed_item_match)
   }
   if (!item.unit_code || item.unit_code.trim() === '') {
     reasons.push(ISSUE_TOOLTIP.unmapped_unit_code)
@@ -79,6 +84,7 @@ export function rowIssueReason(item: BillItem): string {
 // Rules (must match backend bills.go retry handler + F2 anomaly rules):
 //   - bill must have ≥ 1 item
 //   - every item must have non-empty item_code (SML required)
+//   - every item with item_code must be user/system confirmed (mapped=true)
 //   - every item must have non-empty unit_code (SML required)
 //   - every item must have qty > 0  (F2 qty_zero block-level anomaly)
 //   - every item must have price > 0 (F2 price_zero block-level anomaly)
@@ -98,6 +104,7 @@ export function validateForSML(bill: Bill): ValidationResult {
   const counts: Record<IssueKind, number> = {
     no_items: 0,
     unmapped_item_code: 0,
+    unconfirmed_item_match: 0,
     unmapped_unit_code: 0,
     qty_zero: 0,
     price_zero: 0,
@@ -105,6 +112,7 @@ export function validateForSML(bill: Bill): ValidationResult {
   const firsts: Record<IssueKind, string | null> = {
     no_items: null,
     unmapped_item_code: null,
+    unconfirmed_item_match: null,
     unmapped_unit_code: null,
     qty_zero: null,
     price_zero: null,
@@ -118,13 +126,14 @@ export function validateForSML(bill: Bill): ValidationResult {
       if (firstBlocking === null) firstBlocking = it.id
     }
     if (!it.item_code || it.item_code.trim() === '') itemHas('unmapped_item_code')
+    else if (!it.mapped) itemHas('unconfirmed_item_match')
     if (!it.unit_code || it.unit_code.trim() === '') itemHas('unmapped_unit_code')
     if (!it.qty || it.qty <= 0) itemHas('qty_zero')
     if (it.price == null || it.price <= 0) itemHas('price_zero')
   }
 
   const issues: ValidationIssue[] = (
-    ['unmapped_item_code', 'unmapped_unit_code', 'qty_zero', 'price_zero'] as IssueKind[]
+    ['unmapped_item_code', 'unconfirmed_item_match', 'unmapped_unit_code', 'qty_zero', 'price_zero'] as IssueKind[]
   )
     .filter((k) => counts[k] > 0)
     .map((k) => ({ kind: k, count: counts[k], firstItemId: firsts[k] }))

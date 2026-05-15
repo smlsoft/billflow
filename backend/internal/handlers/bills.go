@@ -29,6 +29,7 @@ type BillHandler struct {
 	cfg             *config.Config
 	lineSvc         *lineservice.Service
 	auditRepo       *repository.AuditLogRepo
+	aliasRepo       *repository.MarketplaceAliasRepo
 	catalogRepo     *repository.SMLCatalogRepo     // for unit_code defaults on item edit
 	channelDefaults *repository.ChannelDefaultRepo // per-(channel,bill_type) party config
 	docCounters     *repository.DocCounterRepo     // atomic doc_no generator
@@ -47,6 +48,7 @@ func NewBillHandler(
 	cfg *config.Config,
 	lineSvc *lineservice.Service,
 	auditRepo *repository.AuditLogRepo,
+	aliasRepo *repository.MarketplaceAliasRepo,
 	catalogRepo *repository.SMLCatalogRepo,
 	channelDefaults *repository.ChannelDefaultRepo,
 	docCounters *repository.DocCounterRepo,
@@ -64,6 +66,7 @@ func NewBillHandler(
 		cfg:             cfg,
 		lineSvc:         lineSvc,
 		auditRepo:       auditRepo,
+		aliasRepo:       aliasRepo,
 		catalogRepo:     catalogRepo,
 		channelDefaults: channelDefaults,
 		docCounters:     docCounters,
@@ -606,10 +609,10 @@ func (h *BillHandler) Retry(c *gin.Context) {
 	if !allMapped {
 		_ = h.billRepo.UpdateStatus(id, "needs_review", nil, nil, nil)
 		if missingCatalogCode != "" {
-			c.JSON(http.StatusAccepted, gin.H{"message": fmt.Sprintf("ไม่พบรหัสสินค้า %s ในสินค้า SML — bill set to needs_review", missingCatalogCode)})
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("ไม่พบรหัสสินค้า %s ในสินค้า SML — ต้องตรวจสินค้าอีกครั้งก่อนส่ง SML", missingCatalogCode)})
 			return
 		}
-		c.JSON(http.StatusAccepted, gin.H{"message": "some items still unmapped — bill set to needs_review"})
+		c.JSON(http.StatusConflict, gin.H{"error": "ต้องยืนยันการจับคู่สินค้าก่อนส่ง SML"})
 		return
 	}
 
@@ -1564,10 +1567,63 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 					})
 				}
 			}
+			if h.aliasRepo != nil && isMarketplaceSource(bill.Source) {
+				userID := c.GetString("user_id")
+				alias, aliasErr := h.aliasRepo.Upsert(bill.Source, existingItem.SourceSKU, existingItem.RawName, *req.ItemCode, unit, userID)
+				if aliasErr != nil {
+					h.log.Warn("UpdateItem: marketplace alias save failed",
+						zap.String("source", bill.Source),
+						zap.String("raw_name", existingItem.RawName),
+						zap.String("source_sku", existingItem.SourceSKU),
+						zap.String("item_code", *req.ItemCode),
+						zap.Error(aliasErr))
+				} else if alias != nil {
+					appliedItems, readyBills, applyErr := h.aliasRepo.ApplyToOpenItems(
+						bill.Source,
+						bill.BillType,
+						alias.SourceSKU,
+						alias.NormalizedKey,
+						alias.RawName,
+						alias.ItemCode,
+						alias.UnitCode,
+					)
+					if applyErr != nil {
+						h.log.Warn("UpdateItem: apply marketplace alias failed",
+							zap.String("alias_id", alias.ID),
+							zap.Error(applyErr))
+					} else if h.auditRepo != nil {
+						var auditUserID *string
+						if userID != "" {
+							auditUserID = &userID
+						}
+						_ = h.auditRepo.Log(models.AuditEntry{
+							Action:   "marketplace_alias_confirmed",
+							TargetID: &itemID,
+							UserID:   auditUserID,
+							Source:   bill.Source,
+							Level:    "info",
+							Detail: map[string]interface{}{
+								"alias_id":       alias.ID,
+								"source_sku":     alias.SourceSKU,
+								"normalized_key": alias.NormalizedKey,
+								"raw_name":       alias.RawName,
+								"item_code":      alias.ItemCode,
+								"unit_code":      alias.UnitCode,
+								"applied_items":  appliedItems,
+								"ready_bills":    readyBills,
+							},
+						})
+					}
+				}
+			}
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "item updated"})
+}
+
+func isMarketplaceSource(source string) bool {
+	return source == "shopee" || source == "lazada" || source == "tiktok"
 }
 
 // ─── Source artifact endpoints ────────────────────────────────────────────────

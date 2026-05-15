@@ -18,9 +18,15 @@ interface Props {
   bills: Bill[]
   loading?: boolean
   onRowClick: (id: string) => void
+  showShopeeStatusColumn?: boolean
 }
 
-export default function BillTable({ bills, loading, onRowClick }: Props) {
+export default function BillTable({
+  bills,
+  loading,
+  onRowClick,
+  showShopeeStatusColumn = true,
+}: Props) {
   return (
     <DataTable<Bill>
       data={bills}
@@ -139,17 +145,19 @@ export default function BillTable({ bills, loading, onRowClick }: Props) {
             </div>
           ),
         },
-        {
-          key: 'shopee_status',
-          header: 'สถานะคำสั่งซื้อ',
-          headerClassName: 'text-center',
-          className: 'py-2 text-center',
-          cell: (b) => (
-            <div className="flex justify-center">
-              <ShopeeOrderStatusBadge event={b.shopee_status} title={shopeeStatusTitle(b)} />
-            </div>
-          ),
-        },
+        ...(showShopeeStatusColumn
+          ? [{
+              key: 'shopee_status',
+              header: 'สถานะคำสั่งซื้อ',
+              headerClassName: 'text-center',
+              className: 'py-2 text-center',
+              cell: (b: Bill) => (
+                <div className="flex justify-center">
+                  <ShopeeOrderStatusBadge event={b.shopee_status} title={shopeeStatusTitle(b)} />
+                </div>
+              ),
+            }]
+          : []),
       ]}
       rowClassName={(b) =>
         b.status === 'needs_review'

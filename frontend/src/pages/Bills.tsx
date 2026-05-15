@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import BillTable from '@/components/BillTable'
 import { EmptyState } from '@/components/common/EmptyState'
-import { PageHeader } from '@/components/common/PageHeader'
 import { useBills } from '@/hooks/useBills'
 import client from '@/api/client'
 import { BulkSendDialog } from './BulkSendDialog'
@@ -203,6 +202,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PER_PAGE)) : 1
   const hasMore = data ? page * PER_PAGE < data.total : false
+  const bulkCandidateCount = (pendingCount.data?.total ?? 0) + (needsReviewCount.data?.total ?? 0)
   const detailBasePath =
     mode === 'sale-invoice' ? '/sale-invoices' : mode === 'sales-order' ? '/sales-orders' : '/bills'
 
@@ -237,30 +237,6 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title={config.title}
-        description={config.description}
-      />
-
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-info/25 bg-info/5 px-4 py-3 text-sm">
-        <Info className="h-4 w-4 shrink-0 text-info" />
-        <span className="text-muted-foreground">ช่องทางเข้า:</span>
-        <Link to={config.routeTo} className="font-medium text-primary hover:underline">
-          {config.routeLabel}
-        </Link>
-        <span className="text-muted-foreground">→ ปลายทาง SML:</span>
-        <span className="font-medium text-foreground">{config.destination}</span>
-        <code className="rounded bg-background px-1.5 py-0.5 font-mono text-xs text-foreground">
-          {config.docCode}
-        </code>
-        <Link
-          to="/settings/channels"
-          className="ml-auto text-xs font-medium text-primary hover:underline"
-        >
-          ตั้งค่าเส้นทาง
-        </Link>
-      </div>
-
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <QueueMetric label="ต้องตรวจสินค้า" value={needsReviewCount.data?.total ?? 0} icon={AlertTriangle} tone="warning" />
         <QueueMetric label="พร้อมส่ง" value={pendingCount.data?.total ?? 0} icon={Clock} tone="primary" />
@@ -269,6 +245,24 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       </div>
 
       <div className="rounded-xl border border-border/70 bg-card p-3 shadow-sm">
+        <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <Link to={config.routeTo} className="font-medium text-primary hover:underline">
+            {config.routeLabel}
+          </Link>
+          <span>→</span>
+          <span className="font-medium text-foreground">{config.destination}</span>
+          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+            {config.docCode}
+          </code>
+          <Link
+            to="/settings/channels"
+            className="font-medium text-primary hover:underline sm:ml-auto"
+          >
+            ตั้งค่าเส้นทาง
+          </Link>
+        </div>
+
         <div className="mb-2 flex flex-wrap gap-1.5">
           {STATUS_OPTIONS.map((o) => (
             <button
@@ -288,60 +282,62 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-        <div className="relative w-full max-w-sm">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder={config.searchPlaceholder}
-            value={search}
-            onChange={(e) => resetPage(() => setSearch(e.target.value))}
-            className="h-9 pl-8"
-          />
-        </div>
+          <div className="relative w-full max-w-sm">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder={config.searchPlaceholder}
+              value={search}
+              onChange={(e) => resetPage(() => setSearch(e.target.value))}
+              className="h-9 pl-8"
+            />
+          </div>
 
-        {mode !== 'purchase-order' && (
-          <span className="rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground">
-            {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
-          </span>
-        )}
-        {showShopeeStatusFilter && (
-          <select
-            value={shopeeStatus}
-            onChange={(e) => resetPage(() => setShopeeStatus(e.target.value))}
-            className="h-9 rounded-md border border-border bg-background px-2.5 text-xs text-foreground"
-            aria-label="กรองตามสถานะคำสั่งซื้อ Shopee"
+          {mode !== 'purchase-order' && (
+            <span className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground sm:w-auto">
+              {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
+            </span>
+          )}
+          {showShopeeStatusFilter && (
+            <select
+              value={shopeeStatus}
+              onChange={(e) => resetPage(() => setShopeeStatus(e.target.value))}
+              className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-auto"
+              aria-label="กรองตามสถานะคำสั่งซื้อ Shopee"
+            >
+              {SHOPEE_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
+          {inboxes.length > 0 && config.routeTo === '/settings/email' && (
+            <select
+              value={emailAccountId}
+              onChange={(e) => resetPage(() => setEmailAccountId(e.target.value))}
+              className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-auto"
+              aria-label="กรองตามกล่องอีเมล"
+            >
+              <option value={ALL}>ทุกกล่องอีเมล</option>
+              {inboxes.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} · {a.username}
+                </option>
+              ))}
+            </select>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            className="w-full min-w-0 justify-center gap-1.5 sm:ml-auto sm:w-auto"
+            disabled={bulkCandidateCount === 0}
+            onClick={() => setBulkOpen(true)}
           >
-            {SHOPEE_STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        )}
-        {inboxes.length > 0 && config.routeTo === '/settings/email' && (
-          <select
-            value={emailAccountId}
-            onChange={(e) => resetPage(() => setEmailAccountId(e.target.value))}
-            className="h-9 rounded-md border border-border bg-background px-2.5 text-xs text-foreground"
-            aria-label="กรองตามกล่องอีเมล"
-          >
-            <option value={ALL}>ทุกกล่องอีเมล</option>
-            {inboxes.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} · {a.username}
-              </option>
-            ))}
-          </select>
-        )}
-        <Button
-          type="button"
-          size="sm"
-          className="ml-auto gap-1.5"
-          disabled={(pendingCount.data?.total ?? 0) === 0}
-          onClick={() => setBulkOpen(true)}
-        >
-          <Send className="h-3.5 w-3.5" />
-          ส่ง SML ทั้งหมด {(pendingCount.data?.total ?? 0).toLocaleString()} รายการ
-        </Button>
+            <Send className="h-3.5 w-3.5" />
+            <span className="truncate">
+              ส่ง SML ทั้งหมด {bulkCandidateCount.toLocaleString()} รายการ
+            </span>
+          </Button>
         </div>
       </div>
 
@@ -370,6 +366,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         <BillTable
           bills={data?.data ?? []}
           loading={loading}
+          showShopeeStatusColumn={showShopeeStatusFilter}
           onRowClick={(id) => navigate(`${detailBasePath}/${id}`)}
         />
       )}

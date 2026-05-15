@@ -85,6 +85,7 @@ func main() {
 	userRepo := repository.NewUserRepo(db)
 	billRepo := repository.NewBillRepo(db)
 	mappingRepo := repository.NewMappingRepo(db)
+	aliasRepo := repository.NewMarketplaceAliasRepo(db)
 	insightRepo := repository.NewInsightRepo(db)
 	platformRepo := repository.NewPlatformMappingRepo(db)
 	auditLogRepo := repository.NewAuditLogRepo(db)
@@ -318,8 +319,9 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, aliasRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
+	marketplaceAliasH := handlers.NewMarketplaceAliasHandler(aliasRepo, catalogRepo, auditLogRepo, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
 	imapConfigured := false
 	if accs, err := imapAccountRepo.ListEnabled(); err == nil && len(accs) > 0 {
@@ -364,11 +366,11 @@ func main() {
 		}
 	}()
 	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, channelDefaultRepo, cfg.AutoConfirmThreshold, logger)
-	shopeeH := handlers.NewShopeeImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
+	shopeeH := handlers.NewShopeeImportHandler(billRepo, mappingRepo, aliasRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	shopeeH.SetArtifactService(artifactSvc)
-	lazadaH := handlers.NewLazadaImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
+	lazadaH := handlers.NewLazadaImportHandler(billRepo, mappingRepo, aliasRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	lazadaH.SetArtifactService(artifactSvc)
-	tiktokH := handlers.NewTikTokImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
+	tiktokH := handlers.NewTikTokImportHandler(billRepo, mappingRepo, aliasRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	tiktokH.SetArtifactService(artifactSvc)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
@@ -428,6 +430,8 @@ func main() {
 		api.DELETE("/mappings/:id", middleware.RequireRole("admin"), mappingH.Delete)
 		api.GET("/mappings/stats", mappingH.Stats)
 		api.POST("/mappings/feedback", middleware.RequireRole("admin", "staff"), mappingH.Feedback)
+		api.GET("/marketplace-aliases/review-groups", middleware.RequireRole("admin", "staff"), marketplaceAliasH.ReviewGroups)
+		api.POST("/marketplace-aliases/confirm", middleware.RequireRole("admin", "staff"), marketplaceAliasH.Confirm)
 
 		// Dashboard
 		api.GET("/dashboard/stats", dashH.Stats)

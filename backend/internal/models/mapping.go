@@ -38,6 +38,35 @@ type MatchResult struct {
 	Unmapped    bool
 }
 
+type MarketplaceItemAlias struct {
+	ID            string     `json:"id"`
+	Source        string     `json:"source"`
+	SourceSKU     string     `json:"source_sku"`
+	RawName       string     `json:"raw_name"`
+	NormalizedKey string     `json:"normalized_key"`
+	ItemCode      string     `json:"item_code"`
+	UnitCode      string     `json:"unit_code"`
+	Confidence    float64    `json:"confidence"`
+	ConfirmedBy   *string    `json:"confirmed_by,omitempty"`
+	UsageCount    int        `json:"usage_count"`
+	LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+type MarketplaceAliasReviewGroup struct {
+	GroupKey       string         `json:"group_key"`
+	Source         string         `json:"source"`
+	BillType       string         `json:"bill_type"`
+	SourceSKU      string         `json:"source_sku"`
+	RawName        string         `json:"raw_name"`
+	NormalizedKey  string         `json:"normalized_key"`
+	BillCount      int            `json:"bill_count"`
+	ItemCount      int            `json:"item_count"`
+	SuggestedMatch *CatalogMatch  `json:"suggested_match,omitempty"`
+	Candidates     []CatalogMatch `json:"candidates,omitempty"`
+}
+
 // PlatformColumnMapping maps a logical field name to the actual Excel column name
 // per platform (lazada | shopee). Stored in platform_column_mappings table.
 type PlatformColumnMapping struct {

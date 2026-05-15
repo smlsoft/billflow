@@ -30,6 +30,7 @@ import (
 type LazadaImportHandler struct {
 	billRepo        *repository.BillRepo
 	mappingRepo     *repository.MappingRepo
+	aliasRepo       *repository.MarketplaceAliasRepo
 	auditRepo       *repository.AuditLogRepo
 	cfg             *config.Config
 	channelDefaults *repository.ChannelDefaultRepo
@@ -46,6 +47,7 @@ type LazadaImportHandler struct {
 func NewLazadaImportHandler(
 	billRepo *repository.BillRepo,
 	mappingRepo *repository.MappingRepo,
+	aliasRepo *repository.MarketplaceAliasRepo,
 	auditRepo *repository.AuditLogRepo,
 	cfg *config.Config,
 	channelDefaults *repository.ChannelDefaultRepo,
@@ -58,6 +60,7 @@ func NewLazadaImportHandler(
 	h := &LazadaImportHandler{
 		billRepo:        billRepo,
 		mappingRepo:     mappingRepo,
+		aliasRepo:       aliasRepo,
 		auditRepo:       auditRepo,
 		cfg:             cfg,
 		channelDefaults: channelDefaults,
@@ -293,6 +296,7 @@ func (h *LazadaImportHandler) Confirm(c *gin.Context) {
 	const topK = 5
 	const highConfThreshold = 0.85
 	type matchResolution struct {
+		alias   *models.MarketplaceItemAlias
 		learned *models.Mapping
 		matches []models.CatalogMatch
 	}
@@ -337,9 +341,18 @@ func (h *LazadaImportHandler) Confirm(c *gin.Context) {
 			if it.OrderItemID != "" {
 				orderItemIDs = append(orderItemIDs, it.OrderItemID)
 			}
-			resolved, ok := resolutionCache[rawName]
+			cacheKey := rawName + "\x00" + it.SKU
+			resolved, ok := resolutionCache[cacheKey]
 			if !ok {
-				if h.mappingRepo != nil {
+				if h.aliasRepo != nil {
+					if a, err := h.aliasRepo.Find("lazada", it.SKU, rawName); err == nil {
+						resolved.alias = a
+					} else {
+						h.logger.Warn("lazada_excel: lookup marketplace alias failed",
+							zap.String("raw_name", rawName), zap.Error(err))
+					}
+				}
+				if resolved.alias == nil && h.mappingRepo != nil {
 					if m, err := h.mappingRepo.FindByRawName(rawName); err == nil {
 						resolved.learned = m
 					} else {
@@ -347,7 +360,7 @@ func (h *LazadaImportHandler) Confirm(c *gin.Context) {
 							zap.String("raw_name", rawName), zap.Error(err))
 					}
 				}
-				if resolved.learned == nil && h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
+				if resolved.alias == nil && resolved.learned == nil && h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
 					if emb, err := h.embSvc.EmbedText(rawName); err == nil {
 						resolved.matches = h.catalogIdx.Search(emb, topK)
 					} else {
@@ -355,10 +368,10 @@ func (h *LazadaImportHandler) Confirm(c *gin.Context) {
 							zap.String("raw_name", rawName), zap.Error(err))
 					}
 				}
-				if resolved.learned == nil && len(resolved.matches) == 0 && h.catalogSvc != nil {
+				if resolved.alias == nil && resolved.learned == nil && len(resolved.matches) == 0 && h.catalogSvc != nil {
 					resolved.matches, _ = h.catalogSvc.SearchByText(rawName, topK)
 				}
-				resolutionCache[rawName] = resolved
+				resolutionCache[cacheKey] = resolved
 			}
 			matches := resolved.matches
 			price := it.Price
@@ -368,6 +381,7 @@ func (h *LazadaImportHandler) Confirm(c *gin.Context) {
 				it.Qty,
 				&price,
 				defaultUnit,
+				resolved.alias,
 				resolved.learned,
 				matches,
 				h.lookupCatalogItem,
@@ -375,6 +389,9 @@ func (h *LazadaImportHandler) Confirm(c *gin.Context) {
 			)
 			if resolved.learned != nil && bi.MappingID != nil {
 				_ = h.mappingRepo.IncrementUsage(resolved.learned.ID)
+			}
+			if resolved.alias != nil {
+				_ = h.aliasRepo.IncrementUsage(resolved.alias.ID)
 			}
 			if !resolvedHigh {
 				allHigh = false

@@ -25,6 +25,7 @@ func TestMarketplaceBillItemUsesCatalogSKUBeforeNameMapping(t *testing.T) {
 		2,
 		&price,
 		"ถุง",
+		nil,
 		learned,
 		matches,
 		func(code string) *models.CatalogItem {
@@ -68,6 +69,7 @@ func TestMarketplaceBillItemFallsBackToNameWhenSKUIsMissingFromCatalog(t *testin
 		&price,
 		"ถุง",
 		nil,
+		nil,
 		matches,
 		func(code string) *models.CatalogItem {
 			if code != "UNKNOWN-SKU" {
@@ -89,6 +91,64 @@ func TestMarketplaceBillItemFallsBackToNameWhenSKUIsMissingFromCatalog(t *testin
 	}
 }
 
+func TestMarketplaceBillItemUsesAliasBeforeNameMapping(t *testing.T) {
+	price := 88.0
+	alias := &models.MarketplaceItemAlias{
+		ID:       "alias-1",
+		ItemCode: "ALIAS-CODE",
+		UnitCode: "กล่อง",
+	}
+	learned := &models.Mapping{
+		ID:       "map-1",
+		ItemCode: "NAME-CODE",
+		UnitCode: "ชิ้น",
+	}
+
+	item, high := marketplaceBillItemFromMatch(
+		"Marketplace Name",
+		"UNKNOWN-SKU",
+		1,
+		&price,
+		"ถุง",
+		alias,
+		learned,
+		nil,
+		func(code string) *models.CatalogItem { return nil },
+		0.85,
+	)
+
+	if !high || !item.Mapped {
+		t.Fatalf("high/mapped = %v/%v, want true/true from alias", high, item.Mapped)
+	}
+	if item.ItemCode == nil || *item.ItemCode != "ALIAS-CODE" {
+		t.Fatalf("ItemCode = %v, want ALIAS-CODE", item.ItemCode)
+	}
+}
+
+func TestMarketplaceBillItemBlocksVariantConflict(t *testing.T) {
+	item, high := marketplaceBillItemFromMatch(
+		"สติ๊กเกอร์บล็อคคิ้ว / No.4 สีชมพู",
+		"",
+		1,
+		nil,
+		"แผ่น",
+		nil,
+		nil,
+		[]models.CatalogMatch{{
+			ItemCode: "AH-0030",
+			ItemName: "สติ้กเกอร์บล็อคคิ้ว สีฟ้า 5 คู่",
+			UnitCode: "แผ่น",
+			Score:    0.92,
+		}},
+		nil,
+		0.85,
+	)
+
+	if high || item.Mapped {
+		t.Fatalf("high/mapped = %v/%v, want false/false for color conflict", high, item.Mapped)
+	}
+}
+
 func TestMarketplaceBillItemFallsBackToNeedsReviewWithoutSKUOrHighNameMatch(t *testing.T) {
 	item, high := marketplaceBillItemFromMatch(
 		"Marketplace Name",
@@ -96,6 +156,7 @@ func TestMarketplaceBillItemFallsBackToNeedsReviewWithoutSKUOrHighNameMatch(t *t
 		1,
 		nil,
 		"ถุง",
+		nil,
 		nil,
 		[]models.CatalogMatch{{
 			ItemCode: "LOW-MATCH",

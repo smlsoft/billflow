@@ -16,6 +16,7 @@ import {
   ShoppingBag,
   Sparkles,
   Sun,
+  Tags,
   Upload,
   Workflow,
 } from 'lucide-react'
@@ -66,6 +67,7 @@ const NAV_ITEMS: Array<{
   { to: '/import/lazada', label: 'Lazada Excel', icon: Upload, enabled: ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS },
   { to: '/import/tiktok', label: 'TikTok Excel', icon: Upload, enabled: ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS },
   { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow },
+  { to: '/marketplace-aliases', label: 'สินค้ารอยืนยัน', icon: Tags, enabled: ENABLE_SALES_ORDERS },
   { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database },
   { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot },
   { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText },
