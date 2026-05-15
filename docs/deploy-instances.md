@@ -8,19 +8,23 @@ Registry สำหรับ folder, ports, containers, tunnels และ deploy 
 
 | Instance | Purpose | Server folder | Frontend | Backend | PostgreSQL | Current frontend asset | Tunnel log |
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
-| `billflow` | demo หลัก / ทดสอบงานใหม่ | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | `index-ZO1PU287.js` | `/tmp/billflow-tunnel.log` |
-| `billflow-henna` | Henna customer trial | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5458` | `index-ZO1PU287.js` | `/tmp/billflow-henna-tunnel.log` |
-| `billflow-thaisunsport` | Thaisunsport Phase 1 demo | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | `index-PGhS5G_e.js` | `/tmp/billflow-thaisunsport-tunnel.log` |
+| `billflow` | demo หลัก / ทดสอบงานใหม่ | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | rebuilt 2026-05-15 | `/tmp/billflow-tunnel.log` |
+| `billflow-henna` | Henna customer trial | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5458` | rebuilt 2026-05-15 | `/tmp/billflow-henna-tunnel.log` |
+| `billflow-thaisunsport` | Thaisunsport Phase 1 demo | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | rebuilt 2026-05-15 | `/tmp/billflow-thaisunsport-tunnel.log` |
 
 ## Latest Verified Deploy
 
-- Time verified: 2026-05-15 14:40 +07
-- Deployed app commit: `be7734e Add catalog lifecycle and review queue UX`
-- Change type: shared backend/frontend/data safety + UX handoff cleanup
+- Time verified: 2026-05-15 15:35 +07
+- Deployed app commit: `d55847d fix: include lazada ready to ship imports`
+- Previous same-day frontend commit: `de581be fix: refresh sidebar badges after queue actions`
+- Change type: shared backend parser fix + frontend queue badge refresh
 - Deploy targets: all three instances
 - Verification:
   - backend health ok on `8090`, `8110`, `8100`
   - frontend key routes HTTP 200 on `3010`, `3030`, `3020`
+  - Henna `/import/lazada` HTTP 200 after the Lazada follow-up deploy
+  - `go test ./...` passed from `backend`
+  - `npm run build` passed from `frontend` for the sidebar badge fix
   - migration `036_sml_catalog_lifecycle.sql` applied on all three instances
   - `sml_catalog.is_active`, `sml_catalog.missing_at`, `sml_catalog.last_seen_at` exist in all three DBs
   - main/Henna remain Phase 2 sales-enabled; Thaisunsport remains Phase 1 sales-disabled
@@ -83,4 +87,8 @@ Use folder/container/volume names with the customer slug, e.g. `billflow-henna-*
 
 - Henna was created from the normal BillFlow instance, not from Thaisunsport.
 - Thaisunsport is a Phase 1 purchase-flow demo and should not show sales/import menus.
+- Latest marketplace import status filters:
+  - Shopee Excel keeps `ที่ต้องจัดส่ง`.
+  - TikTok Excel/CSV keeps `ที่จะจัดส่ง`.
+  - Lazada Excel keeps `ready_to_ship`.
 - Shopee API direct is the next planned phase; start on `billflow`, then main + Henna after UAT, and skip Thaisunsport until Phase 2 is explicitly enabled.

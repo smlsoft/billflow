@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-15 14:40 +07
+> Updated: 2026-05-15 15:35 +07
 > Source of truth checked: local tests/build, deployed Docker Compose services on `192.168.2.109`, backend health, frontend route checks, migration logs, PostgreSQL schema, and instance feature flags.
 
 ## New Chat Handoff
@@ -15,11 +15,12 @@
 
 ## Latest Deploy
 
-- Latest deployed app commit: `be7734e Add catalog lifecycle and review queue UX`
+- Latest deployed app commit: `d55847d fix: include lazada ready to ship imports`
 - Branch: `checkpoint-channel-defaults-cleanup`
-- Deploy time verified: 2026-05-15 14:40 +07
+- Deploy time verified: 2026-05-15 15:35 +07
 - Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`
 - Thaisunsport still remains Phase 1 purchase-only through its `.env` feature flags.
+- Previous same-day frontend badge fix: `de581be fix: refresh sidebar badges after queue actions` (deployed to all three frontends).
 
 ### Verification Passed
 
@@ -28,6 +29,10 @@
   - `npm run build`
   - `git diff --check`
   - `PYTHONPYCACHEPREFIX=/private/tmp/billflow-pycache python3 -m py_compile scripts/deploy.py`
+- Latest follow-up verification:
+  - `go test ./...` from `backend`
+  - `go test ./internal/handlers` from `backend`
+  - `npm run build` from `frontend` for the sidebar badge fix
 - Backend health:
   - main `8090`: ok
   - Henna `8110`: ok
@@ -36,14 +41,13 @@
   - main `3010`: `/sale-invoices`, `/marketplace-aliases`, `/settings/catalog`, `/settings/old-data` all HTTP 200
   - Henna `3030`: `/sale-invoices`, `/marketplace-aliases`, `/settings/catalog`, `/settings/old-data` all HTTP 200
   - Thaisunsport `3020`: `/bills`, `/settings/catalog`, `/settings/old-data` all HTTP 200
+  - Latest Lazada spot check: Henna `3030` `/import/lazada` HTTP 200
 - Migration `036_sml_catalog_lifecycle.sql` applied on all three instances.
 - `sml_catalog` columns exist on all three DBs:
   - `is_active`
   - `missing_at`
   - `last_seen_at`
-- Frontend assets after deploy:
-  - main/Henna: `assets/index-ZO1PU287.js`
-  - Thaisunsport: `assets/index-PGhS5G_e.js`
+- Frontend assets were rebuilt during the sidebar badge deploy; exact asset filenames are instance/build-flag specific and should not be used as the source of truth.
 
 ## Instance Status
 
@@ -62,11 +66,13 @@ Detailed registry: `docs/deploy-instances.md`.
   - Bulk send includes `pending + needs_review` but sends only rows passing validation.
   - Low-confidence/unconfirmed item matches are blocked until user confirms mapping.
   - Sales tables hide purchase-only order-status column.
+  - Sidebar badges refresh immediately after bill queue actions (`ลบบิล`, `เก็บบิล`, `กู้คืน`, successful SML retry) without browser refresh.
 - Marketplace matching
   - SKU-first remains when marketplace SKU equals real SML item code.
   - Marketplace alias learning stores confirmed Shopee/Lazada/TikTok SKU/name/variant to SML item mapping.
   - `/marketplace-aliases` is a dense review queue with search/filter/sort/pagination.
   - Sidebar shows red badge for urgent queues including `สินค้ารอยืนยัน`.
+  - Confirming an alias refreshes sidebar queue badges immediately.
 - Catalog sync
   - `/settings/catalog` is manual-first.
   - Full sync marks products missing from SML as inactive instead of hard-delete.
@@ -79,6 +85,9 @@ Detailed registry: `docs/deploy-instances.md`.
 - TikTok import
   - TikTok Excel/CSV now imports `ที่จะจัดส่ง` in addition to `จัดส่งแล้ว`, `shipped`, `delivered`, `completed`, `to ship`, `ready to ship`, and `awaiting shipment`.
   - Cancelled/non-sale-ready rows are still skipped.
+- Lazada import
+  - Lazada Excel now imports `ready_to_ship` in addition to `confirmed`, `shipped`, and `delivered`.
+  - Return/cancel/non-sale-ready rows are still skipped.
 
 ## Sidebar / Menu Model
 
@@ -108,7 +117,7 @@ Urgent badges are red for purchase/sales document queues and marketplace alias r
 
 ## Git / Local State
 
-- App commit deployed: `be7734e`
+- App commit deployed: `d55847d`
 - Intentionally untracked sample files left out of commits:
   - `Order.all.20260401_20260430.xlsx`
   - `lazada.xlsx`
