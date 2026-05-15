@@ -84,6 +84,12 @@ SML #2:   http://192.168.2.248:8080  (REST saleorder/saleinvoice/purchaseorder/p
 
 Server deploy folder: `/home/bosscatdog/billflow` (deployed copy, not a git checkout). See [docs/current-state.md](docs/current-state.md).
 
+Current handoff / source of truth for AI agents:
+
+- [AGENTS.md](AGENTS.md)
+- [docs/current-state.md](docs/current-state.md)
+- [docs/deploy-instances.md](docs/deploy-instances.md)
+
 Phase 1 customer-test docs:
 
 - [docs/phase1-guide.md](docs/phase1-guide.md) — คู่มือใช้งานบิลซื้อ Shopee ล่าสุด
@@ -731,7 +737,8 @@ URL: /import/shopee
 4. POST /api/import/shopee/preview
    - parse Excel (columns ภาษาไทย hardcoded)
    - ตรวจ duplicate: SELECT FROM bills WHERE source='shopee' AND order_id=?
-   - exclude สถานะ: "ที่ต้องจัดส่ง", "ยกเลิกแล้ว"
+   - include สถานะที่ต้องทำงาน เช่น "ที่ต้องจัดส่ง"
+   - exclude เฉพาะสถานะยกเลิก เช่น "ยกเลิกแล้ว"
 5. Preview table: เห็นทุก order, duplicate badge สีเหลือง
 6. เลือก orders (non-duplicate pre-checked) → ยืนยัน
 7. POST /api/import/shopee/confirm
@@ -765,7 +772,7 @@ Dedicated flow now mirrors Shopee Excel:
 ### TikTok Excel/CSV Import (Phase 4c) ✅ Deployed Main + Henna
 
 Dedicated flow mirrors Shopee/Lazada Excel:
-- `/api/import/tiktok/preview` parses TikTok Seller Center `.csv` or `.xlsx`, groups by `Order ID`, checks duplicates, and filters sale-ready statuses (`จัดส่งแล้ว`, `shipped`, `delivered`).
+- `/api/import/tiktok/preview` parses TikTok Seller Center `.csv` or `.xlsx`, groups by `Order ID`, checks duplicates, and imports sale-ready statuses including `ที่จะจัดส่ง`, `จัดส่งแล้ว`, `shipped`, `delivered`, `completed`, `to ship`, `ready to ship`, and `awaiting shipment`.
 - Uses `SKU ID` as source SKU fallback when `Seller SKU` is empty, and uses `SKU Subtotal After Discount / Quantity` as item price.
 - Keeps `Order Amount` at order level so multi-row orders are not double-counted.
 - `/api/import/tiktok/confirm` creates local sale bills with `source='tiktok'`; SML send happens later through Bill Detail Retry.
@@ -870,7 +877,9 @@ sudo systemctl start cloudflared
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
-### Latest Production Check (2026-05-12)
+### Latest Production Check
+
+Latest source of truth is [docs/current-state.md](docs/current-state.md). Historical details below are retained as background and may be older than the current deploy snapshot.
 
 ```
 Server folder: /home/bosscatdog/billflow
@@ -923,7 +932,7 @@ Backup cron (2026-04-27):
 
 Marketplace import / next phase:
 ✅ Lazada Excel import deployed to main + Henna (Phase 4b)
-✅ TikTok Excel/CSV import deployed to main + Henna (Phase 4c)
+✅ TikTok Excel/CSV import deployed to main + Henna (Phase 4c), including status "ที่จะจัดส่ง"
 ✅ Shopee Excel deployed; imports ready-to-ship rows and routes through local review/SML retry
 ⬜ Shopee API direct is the next phase; start on BillFlow main, then main + Henna after UAT
 ⬜ Thaisunsport remains Phase 1 purchase-only until explicitly enabled for sales
@@ -1023,7 +1032,9 @@ docker logs billflow-backend --tail=20 2>&1 | grep coordinator
 
 | ไฟล์ | เนื้อหา |
 |---|---|
+| [AGENTS.md](AGENTS.md) | handoff/source-of-truth สำหรับ Codex/AI agents |
 | [docs/current-state.md](docs/current-state.md) | snapshot จาก code + server + production DB |
+| [docs/deploy-instances.md](docs/deploy-instances.md) | registry port/folder/container/tunnel ของแต่ละร้าน |
 | [docs/overview.md](docs/overview.md) | ภาพรวมการทำงานทั้งระบบ (flow diagram + component map) |
 | [docs/line-oa.md](docs/line-oa.md) | LINE OA human inbox, multi-OA, Reply/Push, media |
 | [docs/email.md](docs/email.md) | Email IMAP workflow: poll, dedup, OCR, extract, SML |
@@ -1067,7 +1078,7 @@ billflow/
 ├── docker-compose.yml
 ├── docker-compose.dev.yml
 ├── .env.example
-└── CLAUDE.md
+└── AGENTS.md
 ```
 
 ---

@@ -2,6 +2,7 @@
 
 > ใช้ก่อนส่งให้ลูกค้าทดสอบ
 > Scope: Shopee email purchase bill → BillFlow review → SML `purchaseorder`
+> สถานะ instance/port ล่าสุดให้ดู `docs/current-state.md` และ `docs/deploy-instances.md`
 
 ---
 
@@ -35,7 +36,9 @@
 ### Catalog
 
 - [ ] เข้า `/settings/catalog`
+- [ ] ถ้า SML เพิ่งเพิ่ม/ลบ/แก้สินค้า ให้กด `ซิงก์สินค้าจาก SML`
 - [ ] ค้นหาสินค้าที่จะใช้ทดสอบเจอ
+- [ ] สินค้าที่ถูกลบจาก SML ไม่ถูกนำมาใช้จับคู่ใหม่
 - [ ] ถ้าไม่เจอ ให้สร้างสินค้าใหม่หรือเตรียม mapping ในหน้าบิล
 
 ---

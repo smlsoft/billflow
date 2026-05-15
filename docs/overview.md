@@ -1,6 +1,6 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-05-13 17:25 +07
+> อัพเดตล่าสุด: 2026-05-15 14:40 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
@@ -138,7 +138,7 @@ billflow/
 | LINE OA | ✅ code exists for human chat 2 ทาง, multi-OA, media, quick replies, status, notes, tags, create bill from chat; hidden/not central in Phase 1 |
 | Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
 | Lazada Excel | ✅ deployed on BillFlow main + Henna: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
-| TikTok Excel/CSV | ✅ deployed on BillFlow main + Henna: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
+| TikTok Excel/CSV | ✅ deployed on BillFlow main + Henna: preview/dedup/create local bills; imports `ที่จะจัดส่ง` and shipped/completed statuses; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
 | Shopee API direct | ⏭️ next phase; sync orders from Shopee Open Platform into the same local bills/review/SML retry flow as Shopee Excel |
 
 ## Current Deployment Snapshot
@@ -149,7 +149,7 @@ billflow/
 | Henna | customer trial Phase 2 | `3030` | `8110` | Purchase + sales + Shopee/Lazada/TikTok Excel, chat disabled |
 | Thaisunsport | customer demo Phase 1 | `3020` | `8100` | Purchase/email only, sales/import/chat disabled |
 
-Latest all-instance deploy verified 2026-05-13 17:25 +07. ดูรายละเอียด port/folder/flags ที่ [deploy-instances.md](deploy-instances.md).
+Latest all-instance deploy verified 2026-05-15 14:40 +07. ดูรายละเอียด port/folder/flags ที่ [deploy-instances.md](deploy-instances.md).
 
 ## Current Document Menus
 

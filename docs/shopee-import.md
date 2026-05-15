@@ -1,6 +1,6 @@
 # Shopee Excel Import — การทำงาน
 
-> อัพเดตล่าสุด: 2026-05-12
+> อัพเดตล่าสุด: 2026-05-15
 > สถานะ: ✅ Deployed on BillFlow main + Henna — SML 248 (`192.168.2.248`) configured on server
 
 ---
@@ -85,6 +85,8 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
 
 **หมายเหตุ:** Lazada ใช้ column mapping จาก DB (admin config ได้จาก `/settings`) เพราะ format อาจต่างกัน
 
+เอกสารนี้อธิบาย Shopee Excel เท่านั้น; สถานะ deploy รวมทุก instance ให้ดู `docs/current-state.md` และ `docs/deploy-instances.md`.
+
 ---
 
 ## สถานะที่ Import / Exclude
@@ -93,7 +95,7 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
 
 สถานะที่นำเข้าได้:
 
-- `ที่ต้องจัดส่ง`
+- ทุกสถานะที่ไม่ใช่ยกเลิก เช่น `ที่ต้องจัดส่ง` และสถานะขายที่ยังต้องทำงานต่อ
 
 orders ที่มีสถานะเหล่านี้จะถูกข้ามโดยอัตโนมัติ (ไม่แสดงใน preview):
 
