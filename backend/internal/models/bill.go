@@ -22,6 +22,9 @@ type Bill struct {
 	CreatedBy     *string            `json:"created_by,omitempty"`
 	CreatedAt     time.Time          `json:"created_at"`
 	SentAt        *time.Time         `json:"sent_at,omitempty"`
+	ArchivedAt    *time.Time         `json:"archived_at,omitempty"`
+	ArchivedBy    *string            `json:"archived_by,omitempty"`
+	ArchiveReason string             `json:"archive_reason,omitempty"`
 	TotalAmount   *float64           `json:"total_amount,omitempty"`
 	Remark        string             `json:"remark"`
 	Items         []BillItem         `json:"items,omitempty"`
@@ -74,6 +77,7 @@ type BillListFilter struct {
 	DocumentRoute  string `form:"document_route"`
 	EmailAccountID string `form:"email_account_id"`
 	Search         string `form:"search"`
+	Archived       string `form:"archived"`
 	Page           int    `form:"page,default=1"`
 	PageSize       int    `form:"page_size,default=20"`
 	PerPage        int    `form:"per_page"`

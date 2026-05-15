@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { DetailPageSkeleton } from '@/components/common/LoadingSkeleton'
 import type { BillItem } from '@/types'
 
@@ -18,13 +20,15 @@ import { ShopeeOrderEvents } from './components/ShopeeOrderEvents'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
 import { SendPurchaseDialog } from './components/SendPurchaseDialog'
 import { validateForSML } from './utils/validation'
-import type { RetryBillPayload } from '@/hooks/useBills'
+import { archiveBill, deleteBill, restoreBill, type RetryBillPayload } from '@/hooks/useBills'
 import { isShopeeSalesBill } from '@/lib/shopeeBill'
+import { useAuth } from '@/hooks/useAuth'
 
 export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
+  const { user } = useAuth()
   const { bill, loading, retrying, retryError, handleRetry, handleRetryWithOverride, setBill } =
     useBillData(id)
 
@@ -42,6 +46,7 @@ export default function BillDetail() {
   // sendDialogOpen — SML 248 documents show a dialog (party picker + WH/VAT)
   // before the retry call, so admin can override per-bill send values.
   const [sendDialogOpen, setSendDialogOpen] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'restore' | 'delete' | 'permanent' | null>(null)
 
   // Frontend-side validation against backend retry rules. Memo on `bill`
   // so BillTotal/BillItemRow don't recompute on unrelated parent renders.
@@ -116,10 +121,14 @@ export default function BillDetail() {
     0,
   )
   const canSend =
-    bill.status === 'failed' ||
-    bill.status === 'pending' ||
-    bill.status === 'needs_review'
+    !bill.archived_at && (
+      bill.status === 'failed' ||
+      bill.status === 'pending' ||
+      bill.status === 'needs_review'
+    )
   const canEdit = canSend
+  const canManageBills = user?.role === 'admin' || user?.role === 'staff'
+  const canPermanentDelete = user?.role === 'admin'
   const isShopeeSale = isShopeeSalesBill(bill)
   const evidenceSourceLabel = isShopeeSale ? 'ไฟล์ Marketplace Excel' : 'อีเมล'
 
@@ -142,9 +151,41 @@ export default function BillDetail() {
     })
   }
 
+  const handleConfirmedAction = async () => {
+    if (!bill || !confirmAction) return
+    try {
+      if (confirmAction === 'archive') {
+        await archiveBill(bill.id, 'ผู้ใช้เก็บบิลจากหน้ารายละเอียด')
+        toast.success('เก็บบิลแล้ว')
+        setBill((prev) => prev ? { ...prev, archived_at: new Date().toISOString(), archive_reason: 'ผู้ใช้เก็บบิลจากหน้ารายละเอียด' } : prev)
+      } else if (confirmAction === 'restore') {
+        await restoreBill(bill.id)
+        toast.success('กู้คืนบิลแล้ว')
+        setBill((prev) => prev ? { ...prev, archived_at: null, archived_by: null, archive_reason: '' } : prev)
+      } else {
+        await deleteBill(bill.id)
+        toast.success(confirmAction === 'permanent' ? 'ลบถาวรแล้ว' : 'ลบบิลแล้ว')
+        navigate(bill.bill_type === 'sale' ? (bill.document_route === 'saleinvoice' ? '/sale-invoices' : '/sales-orders') : '/bills', { replace: true })
+      }
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e?.response?.data?.error || e?.message || 'ทำรายการไม่สำเร็จ')
+    } finally {
+      setConfirmAction(null)
+    }
+  }
+
   return (
     <div className="space-y-4">
-      <BillHeader bill={bill} />
+      <BillHeader
+        bill={bill}
+        canManage={canManageBills}
+        canPermanentDelete={canPermanentDelete}
+        onArchive={() => setConfirmAction('archive')}
+        onRestore={() => setConfirmAction('restore')}
+        onDelete={() => setConfirmAction('delete')}
+        onPermanentDelete={() => setConfirmAction('permanent')}
+      />
 
       {(bill.error_msg || retryError) && (
         <BillFailureCard errorMsg={bill.error_msg} retryError={retryError} />
@@ -213,6 +254,33 @@ export default function BillDetail() {
           onCancel={() => setSendDialogOpen(false)}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmAction !== null}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+        title={detailActionTitle(confirmAction)}
+        description={detailActionDescription(confirmAction, bill)}
+        confirmLabel={confirmAction === 'permanent' ? 'ลบถาวร' : confirmAction === 'delete' ? 'ลบบิล' : confirmAction === 'restore' ? 'กู้คืน' : 'เก็บบิล'}
+        variant={confirmAction === 'delete' || confirmAction === 'permanent' ? 'destructive' : 'default'}
+        onConfirm={handleConfirmedAction}
+      />
     </div>
   )
+}
+
+function detailActionTitle(action: 'archive' | 'restore' | 'delete' | 'permanent' | null) {
+  if (action === 'archive') return 'เก็บบิลนี้?'
+  if (action === 'restore') return 'กู้คืนบิลนี้?'
+  if (action === 'permanent') return 'ลบถาวร?'
+  if (action === 'delete') return 'ลบบิลนี้?'
+  return ''
+}
+
+function detailActionDescription(action: 'archive' | 'restore' | 'delete' | 'permanent' | null, bill: { id: string; sml_doc_no?: string | null } | null) {
+  if (!action || !bill) return ''
+  const doc = bill.sml_doc_no || bill.id.slice(0, 8)
+  if (action === 'archive') return `เก็บบิล ${doc} ออกจากหน้างานประจำ แต่ยังค้นย้อนหลังและดู logs ได้`
+  if (action === 'restore') return `นำบิล ${doc} กลับมาแสดงในรายการปกติ`
+  if (action === 'permanent') return `ลบบิล ${doc} และไฟล์แนบถาวร คืนไม่ได้ แต่ logs จะยังเก็บข้อมูลสำคัญไว้`
+  return `ลบบิล ${doc} ที่ยังไม่ได้ส่งเข้า SML พร้อมรายการสินค้าและไฟล์แนบ`
 }

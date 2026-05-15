@@ -89,12 +89,13 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	err := r.db.QueryRow(
 		`SELECT id, bill_type, source, status, document_route, raw_data, sml_doc_no,
 		        sml_payload, sml_response, ai_confidence, anomalies,
-		        error_msg, created_by, created_at, sent_at, remark
+		        error_msg, created_by, created_at, sent_at, archived_at, archived_by, archive_reason, remark
 		 FROM bills WHERE id = $1`, id,
 	).Scan(
 		&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData,
 		&b.SMLDocNo, &smlPayloadRaw, &smlResponseRaw, &b.AIConfidence,
-		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt, &b.Remark,
+		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt,
+		&b.ArchivedAt, &b.ArchivedBy, &b.ArchiveReason, &b.Remark,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -138,6 +139,15 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 	where := "WHERE 1=1"
 	args := []interface{}{}
 	argN := 1
+
+	switch f.Archived {
+	case "include":
+		// no-op: include active and stored bills
+	case "only":
+		where += " AND b.archived_at IS NOT NULL"
+	default:
+		where += " AND b.archived_at IS NULL"
+	}
 
 	if f.Status != "" {
 		where += fmt.Sprintf(" AND b.status = $%d", argN)
@@ -188,14 +198,14 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 	}
 
 	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
-	                 b.anomalies, b.error_msg, b.created_at, b.sent_at,
+	                 b.anomalies, b.error_msg, b.created_at, b.sent_at, b.archived_at, b.archived_by, b.archive_reason,
 	                 COALESCE(SUM(bi.qty * bi.price), 0) AS total_amount,
 	                 COUNT(bi.id) AS item_count
 	          FROM bills b
 	          LEFT JOIN bill_items bi ON bi.bill_id = b.id
 	          ` + where + `
 	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
-	                   b.anomalies, b.error_msg, b.created_at, b.sent_at
+	                   b.anomalies, b.error_msg, b.created_at, b.sent_at, b.archived_at, b.archived_by, b.archive_reason
 	          ORDER BY b.created_at DESC`
 	if f.ShopeeStatus == "" {
 		query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argN, argN+1)
@@ -215,7 +225,8 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		var itemCount int
 		if err := rows.Scan(
 			&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData, &b.SMLDocNo, &b.AIConfidence,
-			&anomaliesRaw, &b.ErrorMsg, &b.CreatedAt, &b.SentAt, &b.TotalAmount, &itemCount,
+			&anomaliesRaw, &b.ErrorMsg, &b.CreatedAt, &b.SentAt, &b.ArchivedAt, &b.ArchivedBy,
+			&b.ArchiveReason, &b.TotalAmount, &itemCount,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -574,6 +585,141 @@ func (r *BillRepo) DeleteItem(billID, itemID string) error {
 		itemID, billID,
 	)
 	return err
+}
+
+func (r *BillRepo) ArchiveBill(billID, userID, reason string) error {
+	_, err := r.db.Exec(
+		`UPDATE bills
+		    SET archived_at = COALESCE(archived_at, NOW()),
+		        archived_by = COALESCE(NULLIF($2, '')::uuid, archived_by),
+		        archive_reason = $3
+		  WHERE id = $1`,
+		billID, userID, reason,
+	)
+	return err
+}
+
+func (r *BillRepo) RestoreBill(billID string) error {
+	_, err := r.db.Exec(
+		`UPDATE bills
+		    SET archived_at = NULL,
+		        archived_by = NULL,
+		        archive_reason = ''
+		  WHERE id = $1`,
+		billID,
+	)
+	return err
+}
+
+func (r *BillRepo) BulkArchiveSentOlderThan(days int, userID, reason string) (int, error) {
+	if days < 1 {
+		days = 180
+	}
+	res, err := r.db.Exec(
+		`UPDATE bills
+		    SET archived_at = NOW(),
+		        archived_by = NULLIF($2, '')::uuid,
+		        archive_reason = $3
+		  WHERE archived_at IS NULL
+		    AND status IN ('sent', 'skipped')
+		    AND created_at < NOW() - ($1::int * INTERVAL '1 day')`,
+		days, userID, reason,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (r *BillRepo) ArchivedIDsOlderThan(days int, limit int) ([]string, error) {
+	if days < 1 {
+		days = 730
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	rows, err := r.db.Query(
+		`SELECT id
+		   FROM bills
+		  WHERE archived_at IS NOT NULL
+		    AND archived_at < NOW() - ($1::int * INTERVAL '1 day')
+		  ORDER BY archived_at ASC
+		  LIMIT $2`,
+		days, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (r *BillRepo) DeleteBill(billID string) (int, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		UPDATE mapping_feedback
+		   SET bill_item_id = NULL
+		 WHERE bill_item_id IN (SELECT id FROM bill_items WHERE bill_id = $1)`, billID); err != nil {
+		return 0, err
+	}
+	res, err := tx.Exec(`DELETE FROM bills WHERE id = $1`, billID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+type OldDataSummary struct {
+	ActiveTotal           int `json:"active_total"`
+	ArchivedTotal         int `json:"archived_total"`
+	SentOlderThan90Days   int `json:"sent_older_than_90_days"`
+	SentOlderThan180Days  int `json:"sent_older_than_180_days"`
+	SentOlderThan365Days  int `json:"sent_older_than_365_days"`
+	PurgeEligible730Days  int `json:"purge_eligible_730_days"`
+	ArchivedArtifactCount int `json:"archived_artifact_count"`
+}
+
+func (r *BillRepo) OldDataSummary() (OldDataSummary, error) {
+	var s OldDataSummary
+	err := r.db.QueryRow(`
+		SELECT
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NULL),
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NOT NULL),
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NULL AND b.status IN ('sent', 'skipped') AND b.created_at < NOW() - INTERVAL '90 days'),
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NULL AND b.status IN ('sent', 'skipped') AND b.created_at < NOW() - INTERVAL '180 days'),
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NULL AND b.status IN ('sent', 'skipped') AND b.created_at < NOW() - INTERVAL '365 days'),
+		  COUNT(DISTINCT b.id) FILTER (WHERE b.archived_at IS NOT NULL AND b.archived_at < NOW() - INTERVAL '730 days'),
+		  COUNT(ba.id) FILTER (WHERE b.archived_at IS NOT NULL)
+		FROM bills b
+		LEFT JOIN bill_artifacts ba ON ba.bill_id = b.id`,
+	).Scan(
+		&s.ActiveTotal,
+		&s.ArchivedTotal,
+		&s.SentOlderThan90Days,
+		&s.SentOlderThan180Days,
+		&s.SentOlderThan365Days,
+		&s.PurgeEligible730Days,
+		&s.ArchivedArtifactCount,
+	)
+	return s, err
 }
 
 // UpdateBillItem updates item_code, unit_code, mapping_id, and mapped flag for a bill item

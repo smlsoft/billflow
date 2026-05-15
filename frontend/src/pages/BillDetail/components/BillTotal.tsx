@@ -50,9 +50,11 @@ export function BillTotal({
   expectedDocFormat,
 }: Props) {
   const canShowSendButton =
-    bill.status === 'failed' ||
-    bill.status === 'pending' ||
-    bill.status === 'needs_review'
+    !bill.archived_at && (
+      bill.status === 'failed' ||
+      bill.status === 'pending' ||
+      bill.status === 'needs_review'
+    )
   const isPurchase = bill.bill_type === 'purchase'
   const isShopeePurchase = isShopeePurchaseBill(bill)
   const isShopeeSale = isShopeeSalesBill(bill)

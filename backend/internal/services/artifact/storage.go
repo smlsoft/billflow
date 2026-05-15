@@ -21,18 +21,18 @@ import (
 )
 
 type Service struct {
-	rootDir   string
-	maxBytes  int64
-	repo      *repository.BillArtifactRepo
-	logger    *zap.Logger
+	rootDir  string
+	maxBytes int64
+	repo     *repository.BillArtifactRepo
+	logger   *zap.Logger
 }
 
 func New(rootDir string, maxBytes int64, repo *repository.BillArtifactRepo, logger *zap.Logger) *Service {
 	return &Service{
-		rootDir:   rootDir,
-		maxBytes:  maxBytes,
-		repo:      repo,
-		logger:    logger,
+		rootDir:  rootDir,
+		maxBytes: maxBytes,
+		repo:     repo,
+		logger:   logger,
 	}
 }
 
@@ -160,4 +160,35 @@ func (s *Service) Read(artifactID string) ([]byte, *models.BillArtifact, error) 
 // ListByBill is a thin pass-through for handlers.
 func (s *Service) ListByBill(billID string) ([]models.BillArtifact, error) {
 	return s.repo.ListByBill(billID)
+}
+
+// DeleteFiles removes artifact binaries for a bill before/after the DB rows are
+// deleted. It deliberately ignores missing files so cleanup remains idempotent.
+func (s *Service) DeleteFiles(artifacts []models.BillArtifact) []string {
+	if s == nil {
+		return nil
+	}
+	root := filepath.Clean(s.rootDir)
+	var failed []string
+	for _, a := range artifacts {
+		if a.StoragePath == "" {
+			continue
+		}
+		abs := filepath.Clean(filepath.Join(root, a.StoragePath))
+		if abs != root && !strings.HasPrefix(abs, root+string(os.PathSeparator)) {
+			failed = append(failed, a.Filename)
+			continue
+		}
+		if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+			failed = append(failed, a.Filename)
+			if s.logger != nil {
+				s.logger.Warn("artifact delete failed",
+					zap.String("path", a.StoragePath),
+					zap.Error(err))
+			}
+			continue
+		}
+		_ = os.Remove(filepath.Dir(abs))
+	}
+	return failed
 }

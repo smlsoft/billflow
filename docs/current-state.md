@@ -1,12 +1,21 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-15 12:19 +07
+> Updated: 2026-05-15 13:22 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
+- Latest all-instance old-data deploy verified 2026-05-15 13:22 +07:
+  - Scope: เพิ่มระบบจัดการบิลเก่าแบบคำ user-friendly: `เก็บบิล`, `บิลที่เก็บแล้ว`, `กู้คืน`, `ลบบิล`, `ลบถาวร`, และหน้า `/settings/old-data` ชื่อ `จัดการข้อมูลเก่า`.
+  - Backend: migration `035_bill_archive.sql` เพิ่ม `archived_at`, `archived_by`, `archive_reason`; `/api/bills` ซ่อนบิลที่เก็บแล้วเป็นค่าเริ่มต้น และรองรับ `archived=include|only`; เพิ่ม API เก็บบิล/กู้คืน/ลบรายบิล/สรุปข้อมูลเก่า/เก็บบิลเก่า/ลบถาวร.
+  - Safety: บิล `sent` หรือ `skipped` ต้องใช้ `เก็บบิล` ก่อนลบถาวร; `ลบถาวร` จำกัดเฉพาะ admin; `ลบบิล` ใช้กับบิลที่ยังไม่ส่ง SML; การลบถาวรลบไฟล์แนบก่อนลบ DB และ logs ยังเก็บ snapshot สำคัญ เช่นเลขบิล, เลข SML, source, route, created/sent/archive time.
+  - Frontend: `/bills`, `/sales-orders`, `/sale-invoices` มี filter `รายการปกติ` / `รวมบิลที่เก็บแล้ว` / `บิลที่เก็บแล้ว`; ตารางและ detail มี action `เก็บบิล`, `กู้คืน`, `ลบบิล`, `ลบถาวร`; หน้า `จัดการข้อมูลเก่า` มีสรุปจำนวนและ bulk action สำหรับ admin.
+  - Audit log labels added: `เก็บบิล`, `กู้คืนบิล`, `ลบบิล`, `ลบถาวร`, `เก็บบิลเก่า`, `ลบถาวรหลายบิล`.
+  - Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`; Thaisunsport verified still `VITE_PHASE=1` and sales/Shopee/Lazada/TikTok Excel/chat disabled.
+  - Local verification before deploy: `go test ./...`, `npm run build`, `python3 -m py_compile scripts/deploy.py` with `/private/tmp` pycache, and `git diff --check`.
+  - Deploy verification: backend health ok on `8090`, `8110`, `8100`; migration `035_bill_archive.sql` applied and `bills` columns exist in all three DBs; frontend `/settings/old-data` HTTP 200 on `3010`, `3030`, `3020`; browser QA on main confirmed `/settings/old-data`, `/bills`, `/sales-orders`, `/sale-invoices` render the new filters/actions with no horizontal overflow.
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - Latest marketplace alias matching deploy verified 2026-05-15 12:19 +07:
   - Scope: เพิ่ม `marketplace_item_aliases` สำหรับจำการจับคู่สินค้า marketplace → SML แบบยืนยันครั้งเดียว, เพิ่มหน้า `/marketplace-aliases` สำหรับรวมสินค้ารอยืนยันเป็นกลุ่ม, และปรับ Shopee/Lazada/TikTok import ให้ใช้ alias ก่อน raw-name mapping/AI candidate.

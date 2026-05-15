@@ -39,6 +39,12 @@ export const ACTION_META: Record<string, ActionMeta> = {
   bill_pending: { label: 'รอตรวจสอบ', emoji: '⏳', tone: 'warning' },
   bill_item_added: { label: 'เพิ่มรายการในบิล', emoji: '➕', tone: 'info' },
   bill_item_deleted: { label: 'ลบรายการในบิล', emoji: '➖', tone: 'muted' },
+  bill_archived: { label: 'เก็บบิล', emoji: '📦', tone: 'muted' },
+  bill_restored: { label: 'กู้คืนบิล', emoji: '↩️', tone: 'info' },
+  bill_deleted: { label: 'ลบบิล', emoji: '🗑️', tone: 'warning' },
+  bill_purged: { label: 'ลบถาวร', emoji: '🧨', tone: 'danger' },
+  bill_bulk_archived: { label: 'เก็บบิลเก่า', emoji: '📦', tone: 'muted' },
+  bill_bulk_purged: { label: 'ลบถาวรหลายบิล', emoji: '🧨', tone: 'danger' },
   // SML push
   sml_sent: { label: 'ส่ง SML สำเร็จ', emoji: '✅', tone: 'success' },
   sml_failed: { label: 'ส่ง SML ล้มเหลว', emoji: '❌', tone: 'danger' },
@@ -99,6 +105,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   sml: 'SML',
   system: 'System',
   setup: 'Setup',
+  bills: 'Bills',
   channel_defaults: 'Settings',
   catalog: 'Catalog',
 }
@@ -115,6 +122,7 @@ export const SOURCE_TONE: Record<string, string> = {
   sml: 'bg-primary/10 text-primary',
   system: 'bg-muted text-muted-foreground',
   setup: 'bg-warning/10 text-warning',
+  bills: 'bg-muted text-muted-foreground',
   channel_defaults: 'bg-muted text-muted-foreground',
   catalog: 'bg-muted text-muted-foreground',
 }
@@ -165,6 +173,17 @@ export function summarize(log: AuditLog): string {
       const message = err.error ?? d.error ?? ''
       return [route ? smlRouteLabel(route) : '', docNo, message].filter(Boolean).join(' · ')
     }
+    case 'bill_archived':
+      return [d.sml_doc_no, d.order_id ?? d.shopee_order_id ?? d.lazada_order_id ?? d.tiktok_order_id, d.reason].filter(Boolean).join(' · ')
+    case 'bill_restored':
+      return [d.sml_doc_no, d.order_id ?? d.shopee_order_id ?? d.lazada_order_id ?? d.tiktok_order_id].filter(Boolean).join(' · ')
+    case 'bill_deleted':
+    case 'bill_purged':
+      return [d.sml_doc_no, d.order_id ?? d.shopee_order_id ?? d.lazada_order_id ?? d.tiktok_order_id, d.permanent ? 'ลบถาวร' : 'ลบบิล'].filter(Boolean).join(' · ')
+    case 'bill_bulk_archived':
+      return `เก็บบิล ${Number(d.count ?? 0).toLocaleString()} รายการ · เก่ากว่า ${d.older_than_days ?? '-'} วัน`
+    case 'bill_bulk_purged':
+      return `ลบถาวร ${Number(d.purged ?? 0).toLocaleString()} รายการ · เก่ากว่า ${d.older_than_days ?? '-'} วัน`
     case 'shopee_import_done':
     case 'tiktok_import_done':
       return `สำเร็จ ${d.success_count ?? 0} / ล้มเหลว ${d.fail_count ?? 0} (รวม ${d.total ?? 0})`

@@ -1,4 +1,4 @@
-import { ArrowLeft } from 'lucide-react'
+import { Archive, ArrowLeft, RotateCcw, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,12 @@ import { SOURCE_LABELS } from '../utils/formatters'
 
 interface Props {
   bill: Bill
+  canManage?: boolean
+  canPermanentDelete?: boolean
+  onArchive?: () => void
+  onRestore?: () => void
+  onDelete?: () => void
+  onPermanentDelete?: () => void
 }
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -25,7 +31,15 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-export function BillHeader({ bill }: Props) {
+export function BillHeader({
+  bill,
+  canManage = true,
+  canPermanentDelete = false,
+  onArchive,
+  onRestore,
+  onDelete,
+  onPermanentDelete,
+}: Props) {
   const navigate = useNavigate()
   const rawData = bill.raw_data as Record<string, unknown> | null
   const isPurchase = bill.bill_type === 'purchase'
@@ -82,7 +96,38 @@ export function BillHeader({ bill }: Props) {
               </Badge>
             )}
           </div>
-          <BillStatusBadge status={bill.status} />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {bill.archived_at && (
+              <Badge variant="outline" className="border-muted-foreground/30 text-muted-foreground">
+                บิลที่เก็บแล้ว
+              </Badge>
+            )}
+            <BillStatusBadge status={bill.status} />
+            {canManage && bill.archived_at ? (
+              <>
+                <Button type="button" size="sm" variant="outline" className="h-8" onClick={onRestore}>
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                  กู้คืน
+                </Button>
+                {canPermanentDelete && (
+                  <Button type="button" size="sm" variant="ghost" className="h-8 text-destructive hover:text-destructive" onClick={onPermanentDelete}>
+                    <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                    ลบถาวร
+                  </Button>
+                )}
+              </>
+            ) : canManage && (bill.status === 'sent' || bill.status === 'skipped') ? (
+              <Button type="button" size="sm" variant="outline" className="h-8" onClick={onArchive}>
+                <Archive className="mr-1.5 h-3.5 w-3.5" />
+                เก็บบิล
+              </Button>
+            ) : canManage ? (
+              <Button type="button" size="sm" variant="ghost" className="h-8 text-destructive hover:text-destructive" onClick={onDelete}>
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                ลบบิล
+              </Button>
+            ) : null}
+          </div>
         </CardHeader>
 
         <CardContent className="px-5 py-3">
@@ -176,6 +221,12 @@ export function BillHeader({ bill }: Props) {
               <InfoRow
                 label="ส่ง SML เมื่อ"
                 value={dayjs(bill.sent_at).format('DD/MM/YYYY HH:mm')}
+              />
+            )}
+            {bill.archived_at && (
+              <InfoRow
+                label="เก็บบิลเมื่อ"
+                value={dayjs(bill.archived_at).format('DD/MM/YYYY HH:mm')}
               />
             )}
             {!isPurchase && bill.ai_confidence != null && (

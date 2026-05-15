@@ -2,16 +2,23 @@
 
 Auth: BF_PASS env var (no hardcoded password). Run from project root:
   BF_PASS=xxx python scripts/deploy.py
+
+Optional instance overrides:
+  BF_REMOTE=/home/bosscatdog/billflow-henna
+  BF_BACKEND_PORT=8110
+  BF_BACKEND_CONTAINER=billflow-henna-backend
 """
 import paramiko, sys, io, os, time, tarfile
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-HOST = "192.168.2.109"
-USER = "bosscatdog"
+HOST = os.environ.get("BF_HOST", "192.168.2.109")
+USER = os.environ.get("BF_USER", "bosscatdog")
 PASS = os.environ.get("BF_PASS")
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-REMOTE = "/home/bosscatdog/billflow"
+REMOTE = os.environ.get("BF_REMOTE", "/home/bosscatdog/billflow")
+BACKEND_PORT = os.environ.get("BF_BACKEND_PORT", "8090")
+BACKEND_CONTAINER = os.environ.get("BF_BACKEND_CONTAINER", "billflow-backend")
 
 if not PASS:
     print("ERROR: BF_PASS env var required", file=sys.stderr)
@@ -39,6 +46,8 @@ def run(client, cmd, label=None, timeout=900):
 
 
 def main():
+    print(f"Remote folder: {REMOTE}")
+    print(f"Backend health port: {BACKEND_PORT}")
     print(f"Connecting to {USER}@{HOST}...")
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -130,20 +139,20 @@ def main():
     run(c, "docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'billflow|NAME'", label="containers")
 
     # Health check — must return non-empty body containing "ok", else fail loud.
-    si, so, se = c.exec_command("curl -s -m 5 http://localhost:8090/health", timeout=15)
+    si, so, se = c.exec_command(f"curl -s -m 5 http://localhost:{BACKEND_PORT}/health", timeout=15)
     health = so.read().decode("utf-8", errors="replace").strip()
     print(f"\n========== health ==========\n{health!r}")
     if '"status":"ok"' not in health:
         print("❌ health check failed — backend may be crashing. Recent fatal logs:")
         si, so, se = c.exec_command(
-            "docker logs billflow-backend 2>&1 | grep -i 'fatal\\|panic\\|error.:\\|migration' | tail -20",
+            f"docker logs {BACKEND_CONTAINER} 2>&1 | grep -i 'fatal\\|panic\\|error.:\\|migration' | tail -20",
             timeout=15,
         )
         print(so.read().decode("utf-8", errors="replace"))
         c.close()
         sys.exit(2)
 
-    run(c, "docker logs billflow-backend 2>&1 | grep -i 'migration applied' | tail -10", label="migrations applied")
+    run(c, f"docker logs {BACKEND_CONTAINER} 2>&1 | grep -i 'migration applied' | tail -10", label="migrations applied")
 
     c.close()
     print("\n✅ deploy complete")

@@ -58,6 +58,10 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
     crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'เส้นทางเอกสาร SML' }],
   },
   {
+    pattern: '/settings/old-data',
+    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'จัดการข้อมูลเก่า' }],
+  },
+  {
     pattern: '/settings/ai-usage',
     crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'การใช้งาน AI' }],
   },

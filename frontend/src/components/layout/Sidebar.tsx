@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Building2,
+  Archive,
   Bot,
   ChevronsLeft,
   ChevronsRight,
@@ -155,6 +156,7 @@ const NAV_GROUPS: NavGroup[] = [
       },
       { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
       { to: '/marketplace-aliases', label: 'สินค้ารอยืนยัน', icon: Tags, hint: 'Marketplace Alias Review', enabled: ENABLE_SALES_ORDERS },
+      { to: '/settings/old-data', label: 'จัดการข้อมูลเก่า', icon: Archive, hint: 'เก็บบิล / ลบถาวร' },
       { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
       { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot, hint: 'ค่าใช้จ่าย / รุ่น AI' },
       { to: '/settings/users', label: 'ผู้ใช้ระบบ', icon: UsersRound, hint: 'Roles and access' },

@@ -12,6 +12,7 @@ interface BillsFilter {
   document_route?: string
   email_account_id?: string
   search?: string
+  archived?: 'include' | 'only' | ''
   date_from?: string
   date_to?: string
 }
@@ -50,6 +51,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.document_route) params.set('document_route', filter.document_route)
       if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
       if (filter.search) params.set('search', filter.search)
+      if (filter.archived) params.set('archived', filter.archived)
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)
       const res = await client.get<BillListResponse>(`/api/bills?${params}`)
@@ -81,4 +83,16 @@ export async function retryBill(
   if (res.status !== 200) {
     throw new Error(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`)
   }
+}
+
+export async function archiveBill(id: string, reason?: string): Promise<void> {
+  await client.post(`/api/bills/${id}/archive`, { reason })
+}
+
+export async function restoreBill(id: string): Promise<void> {
+  await client.post(`/api/bills/${id}/restore`)
+}
+
+export async function deleteBill(id: string): Promise<void> {
+  await client.delete(`/api/bills/${id}`, { data: { confirm: 'DELETE' } })
 }

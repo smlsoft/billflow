@@ -99,6 +99,9 @@ export interface Bill {
   items?: BillItem[]
   created_at: string
   sent_at?: string | null
+  archived_at?: string | null
+  archived_by?: string | null
+  archive_reason?: string
   // computed in list view
   total_amount?: number | null
   // Only present in single-bill GET (not in list response).

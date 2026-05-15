@@ -126,6 +126,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-15 13:22 +07: Old Data Management / bill storage lifecycle deployed to all three instances.
+- Scope: migration `035_bill_archive.sql`; `/api/bills` default active-only list with `archived=include|only`; per-bill `เก็บบิล`, `กู้คืน`, `ลบบิล`, `ลบถาวร`; admin page `/settings/old-data` (`จัดการข้อมูลเก่า`) for bulk storing old sent/skipped bills and permanent deletion of long-stored bills.
+- Change type: shared backend/frontend/data-management. Deploy targets: `billflow`, `billflow-henna`, and `billflow-thaisunsport`; Thaisunsport remains Phase 1 through its existing `.env` build flags.
+- Local verification: backend `go test ./...` passed, frontend `npm run build` passed, deploy script py_compile passed, and `git diff --check` passed.
+- Deploy verification: backend health ok on `8090`, `8110`, `8100`; migration `035_bill_archive.sql` applied in all three backend logs; `archived_at`, `archived_by`, `archive_reason` exist in all three DBs; frontend `/settings/old-data` HTTP 200 on `3010`, `3030`, `3020`; browser QA on main verified `/settings/old-data`, `/bills`, `/sales-orders`, `/sale-invoices` render without horizontal overflow.
+
 - 2026-05-15 12:19 +07: Marketplace alias learning + bulk product review deployed to all three instances.
 - Scope: migration `034_marketplace_item_aliases.sql`, alias repository/API, Shopee/Lazada/TikTok import alias lookup, variant/color guard, detail-edit alias learning, and `/marketplace-aliases` review page.
 - Change type: shared backend matching + UX guardrail. Deploy targets: `billflow`, `billflow-henna`, and `billflow-thaisunsport`; Thaisunsport remains Phase 1 through its existing `.env` build flags.

@@ -413,9 +413,15 @@ func main() {
 
 		// Bills
 		api.GET("/bills", billH.List)
+		api.GET("/bills/old-data/summary", middleware.RequireRole("admin", "staff"), billH.OldDataSummary)
+		api.POST("/bills/archive-old", middleware.RequireRole("admin"), billH.ArchiveOld)
+		api.POST("/bills/purge-old", middleware.RequireRole("admin"), billH.PurgeOld)
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
 		api.POST("/bills/:id/retry", billH.Retry)
+		api.POST("/bills/:id/archive", middleware.RequireRole("admin", "staff"), billH.Archive)
+		api.POST("/bills/:id/restore", middleware.RequireRole("admin", "staff"), billH.Restore)
+		api.DELETE("/bills/:id", middleware.RequireRole("admin", "staff"), billH.DeleteBill)
 		api.PUT("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.UpdateItem)
 		api.POST("/bills/:id/items", middleware.RequireRole("admin", "staff"), billH.AddItem)
 		api.DELETE("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.DeleteItemRow)

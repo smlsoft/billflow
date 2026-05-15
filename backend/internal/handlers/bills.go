@@ -497,6 +497,302 @@ func (h *BillHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, bill)
 }
 
+// GET /api/bills/old-data/summary
+func (h *BillHandler) OldDataSummary(c *gin.Context) {
+	summary, err := h.billRepo.OldDataSummary()
+	if err != nil {
+		h.log.Error("OldDataSummary", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data": summary,
+		"defaults": gin.H{
+			"archive_days": 180,
+			"purge_days":   730,
+		},
+	})
+}
+
+type archiveBillRequest struct {
+	Reason string `json:"reason"`
+}
+
+// POST /api/bills/:id/archive — user-facing "เก็บบิล".
+func (h *BillHandler) Archive(c *gin.Context) {
+	id := c.Param("id")
+	bill, err := h.billRepo.FindByID(id)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if bill.ArchivedAt != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "บิลนี้ถูกเก็บไว้แล้ว"})
+		return
+	}
+	if bill.Status != "sent" && bill.Status != "skipped" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "บิลนี้ยังเป็นงานค้างอยู่ ใช้ลบบิลแทนการเก็บบิล หรือส่งให้เรียบร้อยก่อน"})
+		return
+	}
+	var req archiveBillRequest
+	_ = c.ShouldBindJSON(&req)
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "เก็บบิลออกจากหน้างานประจำ"
+	}
+	userID := c.GetString("user_id")
+	if err := h.billRepo.ArchiveBill(id, userID, reason); err != nil {
+		h.log.Error("Archive bill", zap.String("bill", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "เก็บบิลไม่สำเร็จ"})
+		return
+	}
+	h.auditBillLifecycle(c, "bill_archived", bill, "info", gin.H{"reason": reason})
+	c.JSON(http.StatusOK, gin.H{"message": "เก็บบิลแล้ว"})
+}
+
+// POST /api/bills/:id/restore — user-facing "กู้คืน".
+func (h *BillHandler) Restore(c *gin.Context) {
+	id := c.Param("id")
+	bill, err := h.billRepo.FindByID(id)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if bill.ArchivedAt == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "บิลนี้อยู่ในรายการปกติแล้ว"})
+		return
+	}
+	if err := h.billRepo.RestoreBill(id); err != nil {
+		h.log.Error("Restore bill", zap.String("bill", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "กู้คืนบิลไม่สำเร็จ"})
+		return
+	}
+	h.auditBillLifecycle(c, "bill_restored", bill, "info", nil)
+	c.JSON(http.StatusOK, gin.H{"message": "กู้คืนบิลแล้ว"})
+}
+
+type deleteBillRequest struct {
+	Confirm string `json:"confirm"`
+}
+
+// DELETE /api/bills/:id — "ลบบิล" for unsent bills, "ลบถาวร" for stored bills.
+func (h *BillHandler) DeleteBill(c *gin.Context) {
+	id := c.Param("id")
+	bill, err := h.billRepo.FindByID(id)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	var req deleteBillRequest
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Confirm) != "DELETE" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "พิมพ์ DELETE เพื่อยืนยันการลบ"})
+		return
+	}
+	role := c.GetString("user_role")
+	permanent := bill.ArchivedAt != nil
+	if permanent && role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "ลบถาวรได้เฉพาะผู้ดูแลระบบ"})
+		return
+	}
+	if (bill.Status == "sent" || bill.Status == "skipped") && bill.ArchivedAt == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "บิลที่ส่งเข้า SML แล้วหรือข้ามแล้วต้องเก็บบิลก่อน หากต้องลบจริงให้ไปที่บิลที่เก็บแล้ว"})
+		return
+	}
+
+	if failed := h.deleteBillArtifacts(id); len(failed) > 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "ลบไฟล์แนบไม่สำเร็จ",
+			"files": failed,
+		})
+		return
+	}
+	deleted, err := h.billRepo.DeleteBill(id)
+	if err != nil {
+		h.log.Error("Delete bill", zap.String("bill", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ลบบิลไม่สำเร็จ"})
+		return
+	}
+	if deleted == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	action := "bill_deleted"
+	if permanent {
+		action = "bill_purged"
+	}
+	h.auditBillLifecycle(c, action, bill, "warn", gin.H{
+		"permanent": permanent,
+	})
+	c.JSON(http.StatusOK, gin.H{"message": "ลบบิลแล้ว"})
+}
+
+type oldDataRequest struct {
+	OlderThanDays int    `json:"older_than_days"`
+	Reason        string `json:"reason"`
+	Confirm       string `json:"confirm"`
+}
+
+// POST /api/bills/archive-old — admin bulk "เก็บบิลที่ส่งสำเร็จแล้ว".
+func (h *BillHandler) ArchiveOld(c *gin.Context) {
+	var req oldDataRequest
+	_ = c.ShouldBindJSON(&req)
+	days := req.OlderThanDays
+	if days == 0 {
+		days = 180
+	}
+	if days < 30 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "เลือกช่วงอย่างน้อย 30 วันเพื่อกันการเก็บบิลใหม่ผิดพลาด"})
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = fmt.Sprintf("เก็บบิลที่ส่งสำเร็จแล้วเก่ากว่า %d วัน", days)
+	}
+	count, err := h.billRepo.BulkArchiveSentOlderThan(days, c.GetString("user_id"), reason)
+	if err != nil {
+		h.log.Error("Archive old bills", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "เก็บบิลเก่าไม่สำเร็จ"})
+		return
+	}
+	h.auditBulkLifecycle(c, "bill_bulk_archived", "info", gin.H{
+		"older_than_days": days,
+		"reason":          reason,
+		"count":           count,
+	})
+	c.JSON(http.StatusOK, gin.H{"archived": count})
+}
+
+// POST /api/bills/purge-old — admin-only "ลบถาวร".
+func (h *BillHandler) PurgeOld(c *gin.Context) {
+	var req oldDataRequest
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Confirm) != "DELETE" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "พิมพ์ DELETE เพื่อยืนยันการลบถาวร"})
+		return
+	}
+	days := req.OlderThanDays
+	if days == 0 {
+		days = 730
+	}
+	if days < 365 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ลบถาวรต้องเลือกข้อมูลที่เก็บแล้วอย่างน้อย 365 วัน"})
+		return
+	}
+	ids, err := h.billRepo.ArchivedIDsOlderThan(days, 500)
+	if err != nil {
+		h.log.Error("Purge old bill IDs", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดบิลเก่าไม่สำเร็จ"})
+		return
+	}
+	purged := 0
+	var failed []string
+	for _, id := range ids {
+		bill, err := h.billRepo.FindByID(id)
+		if err != nil || bill == nil {
+			failed = append(failed, id)
+			continue
+		}
+		if f := h.deleteBillArtifacts(id); len(f) > 0 {
+			failed = append(failed, id)
+			continue
+		}
+		deleted, err := h.billRepo.DeleteBill(id)
+		if err != nil || deleted == 0 {
+			failed = append(failed, id)
+			continue
+		}
+		h.auditBillLifecycle(c, "bill_purged", bill, "warn", gin.H{
+			"permanent":       true,
+			"bulk":            true,
+			"older_than_days": days,
+		})
+		purged++
+	}
+	h.auditBulkLifecycle(c, "bill_bulk_purged", "warn", gin.H{
+		"older_than_days": days,
+		"purged":          purged,
+		"failed":          failed,
+		"limit":           500,
+	})
+	c.JSON(http.StatusOK, gin.H{"purged": purged, "failed": failed})
+}
+
+func (h *BillHandler) deleteBillArtifacts(billID string) []string {
+	if h.artifactSvc == nil {
+		return nil
+	}
+	artifacts, err := h.artifactSvc.ListByBill(billID)
+	if err != nil {
+		h.log.Warn("list bill artifacts before delete", zap.String("bill", billID), zap.Error(err))
+		return []string{"ไฟล์แนบของบิล"}
+	}
+	return h.artifactSvc.DeleteFiles(artifacts)
+}
+
+func (h *BillHandler) auditBillLifecycle(c *gin.Context, action string, bill *models.Bill, level string, extra gin.H) {
+	if h.auditRepo == nil || bill == nil {
+		return
+	}
+	billID := bill.ID
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	detail := billSnapshot(bill)
+	for k, v := range extra {
+		detail[k] = v
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action:   action,
+		TargetID: &billID,
+		UserID:   userID,
+		Source:   bill.Source,
+		Level:    level,
+		Detail:   detail,
+	})
+}
+
+func (h *BillHandler) auditBulkLifecycle(c *gin.Context, action string, level string, detail gin.H) {
+	if h.auditRepo == nil {
+		return
+	}
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action: action,
+		UserID: userID,
+		Source: "bills",
+		Level:  level,
+		Detail: detail,
+	})
+}
+
+func billSnapshot(bill *models.Bill) gin.H {
+	out := gin.H{
+		"bill_id":        bill.ID,
+		"bill_type":      bill.BillType,
+		"source":         bill.Source,
+		"status":         bill.Status,
+		"document_route": bill.DocumentRoute,
+		"created_at":     bill.CreatedAt,
+		"sent_at":        bill.SentAt,
+		"sml_doc_no":     bill.SMLDocNo,
+		"archived_at":    bill.ArchivedAt,
+	}
+	if bill.RawData != nil {
+		var raw map[string]interface{}
+		if err := json.Unmarshal(bill.RawData, &raw); err == nil {
+			for _, key := range []string{"order_id", "shopee_order_id", "lazada_order_id", "tiktok_order_id", "customer_name", "seller_name"} {
+				if v, ok := raw[key]; ok {
+					out[key] = v
+				}
+			}
+		}
+	}
+	return out
+}
+
 // mapSourceToChannel mirrors the same logic the retry handler uses to look
 // up a channel_defaults row. Kept private to this file.
 func mapSourceToChannel(source string) string {

@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, Clock, Info, Mail, Search, Send, Settings, UploadCloud } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import BillTable from '@/components/BillTable'
 import { EmptyState } from '@/components/common/EmptyState'
-import { useBills } from '@/hooks/useBills'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { archiveBill, deleteBill, restoreBill, useBills } from '@/hooks/useBills'
+import { useAuth } from '@/hooks/useAuth'
 import client from '@/api/client'
 import { BulkSendDialog } from './BulkSendDialog'
 import {
@@ -15,6 +18,7 @@ import {
   BILL_TYPE_LABEL,
   PAGE_TITLE,
 } from '@/lib/labels'
+import type { Bill } from '@/types'
 
 const PER_PAGE = 20
 const ALL = '__all__'
@@ -52,6 +56,12 @@ const SHOPEE_STATUS_OPTIONS = [
 ]
 
 const VALID_SHOPEE_STATUSES = SHOPEE_STATUS_OPTIONS.map((o) => o.value)
+const ARCHIVE_OPTIONS = [
+  { value: 'active', label: 'รายการปกติ' },
+  { value: 'include', label: 'รวมบิลที่เก็บแล้ว' },
+  { value: 'only', label: 'บิลที่เก็บแล้ว' },
+] as const
+type ArchiveMode = typeof ARCHIVE_OPTIONS[number]['value']
 
 type BillsMode = 'purchase-order' | 'sales-order' | 'sale-invoice'
 
@@ -136,8 +146,14 @@ function readURLFilter(params: URLSearchParams, key: string, valid: string[]): s
   return v && valid.includes(v) ? v : ALL
 }
 
+function readURLArchive(params: URLSearchParams): ArchiveMode {
+  const v = params.get('archived')
+  return v === 'include' || v === 'only' ? v : 'active'
+}
+
 export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode }) {
   const config = MODE_CONFIG[mode]
+  const { user } = useAuth()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   // Seed filters from the URL so deep-links from the Dashboard ("บิลล้มเหลว"
@@ -153,8 +169,15 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [emailAccountId, setEmailAccountId] = useState(ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
   const [search, setSearch] = useState('')
+  const [archiveMode, setArchiveMode] = useState<ArchiveMode>(() => readURLArchive(searchParams))
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<{
+    kind: 'archive' | 'restore' | 'delete' | 'permanent'
+    bill: Bill
+  } | null>(null)
   const showShopeeStatusFilter = mode === 'purchase-order'
+  const canManageBills = user?.role === 'admin' || user?.role === 'staff'
+  const canPermanentDelete = user?.role === 'admin'
 
   const { data, loading, refetch } = useBills({
     page,
@@ -166,6 +189,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     document_route: config.documentRoute,
     email_account_id: emailAccountId === ALL ? '' : emailAccountId,
     search,
+    archived: archiveMode === 'active' ? '' : archiveMode,
   })
   const needsReviewCount = useBills({
     page: 1,
@@ -211,6 +235,36 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     setPage(1)
   }
 
+  const refreshAll = () => {
+    refetch()
+    pendingCount.refetch()
+    needsReviewCount.refetch()
+    sentCount.refetch()
+    failedCount.refetch()
+  }
+
+  const handleConfirmedAction = async () => {
+    if (!confirmAction) return
+    const { kind, bill } = confirmAction
+    try {
+      if (kind === 'archive') {
+        await archiveBill(bill.id, 'ผู้ใช้เก็บบิลจากหน้ารายการ')
+        toast.success('เก็บบิลแล้ว')
+      } else if (kind === 'restore') {
+        await restoreBill(bill.id)
+        toast.success('กู้คืนบิลแล้ว')
+      } else {
+        await deleteBill(bill.id)
+        toast.success(kind === 'permanent' ? 'ลบถาวรแล้ว' : 'ลบบิลแล้ว')
+      }
+      setConfirmAction(null)
+      refreshAll()
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e?.response?.data?.error || e?.message || 'ทำรายการไม่สำเร็จ')
+    }
+  }
+
   useEffect(() => {
     let alive = true
     client.get<{ data: InboxOption[] }>('/api/settings/imap-accounts')
@@ -229,11 +283,13 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.set('status', status)
     if (showShopeeStatusFilter && shopeeStatus !== ALL) next.set('shopee_status', shopeeStatus)
     else next.delete('shopee_status')
+    if (archiveMode === 'active') next.delete('archived')
+    else next.set('archived', archiveMode)
     const nextString = next.toString()
     if (nextString !== searchParams.toString()) {
       setSearchParams(next, { replace: true })
     }
-  }, [status, shopeeStatus, showShopeeStatusFilter, searchParams, setSearchParams])
+  }, [status, shopeeStatus, archiveMode, showShopeeStatusFilter, searchParams, setSearchParams])
 
   return (
     <div className="space-y-5">
@@ -272,6 +328,24 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               className={[
                 'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
                 status === o.value
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
+              ].join(' ')}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {ARCHIVE_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => resetPage(() => setArchiveMode(o.value))}
+              className={[
+                'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                archiveMode === o.value
                   ? 'border-primary bg-primary text-primary-foreground'
                   : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
               ].join(' ')}
@@ -330,7 +404,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
             type="button"
             size="sm"
             className="w-full min-w-0 justify-center gap-1.5 sm:ml-auto sm:w-auto"
-            disabled={bulkCandidateCount === 0}
+            disabled={bulkCandidateCount === 0 || archiveMode === 'only'}
             onClick={() => setBulkOpen(true)}
           >
             <Send className="h-3.5 w-3.5" />
@@ -341,7 +415,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
       </div>
 
-      {!loading && (data?.total ?? 0) === 0 && !search && status === ALL && shopeeStatus === ALL ? (
+      {!loading && (data?.total ?? 0) === 0 && !search && status === ALL && shopeeStatus === ALL && archiveMode === 'active' ? (
         <EmptyState
           icon={mode === 'purchase-order' ? Mail : UploadCloud}
           title={config.emptyTitle}
@@ -367,6 +441,12 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           bills={data?.data ?? []}
           loading={loading}
           showShopeeStatusColumn={showShopeeStatusFilter}
+          canManage={canManageBills}
+          canPermanentDelete={canPermanentDelete}
+          onArchive={(bill) => setConfirmAction({ kind: 'archive', bill })}
+          onRestore={(bill) => setConfirmAction({ kind: 'restore', bill })}
+          onDelete={(bill) => setConfirmAction({ kind: 'delete', bill })}
+          onPermanentDelete={(bill) => setConfirmAction({ kind: 'permanent', bill })}
           onRowClick={(id) => navigate(`${detailBasePath}/${id}`)}
         />
       )}
@@ -414,8 +494,35 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           failedCount.refetch()
         }}
       />
+
+      <ConfirmDialog
+        open={confirmAction !== null}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+        title={confirmActionTitle(confirmAction)}
+        description={confirmActionDescription(confirmAction)}
+        confirmLabel={confirmAction?.kind === 'permanent' ? 'ลบถาวร' : confirmAction?.kind === 'delete' ? 'ลบบิล' : confirmAction?.kind === 'restore' ? 'กู้คืน' : 'เก็บบิล'}
+        variant={confirmAction?.kind === 'delete' || confirmAction?.kind === 'permanent' ? 'destructive' : 'default'}
+        onConfirm={handleConfirmedAction}
+      />
     </div>
   )
+}
+
+function confirmActionTitle(action: { kind: 'archive' | 'restore' | 'delete' | 'permanent'; bill: Bill } | null) {
+  if (!action) return ''
+  if (action.kind === 'archive') return 'เก็บบิลนี้?'
+  if (action.kind === 'restore') return 'กู้คืนบิลนี้?'
+  if (action.kind === 'permanent') return 'ลบถาวร?'
+  return 'ลบบิลนี้?'
+}
+
+function confirmActionDescription(action: { kind: 'archive' | 'restore' | 'delete' | 'permanent'; bill: Bill } | null) {
+  if (!action) return ''
+  const doc = action.bill.sml_doc_no || action.bill.id.slice(0, 8)
+  if (action.kind === 'archive') return `เก็บบิล ${doc} ออกจากหน้างานประจำ แต่ยังค้นย้อนหลังและดู logs ได้`
+  if (action.kind === 'restore') return `นำบิล ${doc} กลับมาแสดงในรายการปกติ`
+  if (action.kind === 'permanent') return `ลบบิล ${doc} และไฟล์แนบถาวร คืนไม่ได้ แต่ logs จะยังเก็บข้อมูลสำคัญไว้`
+  return `ลบบิล ${doc} ที่ยังไม่ได้ส่งเข้า SML พร้อมรายการสินค้าและไฟล์แนบ`
 }
 
 function QueueMetric({

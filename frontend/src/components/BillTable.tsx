@@ -1,5 +1,8 @@
 import dayjs from 'dayjs'
+import type { MouseEvent } from 'react'
+import { Archive, RotateCcw, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import BillStatusBadge from '@/components/BillStatusBadge'
 import { DataTable } from '@/components/common/DataTable'
 import { billSourceLabel } from '@/lib/labels'
@@ -19,6 +22,12 @@ interface Props {
   loading?: boolean
   onRowClick: (id: string) => void
   showShopeeStatusColumn?: boolean
+  canManage?: boolean
+  canPermanentDelete?: boolean
+  onArchive?: (bill: Bill) => void
+  onRestore?: (bill: Bill) => void
+  onDelete?: (bill: Bill) => void
+  onPermanentDelete?: (bill: Bill) => void
 }
 
 export default function BillTable({
@@ -26,6 +35,12 @@ export default function BillTable({
   loading,
   onRowClick,
   showShopeeStatusColumn = true,
+  canManage = true,
+  canPermanentDelete = false,
+  onArchive,
+  onRestore,
+  onDelete,
+  onPermanentDelete,
 }: Props) {
   return (
     <DataTable<Bill>
@@ -158,15 +173,90 @@ export default function BillTable({
               ),
             }]
           : []),
+        {
+          key: 'actions',
+          header: 'จัดการ',
+          headerClassName: 'text-right',
+          className: 'py-2 text-right',
+          cell: (b) => (
+            <BillRowActions
+              bill={b}
+              canManage={canManage}
+              canPermanentDelete={canPermanentDelete}
+              onArchive={onArchive}
+              onRestore={onRestore}
+              onDelete={onDelete}
+              onPermanentDelete={onPermanentDelete}
+            />
+          ),
+        },
       ]}
       rowClassName={(b) =>
-        b.status === 'needs_review'
+        b.archived_at
+          ? 'bg-muted/25 opacity-80'
+          : b.status === 'needs_review'
           ? 'bg-warning/[0.025]'
           : b.status === 'failed'
             ? 'bg-destructive/[0.025]'
             : ''
       }
     />
+  )
+}
+
+function BillRowActions({
+  bill,
+  canManage,
+  canPermanentDelete,
+  onArchive,
+  onRestore,
+  onDelete,
+  onPermanentDelete,
+}: {
+  bill: Bill
+  canManage: boolean
+  canPermanentDelete: boolean
+  onArchive?: (bill: Bill) => void
+  onRestore?: (bill: Bill) => void
+  onDelete?: (bill: Bill) => void
+  onPermanentDelete?: (bill: Bill) => void
+}) {
+  const stop = (fn?: (bill: Bill) => void) => (e: MouseEvent) => {
+    e.stopPropagation()
+    fn?.(bill)
+  }
+  if (!canManage) {
+    return null
+  }
+  if (bill.archived_at) {
+    return (
+      <div className="flex justify-end gap-1.5">
+        <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={stop(onRestore)}>
+          <RotateCcw className="mr-1 h-3.5 w-3.5" />
+          กู้คืน
+        </Button>
+        {canPermanentDelete && (
+          <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive hover:text-destructive" onClick={stop(onPermanentDelete)}>
+            <Trash2 className="mr-1 h-3.5 w-3.5" />
+            ลบถาวร
+          </Button>
+        )}
+      </div>
+    )
+  }
+  if (bill.status === 'sent' || bill.status === 'skipped') {
+    return (
+      <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={stop(onArchive)}>
+        <Archive className="mr-1 h-3.5 w-3.5" />
+        เก็บบิล
+      </Button>
+    )
+  }
+  return (
+    <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs text-destructive hover:text-destructive" onClick={stop(onDelete)}>
+      <Trash2 className="mr-1 h-3.5 w-3.5" />
+      ลบบิล
+    </Button>
   )
 }
 
