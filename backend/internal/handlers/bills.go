@@ -22,7 +22,6 @@ import (
 type BillHandler struct {
 	billRepo        *repository.BillRepo
 	mapperSvc       *mapper.Service
-	smlClient       *sml.Client              // SML 213 JSON-RPC (sale_reserve)
 	invoiceClient   *sml.InvoiceClient       // SML 248 saleinvoice REST (legacy)
 	saleOrderClient *sml.SaleOrderClient     // SML 248 saleorder REST (default)
 	poClient        *sml.PurchaseOrderClient // SML 248 purchaseorder REST
@@ -40,7 +39,6 @@ type BillHandler struct {
 func NewBillHandler(
 	billRepo *repository.BillRepo,
 	mapperSvc *mapper.Service,
-	smlClient *sml.Client,
 	invoiceClient *sml.InvoiceClient,
 	saleOrderClient *sml.SaleOrderClient,
 	poClient *sml.PurchaseOrderClient,
@@ -57,7 +55,6 @@ func NewBillHandler(
 	return &BillHandler{
 		billRepo:        billRepo,
 		mapperSvc:       mapperSvc,
-		smlClient:       smlClient,
 		invoiceClient:   invoiceClient,
 		saleOrderClient: saleOrderClient,
 		poClient:        poClient,
@@ -329,15 +326,14 @@ func fallbackDocPrefix(route string) string {
 
 // resolveEndpoint figures out which SML client to use for a channel.
 //
-// The admin-supplied `endpoint` is now a free-form URL/path (e.g.
+// The admin-supplied `endpoint` is a free-form URL/path (e.g.
 // "/SMLJavaRESTService/v3/api/saleorder" or "https://sml/.../saleinvoice").
-// We pick the client by keyword match — saleorder/saleinvoice/purchaseorder/
-// sale_reserve in the URL — and pass the URL through as override so the
-// client posts to the admin's chosen path.
+// We pick the client by keyword match and pass the URL through as override
+// so the client posts to the admin's chosen path.
 //
 // Returns:
 //
-//	kind        — "saleorder" | "saleinvoice" | "purchaseorder" | "sale_reserve"
+//	kind        — "saleorder" | "saleinvoice" | "purchaseorder"
 //	urlOverride — the URL to send to (empty = use client's default)
 func resolveEndpoint(def *models.ChannelDefault, source, billType string) (kind, urlOverride string) {
 	raw := ""
@@ -354,27 +350,20 @@ func resolveEndpoint(def *models.ChannelDefault, source, billType string) (kind,
 		return "saleinvoice", ""
 	case rawTrimmed == "saleorder":
 		return "saleorder", ""
-	case rawTrimmed == "sale_reserve":
-		return "sale_reserve", ""
 	case strings.Contains(rawLower, "purchaseorder"):
 		return "purchaseorder", raw
 	case strings.Contains(rawLower, "saleinvoice"):
 		return "saleinvoice", raw
 	case strings.Contains(rawLower, "saleorder"):
 		return "saleorder", raw
-	case strings.Contains(rawLower, "sale_reserve"):
-		// SML 213 sale_reserve uses MCP/SSE — URL not overridable
-		return "sale_reserve", ""
 	}
 
 	// No keyword match (or empty) → default routing by channel + bill_type
 	if source == "shopee_shipped" || billType == "purchase" {
 		return "purchaseorder", ""
 	}
-	if source == "shopee" || source == "shopee_email" || source == "lazada" || source == "tiktok" {
-		return "saleorder", ""
-	}
-	return "sale_reserve", ""
+	// All sale channels (shopee, lazada, tiktok, line, email, manual) → saleorder
+	return "saleorder", ""
 }
 
 // resolveItemName returns the catalog name for a mapped item_code, falling
@@ -425,8 +414,7 @@ func (h *BillHandler) List(c *gin.Context) {
 // Response includes a "preview" object showing the SML route + endpoint +
 // doc_no pattern that THIS bill would hit on retry. The preview is purely
 // informational — it surfaces routing decisions in the BillDetail UI so
-// admins catch misconfigured channels (e.g. shopee bill routed to
-// sale_reserve because endpoint string doesn't match keywords) BEFORE
+// admins catch misconfigured channels BEFORE
 // they click Send and have to debug a failed bill afterwards.
 func (h *BillHandler) Get(c *gin.Context) {
 	id := c.Param("id")
@@ -535,11 +523,11 @@ func (h *BillHandler) Timeline(c *gin.Context) {
 }
 
 // POST /api/bills/:id/retry
-// Routes to one of three SML clients based on bill.Source / bill.BillType:
+// Routes to SML 248 REST based on bill.Source / bill.BillType:
 //
-//	line / email / lazada / manual (sale)  → smlClient.CreateSaleReserve  (SML 213 JSON-RPC)
-//	shopee / shopee_email           (sale) → saleOrderClient.CreateSaleOrder (SML 248 saleorder — ใบสั่งขาย)
-//	shopee_shipped              (purchase) → poClient.CreatePurchaseOrder (SML 248 purchaseorder)
+//	shopee_shipped / purchase → poClient.CreatePurchaseOrder (ใบสั่งซื้อ)
+//	saleinvoice pinned        → invoiceClient.CreateSaleInvoice (ใบกำกับภาษี)
+//	all other sale channels   → saleOrderClient.CreateSaleOrder (ใบสั่งขาย)
 //
 // RetryRequest is the optional POST body for POST /api/bills/:id/retry.
 // For purchase bills: party_code overrides channel_defaults.party_code and
@@ -595,7 +583,7 @@ func (h *BillHandler) Retry(c *gin.Context) {
 			allMapped = false
 			break
 		}
-		if kind != "sale_reserve" && h.catalogRepo != nil {
+		if h.catalogRepo != nil {
 			code := strings.TrimSpace(*item.ItemCode)
 			if cat, _ := h.catalogRepo.GetOne(code); cat == nil {
 				missingCatalogCode = code
@@ -628,96 +616,12 @@ func (h *BillHandler) Retry(c *gin.Context) {
 		h.retryPurchaseOrder(c, bill, req)
 	case "saleinvoice":
 		h.retrySaleInvoice(c, bill, req)
-	case "saleorder":
-		h.retrySaleOrder(c, bill, req)
 	default:
-		h.retrySaleReserve(c, bill)
+		h.retrySaleOrder(c, bill, req)
 	}
 }
 
-// ─── Route 1: SML 213 JSON-RPC SaleReserve (LINE/email/lazada/manual) ────────
-func (h *BillHandler) retrySaleReserve(c *gin.Context, bill *models.Bill) {
-	id := bill.ID
-
-	// Re-run mapper to pick up any newly-added mappings
-	var smlItems []sml.SMLItem
-	for _, item := range bill.Items {
-		match := h.mapperSvc.Match(item.RawName)
-		itemCode := item.RawName
-		unitCode := ""
-		if item.UnitCode != nil {
-			unitCode = *item.UnitCode
-		}
-		if item.ItemCode != nil {
-			itemCode = *item.ItemCode
-		}
-		if match.Mapping != nil && !match.NeedsReview {
-			itemCode = match.Mapping.ItemCode
-			unitCode = match.Mapping.UnitCode
-			_ = h.billRepo.UpdateBillItem(item.ID, match.Mapping.ItemCode, match.Mapping.UnitCode, match.Mapping.ID, true)
-		}
-		price := 0.0
-		if item.Price != nil {
-			price = *item.Price
-		}
-		smlItems = append(smlItems, sml.SMLItem{
-			ItemCode: itemCode,
-			Qty:      item.Qty,
-			UnitCode: unitCode,
-			Price:    price,
-		})
-	}
-
-	var rawData struct {
-		CustomerName  string  `json:"customer_name"`
-		CustomerPhone *string `json:"customer_phone"`
-	}
-	if bill.RawData != nil {
-		_ = json.Unmarshal(bill.RawData, &rawData)
-	}
-
-	// Override AI-extracted contact_name with the channel default so SML 213
-	// doesn't create a fresh AR row for every chatbot session. Phone still
-	// comes from chat (the user's real number) when present, falling back to
-	// the default's phone snapshot only when chat didn't capture one.
-	def, err := h.lookupChannelDefault(bill.Source, "sale")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	phone := ""
-	if rawData.CustomerPhone != nil && *rawData.CustomerPhone != "" {
-		phone = *rawData.CustomerPhone
-	} else {
-		phone = def.PartyPhone
-	}
-	req := sml.SaleOrderRequest{
-		ContactName:  def.PartyName,
-		ContactPhone: phone,
-		Items:        smlItems,
-	}
-
-	reqJSON, _ := json.Marshal(req)
-	start := time.Now()
-	result, err := h.smlClient.CreateSaleReserve(req)
-	if err != nil {
-		// SaleReserve has no client-side doc_no — SML 213 generates BS… on success.
-		h.recordFailure(c, id, bill.Source, reqJSON, err, start, "SaleReserve", "")
-		return
-	}
-
-	respJSON, _ := json.Marshal(result)
-	_ = h.billRepo.UpdateStatus(id, "sent", &result.DocNo, respJSON, nil)
-	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
-	if b, err := h.billRepo.FindByID(id); err == nil && b != nil {
-		_ = h.billRepo.UpdatePriceHistory(b.Items)
-	}
-	h.recordSuccess(c, id, bill.Source, reqJSON, respJSON, result.DocNo, start)
-	c.JSON(http.StatusOK, gin.H{"message": "bill sent to SML", "doc_no": result.DocNo})
-}
-
-// ─── Route 2: SML 248 saleorder REST (shopee, shopee_email) ──────────────────
+// ─── Route 1: SML 248 saleorder REST ─────────────────────────────────────────
 // ใบสั่งขาย — landed in /v3/api/saleorder, the sale-side counterpart to
 // purchaseorder. Replaces the old saleinvoice default path so Shopee
 // orders show up under "ใบสั่งขาย" in SML instead of "ใบกำกับภาษี".

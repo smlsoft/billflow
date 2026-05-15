@@ -56,9 +56,6 @@ type Config struct {
 	// Mistral
 	MistralAPIKey string
 
-	// SML (existing — JSON-RPC for LINE/Email)
-	SMLBaseURL string
-
 	// Shopee SML (REST API — saleinvoice).
 	// CustCode moved to channel_defaults table — manage via /settings/channels.
 	ShopeeSMLURL        string
@@ -123,7 +120,6 @@ func Load() *Config {
 		OpenRouterFallback:     getEnv("OPENROUTER_FALLBACK_MODEL", "google/gemini-flash-1.5"),
 		OpenRouterAudioModel:   getEnv("OPENROUTER_AUDIO_MODEL", "openai/whisper-1"),
 		MistralAPIKey:          getEnv("MISTRAL_API_KEY", ""),
-		SMLBaseURL:             getEnv("SML_BASE_URL", "http://192.168.2.213:3248"),
 		ShopeeSMLURL:           getEnv("SHOPEE_SML_URL", "http://192.168.2.248:8080"),
 		ShopeeSMLGUID:          getEnv("SHOPEE_SML_GUID", "SMLX"),
 		ShopeeSMLProvider:      getEnv("SHOPEE_SML_PROVIDER", "SML1"),

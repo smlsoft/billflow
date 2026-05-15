@@ -781,7 +781,7 @@ type chatBillItemInputRow struct {
 // Creates a Bill with source="line", status="pending", raw_data.line_user_id =
 // the conversation's userID. Items are inserted as bill_items rows. The bill
 // then shows up in /bills and the admin can use the existing Retry button to
-// push it to SML 213 sale_reserve — no new SML code path.
+// push to SML 248 saleorder via bills Retry flow.
 func (h *ChatInboxHandler) CreateBill(c *gin.Context) {
 	lineUserID := c.Param("lineUserId")
 	if lineUserID == "" {

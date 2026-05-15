@@ -110,12 +110,6 @@ func main() {
 	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel).WithUsageLogger(aiUsageRepo)
 	mapperSvc := mapper.New(mappingRepo)
 	anomalySvc := anomaly.New(billRepo).WithCustomerLookup(billRepo)
-	smlClient := sml.New(sml.Config{
-		BaseURL: cfg.SMLBaseURL,
-	})
-	// MCPClient (sml.NewMCPClient) was used by the AI chatbot for product
-	// inquiry — removed in session 13. The MCP client code itself is kept
-	// in services/sml/mcp.go in case future flows need it.
 	insightSvc := insight.New(aiClient)
 	artifactSvc := artifact.New(cfg.ArtifactsDir, cfg.ArtifactsMaxBytes, artifactRepo, logger)
 	pool := worker.New()
@@ -317,7 +311,7 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, smlClient, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
 	imapConfigured := false
@@ -327,7 +321,7 @@ func main() {
 	dashH.SetConfigStatus(
 		cfg.LineChannelSecret != "" && cfg.LineChannelAccessToken != "",
 		imapConfigured,
-		cfg.SMLBaseURL != "",
+		cfg.ShopeeSMLURL != "",
 		cfg.OpenRouterAPIKey != "",
 		cfg.AutoConfirmThreshold,
 	)
@@ -347,7 +341,7 @@ func main() {
 	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, mediaSigner, eventBroker, cfg.PublicBaseURL, logger)
 	publicMediaH := handlers.NewPublicMediaHandler(chatMediaRepo, mediaSigner, logger)
 	sseH := handlers.NewSSEHandler(eventBroker, mediaSigner)
-	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, smlClient, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
+	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetArtifactService(artifactSvc)
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, cfg, cfg.AutoConfirmThreshold, logger)
@@ -362,7 +356,7 @@ func main() {
 			logger.Info("catalog auto-resume started")
 		}
 	}()
-	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, smlClient, billRepo, channelDefaultRepo, cfg.AutoConfirmThreshold, logger)
+	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, saleOrderClient, billRepo, channelDefaultRepo, docCounterRepo, cfg, cfg.AutoConfirmThreshold, logger)
 	shopeeH := handlers.NewShopeeImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	shopeeH.SetArtifactService(artifactSvc)
 	lazadaH := handlers.NewLazadaImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
@@ -446,7 +440,7 @@ func main() {
 		api.GET("/ai-usage/summary", middleware.RequireRole("admin"), aiUsageH.Summary)
 		api.GET("/ai-usage/logs", middleware.RequireRole("admin"), aiUsageH.Logs)
 
-		// Import — existing (JSON-RPC sale_reserve)
+		// Import (Lazada)
 		api.POST("/import/upload", middleware.RequireRole("admin", "staff"), importH.Upload)
 		api.POST("/import/confirm", middleware.RequireRole("admin", "staff"), importH.Confirm)
 

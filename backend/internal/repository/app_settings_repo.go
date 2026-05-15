@@ -97,9 +97,6 @@ func (r *AppSettingsRepo) ApplyToConfig(cfg *config.Config) error {
 	if v := get("ai.openrouter_audio_model"); v != "" {
 		cfg.OpenRouterAudioModel = v
 	}
-	if v := get("sml.json_rpc_base_url"); v != "" {
-		cfg.SMLBaseURL = v
-	}
 	if v := get("sml.rest_base_url"); v != "" {
 		cfg.ShopeeSMLURL = v
 	}
@@ -134,8 +131,7 @@ func (r *AppSettingsRepo) ApplyToConfig(cfg *config.Config) error {
 
 func RuntimeSettingValues(cfg *config.Config) map[string]string {
 	return map[string]string{
-		"sml.json_rpc_base_url":             cfg.SMLBaseURL,
-		"sml.rest_base_url":                 cfg.ShopeeSMLURL,
+		"sml.rest_base_url": cfg.ShopeeSMLURL,
 		"sml.guid":                          cfg.ShopeeSMLGUID,
 		"sml.provider":                      cfg.ShopeeSMLProvider,
 		"sml.config_file":                   cfg.ShopeeSMLConfigFile,

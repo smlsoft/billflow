@@ -122,7 +122,7 @@ type quickSetupMapping struct {
 }
 
 var quickSetupMappings = []quickSetupMapping{
-	// SML 213 sale_reserve auto-generates its own doc_no — prefix/format unused
+	// doc_no prefix/format apply to all SML 248 routes
 	{"line", "sale", "ลูกค้า จาก Line", "", "", ""},
 	{"email", "sale", "ลูกค้า จาก Email", "", "", ""},
 	// SML 248 saleorder — BF-SO + YYMM + 4-digit running counter (resets monthly)

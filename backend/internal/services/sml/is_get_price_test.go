@@ -6,14 +6,6 @@ import (
 )
 
 func TestSMLLinePayloadsHardcodeIsGetPrice(t *testing.T) {
-	t.Run("sale reserve", func(t *testing.T) {
-		items := buildItems([]SMLItem{{ItemCode: "ITEM-1", Qty: 1, UnitCode: "ชิ้น", Price: 10}})
-		if len(items) != 1 || items[0].IsGetPrice != 1 {
-			t.Fatalf("sale reserve is_get_price = %+v, want 1", items)
-		}
-		assertJSONHasIsGetPrice(t, items[0])
-	})
-
 	t.Run("saleorder", func(t *testing.T) {
 		payload := BuildSaleOrderPayload(
 			"SO-1",

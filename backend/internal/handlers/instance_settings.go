@@ -41,7 +41,6 @@ var instanceSettingDefs = []settingDef{
 	{Key: "instance.slug", Label: "รหัสร้าน", Group: "instance", Type: "text", DefaultValue: "default", Description: "ไม่บังคับ ใช้เป็นชื่อสั้นสำหรับแยกเอกสาร backup และ deploy"},
 	{Key: "instance.support_contact", Label: "ผู้ดูแลระบบ", Group: "instance", Type: "text", DefaultValue: "", Description: "ไม่บังคับ เบอร์หรือชื่อคนที่ดูแลระบบชุดนี้"},
 
-	{Key: "sml.json_rpc_base_url", Label: "SML JSON-RPC URL", Group: "sml", Type: "url", EnvKey: "SML_BASE_URL", Restart: true, Description: "ใช้กับ sale_reserve / LINE / email sale flow"},
 	{Key: "sml.rest_base_url", Label: "SML REST URL", Group: "sml", Type: "url", EnvKey: "SHOPEE_SML_URL", Restart: true, Description: "ใช้กับ catalog, saleorder, purchaseorder"},
 	{Key: "sml.guid", Label: "GUID", Group: "sml", Type: "text", EnvKey: "SHOPEE_SML_GUID", Restart: true},
 	{Key: "sml.provider", Label: "Provider", Group: "sml", Type: "text", EnvKey: "SHOPEE_SML_PROVIDER", Restart: true},
@@ -195,8 +194,6 @@ func (h *InstanceSettingsHandler) effectiveValue(def settingDef, dbSettings map[
 		}
 	}
 	switch def.Key {
-	case "sml.json_rpc_base_url":
-		return h.cfg.SMLBaseURL, "default"
 	case "sml.rest_base_url":
 		return h.cfg.ShopeeSMLURL, "default"
 	case "sml.guid":

@@ -5,10 +5,9 @@ import "time"
 // ChannelDefault is the per-(channel, bill_type) party setting that decides
 // which SML customer (sale) or supplier (purchase) bills route to.
 //
-// For SML 248 channels (shopee*, lazada), PartyCode is sent as cust_code in
-// saleinvoice/purchaseorder. For SML 213 channels (line, email), PartyName
-// overrides the AI-extracted contact_name on sale_reserve so SML doesn't
-// create a fresh AR row for every chatbot session.
+// PartyCode is sent as cust_code in saleorder/saleinvoice/purchaseorder.
+// PartyName overrides the AI-extracted contact_name so SML doesn't
+// create a fresh AR row for every session.
 type ChannelDefault struct {
 	Channel          string `json:"channel"`
 	BillType         string `json:"bill_type"`

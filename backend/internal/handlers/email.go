@@ -21,7 +21,6 @@ import (
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/mistral"
-	"billflow/internal/services/sml"
 )
 
 // Date extraction patterns for Shopee email bodies. Priority order matches
@@ -114,7 +113,6 @@ type EmailHandler struct {
 	ocrClient  *mistral.OCRClient
 	mapperSvc  *mapper.Service
 	anomalySvc *anomaly.Service
-	smlClient  *sml.Client
 	billRepo   *repository.BillRepo
 	auditRepo  *repository.AuditLogRepo
 	lineSvc    *lineservice.Service
@@ -134,7 +132,6 @@ func NewEmailHandler(
 	ocrClient *mistral.OCRClient,
 	mapperSvc *mapper.Service,
 	anomalySvc *anomaly.Service,
-	smlClient *sml.Client,
 	billRepo *repository.BillRepo,
 	auditRepo *repository.AuditLogRepo,
 	lineSvc *lineservice.Service,
@@ -146,7 +143,6 @@ func NewEmailHandler(
 		ocrClient:  ocrClient,
 		mapperSvc:  mapperSvc,
 		anomalySvc: anomalySvc,
-		smlClient:  smlClient,
 		billRepo:   billRepo,
 		auditRepo:  auditRepo,
 		lineSvc:    lineSvc,

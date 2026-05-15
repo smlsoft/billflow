@@ -11,6 +11,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	"go.uber.org/zap"
 
+	"billflow/internal/config"
 	"billflow/internal/middleware"
 	"billflow/internal/models"
 	"billflow/internal/repository"
@@ -24,9 +25,11 @@ type ImportHandler struct {
 	platformRepo    *repository.PlatformMappingRepo
 	mapperSvc       *mapper.Service
 	anomalySvc      *anomaly.Service
-	smlClient       *sml.Client
+	saleOrderClient *sml.SaleOrderClient
 	billRepo        *repository.BillRepo
 	channelDefaults *repository.ChannelDefaultRepo
+	docCounters     *repository.DocCounterRepo
+	cfg             *config.Config
 	threshold       float64
 	logger          *zap.Logger
 }
@@ -35,9 +38,11 @@ func NewImportHandler(
 	platformRepo *repository.PlatformMappingRepo,
 	mapperSvc *mapper.Service,
 	anomalySvc *anomaly.Service,
-	smlClient *sml.Client,
+	saleOrderClient *sml.SaleOrderClient,
 	billRepo *repository.BillRepo,
 	channelDefaults *repository.ChannelDefaultRepo,
+	docCounters *repository.DocCounterRepo,
+	cfg *config.Config,
 	threshold float64,
 	logger *zap.Logger,
 ) *ImportHandler {
@@ -45,9 +50,11 @@ func NewImportHandler(
 		platformRepo:    platformRepo,
 		mapperSvc:       mapperSvc,
 		anomalySvc:      anomalySvc,
-		smlClient:       smlClient,
+		saleOrderClient: saleOrderClient,
 		billRepo:        billRepo,
 		channelDefaults: channelDefaults,
+		docCounters:     docCounters,
+		cfg:             cfg,
 		threshold:       threshold,
 		logger:          logger,
 	}
@@ -211,18 +218,26 @@ func (h *ImportHandler) Confirm(c *gin.Context) {
 			continue
 		}
 
-		// Build SML request
-		smlReq, err := h.buildSMLRequest(bill)
+		// Build SML payload
+		payload, docNo, err := h.buildImportPayload(bill)
 		if err != nil {
 			failed++
 			errors = append(errors, errorEntry{BillID: billID, Reason: err.Error()})
 			continue
 		}
 
+		// Stamp doc_no before calling SML so re-confirm reuses the same number
+		_ = h.billRepo.UpdateStatus(billID, bill.Status, &docNo, nil, nil)
+
 		// Send to SML
-		result, err := h.smlClient.CreateSaleReserve(smlReq)
-		if err != nil {
-			errMsg := err.Error()
+		_, soResp, err := h.saleOrderClient.CreateSaleOrder(payload, "")
+		if err != nil || soResp == nil || !soResp.IsSuccess() {
+			errMsg := ""
+			if err != nil {
+				errMsg = err.Error()
+			} else {
+				errMsg = soResp.Message
+			}
 			_ = h.billRepo.UpdateStatus(billID, "failed", nil, nil, &errMsg)
 			failed++
 			errors = append(errors, errorEntry{BillID: billID, Reason: errMsg})
@@ -230,8 +245,12 @@ func (h *ImportHandler) Confirm(c *gin.Context) {
 		}
 
 		// Mark sent
-		resp, _ := json.Marshal(result)
-		_ = h.billRepo.UpdateStatus(billID, "sent", &result.DocNo, resp, nil)
+		sentDocNo := soResp.GetDocNo()
+		if sentDocNo == "" {
+			sentDocNo = docNo
+		}
+		resp, _ := json.Marshal(soResp)
+		_ = h.billRepo.UpdateStatus(billID, "sent", &sentDocNo, resp, nil)
 		success++
 	}
 
@@ -469,61 +488,69 @@ func (h *ImportHandler) processOrderGroup(
 	}, nil
 }
 
-// buildSMLRequest assembles the SML payload from a bill + its items.
-func (h *ImportHandler) buildSMLRequest(bill *models.Bill) (sml.SaleReserveRequest, error) {
+// buildImportPayload assembles a SaleOrderPayload from a bill for the import confirm flow.
+func (h *ImportHandler) buildImportPayload(bill *models.Bill) (sml.SaleOrderPayload, string, error) {
 	if len(bill.Items) == 0 {
-		return sml.SaleReserveRequest{}, fmt.Errorf("bill has no items")
-	}
-	customerName, customerPhone := "", ""
-	if bill.RawData != nil {
-		var raw map[string]interface{}
-		if err := json.Unmarshal(bill.RawData, &raw); err == nil {
-			if v, ok := raw["customer_name"].(string); ok {
-				customerName = v
-			}
-			if v, ok := raw["customer_phone"].(string); ok {
-				customerPhone = v
-			}
-		}
+		return sml.SaleOrderPayload{}, "", fmt.Errorf("bill has no items")
 	}
 
-	// Override with the (channel, sale) default so SML 213 keeps a single AR
-	// per channel instead of polluting the master with one row per import.
-	if h.channelDefaults != nil {
-		if def, _ := h.channelDefaults.Get(bill.Source, "sale"); def != nil {
-			customerName = def.PartyName
-			if customerPhone == "" {
-				customerPhone = def.PartyPhone
-			}
-		}
-	}
-	if customerName == "" {
-		return sml.SaleReserveRequest{}, fmt.Errorf("ยังไม่ได้ตั้งค่าลูกค้า default สำหรับ %s/sale — ไปที่ /settings/channels", bill.Source)
+	def, _ := h.channelDefaults.Get(bill.Source, "sale")
+	if def == nil || def.PartyCode == "" {
+		return sml.SaleOrderPayload{}, "", fmt.Errorf("ยังไม่ได้ตั้งค่าลูกค้า default สำหรับ %s/sale — ไปที่ /settings/channels", bill.Source)
 	}
 
-	var smlItems []sml.SMLItem
+	cfg := sml.SaleOrderConfig{
+		BaseURL:    h.cfg.ShopeeSMLURL,
+		GUID:       h.cfg.ShopeeSMLGUID,
+		Provider:   h.cfg.ShopeeSMLProvider,
+		ConfigFile: h.cfg.ShopeeSMLConfigFile,
+		Database:   h.cfg.ShopeeSMLDatabase,
+		DocFormat:  h.cfg.ShopeeSMLDocFormat,
+		SaleCode:   h.cfg.ShopeeSMLSaleCode,
+		BranchCode: h.cfg.ShopeeSMLBranchCode,
+		WHCode:     h.cfg.ShopeeSMLWHCode,
+		ShelfCode:  h.cfg.ShopeeSMLShelfCode,
+		UnitCode:   h.cfg.ShopeeSMLUnitCode,
+		VATType:    h.cfg.ShopeeSMLVATType,
+		VATRate:    h.cfg.ShopeeSMLVATRate,
+		DocTime:    h.cfg.ShopeeSMLDocTime,
+		CustCode:   def.PartyCode,
+	}
+	applyDocumentOverrides(def, &cfg.BranchCode, &cfg.SaleCode, &cfg.UnitCode, &cfg.DocTime)
+	applyChannelOverrides(def, &cfg.WHCode, &cfg.ShelfCode, &cfg.VATType, &cfg.VATRate)
+	if def.DocFormatCode != "" {
+		cfg.DocFormat = def.DocFormatCode
+	}
+
+	var items []sml.SOItem
 	for _, item := range bill.Items {
 		if item.ItemCode == nil || *item.ItemCode == "" {
-			return sml.SaleReserveRequest{}, fmt.Errorf("item '%s' ยังไม่ได้ mapping", item.RawName)
+			return sml.SaleOrderPayload{}, "", fmt.Errorf("item '%s' ยังไม่ได้ mapping", item.RawName)
 		}
 		price := 0.0
 		if item.Price != nil {
 			price = *item.Price
 		}
-		unitCode := ""
-		if item.UnitCode != nil {
-			unitCode = *item.UnitCode
+		unit := cfg.UnitCode
+		if item.UnitCode != nil && *item.UnitCode != "" {
+			unit = *item.UnitCode
 		}
-		smlItems = append(smlItems, sml.SMLItem{
+		items = append(items, sml.SOItem{
 			ItemCode: *item.ItemCode,
+			ItemName: item.RawName,
 			Qty:      item.Qty,
-			UnitCode: unitCode,
 			Price:    price,
+			UnitCode: unit,
 		})
 	}
-	return sml.SaleReserveRequest{
-		ContactName:  customerName,
-		ContactPhone: customerPhone,
-		Items:        smlItems,
-	}, nil
+
+	prefix, format := resolveDocCounterPattern(def, "BF-SO")
+	docNo, err := h.docCounters.GenerateDocNo(prefix, format, bill.CreatedAt)
+	if err != nil {
+		return sml.SaleOrderPayload{}, "", fmt.Errorf("สร้างเลขเอกสารไม่ได้: %w", err)
+	}
+
+	docDate := bill.CreatedAt.Format("2006-01-02")
+	payload := sml.BuildSaleOrderPayload(docNo, docDate, "", "", items, cfg, "")
+	return payload, docNo, nil
 }
