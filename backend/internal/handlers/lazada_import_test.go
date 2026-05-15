@@ -25,7 +25,8 @@ func TestParseLazadaExcelGroupsOrdersAndSkipsReturnStatuses(t *testing.T) {
 		{"LI-1", "SKU-A", "LZ-A", "10 May 2026 06:23", "LZ-100", "Buyer A", "COD", "120.00", "150.00", "10.00", "Serum", "30ml", "TH123", "shipped"},
 		{"LI-2", "SKU-A", "LZ-A", "10 May 2026 06:23", "LZ-100", "Buyer A", "COD", "120.00", "150.00", "10.00", "Serum", "30ml", "TH123", "shipped"},
 		{"LI-3", "SKU-B", "LZ-B", "09 May 2026 12:00", "LZ-101", "Buyer B", "Card", "88.50", "99.00", "0.00", "Mask", "", "TH456", "delivered"},
-		{"LI-4", "SKU-C", "LZ-C", "08 May 2026 12:00", "LZ-102", "Buyer C", "Card", "77.00", "77.00", "0.00", "Return Item", "", "TH789", "In Transit: Returning to seller"},
+		{"LI-4", "SKU-READY", "LZ-READY", "09 May 2026 13:00", "LZ-READY", "Buyer Ready", "Card", "100.00", "100.00", "0.00", "Ready Item", "", "THREADY", "ready_to_ship"},
+		{"LI-5", "SKU-C", "LZ-C", "08 May 2026 12:00", "LZ-102", "Buyer C", "Card", "77.00", "77.00", "0.00", "Return Item", "", "TH789", "In Transit: Returning to seller"},
 	}
 	for r, row := range rows {
 		for c, v := range row {
@@ -47,8 +48,8 @@ func TestParseLazadaExcelGroupsOrdersAndSkipsReturnStatuses(t *testing.T) {
 	if skipped != 1 {
 		t.Fatalf("skipped = %d, want 1; warnings=%v", skipped, warnings)
 	}
-	if len(orders) != 2 {
-		t.Fatalf("orders = %d, want 2", len(orders))
+	if len(orders) != 3 {
+		t.Fatalf("orders = %d, want 3", len(orders))
 	}
 	if orders[0].OrderID != "LZ-100" || orders[0].DocDate != "2026-05-10" {
 		t.Fatalf("first order = %#v", orders[0])
@@ -58,5 +59,8 @@ func TestParseLazadaExcelGroupsOrdersAndSkipsReturnStatuses(t *testing.T) {
 	}
 	if orders[0].PaidAmount != 240 {
 		t.Fatalf("paid amount = %.2f, want 240.00", orders[0].PaidAmount)
+	}
+	if orders[2].OrderID != "LZ-READY" || orders[2].Status != "ready_to_ship" {
+		t.Fatalf("ready_to_ship order = %#v", orders[2])
 	}
 }

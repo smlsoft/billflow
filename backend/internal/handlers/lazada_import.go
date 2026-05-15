@@ -562,9 +562,10 @@ var lazadaColCandidates = map[string][]string{
 }
 
 var lazadaAllowedStatuses = map[string]bool{
-	"confirmed": true,
-	"shipped":   true,
-	"delivered": true,
+	"confirmed":     true,
+	"ready_to_ship": true,
+	"shipped":       true,
+	"delivered":     true,
 }
 
 func parseLazadaExcel(src interface{ Read([]byte) (int, error) }) ([]ShopeeOrder, []string, int, error) {
@@ -721,7 +722,7 @@ foundHeader:
 			parts = append(parts, fmt.Sprintf("%s %d", status, n))
 		}
 		sort.Strings(parts)
-		warnings = append([]string{fmt.Sprintf("กรอง %d แถวเพราะสถานะไม่ใช่ confirmed/shipped/delivered (%s)", skippedCount, strings.Join(parts, ", "))}, warnings...)
+		warnings = append([]string{fmt.Sprintf("กรอง %d แถวเพราะสถานะไม่ใช่ confirmed/ready_to_ship/shipped/delivered (%s)", skippedCount, strings.Join(parts, ", "))}, warnings...)
 	}
 	return orders, warnings, skippedCount, nil
 }
