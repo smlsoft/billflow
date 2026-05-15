@@ -151,7 +151,7 @@ export default function Dashboard() {
                 </h2>
               </div>
               <div className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-                Phase 1+
+                Phase 2
               </div>
             </div>
             <ActionCards stats={stats} loading={loading} />

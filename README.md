@@ -760,7 +760,7 @@ URL: /import/shopee
 Dedicated flow now mirrors Shopee Excel:
 - `/api/import/lazada/preview` parses Lazada Seller Center export, groups by `orderNumber`, checks duplicates, and filters sale-ready statuses (`confirmed`, `shipped`, `delivered`).
 - `/api/import/lazada/confirm` creates local sale bills with `source='lazada'`; SML send happens later through Bill Detail Retry.
-- `/import/lazada` is enabled for Phase 1+ sales instances. Deploy target: BillFlow main + Henna, not Thaisunsport Phase 1.
+- `/import/lazada` is enabled for Phase 2 sales instances. Deploy target: BillFlow main + Henna, not Thaisunsport Phase 1.
 
 ### TikTok Excel/CSV Import (Phase 4c) ✅ Deployed Main + Henna
 

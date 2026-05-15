@@ -90,15 +90,15 @@ Henna instance data adjusted:
 
 ## Findings
 
-### F-001 — P0 — Henna frontend is built as Phase 1, hiding Phase 1+ sales/import UX
+### F-001 — P0 — Henna frontend is built as Phase 1, hiding Phase 2 sales/import UX
 
-Retest status: Resolved. Henna `.env` now uses Phase 1+ flags and the rebuilt JS bundle contains Phase constants `=99`.
+Retest status: Resolved. Henna `.env` now uses Phase 2 flags and the rebuilt JS bundle contains Phase constants `=99`.
 
 Observation:
 
 - `https://aurora-enjoyed-backup-lines.trycloudflare.com/login` and `http://192.168.2.109:3030/login` both show `Phase 1 · Shopee Purchase Bill`.
 - Built frontend asset on Henna contains `const Uy=1`, consistent with `VITE_PHASE=1`.
-- Henna policy says it should match BillFlow main Phase 1+ with purchase + sales work.
+- Henna policy says it should match BillFlow main Phase 2 with purchase + sales work.
 
 Impact:
 
@@ -107,7 +107,7 @@ Impact:
 
 Fix plan:
 
-- Rebuild/deploy Henna frontend with Phase 1+ flags:
+- Rebuild/deploy Henna frontend with Phase 2 flags:
   - `VITE_PHASE` should match main.
   - `VITE_ENABLE_SALES_ORDERS=true`.
   - `VITE_ENABLE_SHOPEE_EXCEL=true` unless intentionally hidden.

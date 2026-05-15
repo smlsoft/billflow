@@ -19,7 +19,7 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 | Change type | Deploy targets | Notes |
 | --- | --- | --- |
 | ทดสอบงานใหม่หรือแก้เฉพาะ demo หลัก | `billflow` | ใช้ main เป็นพื้นที่ทดสอบก่อน |
-| Phase 1+ / งานฝั่งขาย / UX ที่เปิดทั้งซื้อและขาย | `billflow`, `billflow-henna` | Henna ต้องเทียบเท่า main และเปิดงานฝั่งซื้อ + งานฝั่งขาย |
+| Phase 2 / งานฝั่งขาย / UX ที่เปิดทั้งซื้อและขาย | `billflow`, `billflow-henna` | Henna ต้องเทียบเท่า main และเปิดงานฝั่งซื้อ + งานฝั่งขาย |
 | Shared Phase 1 bug/UX/backend/email/bills/logs/settings ที่ไม่ผูกกับงานฝั่งขาย | `billflow`, `billflow-henna`, `billflow-thaisunsport` | Thaisunsport รับเฉพาะสิ่งที่ใช้ร่วมกับ Phase 1 |
 | งานเฉพาะร้าน เช่น credential, SML config, tunnel URL, env เฉพาะ instance | instance นั้นเท่านั้น | ห้ามกระทบ instance อื่น |
 
@@ -28,7 +28,7 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 ## Next Planned Phase — Shopee API Direct
 
 - เริ่ม development/test บน `billflow` ก่อน เพราะเป็น demo หลักและใช้ตรวจ flow ใหม่ได้เร็วที่สุด.
-- เมื่อ stable แล้ว deploy ไป `billflow` + `billflow-henna` เพราะ Henna ต้องเทียบเท่า main สำหรับ Phase 1+ / งานฝั่งขาย.
+- เมื่อ stable แล้ว deploy ไป `billflow` + `billflow-henna` เพราะ Henna ต้องเทียบเท่า main สำหรับ Phase 2 / งานฝั่งขาย.
 - ยังไม่ deploy ไป `billflow-thaisunsport` เพราะ instance นี้ยังเป็น Phase 1 ฝั่งซื้อ และปิด sales/import channel ด้วย feature flags.
 - Shopee API direct ต้อง feed เข้า review/SML retry pipeline เดิมเหมือน Shopee Excel; ห้ามสร้าง SML send flow แยกถ้าไม่จำเป็น.
 - Shopee Excel ต้องคงไว้เป็น fallback/manual import ระหว่าง UAT ของ API direct.
@@ -94,7 +94,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - Database is separate PostgreSQL volume `billflow-henna_billflow_henna_pgdata`.
 - `PUBLIC_BASE_URL` in `/home/bosscatdog/billflow-henna/.env` is set to the latest Henna Quick Tunnel URL.
 - Current feature flags:
-  - `VITE_PHASE=99`
+  - `VITE_PHASE=2`
   - `VITE_ENABLE_SALES_ORDERS=true`
   - `VITE_ENABLE_SHOPEE_EXCEL=true`
   - `VITE_ENABLE_LAZADA_EXCEL=true`
@@ -108,7 +108,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 - Latest deploy verified: 2026-05-13 16:53 +07.
 - Current purpose: customer demo for Phase 1 purchase flow only.
-- Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
+- Keep sale features disabled until the user explicitly asks to open Phase 2 for this customer:
   - `VITE_PHASE=1`
   - `VITE_ENABLE_SALES_ORDERS=false`
   - `VITE_ENABLE_SHOPEE_EXCEL=false`
@@ -148,11 +148,11 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - Local verification: `npm run build` passed.
 - Deploy verification: main and Henna serve `index-CsDcDUth.js`; frontend containers are up on `3010` and `3030`; backend health ok on `8090`, `8110`, `8100`.
 - 2026-05-13 17:25 +07: Corrected main/Henna frontend feature flags after deploy-policy review.
-- Scope: `billflow` and `billflow-henna` are Phase 1+ (`VITE_PHASE=99`) with sales/Shopee/Lazada/TikTok Excel enabled and chat disabled; `billflow-thaisunsport` remains Phase 1 purchase-only.
+- Scope: `billflow` and `billflow-henna` are Phase 2 (`VITE_PHASE=2`) with sales/Shopee/Lazada/TikTok Excel enabled and chat disabled; `billflow-thaisunsport` remains Phase 1 purchase-only.
 - Deploy targets: frontend rebuild/restart for `billflow` and `billflow-henna` only.
 - Deploy verification: main and Henna serve `index-qyZlCwSs.js`; Thaisunsport still serves Phase 1 asset `index-CpcZFriL.js`; backend health ok on `8090`, `8110`, `8100`.
 - 2026-05-13 16:53 +07: `/settings/channels` visibility fix deployed to all three instances.
-- Scope: channel settings table now derives visible rows from instance feature flags instead of showing every backend-supported channel slot. Thaisunsport Phase 1 shows only `Email บิลซื้อ Shopee`; main and Henna hide LINE/chat routing because chat is disabled while keeping Phase 1+ purchase/sales marketplace routes.
+- Scope: channel settings table now derives visible rows from instance feature flags instead of showing every backend-supported channel slot. Thaisunsport Phase 1 shows only `Email บิลซื้อ Shopee`; main and Henna hide LINE/chat routing because chat is disabled while keeping Phase 2 purchase/sales marketplace routes.
 - Deploy targets: `billflow`, `billflow-henna`, `billflow-thaisunsport`.
 - Local verification: `npm run build` passed.
 - Deploy verification: frontend `/settings/channels` HTTP 200 on `3010`, `3030`, `3020`.
@@ -197,21 +197,21 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - Scope: synced backend/frontend/docs to `billflow`, `billflow-henna`, and `billflow-thaisunsport`, then rebuilt/restarted backend + frontend containers.
 - Verification: backend health ok on `8090`, `8110`, `8100`; frontend HTTP 200 on `3010`, `3030`, `3020`.
 - Flags verified in both `.env` and `docker-compose.yml` build args:
-  - Main: `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, chat disabled.
-  - Henna: `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, chat disabled.
+  - Main: `VITE_PHASE=2`, sales/Shopee/Lazada/TikTok Excel enabled, chat disabled.
+  - Henna: `VITE_PHASE=2`, sales/Shopee/Lazada/TikTok Excel enabled, chat disabled.
   - Thaisunsport: `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel disabled, chat disabled.
 - Next work: Shopee API direct starts on `billflow`; deploy to Henna only after UAT; skip Thaisunsport until sales features are explicitly enabled.
 - 2026-05-12 11:34 +07: Audit actor + production log accountability deployed to all three instances.
 - Scope: backend `/api/logs` now returns `actor` with user name/email/role when `user_id` exists, classifies background entries as worker/system, and supports `user_id` filtering.
 - Scope: `/logs` shows the actor badge in each row, adds a `ผู้ทำรายการ` filter, removes playful emoji from action labels, and keeps DEV payload copyable for admins/devs.
 - Scope: SML send success/failure, bill item add/delete, and mapping feedback logs now write the current `user_id`; backend also blocks malformed `doc_no` with hidden/Thai mark characters before sending to SML.
-- Change type: Shared Phase 1+ audit/accountability/data-quality hardening.
+- Change type: Shared Phase 2 audit/accountability/data-quality hardening.
 - Local verification: `npm run build` passed; `GOCACHE=... go test ./...` passed.
 - Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend `/logs` HTTP 200 on `3010`, `3030`, `3020`; main `/api/logs` verified returning `actor` for Admin entries.
 - Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
 - 2026-05-12 11:11 +07: Logs Action View deployed to all three instances.
 - Scope: `/logs` now has summary cards, quick filters, DEV toggle, grouped import runs, SML failure incident cards, copyable DEV payload, and data-quality warning for malformed/hidden-character `doc_no`.
-- Change type: Shared Phase 1+ frontend UX/debug clarity.
+- Change type: Shared Phase 2 frontend UX/debug clarity.
 - Local verification: `npm run build` passed; browser check on local `/logs` confirmed new summary/DEV/filter controls render.
 - Deploy verification: backend health ok on `8090`, `8110`, `8100`; frontend `/logs` HTTP 200 on `3010`, `3030`, `3020`.
 - Thaisunsport flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
@@ -277,7 +277,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - Verified frontend route: `/import/tiktok` returns HTTP 200 on `3010`, `3030`.
 - Verified migration `030_tiktok_import.sql` applied on main and Henna.
 - Skipped `billflow-thaisunsport` intentionally because it remains Phase 1 purchase-only; backend `8100` was health-checked but containers were not restarted.
-- 2026-05-11 16:42 +07: Phase 1+ Lazada Excel sales flow deployed to `billflow` and `billflow-henna` only.
+- 2026-05-11 16:42 +07: Phase 2 Lazada Excel sales flow deployed to `billflow` and `billflow-henna` only.
 - Scope: `/import/lazada`, Lazada preview/confirm API, `lazada` channel sale routing, sales queue counts including Lazada, and migration `029_lazada_import.sql`.
 - Verified backend health: `8090`, `8110`.
 - Verified frontend health: `3010`, `3030`.

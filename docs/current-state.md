@@ -17,8 +17,8 @@
   - Server source guard: no active `channel: 'email'` slot in deployed `/settings/channels` source for main/Henna; deleted frontend orphan files are absent on both folders.
   - Cleanup removed legacy channel-default delete/quick-setup runtime endpoints and unused frontend files; audit labels for historical quick-setup/delete logs remain readable.
 - Previous all-instance deploy verified 2026-05-13 17:25 +07:
-  - BillFlow main: backend `8090` health ok, frontend `3010` HTTP 200, `.env` flags `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`.
-  - Henna: backend `8110` health ok, frontend `3030` HTTP 200, `.env` flags `VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`.
+  - BillFlow main: backend `8090` health ok, frontend `3010` HTTP 200, `.env` flags `VITE_PHASE=2`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`.
+  - Henna: backend `8110` health ok, frontend `3030` HTTP 200, `.env` flags `VITE_PHASE=2`, sales/Shopee/Lazada/TikTok Excel enabled, `VITE_ENABLE_CHAT=false`.
   - Thaisunsport: backend `8100` health ok, frontend `3020` HTTP 200, `.env` flags `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok Excel disabled, `VITE_ENABLE_CHAT=false`.
   - `docker-compose.yml` build args were checked for the same feature flags on all three instances.
   - Deploy folders updated from the same local codebase: `/home/bosscatdog/billflow`, `/home/bosscatdog/billflow-henna`, `/home/bosscatdog/billflow-thaisunsport`.
@@ -28,14 +28,14 @@
   - Health checked: backend `8100` = `ok`, frontend `3020` serve HTML ได้, containers up.
   - Frontend build flags: `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`, `VITE_ENABLE_LAZADA_EXCEL=false`, `VITE_ENABLE_TIKTOK_EXCEL=false`, `VITE_ENABLE_CHAT=false`.
   - AI model ใน `.env`: `OPENROUTER_MODEL=google/gemini-2.5-flash-lite`, fallback `google/gemini-2.5-flash`.
-  - สำหรับ demo Thaisunsport ตอนนี้อย่าเปิด Phase 1+ / Shopee Excel / ใบสั่งขาย จนกว่าลูกค้าจะผ่าน demo ฝั่งซื้อ.
+  - สำหรับ demo Thaisunsport ตอนนี้อย่าเปิด Phase 2 / Shopee Excel / ใบสั่งขาย จนกว่าลูกค้าจะผ่าน demo ฝั่งซื้อ.
 - Henna customer trial ถูกสร้างใหม่จาก BillFlow ปกติ ไม่ใช่ Thaisunsport:
   - Public URL: `https://aurora-enjoyed-backup-lines.trycloudflare.com/login`
   - Frontend `3030`, backend `8110`, postgres `5458`
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
   - Latest deploy verified 2026-05-13 18:20 +07:
-    - Henna frontend rebuilt as Phase 1+ (`VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled), matching BillFlow main for purchase + sales work.
+    - Henna frontend rebuilt as Phase 2 (`VITE_PHASE=2`, sales/Shopee/Lazada/TikTok Excel enabled), matching BillFlow main for purchase + sales work.
     - LINE/chat features are explicitly disabled with `VITE_ENABLE_CHAT=false`.
     - Cleanup deploy asset `index-B84xDgtQ.js`; `/settings/channels` no longer exposes generic Email rows, customer/supplier config, delete action, free-form endpoint, or legacy quick-setup runtime.
     - Backend health `8110` = `{"database":"ok","env":"production","status":"ok"}`.
@@ -96,7 +96,7 @@
 - Shopee SKU ถูกเก็บแยกเป็น `bill_items.source_sku`; ถ้า SKU ไม่มีใน SML Catalog จะไม่เอาไปใส่เป็น `item_code`.
 - REST SML retry ตรวจซ้ำว่า `item_code` มีอยู่ใน Catalog จริงก่อนส่ง.
 - Saleinvoice test ล่าสุด: `BF-INV26050001` ส่ง payload มี `doc_ref_date: "2026-03-10"` แล้ว ถ้า SML UI ไม่แสดงให้ dev SML ตรวจ API mapping.
-- UX hardening ล่าสุดสำหรับ Phase 1+:
+- UX hardening ล่าสุดสำหรับ Phase 2:
   - Dashboard เพิ่ม `Action Center` จัดลำดับงานถัดไปให้ user: setup ไม่ครบ, email มีปัญหา, SML fail, mapping ค้าง, และเอกสารพร้อมส่ง
   - หน้า Dashboard และหน้าเอกสารแสดง empty state พร้อมปุ่มไปงานถัดไปเมื่อยังไม่มีบิลหลังล้างข้อมูลทดสอบ
   - `/settings/channels` ซ่อน API path เป็น `รายละเอียดขั้นสูง` เพื่อไม่ให้พนักงานทั่วไปสับสน
@@ -207,7 +207,7 @@
   - ใช้ mapping/catalog/review/retry SML flow เดิมทั้งหมด
 - Shopee Excel ควรยังคงอยู่เป็น fallback/manual import จนกว่า API direct จะ stable.
 - เริ่ม implement/test บน BillFlow main ก่อน แล้วค่อย deploy main + Henna เมื่อผ่าน UAT.
-- ไม่ deploy ไป Thaisunsport เว้นแต่ผู้ใช้สั่งเปิด Phase 1+ / งานฝั่งขายให้ร้านนี้.
+- ไม่ deploy ไป Thaisunsport เว้นแต่ผู้ใช้สั่งเปิด Phase 2 / งานฝั่งขายให้ร้านนี้.
 
 สิ่งที่ต้องเตรียม/ยืนยันก่อน coding Shopee API:
 
@@ -220,18 +220,18 @@
 
 ## Latest Deploy Notes
 
-### Main + Henna — Correct Phase 1+ Flags, Chat Disabled
+### Main + Henna — Correct Phase 2 Flags, Chat Disabled
 
 - Time verified: 2026-05-13 17:25 +07.
 - Change type: frontend deploy-policy correction after confirming main/Henna must keep sales work.
 - Deploy targets: `billflow`, `billflow-henna`; skipped `billflow-thaisunsport`.
 - Scope:
-  - `billflow` and `billflow-henna` now use `VITE_PHASE=99`.
+  - `billflow` and `billflow-henna` now use `VITE_PHASE=2`.
   - Sales/Shopee/Lazada/TikTok Excel are enabled on main + Henna.
   - LINE/chat remains disabled with `VITE_ENABLE_CHAT=false`, so `/messages` redirects away and chat settings stay hidden.
   - Thaisunsport remains `VITE_PHASE=1` with sales/marketplace/chat disabled.
 - Verification:
-  - Main and Henna serve Phase 1+ asset `index-qyZlCwSs.js`.
+  - Main and Henna serve Phase 2 asset `index-qyZlCwSs.js`.
   - Thaisunsport still serves Phase 1 asset `index-CpcZFriL.js`.
   - Backend health ok: `8090`, `8110`, `8100`.
 
@@ -243,7 +243,7 @@
 - Scope:
   - Removed generic `Email` sale/purchase rows from the visible channel slot list.
   - Kept `Email บิลซื้อ Shopee` (`shopee_shipped/purchase`) as the purchase email route.
-  - Kept Phase 1+ sales routes for Shopee/Lazada/TikTok Excel.
+  - Kept Phase 2 sales routes for Shopee/Lazada/TikTok Excel.
 - Verification:
   - Local `npm run build` passed.
   - Main and Henna serve frontend asset `index-CsDcDUth.js`.
@@ -309,8 +309,8 @@
 - Scope:
   - `/settings/channels` now derives visible channel rows from the instance feature flags instead of showing every backend-supported `(channel, bill_type)` slot.
   - Thaisunsport Phase 1 shows only the purchase route that is enabled for the instance: `Email บิลซื้อ Shopee`.
-  - Henna hides LINE/chat routing rows because `VITE_ENABLE_CHAT=false`, while keeping Phase 1+ purchase/sales marketplace routes.
-  - Main also hides LINE/chat routing rows because `VITE_ENABLE_CHAT=false`, while keeping Phase 1+ purchase/sales marketplace routes.
+  - Henna hides LINE/chat routing rows because `VITE_ENABLE_CHAT=false`, while keeping Phase 2 purchase/sales marketplace routes.
+  - Main also hides LINE/chat routing rows because `VITE_ENABLE_CHAT=false`, while keeping Phase 2 purchase/sales marketplace routes.
 - Verification:
   - Local `npm run build` passed.
   - Frontend `/settings/channels` HTTP 200 after rebuild: main `3010`, Henna `3030`, Thaisunsport `3020`.
@@ -388,8 +388,8 @@
   - Thaisunsport `pd.thaisunsport2@gmail.com` advanced from `backlog` to `ok`, `consecutive_failures=0`; cursor/backlog fields no longer show the old fetch failure.
   - Browser check on Thaisunsport `/settings/email` confirmed skipped-reason summary, detail dialog, order/search flow, and reset lookback dialog render correctly.
 - Feature policy after deploy:
-  - `billflow`: Phase 1+ purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
-  - `billflow-henna`: Phase 1+ purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
+  - `billflow`: Phase 2 purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
+  - `billflow-henna`: Phase 2 purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
   - `billflow-thaisunsport`: Phase 1 purchase only; sales/Shopee/Lazada/TikTok Excel/chat disabled.
 
 ### All Instances — Latest Codebase Snapshot For Shopee API Handoff
@@ -402,14 +402,14 @@
   - Frontend HTTP 200: `3010`, `3030`, `3020`.
   - Feature flags checked in `.env` and `docker-compose.yml` build args on all three instances.
 - Feature policy after deploy:
-  - `billflow`: Phase 1+ purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
-  - `billflow-henna`: Phase 1+ purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
+  - `billflow`: Phase 2 purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
+  - `billflow-henna`: Phase 2 purchase/sales/marketplace Excel, `VITE_ENABLE_CHAT=false`.
   - `billflow-thaisunsport`: Phase 1 purchase only; sales/Shopee/Lazada/TikTok Excel/chat disabled.
 - Local git status after deploy: only untracked sample import files remain (`Order.all.20260401_20260430.xlsx`, `lazada.xlsx`, `tiktok_csv.csv`, `tiktok_excel.xlsx`); no tracked code changes are pending.
 
-### Main + Henna — Lazada Excel Phase 1+ Sales Flow
+### Main + Henna — Lazada Excel Phase 2 Sales Flow
 
-- Change type: Phase 1+ / งานฝั่งขาย / Marketplace Excel import.
+- Change type: Phase 2 / งานฝั่งขาย / Marketplace Excel import.
 - Deploy targets: `billflow`, `billflow-henna`.
 - Skipped: `billflow-thaisunsport` เพราะยัง Phase 1 ฝั่งซื้อและ sales/Shopee Excel disabled.
 - Scope:

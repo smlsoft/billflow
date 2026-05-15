@@ -5,7 +5,7 @@ WORKDIR /app
 
 # VITE_PHASE is baked into the JS bundle at build time by Vite.
 # Pass it via docker-compose build args (see docker-compose.yml args section).
-ARG VITE_PHASE=99
+ARG VITE_PHASE=2
 ENV VITE_PHASE=${VITE_PHASE}
 ARG VITE_ENABLE_SALES_ORDERS=true
 ENV VITE_ENABLE_SALES_ORDERS=${VITE_ENABLE_SALES_ORDERS}

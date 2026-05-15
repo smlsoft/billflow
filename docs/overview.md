@@ -145,8 +145,8 @@ billflow/
 
 | Instance | Purpose | Frontend | Backend | Current feature set |
 |---|---|---:|---:|---|
-| BillFlow main | demo หลัก / ทดสอบงานใหม่ | `3010` | `8090` | Phase 1+ + marketplace Excel, chat disabled |
-| Henna | customer trial Phase 1+ | `3030` | `8110` | Purchase + sales + Shopee/Lazada/TikTok Excel, chat disabled |
+| BillFlow main | demo หลัก / ทดสอบงานใหม่ | `3010` | `8090` | Phase 2 + marketplace Excel, chat disabled |
+| Henna | customer trial Phase 2 | `3030` | `8110` | Purchase + sales + Shopee/Lazada/TikTok Excel, chat disabled |
 | Thaisunsport | customer demo Phase 1 | `3020` | `8100` | Purchase/email only, sales/import/chat disabled |
 
 Latest all-instance deploy verified 2026-05-13 17:25 +07. ดูรายละเอียด port/folder/flags ที่ [deploy-instances.md](deploy-instances.md).
