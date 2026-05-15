@@ -7,6 +7,7 @@ import {
   FileText,
   Info,
   ListFilter,
+  Loader2,
   Mail,
   Pencil,
   PlayCircle,
@@ -567,6 +568,7 @@ export default function EmailAccounts() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [detailAccount, setDetailAccount] = useState<IMAPAccountFull | null>(null)
   const [resetAccount, setResetAccount] = useState<IMAPAccountFull | null>(null)
+  const [pollingIds, setPollingIds] = useState<Set<string>>(new Set())
 
   const fetchAll = async () => {
     try {
@@ -597,6 +599,8 @@ export default function EmailAccounts() {
   }
 
   const handlePollNow = async (a: IMAPAccountFull) => {
+    if (pollingIds.has(a.id)) return
+    setPollingIds((prev) => new Set(prev).add(a.id))
     const id = toast.loading(`กำลังดึงอีเมล ${a.name}…`)
     try {
       const res = await client.post<{
@@ -639,6 +643,12 @@ export default function EmailAccounts() {
         ? e.response?.data?.error || e.message
         : ''
       toast.error(`ดึงอีเมลไม่สำเร็จ${msg ? `: ${msg}` : ''}`, { id })
+    } finally {
+      setPollingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(a.id)
+        return next
+      })
     }
   }
 
@@ -963,7 +973,9 @@ export default function EmailAccounts() {
                 header: '',
                 headerClassName: 'text-right',
                 className: 'text-right',
-                cell: (a) => (
+                cell: (a) => {
+                  const polling = pollingIds.has(a.id)
+                  return (
                   <div className="flex justify-end gap-1">
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -972,12 +984,16 @@ export default function EmailAccounts() {
                           variant="ghost"
                           className="h-7 w-7"
                           onClick={() => handlePollNow(a)}
-                          disabled={!a.enabled}
+                          disabled={!a.enabled || polling}
                         >
-                          <PlayCircle className="h-3.5 w-3.5" />
+                          {polling ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <PlayCircle className="h-3.5 w-3.5" />
+                          )}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>ดึงอีเมลตอนนี้</TooltipContent>
+                      <TooltipContent>{polling ? 'กำลังดึงอีเมลกล่องนี้' : 'ดึงอีเมลตอนนี้'}</TooltipContent>
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -1019,7 +1035,8 @@ export default function EmailAccounts() {
                       <TooltipContent>ลบ</TooltipContent>
                     </Tooltip>
                   </div>
-                ),
+                  )
+                },
               },
             ]}
           />

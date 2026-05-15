@@ -279,6 +279,7 @@ export default function CatalogSettings() {
   }
 
   async function handleSync() {
+    if (isSyncBusy) return
     const hasPendingRestart = await fetchInstanceStatus()
     if (hasPendingRestart) {
       notify('มีการเปลี่ยนค่า SML ที่ยังไม่ได้รีสตาร์ท กรุณาไปที่การเชื่อมต่อระบบก่อน Sync', false)
@@ -302,6 +303,7 @@ export default function CatalogSettings() {
   }
 
   async function handleEmbedAll() {
+    if (isEmbedBusy) return
     setEmbedding(true)
     try {
       const res = await api.post<{ message: string }>('/api/catalog/embed-all')
@@ -325,6 +327,8 @@ export default function CatalogSettings() {
   }
 
   async function handleEmbedOne(code: string) {
+    if (busyRow?.code === code) return
+    setBusyRow({ code, action: 'embed' })
     try {
       await api.post(`/api/catalog/${code}/embed`)
       notify(`Embed ${code} สำเร็จ`)
@@ -332,12 +336,14 @@ export default function CatalogSettings() {
       fetchItems(params)
     } catch {
       notify(`Embed ${code} ล้มเหลว`, false)
+    } finally {
+      setBusyRow(null)
     }
   }
 
   // Tracks which row is currently running an action so we can disable
   // its buttons and show a spinner without blocking the rest of the table.
-  const [busyRow, setBusyRow] = useState<{ code: string; action: 'refresh' | 'delete' } | null>(null)
+  const [busyRow, setBusyRow] = useState<{ code: string; action: 'embed' | 'refresh' | 'delete' } | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   async function handleRefreshOne(code: string) {
@@ -707,9 +713,10 @@ export default function CatalogSettings() {
                           size="sm"
                           variant="outline"
                           className="h-7 px-2 text-xs"
+                          disabled={busyRow?.code === item.item_code}
                           onClick={() => handleEmbedOne(item.item_code)}
                         >
-                          เตรียมข้อมูล
+                          {busyRow?.code === item.item_code && busyRow.action === 'embed' ? 'กำลังทำ…' : 'เตรียมข้อมูล'}
                         </Button>
                       )}
                       <Button

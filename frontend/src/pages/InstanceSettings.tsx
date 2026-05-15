@@ -136,6 +136,18 @@ export default function InstanceSettings() {
   }
 
   const save = async () => {
+    if (saving || restarting || loading) return
+    const changed = settings.filter((s) => visibleKeys.has(s.key) && (draft[s.key] ?? '') !== (s.source === 'database' ? s.value ?? '' : ''))
+    if (changed.length > 0) {
+      const important = changed.filter((s) => s.restart_required || s.group === 'sml' || s.group === 'ai' || s.secret)
+      if (important.length > 0) {
+        const labels = important.slice(0, 6).map((s) => s.label).join(', ')
+        const more = important.length > 6 ? ` และอีก ${important.length - 6} ค่า` : ''
+        if (!window.confirm(`บันทึกและรีสตาร์ท backend ตอนนี้?\n\nค่าที่มีผลต่อระบบจริง: ${labels}${more}`)) {
+          return
+        }
+      }
+    }
     setSaving(true)
     setRestarting(false)
     const toastID = toast.loading('กำลังบันทึกค่า...')
@@ -160,6 +172,8 @@ export default function InstanceSettings() {
   }
 
   const restartOnly = async () => {
+    if (saving || restarting || loading) return
+    if (!window.confirm('รีสตาร์ท backend ตอนนี้เพื่อเริ่มใช้ค่าที่บันทึกไว้?')) return
     setRestarting(true)
     const toastID = toast.loading('กำลังรีสตาร์ท backend...')
     try {

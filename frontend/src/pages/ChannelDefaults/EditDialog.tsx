@@ -73,6 +73,16 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     destinationOptions.find((option) => option.value === selectedDestination) ??
     destinationFor(row.channel as ChannelKey, row.bill_type, row.endpoint ?? '', row.doc_format_code ?? '') ??
     destinationOptions[0]
+  const docPrefixTrimmed = docPrefix.trim()
+  const docRunningFormatTrimmed = docRunningFormat.trim().toUpperCase()
+  const docWarning = docNoPatternWarning(docPrefixTrimmed, docRunningFormatTrimmed)
+  const canSave =
+    !!selectedDestinationMeta &&
+    docPrefixTrimmed !== '' &&
+    docRunningFormatTrimmed !== '' &&
+    docRunningFormatTrimmed.includes('#') &&
+    !docWarning &&
+    !saving
 
   const handleDestinationChange = (value: EndpointKind) => {
     const destination = destinationOptions.find((option) => option.value === value)
@@ -83,8 +93,21 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   }
 
   const handleSave = async () => {
+    if (saving) return
     if (!selectedDestinationMeta) {
       toast.error('กรุณาเลือกปลายทาง SML ก่อน')
+      return
+    }
+    if (!docPrefixTrimmed) {
+      toast.error('กรุณากรอก prefix ของเลขเอกสาร')
+      return
+    }
+    if (!docRunningFormatTrimmed || !docRunningFormatTrimmed.includes('#')) {
+      toast.error('รูปแบบเลขรันต้องมี # อย่างน้อย 1 ตัว')
+      return
+    }
+    if (docWarning) {
+      toast.error('แก้รูปแบบเลขเอกสารตามคำเตือนก่อนบันทึก')
       return
     }
     setSaving(true)
@@ -99,8 +122,8 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         party_tax_id: row.party_tax_id ?? '',
         doc_format_code: selectedDestinationMeta.docFormatCode,
         endpoint: selectedDestinationMeta.apiPath,
-        doc_prefix: docPrefix.trim(),
-        doc_running_format: docRunningFormat.trim(),
+        doc_prefix: docPrefixTrimmed,
+        doc_running_format: docRunningFormatTrimmed,
         branch_code: '',
         sale_code: '',
         unit_code: '',
@@ -196,7 +219,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                 <Label className="text-xs">รูปแบบเลขรัน</Label>
                 <Input
                   value={docRunningFormat}
-                  onChange={(e) => setDocRunningFormat(e.target.value)}
+                  onChange={(e) => setDocRunningFormat(e.target.value.toUpperCase())}
                   placeholder="YYMM####"
                   className="font-mono"
                 />
@@ -206,7 +229,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
               <div>
                 <b>ตัวอย่างถัดไป:</b>{' '}
                 <code className="rounded bg-background px-1.5 py-0.5 font-mono text-foreground">
-                  {previewDocNo(docPrefix || 'BF', docRunningFormat || 'YYMM####')}
+                  {previewDocNo(docPrefixTrimmed || 'BF', docRunningFormatTrimmed || 'YYMM####')}
                 </code>
               </div>
               <div>
@@ -217,9 +240,14 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                 <code>YY</code> = รายปี)
               </div>
             </div>
-            {docNoPatternWarning(docPrefix, docRunningFormat) && (
+            {docWarning && (
               <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-                ⚠️ {docNoPatternWarning(docPrefix, docRunningFormat)}
+                ⚠️ {docWarning}
+              </div>
+            )}
+            {docRunningFormatTrimmed && !docRunningFormatTrimmed.includes('#') && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                รูปแบบเลขรันต้องมี # เพื่อให้ระบบออกเลขเอกสารต่อเนื่องได้
               </div>
             )}
           </div>
@@ -230,7 +258,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             ยกเลิก
           </Button>
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={!canSave}>
             {saving ? 'กำลังบันทึก…' : 'บันทึก'}
           </Button>
         </DialogFooter>

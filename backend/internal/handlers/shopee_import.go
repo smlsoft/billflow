@@ -589,59 +589,21 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			matches := resolved.matches
 
 			price := it.Price
-			bi := models.BillItem{
-				RawName:   rawName,
-				SourceSKU: it.SKU,
-				Qty:       it.Qty,
-				Price:     &price,
-			}
-
-			// Priority:
-			// 1. Human/F1 mapping from /mappings. This is the user's source
-			//    of truth and must win over Shopee SKU guesses.
-			// 2. High-confidence catalog match.
-			// 3. Excel SKU only when it exists in SML catalog. Otherwise keep
-			//    it as source_sku, not item_code, so Shopee SKU cannot masquerade
-			//    as an SML product code.
-			switch {
-			case resolved.learned != nil:
-				bi.ItemCode = &resolved.learned.ItemCode
-				bi.UnitCode = &resolved.learned.UnitCode
-				bi.MappingID = &resolved.learned.ID
-				bi.Mapped = true
+			bi, resolvedHigh := marketplaceBillItemFromMatch(
+				rawName,
+				it.SKU,
+				it.Qty,
+				&price,
+				defaultUnit,
+				resolved.learned,
+				matches,
+				h.lookupCatalogItem,
+				highConfThreshold,
+			)
+			if resolved.learned != nil && bi.MappingID != nil {
 				_ = h.mappingRepo.IncrementUsage(resolved.learned.ID)
-			case len(matches) > 0 && matches[0].Score >= highConfThreshold:
-				bi.ItemCode = &matches[0].ItemCode
-				unit := matches[0].UnitCode
-				if unit == "" {
-					unit = defaultUnit
-				}
-				bi.UnitCode = &unit
-				bi.Mapped = true
-			case it.SKU != "":
-				if cat := h.lookupCatalogItem(it.SKU); cat != nil {
-					code := cat.ItemCode
-					unit := cat.UnitCode
-					if unit == "" {
-						unit = defaultUnit
-					}
-					bi.ItemCode = &code
-					bi.UnitCode = &unit
-					bi.Mapped = true
-				} else {
-					bi.Mapped = false
-					allHigh = false
-				}
-			default:
-				if len(matches) > 0 {
-					bi.ItemCode = &matches[0].ItemCode
-					unit := matches[0].UnitCode
-					if unit == "" {
-						unit = defaultUnit
-					}
-					bi.UnitCode = &unit
-				}
-				bi.Mapped = false
+			}
+			if !resolvedHigh {
 				allHigh = false
 			}
 

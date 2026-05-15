@@ -313,7 +313,7 @@ export default function LazadaImport() {
   }
 
   const handleConfirm = async () => {
-    if (!preview || selectedIDs.size === 0) return
+    if (step !== 'preview' || !preview || selectedIDs.size === 0) return
     setStep('confirming')
     setError('')
     try {
@@ -529,7 +529,7 @@ export default function LazadaImport() {
             </Button>
             <Button
               size="sm"
-              disabled={selectedIDs.size === 0}
+              disabled={selectedIDs.size === 0 || step !== 'preview'}
               onClick={handleConfirm}
             >
               {destination.action} {selectedIDs.size} รายการ

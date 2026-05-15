@@ -105,13 +105,32 @@ export function BillItemRow({
   }
 
   const handleSave = async () => {
+    if (saving) return
+    const qty = Number(draft.qty)
+    const price = Number(draft.price)
+    if (!draft.item_code.trim()) {
+      toast.error('กรุณาเลือกสินค้าใน SML ก่อนบันทึก')
+      return
+    }
+    if (!draft.unit_code.trim()) {
+      toast.error('กรุณากรอกหน่วยก่อนบันทึก')
+      return
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      toast.error('จำนวนต้องมากกว่า 0')
+      return
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      toast.error('ราคาต้องมากกว่า 0')
+      return
+    }
     setSaving(true)
     try {
       await api.put(`/api/bills/${billId}/items/${item.id}`, {
-        item_code: draft.item_code,
-        unit_code: draft.unit_code,
-        qty: Number(draft.qty),
-        price: Number(draft.price),
+        item_code: draft.item_code.trim(),
+        unit_code: draft.unit_code.trim(),
+        qty,
+        price,
       })
 
       // F1 learning: backend registers ai_learned mapping if item_code changed.
@@ -133,11 +152,11 @@ export function BillItemRow({
 
       onUpdated({
         ...item,
-        item_code: draft.item_code,
-        unit_code: draft.unit_code,
-        qty: Number(draft.qty),
-        price: Number(draft.price),
-        mapped: draft.item_code !== '',
+        item_code: draft.item_code.trim(),
+        unit_code: draft.unit_code.trim(),
+        qty,
+        price,
+        mapped: draft.item_code.trim() !== '',
         candidates,
       })
       setEditing(false)

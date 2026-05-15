@@ -123,8 +123,9 @@ export function BulkSendDialog({
   const [remark, setRemark] = useState('')
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [totalPending, setTotalPending] = useState(0)
+  const [sendAttempted, setSendAttempted] = useState(false)
 
-  const readyCount = candidates.filter((c) => c.ready).length
+  const readyCount = candidates.filter((c) => c.ready && !c.result).length
   const skippedCount = candidates.length - readyCount
   const sentCount = candidates.filter((c) => c.result === 'sent').length
   const failedCount = candidates.filter((c) => c.result === 'failed').length
@@ -133,17 +134,18 @@ export function BulkSendDialog({
     let readySeq = 0
     return candidates.map((row) => {
       const baseDocNo = previewDocNo(row.bill)
+      const participatesInSend = row.ready || row.result === 'sent' || row.result === 'failed'
       let docNo = ''
       let sequence: number | null = null
 
-      if (row.ready) {
+      if (participatesInSend) {
         readySeq += 1
         sequence = readySeq
       }
 
       if (row.bill.sml_doc_no) {
         docNo = row.bill.sml_doc_no
-      } else if (row.ready && baseDocNo) {
+      } else if (participatesInSend && baseDocNo) {
         const offset = previewOffsets.get(baseDocNo) ?? 0
         docNo = incrementTrailingNumber(baseDocNo, offset)
         previewOffsets.set(baseDocNo, offset + 1)
@@ -173,7 +175,8 @@ export function BulkSendDialog({
     vatRateStr.trim() !== '' &&
     Number.isFinite(vatRateNum) &&
     docTime.trim() !== '' &&
-    !sending
+    !sending &&
+    !sendAttempted
   const missingFields = [
     !party?.code ? (billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย') : '',
     whCode.trim() === '' ? 'คลัง' : '',
@@ -186,6 +189,7 @@ export function BulkSendDialog({
   const completedRows = displayRows.filter((row) => row.result)
   const resultSkippedCount = candidates.filter((c) => c.result === 'skipped').length
   const finished = completedRows.length > 0 && !sending
+  const lockedAfterAttempt = sendAttempted && !sending
 
   const destination = useMemo(() => {
     if (filters.document_route === 'saleinvoice') {
@@ -214,6 +218,7 @@ export function BulkSendDialog({
     setRemark('')
     setCandidates([])
     setTotalPending(0)
+    setSendAttempted(false)
 
     async function load() {
       try {
@@ -298,25 +303,33 @@ export function BulkSendDialog({
   }
 
   const handleSend = async () => {
-    if (!canSend) return
+    if (!canSend || sendAttempted) return
+    setSendAttempted(true)
     setSending(true)
     const body = payload()
-    for (const row of candidates) {
+    const rowsToSend = candidates.filter((row) => row.ready && !row.result)
+    const rowsToSkip = candidates.filter((row) => !row.ready && !row.result)
+    for (const row of rowsToSkip) {
+      setCandidates((prev) =>
+        prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'skipped', message: 'ยังไม่พร้อมส่ง' } : c),
+      )
+    }
+    for (const row of rowsToSend) {
       if (!row.ready) {
         setCandidates((prev) =>
-          prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'skipped', message: 'ยังไม่พร้อมส่ง' } : c),
+          prev.map((c) => c.bill.id === row.bill.id ? { ...c, ready: false, result: 'skipped', message: 'ยังไม่พร้อมส่ง' } : c),
         )
         continue
       }
       try {
         await retryBill(row.bill.id, body)
         setCandidates((prev) =>
-          prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'sent', message: 'ส่งสำเร็จ' } : c),
+          prev.map((c) => c.bill.id === row.bill.id ? { ...c, ready: false, result: 'sent', message: 'ส่งสำเร็จ' } : c),
         )
       } catch (err) {
         const msg = errorMessage(err)
         setCandidates((prev) =>
-          prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'failed', message: msg } : c),
+          prev.map((c) => c.bill.id === row.bill.id ? { ...c, ready: false, result: 'failed', message: msg } : c),
         )
       }
     }
@@ -611,6 +624,11 @@ export function BulkSendDialog({
                   )}
                 </div>
               )}
+              {failedRows.length === 0 && (
+                <div className="mt-2 rounded-md border border-success/25 bg-background/70 px-2 py-1.5 text-success">
+                  ส่งสำเร็จแล้ว ปิดหน้าต่างนี้เพื่อโหลดรายการล่าสุดก่อนส่งรอบถัดไป
+                </div>
+              )}
             </div>
           )}
           {missingFields.length > 0 && (
@@ -623,7 +641,11 @@ export function BulkSendDialog({
 
         <DialogFooter className="items-center gap-2 sm:justify-between">
           <div className="text-xs text-muted-foreground">
-            {sending ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount}` : finished ? `สำเร็จ ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
+            {sending
+              ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount}`
+              : finished
+                ? `สำเร็จ ${sentCount} · ไม่สำเร็จ ${failedCount} · ปิดเพื่อโหลดสถานะใหม่`
+                : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
           </div>
           <div className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
@@ -631,7 +653,7 @@ export function BulkSendDialog({
             </Button>
             <Button type="button" onClick={handleSend} disabled={!canSend} className="gap-2">
               {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              ส่ง SML {readyCount} รายการ
+              {lockedAfterAttempt ? 'ส่งรอบนี้เสร็จแล้ว' : `ส่ง SML ${readyCount} รายการ`}
             </Button>
           </div>
         </DialogFooter>

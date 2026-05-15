@@ -4,6 +4,7 @@ import { ShieldCheck, Trash2, UserPlus, UsersRound } from 'lucide-react'
 import { toast } from 'sonner'
 
 import client from '@/api/client'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { PageHeader } from '@/components/common/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -55,6 +56,7 @@ export default function UserSettings() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState<User | null>(null)
 
   const editing = Boolean(form.id)
   const sortedUsers = useMemo(
@@ -80,6 +82,7 @@ export default function UserSettings() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (saving) return
     setSaving(true)
     try {
       const payload = {
@@ -114,15 +117,17 @@ export default function UserSettings() {
     })
   }
 
-  const deleteUser = async (u: User) => {
-    if (!confirm(`ลบผู้ใช้ ${u.email}?`)) return
+  const deleteUser = async () => {
+    if (!deleting) return
     try {
-      await client.delete(`/api/settings/users/${u.id}`)
+      await client.delete(`/api/settings/users/${deleting.id}`)
       toast.success('ลบผู้ใช้แล้ว')
-      if (form.id === u.id) reset()
+      if (form.id === deleting.id) reset()
       await load()
     } catch (err: any) {
       toast.error(err.response?.data?.error ?? 'ลบผู้ใช้ไม่สำเร็จ')
+    } finally {
+      setDeleting(null)
     }
   }
 
@@ -192,7 +197,7 @@ export default function UserSettings() {
                           type="button"
                           variant="ghost"
                           size="icon"
-                          onClick={() => deleteUser(u)}
+                          onClick={() => setDeleting(u)}
                           disabled={u.id === currentUser.id}
                           aria-label="ลบผู้ใช้"
                         >
@@ -273,6 +278,15 @@ export default function UserSettings() {
           </CardContent>
         </Card>
       </div>
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title="ลบผู้ใช้ระบบ"
+        description={deleting ? `ยืนยันลบผู้ใช้ ${deleting.email}?\nผู้ใช้นี้จะเข้า BillFlow ไม่ได้อีก แต่ประวัติ audit log เดิมยังคงอยู่` : ''}
+        confirmLabel="ลบผู้ใช้"
+        variant="destructive"
+        onConfirm={deleteUser}
+      />
     </div>
   )
 }

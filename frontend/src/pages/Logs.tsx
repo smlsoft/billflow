@@ -383,15 +383,11 @@ function makeFacts(log: AuditLog): LogFact[] {
 
 function LogExpandedSummary({
   log,
-  onRetry,
-  retrying,
-  canRetry,
+  canOpenBill,
   devMode,
 }: {
   log: AuditLog
-  onRetry: (e: React.MouseEvent) => void
-  retrying: boolean
-  canRetry: boolean
+  canOpenBill: boolean
   devMode: boolean
 }) {
   const d = log.detail ?? {}
@@ -466,16 +462,12 @@ function LogExpandedSummary({
               </div>
             </div>
             <div className="flex shrink-0 flex-col gap-1.5">
-              {canRetry && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onRetry}
-                  disabled={retrying}
-                  className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
-                >
-                  <RotateCw className={cn('h-3 w-3', retrying && 'animate-spin')} />
-                  {retrying ? 'กำลัง retry…' : 'Retry'}
+              {canOpenBill && log.target_id && (
+                <Button asChild variant="outline" size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]">
+                  <Link to={`/bills/${log.target_id}`} onClick={(e) => e.stopPropagation()}>
+                    <FileText className="h-3 w-3" />
+                    เปิดบิลเพื่อส่งใหม่
+                  </Link>
                 </Button>
               )}
               <Button
@@ -599,10 +591,9 @@ function LogExpandedSummary({
   )
 }
 
-function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => void; devMode: boolean }) {
+function LogRow({ log, devMode }: { log: AuditLog; devMode: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
-  const [retrying, setRetrying] = useState(false)
 
   const meta = ACTION_META[log.action] ?? {
     label: log.action,
@@ -614,26 +605,9 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
   const source = log.source ?? ''
   const docNo = primaryDocNo(log)
   const docNoIssue = hasDocNoQualityIssue(log)
-  // Inline retry available only on sml_failed rows that have a bill target.
-  const canRetry = log.action === 'sml_failed' && !!log.target_id
-
-  const handleRetry = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!log.target_id || retrying) return
-    setRetrying(true)
-    try {
-      await api.post(`/api/bills/${log.target_id}/retry`)
-      toast.success('ส่งใหม่สำเร็จ — โหลด log ใหม่')
-      onRetried()
-    } catch (err: any) {
-      toast.error(
-        'Retry ล้มเหลว: ' +
-          (err?.response?.data?.error ?? err?.message ?? 'unknown'),
-      )
-    } finally {
-      setRetrying(false)
-    }
-  }
+  // SML retry must go through the bill detail send dialog so admins can review
+  // doc_no, party, warehouse, shelf, VAT, and route before a real SML call.
+  const canOpenBill = log.action === 'sml_failed' && !!log.target_id
 
   return (
     <div
@@ -740,24 +714,19 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {/* Inline retry — visible at row level (not just expanded) on
-              sml_failed rows. Saves the click to expand + the trip to
-              /bills/:id. Stop click bubbling so the row doesn't toggle. */}
-          {canRetry && !expanded && (
+          {canOpenBill && !expanded && log.target_id && (
             <Tooltip delayDuration={300}>
               <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleRetry}
-                  disabled={retrying}
-                  className="h-7 w-7 shrink-0 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                <Link
+                  to={`/bills/${log.target_id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive"
                 >
-                  <RotateCw className={cn('h-3.5 w-3.5', retrying && 'animate-spin')} />
-                </Button>
+                  <FileText className="h-3.5 w-3.5" />
+                </Link>
               </TooltipTrigger>
               <TooltipContent side="left">
-                Retry บิลนี้
+                เปิดบิลเพื่อตรวจและส่งใหม่
               </TooltipContent>
             </Tooltip>
           )}
@@ -800,9 +769,7 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
         <div className="space-y-2 border-t border-border bg-muted/20 px-3 py-2.5">
           <LogExpandedSummary
             log={log}
-            onRetry={handleRetry}
-            retrying={retrying}
-            canRetry={canRetry}
+            canOpenBill={canOpenBill}
             devMode={devMode}
           />
 
@@ -886,11 +853,9 @@ function buildActivityItems(logs: AuditLog[]): ActivityItem[] {
 function ImportGroupCard({
   group,
   devMode,
-  onRetried,
 }: {
   group: ImportGroup
   devMode: boolean
-  onRetried: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const platform = platformLabel(group.logs)
@@ -960,10 +925,10 @@ function ImportGroupCard({
           </div>
           <div className="space-y-1.5">
             {group.created.map((log) => (
-              <LogRow key={log.id} log={log} onRetried={onRetried} devMode={devMode} />
+              <LogRow key={log.id} log={log} devMode={devMode} />
             ))}
             {devMode && group.logs.filter((log) => log.action !== 'bill_created').map((log) => (
-              <LogRow key={log.id} log={log} onRetried={onRetried} devMode={devMode} />
+              <LogRow key={log.id} log={log} devMode={devMode} />
             ))}
           </div>
         </div>
@@ -1426,13 +1391,11 @@ export default function Logs() {
                         key={item.key}
                         group={item}
                         devMode={devMode}
-                        onRetried={() => load(page)}
                       />
                     ) : (
                       <LogRow
                         key={item.key}
                         log={item.log}
-                        onRetried={() => load(page)}
                         devMode={devMode}
                       />
                     ),

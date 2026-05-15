@@ -97,6 +97,13 @@ const DEFAULTS: FormState = {
   poll_interval_minutes: 5,
   enabled: true,
 }
+const CONNECTION_FIELDS = new Set<keyof FormState>([
+  'host',
+  'port',
+  'username',
+  'password',
+  'mailbox',
+])
 
 const DEFAULT_ACCEPTED_SENDERS = ['shopee.co.th', 'mail.shopee.co.th', 'noreply.shopee.co.th']
 const SHOPEE_DEFAULT_SUBJECTS = ['ถูกจัดส่งแล้ว', 'ยืนยันการชำระเงินคำสั่งซื้อหมายเลข']
@@ -551,11 +558,14 @@ export function AccountDialog({
     }
   }, [open, account])
 
-  const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
+  const set = <K extends keyof FormState>(k: K, v: FormState[K]) => {
+    if (CONNECTION_FIELDS.has(k)) setTestResult(null)
     setForm((p) => ({ ...p, [k]: v }))
+  }
 
   const applyPreset = (p: Preset) => {
     setActivePreset(p.id)
+    setTestResult(null)
     setForm((c) => p.apply(c))
   }
 
@@ -624,6 +634,17 @@ export function AccountDialog({
     }
     if (form.poll_interval_minutes < 5) {
       toast.error('Poll interval ต้องไม่ต่ำกว่า 5 นาที')
+      return
+    }
+    const connectionChanged =
+      !editing ||
+      form.password.trim() !== '' ||
+      form.host !== account?.host ||
+      form.port !== account?.port ||
+      form.username !== account?.username ||
+      form.mailbox !== account?.mailbox
+    if (connectionChanged && !testResult?.ok) {
+      toast.error('กรุณาทดสอบการเชื่อมต่อให้สำเร็จก่อนบันทึก')
       return
     }
     setSaving(true)
