@@ -78,7 +78,7 @@ export default function OldDataSettings() {
         purge_audit: purgeAudit,
         purge_chat: purgeChat,
       })
-      const parts = []
+      const parts: string[] = []
       if (res.data.purged_bills != null) parts.push(`บิล ${res.data.purged_bills} รายการ`)
       if (res.data.purged_audit_logs != null) parts.push(`audit log ${res.data.purged_audit_logs} รายการ`)
       if (res.data.purged_chat_messages != null) parts.push(`chat ${res.data.purged_chat_messages} ข้อความ`)
@@ -92,6 +92,14 @@ export default function OldDataSettings() {
   }
 
   const anyPurgeSelected = purgeBills || purgeAudit || purgeChat
+
+  // Safe accessors — API may return partial data during loading transitions
+  const toArchive = summary?.bills?.to_archive ?? 0
+  const toPurgeBills = summary?.bills?.to_purge ?? 0
+  const archivedCount = summary?.bills?.archived ?? 0
+  const toPurgeAudit = summary?.audit_logs?.to_purge ?? 0
+  const toPurgeChat = summary?.chat_messages?.to_purge ?? 0
+  const dbSizeMB = summary?.db_size_mb ?? 0
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -149,7 +157,10 @@ export default function OldDataSettings() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-semibold tabular-nums">{(summary.db_size_mb ?? 0).toFixed(1)} <span className="text-sm font-normal text-muted-foreground">MB</span></p>
+              <p className="text-2xl font-semibold tabular-nums">
+                {dbSizeMB.toFixed(1)}{' '}
+                <span className="text-sm font-normal text-muted-foreground">MB</span>
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -160,7 +171,7 @@ export default function OldDataSettings() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-semibold tabular-nums">{summary.bills.archived.toLocaleString()}</p>
+              <p className="text-2xl font-semibold tabular-nums">{archivedCount.toLocaleString()}</p>
             </CardContent>
           </Card>
         </div>
@@ -181,7 +192,7 @@ export default function OldDataSettings() {
           {summary && (
             <div className="rounded-lg border bg-muted/30 p-4">
               <p className="text-sm">
-                บิล <span className="font-semibold tabular-nums text-foreground">{summary.bills.to_archive.toLocaleString()}</span> รายการ
+                บิล <span className="font-semibold tabular-nums text-foreground">{toArchive.toLocaleString()}</span> รายการ
                 ที่มีสถานะ sent/failed/skipped และเก่ากว่า{' '}
                 <span className="font-semibold">{summary.archive_days}</span> วัน จะถูก archive
               </p>
@@ -189,11 +200,11 @@ export default function OldDataSettings() {
           )}
           <Button
             onClick={handleArchive}
-            disabled={archiving || !summary || summary.bills.to_archive === 0}
+            disabled={archiving || !summary || toArchive === 0}
             variant="outline"
           >
             <Archive className={`h-4 w-4 mr-2 ${archiving ? 'animate-pulse' : ''}`} />
-            {archiving ? 'กำลัง Archive…' : `Archive ${summary?.bills.to_archive.toLocaleString() ?? 0} รายการ`}
+            {archiving ? 'กำลัง Archive…' : `Archive ${toArchive.toLocaleString()} รายการ`}
           </Button>
         </CardContent>
       </Card>
@@ -214,9 +225,9 @@ export default function OldDataSettings() {
             <div className="rounded-lg border bg-muted/30 p-4 space-y-2 text-sm">
               <p className="font-medium text-muted-foreground">ข้อมูลที่จะถูกลบเมื่อเก่ากว่า {summary.purge_days} วัน:</p>
               <ul className="space-y-1 text-muted-foreground">
-                <li>บิลทั้งหมด: <span className="font-semibold text-foreground tabular-nums">{summary.bills.to_purge.toLocaleString()}</span> รายการ</li>
-                <li>Audit log: <span className="font-semibold text-foreground tabular-nums">{summary.audit_logs.to_purge.toLocaleString()}</span> รายการ</li>
-                <li>Chat messages: <span className="font-semibold text-foreground tabular-nums">{summary.chat_messages.to_purge.toLocaleString()}</span> ข้อความ</li>
+                <li>บิลทั้งหมด: <span className="font-semibold text-foreground tabular-nums">{toPurgeBills.toLocaleString()}</span> รายการ</li>
+                <li>Audit log: <span className="font-semibold text-foreground tabular-nums">{toPurgeAudit.toLocaleString()}</span> รายการ</li>
+                <li>Chat messages: <span className="font-semibold text-foreground tabular-nums">{toPurgeChat.toLocaleString()}</span> ข้อความ</li>
               </ul>
             </div>
           )}
@@ -269,10 +280,7 @@ export default function OldDataSettings() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmPurge(false)}>ยกเลิก</Button>
-            <Button
-              variant="destructive"
-              onClick={handlePurge}
-            >
+            <Button variant="destructive" onClick={handlePurge}>
               ยืนยัน ลบข้อมูล
             </Button>
           </DialogFooter>
