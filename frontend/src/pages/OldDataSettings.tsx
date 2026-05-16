@@ -149,7 +149,7 @@ export default function OldDataSettings() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-2xl font-semibold tabular-nums">{summary.db_size_mb.toFixed(1)} <span className="text-sm font-normal text-muted-foreground">MB</span></p>
+              <p className="text-2xl font-semibold tabular-nums">{(summary.db_size_mb ?? 0).toFixed(1)} <span className="text-sm font-normal text-muted-foreground">MB</span></p>
             </CardContent>
           </Card>
           <Card>

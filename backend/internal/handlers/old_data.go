@@ -65,8 +65,12 @@ func (h *OldDataHandler) Summary(c *gin.Context) {
 		strconv.Itoa(purgeDays),
 	).Scan(&chatMessages.ToPurge)
 
-	// approximate DB size
-	_ = h.db.QueryRow(`SELECT pg_database_size(current_database()) / 1024.0 / 1024.0`).Scan(&diskUsageMB)
+	// approximate DB size — may return NULL if user lacks pg_database_size permission
+	var dbSizeNull *float64
+	_ = h.db.QueryRow(`SELECT pg_database_size(current_database()) / 1024.0 / 1024.0`).Scan(&dbSizeNull)
+	if dbSizeNull != nil {
+		diskUsageMB = *dbSizeNull
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"archive_days":  archiveDays,
