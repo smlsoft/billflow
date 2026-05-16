@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -33,6 +35,8 @@ type settingDef struct {
 	DefaultValue string `json:"default_value,omitempty"`
 	Secret       bool   `json:"secret,omitempty"`
 	Restart      bool   `json:"restart_required,omitempty"`
+	Required     bool   `json:"required,omitempty"`
+	Locked       bool   `json:"locked,omitempty"` // ค่าตายตัว ห้ามแก้ผ่าน UI
 	Description  string `json:"description,omitempty"`
 }
 
@@ -41,21 +45,19 @@ var instanceSettingDefs = []settingDef{
 	{Key: "instance.slug", Label: "รหัสร้าน", Group: "instance", Type: "text", DefaultValue: "default", Description: "ไม่บังคับ ใช้เป็นชื่อสั้นสำหรับแยกเอกสาร backup และ deploy"},
 	{Key: "instance.support_contact", Label: "ผู้ดูแลระบบ", Group: "instance", Type: "text", DefaultValue: "", Description: "ไม่บังคับ เบอร์หรือชื่อคนที่ดูแลระบบชุดนี้"},
 
-	{Key: "sml.rest_base_url", Label: "SML REST URL", Group: "sml", Type: "url", EnvKey: "SHOPEE_SML_URL", Restart: true, Description: "ใช้กับ catalog, saleorder, purchaseorder"},
-	{Key: "sml.guid", Label: "GUID", Group: "sml", Type: "text", EnvKey: "SHOPEE_SML_GUID", Restart: true},
-	{Key: "sml.provider", Label: "Provider", Group: "sml", Type: "text", EnvKey: "SHOPEE_SML_PROVIDER", Restart: true},
-	{Key: "sml.config_file", Label: "Config file", Group: "sml", Type: "text", EnvKey: "SHOPEE_SML_CONFIG_FILE", Restart: true},
-	{Key: "sml.database", Label: "Database", Group: "sml", Type: "text", EnvKey: "SHOPEE_SML_DATABASE", Restart: true},
+	{Key: "sml.rest_base_url", Label: "SML REST URL", Group: "sml", Type: "url", Restart: true, Required: true, Description: "URL ของ sml-api-bybos เช่น http://192.168.2.109:8200"},
+	{Key: "sml.guid", Label: "API Key (guid)", Group: "sml", Type: "text", Restart: true, Required: true, Locked: true, Description: "ค่านี้ตายตัว ต้องตรงกับ API key ที่ตั้งใน sml-api-bybos"},
+	{Key: "sml.database", Label: "Database (tenant)", Group: "sml", Type: "text", Restart: true, Required: true, Description: "ชื่อ database SML ของร้านนี้ เช่น SML1_2026"},
 
-	{Key: "line.notify_channel_secret", Label: "LINE Channel secret", Group: "line", Type: "password", EnvKey: "LINE_CHANNEL_SECRET", Secret: true, Restart: true, Description: "ใช้กับ LINE OA ที่ส่งแจ้งเตือนระบบ"},
-	{Key: "line.notify_channel_access_token", Label: "LINE Channel access token", Group: "line", Type: "password", EnvKey: "LINE_CHANNEL_ACCESS_TOKEN", Secret: true, Restart: true, Description: "ใช้ส่ง Push แจ้งเตือน error และสถานะระบบไปยังแอดมิน"},
-	{Key: "line.notify_admin_user_id", Label: "LINE admin user ID", Group: "line", Type: "text", EnvKey: "LINE_ADMIN_USER_ID", Restart: true, Description: "userId ของผู้รับแจ้งเตือนระบบ เช่น SML error, email error, disk/tunnel warning"},
+	{Key: "line.notify_channel_secret", Label: "LINE Channel secret", Group: "line", Type: "password", Secret: true, Restart: true, Description: "ใช้กับ LINE OA ที่ส่งแจ้งเตือนระบบ"},
+	{Key: "line.notify_channel_access_token", Label: "LINE Channel access token", Group: "line", Type: "password", Secret: true, Restart: true, Description: "ใช้ส่ง Push แจ้งเตือน error และสถานะระบบไปยังแอดมิน"},
+	{Key: "line.notify_admin_user_id", Label: "LINE admin user ID", Group: "line", Type: "text", Restart: true, Description: "userId ของผู้รับแจ้งเตือนระบบ เช่น SML error, email error, disk/tunnel warning"},
 
-	{Key: "ai.openrouter_api_key", Label: "OpenRouter API key", Group: "ai", Type: "password", EnvKey: "OPENROUTER_API_KEY", Secret: true, Restart: true},
-	{Key: "ai.openrouter_model", Label: "Model หลัก", Group: "ai", Type: "text", EnvKey: "OPENROUTER_MODEL", Restart: true},
-	{Key: "ai.openrouter_fallback_model", Label: "Model สำรอง", Group: "ai", Type: "text", EnvKey: "OPENROUTER_FALLBACK_MODEL", Restart: true},
-	{Key: "ai.openrouter_audio_model", Label: "Audio model", Group: "ai", Type: "text", EnvKey: "OPENROUTER_AUDIO_MODEL", Restart: true},
-	{Key: "automation.auto_confirm_threshold", Label: "เกณฑ์ confidence", Group: "automation", Type: "number", EnvKey: "AUTO_CONFIRM_THRESHOLD", Restart: true},
+	{Key: "ai.openrouter_api_key", Label: "OpenRouter API key", Group: "ai", Type: "password", Secret: true, Restart: true, Required: true},
+	{Key: "ai.openrouter_model", Label: "Model หลัก", Group: "ai", Type: "text", Restart: true, Required: true},
+	{Key: "ai.openrouter_fallback_model", Label: "Model สำรอง", Group: "ai", Type: "text", Restart: true},
+	{Key: "ai.openrouter_audio_model", Label: "Audio model", Group: "ai", Type: "text", Restart: true},
+	{Key: "automation.auto_confirm_threshold", Label: "เกณฑ์ confidence", Group: "automation", Type: "number", Restart: true},
 }
 
 func (h *InstanceSettingsHandler) Get(c *gin.Context) {
@@ -69,16 +71,32 @@ func (h *InstanceSettingsHandler) Get(c *gin.Context) {
 	runtimeValues := repository.RuntimeSettingValues(h.cfg)
 	settings := make([]gin.H, 0, len(instanceSettingDefs))
 	pendingKeys := []string{}
+	missingRequired := []string{}
 	for _, def := range instanceSettingDefs {
-		value, source := h.effectiveValue(def, dbSettings)
+		dbVal, fromDB := dbSettings[def.Key]
+		value := ""
+		if fromDB {
+			value = strings.TrimSpace(dbVal.Value)
+		}
+		source := "unset"
+		if fromDB && value != "" {
+			source = "database"
+		}
+
+		missing := def.Required && value == ""
+
 		runtimeValue := runtimeValues[def.Key]
 		active := true
 		pendingRestart := false
-		if def.Restart && runtimeValue != "" && strings.TrimSpace(value) != strings.TrimSpace(runtimeValue) {
+		if def.Restart && runtimeValue != "" && value != strings.TrimSpace(runtimeValue) {
 			active = false
 			pendingRestart = true
 			pendingKeys = append(pendingKeys, def.Key)
 		}
+		if missing {
+			missingRequired = append(missingRequired, def.Key)
+		}
+
 		displayValue := value
 		displayRuntimeValue := runtimeValue
 		hasSecret := false
@@ -89,7 +107,7 @@ func (h *InstanceSettingsHandler) Get(c *gin.Context) {
 		if def.Secret && runtimeValue != "" {
 			displayRuntimeValue = maskSecret(runtimeValue)
 		}
-		_, fromDB := dbSettings[def.Key]
+
 		settings = append(settings, gin.H{
 			"key":              def.Key,
 			"label":            def.Label,
@@ -97,9 +115,11 @@ func (h *InstanceSettingsHandler) Get(c *gin.Context) {
 			"type":             def.Type,
 			"value":            displayValue,
 			"source":           source,
-			"env_key":          def.EnvKey,
 			"secret":           def.Secret,
 			"has_secret":       hasSecret,
+			"required":         def.Required,
+			"locked":           def.Locked,
+			"missing":          missing,
 			"restart_required": def.Restart,
 			"description":      def.Description,
 			"overridden":       fromDB,
@@ -114,7 +134,8 @@ func (h *InstanceSettingsHandler) Get(c *gin.Context) {
 		"restart_required":         len(pendingKeys) > 0,
 		"pending_restart":          len(pendingKeys) > 0,
 		"pending_restart_settings": pendingKeys,
-		"note":                     "SML/AI clients are created at backend boot; restart backend after changing those values.",
+		"missing_required":         missingRequired,
+		"setup_complete":           len(missingRequired) == 0,
 	})
 }
 
@@ -143,9 +164,15 @@ func (h *InstanceSettingsHandler) Update(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown setting: " + key})
 			return
 		}
+		if def.Locked {
+			continue // ค่าตายตัว ไม่อนุญาตให้แก้ผ่าน API
+		}
 		trimmed := strings.TrimSpace(value)
-		if def.Secret && (trimmed == "" || strings.Contains(trimmed, "••••")) {
-			continue
+		if trimmed == "" {
+			continue // skip blank — don't overwrite existing value with empty
+		}
+		if def.Secret && strings.Contains(trimmed, "••••••••") {
+			continue // skip masked placeholder — user didn't change the secret
 		}
 		values[key] = trimmed
 	}
@@ -184,44 +211,138 @@ func (h *InstanceSettingsHandler) Restart(c *gin.Context) {
 	}()
 }
 
+// effectiveValue is kept only for optional fields that have a built-in default
+// (instance.name / instance.slug). All SML/AI/LINE values must be set via UI.
 func (h *InstanceSettingsHandler) effectiveValue(def settingDef, dbSettings map[string]repository.AppSetting) (string, string) {
 	if s, ok := dbSettings[def.Key]; ok && strings.TrimSpace(s.Value) != "" {
 		return s.Value, "database"
 	}
-	if def.EnvKey != "" {
-		if v := strings.TrimSpace(os.Getenv(def.EnvKey)); v != "" {
-			return v, "env"
+	if def.DefaultValue != "" {
+		return def.DefaultValue, "default"
+	}
+	return "", "unset"
+}
+
+// TestConnections tests SML, LINE, and OpenRouter connectivity using saved DB values.
+// Each check is independent — partial success is returned so the UI can show per-service status.
+func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
+	dbSettings, err := h.repo.All()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลด config ไม่ได้"})
+		return
+	}
+	get := func(key string) string {
+		return strings.TrimSpace(dbSettings[key].Value)
+	}
+
+	httpClient := &http.Client{Timeout: 8 * time.Second}
+
+	type checkResult struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error,omitempty"`
+		Detail  string `json:"detail,omitempty"`
+	}
+
+	doGET := func(url string, headers map[string]string) (int, []byte, error) {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return 0, nil, err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, body, nil
+	}
+
+	// ── SML ──────────────────────────────────────────────────────────────────
+	smlResult := checkResult{}
+	baseURL := get("sml.rest_base_url")
+	guid := get("sml.guid")
+	database := get("sml.database")
+	if baseURL == "" || guid == "" || database == "" {
+		smlResult.Error = "ยังไม่ได้ตั้งค่า SML REST URL, guid หรือ database"
+	} else {
+		// Use supplier list — always exists, returns 403 on wrong tenant, 401 on bad guid.
+		smlURL := strings.TrimRight(baseURL, "/") + "/api/v1/ap/suppliers?page=1&size=1"
+		code, body, err := doGET(smlURL, map[string]string{"guid": guid, "databaseName": database})
+		if err != nil {
+			smlResult.Error = fmt.Sprintf("เชื่อมต่อไม่ได้: %v", err)
+		} else if code == http.StatusOK {
+			smlResult.OK = true
+			smlResult.Detail = strings.TrimRight(baseURL, "/")
+		} else if code == http.StatusForbidden {
+			smlResult.Error = fmt.Sprintf("database '%s' ไม่ถูกต้องหรือไม่มีสิทธิ์เข้าถึง", database)
+		} else if code == http.StatusUnauthorized {
+			smlResult.Error = "guid (API key) ไม่ถูกต้อง"
+		} else {
+			smlResult.Error = fmt.Sprintf("server ตอบ %d: %s", code, strings.TrimSpace(string(body)))
 		}
 	}
-	switch def.Key {
-	case "sml.rest_base_url":
-		return h.cfg.ShopeeSMLURL, "default"
-	case "sml.guid":
-		return h.cfg.ShopeeSMLGUID, "default"
-	case "sml.provider":
-		return h.cfg.ShopeeSMLProvider, "default"
-	case "sml.config_file":
-		return h.cfg.ShopeeSMLConfigFile, "default"
-	case "sml.database":
-		return h.cfg.ShopeeSMLDatabase, "default"
-	case "line.notify_channel_secret":
-		return h.cfg.LineChannelSecret, "default"
-	case "line.notify_channel_access_token":
-		return h.cfg.LineChannelAccessToken, "default"
-	case "line.notify_admin_user_id":
-		return h.cfg.LineAdminUserID, "default"
-	case "ai.openrouter_api_key":
-		return h.cfg.OpenRouterAPIKey, "default"
-	case "ai.openrouter_model":
-		return h.cfg.OpenRouterModel, "default"
-	case "ai.openrouter_fallback_model":
-		return h.cfg.OpenRouterFallback, "default"
-	case "ai.openrouter_audio_model":
-		return h.cfg.OpenRouterAudioModel, "default"
-	case "automation.auto_confirm_threshold":
-		return floatString(h.cfg.AutoConfirmThreshold), "default"
+
+	// ── LINE ─────────────────────────────────────────────────────────────────
+	lineResult := checkResult{}
+	lineToken := get("line.notify_channel_access_token")
+	if lineToken == "" {
+		lineResult.Error = "ยังไม่ได้ตั้งค่า LINE Channel access token"
+	} else {
+		code, body, err := doGET("https://api.line.me/v2/bot/info",
+			map[string]string{"Authorization": "Bearer " + lineToken})
+		if err != nil {
+			lineResult.Error = fmt.Sprintf("เชื่อมต่อ LINE API ไม่ได้: %v", err)
+		} else if code == http.StatusOK {
+			lineResult.OK = true
+			// extract displayName from JSON cheaply
+			s := string(body)
+			if i := strings.Index(s, `"displayName":"`); i >= 0 {
+				rest := s[i+15:]
+				if j := strings.Index(rest, `"`); j >= 0 {
+					lineResult.Detail = rest[:j]
+				}
+			}
+		} else {
+			lineResult.Error = "access token ไม่ถูกต้องหรือหมดอายุแล้ว"
+		}
 	}
-	return def.DefaultValue, "default"
+
+	// ── OpenRouter ───────────────────────────────────────────────────────────
+	orResult := checkResult{}
+	orKey := get("ai.openrouter_api_key")
+	if orKey == "" {
+		orResult.Error = "ยังไม่ได้ตั้งค่า OpenRouter API key"
+	} else {
+		code, body, err := doGET("https://openrouter.ai/api/v1/auth/key",
+			map[string]string{"Authorization": "Bearer " + orKey})
+		if err != nil {
+			orResult.Error = fmt.Sprintf("เชื่อมต่อ OpenRouter ไม่ได้: %v", err)
+		} else if code == http.StatusOK {
+			orResult.OK = true
+			// extract limit_remaining from JSON cheaply
+			s := string(body)
+			if i := strings.Index(s, `"limit_remaining":`); i >= 0 {
+				rest := strings.TrimSpace(s[i+18:])
+				end := strings.IndexAny(rest, ",}")
+				if end > 0 {
+					orResult.Detail = "credit คงเหลือ: " + strings.TrimSpace(rest[:end])
+				}
+			}
+		} else {
+			orResult.Error = "API key ไม่ถูกต้อง"
+		}
+	}
+
+	allOK := smlResult.OK && lineResult.OK && orResult.OK
+	c.JSON(http.StatusOK, gin.H{
+		"ok":          allOK,
+		"sml":         smlResult,
+		"line":        lineResult,
+		"openrouter":  orResult,
+	})
 }
 
 func maskSecret(v string) string {

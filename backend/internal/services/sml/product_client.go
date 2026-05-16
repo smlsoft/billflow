@@ -54,7 +54,7 @@ type ProductPriceFormula struct {
 	PriceCurrency int    `json:"price_currency"`
 }
 
-// CreateProductRequest is the body for POST /SMLJavaRESTService/v3/api/product.
+// CreateProductRequest is the body for POST /api/v1/ic/products.
 // Fields use omitempty for optional values so the JSON payload matches what
 // SML accepts; required fields are always included.
 type CreateProductRequest struct {
@@ -99,7 +99,7 @@ func (c *ProductClient) CreateProduct(req CreateProductRequest) (int, *CreatePro
 		return 0, nil, err
 	}
 
-	url := c.baseURL + "/SMLJavaRESTService/v3/api/product"
+	url := c.baseURL + "/api/v1/ic/products"
 	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err

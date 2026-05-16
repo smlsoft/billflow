@@ -344,12 +344,21 @@ func resolveEndpoint(def *models.ChannelDefault, source, billType string) (kind,
 	rawTrimmed := strings.Trim(rawLower, " /")
 
 	switch {
-	case rawTrimmed == "purchaseorder":
+	// keyword-only shortcuts (admin types just the document type)
+	case rawTrimmed == "purchaseorder", rawTrimmed == "purchase-orders":
 		return "purchaseorder", ""
-	case rawTrimmed == "saleinvoice":
+	case rawTrimmed == "saleinvoice", rawTrimmed == "sale-invoices":
 		return "saleinvoice", ""
-	case rawTrimmed == "saleorder":
+	case rawTrimmed == "saleorder", rawTrimmed == "sale-orders":
 		return "saleorder", ""
+	// full path match — new v1 paths
+	case strings.Contains(rawLower, "purchase-orders"):
+		return "purchaseorder", raw
+	case strings.Contains(rawLower, "sale-invoices"):
+		return "saleinvoice", raw
+	case strings.Contains(rawLower, "sale-orders"):
+		return "saleorder", raw
+	// full path match — legacy compat paths (still accepted)
 	case strings.Contains(rawLower, "purchaseorder"):
 		return "purchaseorder", raw
 	case strings.Contains(rawLower, "saleinvoice"):

@@ -11,9 +11,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// SaleOrderConfig holds parameters for the SML saleorder REST API (v3).
+// SaleOrderConfig holds parameters for the SML saleorder REST API.
 // Mirrors PurchaseOrderConfig — saleorder is the sale-side counterpart that
-// posts to /v3/api/saleorder and uses sale_type instead of buy_type.
+// posts to /api/v1/ic/sale-orders and uses sale_type instead of buy_type.
 type SaleOrderConfig struct {
 	BaseURL    string
 	GUID       string
@@ -85,7 +85,7 @@ type SaleOrderItem struct {
 	SumAmountExclVAT float64 `json:"sum_amount_exclude_vat"`
 }
 
-// SaleOrderPayload is the body for POST /SMLJavaRESTService/v3/api/saleorder.
+// SaleOrderPayload is the body for POST /api/v1/ic/sale-orders.
 type SaleOrderPayload struct {
 	DocNo          string          `json:"doc_no"` // required (non-empty), client-generated
 	DocDate        string          `json:"doc_date"`
@@ -148,7 +148,7 @@ func (c *SaleOrderClient) CreateSaleOrder(payload SaleOrderPayload, urlOverride 
 		return 0, nil, err
 	}
 
-	url := resolveSMLURL(c.cfg.BaseURL, "/SMLJavaRESTService/v3/api/saleorder", urlOverride)
+	url := resolveSMLURL(c.cfg.BaseURL, "/api/v1/ic/sale-orders", urlOverride)
 
 	backoffs := []time.Duration{0, 1 * time.Second, 3 * time.Second, 5 * time.Second}
 	var lastResp *SaleOrderResponse

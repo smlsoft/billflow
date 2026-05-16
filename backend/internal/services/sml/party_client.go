@@ -78,10 +78,18 @@ type partyListResponse struct {
 	} `json:"pages"`
 }
 
+// partyPath maps "customer"/"supplier" to the v1 REST path.
+func partyPath(endpoint string) string {
+	if endpoint == "supplier" {
+		return "ap/suppliers"
+	}
+	return "ar/customers"
+}
+
 // fetchPage returns one page of {endpoint} (e.g. "customer" or "supplier").
 func (c *PartyClient) fetchPage(ctx context.Context, endpoint string, page, size int) (*partyListResponse, error) {
-	u := fmt.Sprintf("%s/SMLJavaRESTService/v3/api/%s?page=%d&size=%d",
-		c.cfg.BaseURL, endpoint, page, size)
+	u := fmt.Sprintf("%s/api/v1/%s?page=%d&size=%d",
+		c.cfg.BaseURL, partyPath(endpoint), page, size)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -165,8 +173,8 @@ func (c *PartyClient) GetSupplier(ctx context.Context, code string) (*Party, err
 }
 
 func (c *PartyClient) getOne(ctx context.Context, endpoint, code string) (*Party, error) {
-	u := fmt.Sprintf("%s/SMLJavaRESTService/v3/api/%s/%s",
-		c.cfg.BaseURL, endpoint, url.PathEscape(code))
+	u := fmt.Sprintf("%s/api/v1/%s/%s",
+		c.cfg.BaseURL, partyPath(endpoint), url.PathEscape(code))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err

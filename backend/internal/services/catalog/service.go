@@ -98,7 +98,7 @@ type smlProductItem struct {
 // SyncFromAPI syncs catalog from SML /product/v4 endpoint.
 // Returns (inserted+updated, error).
 func (s *SMLCatalogService) SyncFromAPI() (int, error) {
-	url := fmt.Sprintf("%s/SMLJavaRESTService/product/v4", s.smlBaseURL)
+	url := fmt.Sprintf("%s/api/v1/ic/products", s.smlBaseURL)
 	total := 0
 	page := 0
 
@@ -236,7 +236,7 @@ type singleProductV3Response struct {
 //     the user the product no longer exists in SML and offer Delete).
 //   - the upserted item otherwise.
 func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogItem, notFound bool, err error) {
-	url := fmt.Sprintf("%s/SMLJavaRESTService/v3/api/product/%s", s.smlBaseURL, itemCode)
+	url := fmt.Sprintf("%s/api/v1/ic/products/%s", s.smlBaseURL, itemCode)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false, err

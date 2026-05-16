@@ -60,7 +60,7 @@ func (c *InvoiceClient) headers() map[string]string {
 
 // ─── Product ──────────────────────────────────────────────────────────────────
 
-// ProductInfo holds the fields we need from /SMLJavaRESTService/v3/api/product/{code}
+// ProductInfo holds the fields we need from GET /api/v1/ic/products/{code}
 type ProductInfo struct {
 	Code           string `json:"code"`
 	UnitStandard   string `json:"unit_standard"`
@@ -83,7 +83,7 @@ type productV4Response struct {
 // GetProduct fetches product info by SKU/item_code.
 // Returns nil (no error) if product is not found (404).
 func (c *InvoiceClient) GetProduct(sku string) (*ProductInfo, error) {
-	url := fmt.Sprintf("%s/SMLJavaRESTService/v3/api/product/%s", c.cfg.BaseURL, sku)
+	url := fmt.Sprintf("%s/api/v1/ic/products/%s", c.cfg.BaseURL, sku)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -181,7 +181,7 @@ type InvoiceDetail struct {
 	SumAmountExclVAT float64 `json:"sum_amount_exclude_vat"`
 }
 
-// InvoicePayload is the full body for POST /SMLJavaRESTService/saleinvoice/v4
+// InvoicePayload is the full body for POST /api/v1/ic/sale-invoices
 type InvoicePayload struct {
 	DocNo          string          `json:"doc_no,omitempty"`
 	DocDate        string          `json:"doc_date"`
@@ -247,7 +247,7 @@ func (c *InvoiceClient) CreateInvoice(payload InvoicePayload, urlOverride string
 		return 0, nil, err
 	}
 
-	url := resolveSMLURL(c.cfg.BaseURL, "/SMLJavaRESTService/saleinvoice/v4", urlOverride)
+	url := resolveSMLURL(c.cfg.BaseURL, "/api/v1/ic/sale-invoices", urlOverride)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err

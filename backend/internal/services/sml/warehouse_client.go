@@ -139,7 +139,7 @@ func normalizeShelf(s shelfRecord, fallbackWH string) Shelf {
 }
 
 func (c *WarehouseClient) fetchPage(ctx context.Context, page, size int) (*warehouseListResponse, error) {
-	u := fmt.Sprintf("%s/SMLJavaRESTService/warehouse/v4?page=%d&size=%d", c.cfg.BaseURL, page, size)
+	u := fmt.Sprintf("%s/api/v1/ic/warehouses?page=%d&size=%d", c.cfg.BaseURL, page, size)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func (c *WarehouseClient) FetchAll(ctx context.Context) ([]Warehouse, error) {
 }
 
 func (c *WarehouseClient) Get(ctx context.Context, code string) (*Warehouse, error) {
-	u := fmt.Sprintf("%s/SMLJavaRESTService/warehouse/v4/%s", c.cfg.BaseURL, url.PathEscape(code))
+	u := fmt.Sprintf("%s/api/v1/ic/warehouses/%s", c.cfg.BaseURL, url.PathEscape(code))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err

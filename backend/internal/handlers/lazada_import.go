@@ -96,7 +96,7 @@ func (h *LazadaImportHandler) GetConfig(c *gin.Context) {
 	vatType := h.cfg.ShopeeSMLVATType
 	vatRate := h.cfg.ShopeeSMLVATRate
 	docFormat := h.cfg.ShopeeSMLDocFormat
-	endpoint := "/SMLJavaRESTService/v3/api/saleorder"
+	endpoint := "/api/v1/ic/sale-orders"
 	if h.channelDefaults != nil {
 		if def, _ := h.channelDefaults.Get("lazada", "sale"); def != nil {
 			custCode = def.PartyCode

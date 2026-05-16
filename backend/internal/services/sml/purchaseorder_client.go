@@ -87,7 +87,7 @@ type PurchaseOrderDetail struct {
 	SumAmountExclVAT float64 `json:"sum_amount_exclude_vat"`
 }
 
-// PurchaseOrderPayload is the body for POST /SMLJavaRESTService/v3/api/purchaseorder
+// PurchaseOrderPayload is the body for POST /api/v1/ic/purchase-orders
 type PurchaseOrderPayload struct {
 	DocNo          string                `json:"doc_no,omitempty"` // empty → SML generates
 	ApproveStatus  int                   `json:"approve_status"`
@@ -162,7 +162,7 @@ func (c *PurchaseOrderClient) CreatePurchaseOrder(payload PurchaseOrderPayload, 
 		return 0, nil, err
 	}
 
-	url := resolveSMLURL(c.cfg.BaseURL, "/SMLJavaRESTService/v3/api/purchaseorder", urlOverride)
+	url := resolveSMLURL(c.cfg.BaseURL, "/api/v1/ic/purchase-orders", urlOverride)
 
 	backoffs := []time.Duration{0, 1 * time.Second, 3 * time.Second, 5 * time.Second}
 	var lastResp *PurchaseOrderResponse
