@@ -2,110 +2,97 @@
 
 ## เป้าหมาย
 เปลี่ยนจากเรียก SML REST API (192.168.2.248:8080) โดยตรง  
-→ ไปใช้ **sml-api-bybos** (192.168.2.109:8200) เป็น proxy กลาง
+→ ไปใช้ **sml-api-bybos** (localhost:8200) เป็น proxy กลาง
 
 sml-api-bybos expose endpoints ที่ `/api/v1/` ทั้งหมด  
-docs: http://192.168.2.109:8200/docs
+Swagger docs: http://192.168.2.109:8200/docs
 
 ---
 
-## สถานะ (2026-05-16)
+## สถานะ (2026-05-16) — ✅ พร้อมทดสอบ
 
-### ✅ เสร็จแล้ว — SML clients (services/sml/)
+### การเปลี่ยนแปลงที่ทำแล้ว
 
-| ไฟล์ | path เดิม | path ใหม่ |
+| ส่วน | สิ่งที่เปลี่ยน |
+|---|---|
+| `services/sml/saleorder_client.go` | path: `/SMLJavaRESTService/v3/api/saleorder` → `/api/v1/ic/sale-orders` |
+| `services/sml/saleinvoice_client.go` | path: `/SMLJavaRESTService/restapi/saleinvoice` → `/api/v1/ic/sale-invoices` |
+| `services/sml/purchaseorder_client.go` | path: `/SMLJavaRESTService/v3/api/purchaseorder` → `/api/v1/ic/purchase-orders` |
+| `services/sml/product_client.go` | path: `/SMLJavaRESTService/v3/api/product` → `/api/v1/ic/products` |
+| `services/sml/party_client.go` | path: customer/supplier → `/api/v1/ar/customers`, `/api/v1/ap/suppliers` |
+| `services/sml/warehouse_client.go` | path: `/SMLJavaRESTService/warehouse/v4` → `/api/v1/ic/warehouses` |
+| `services/catalog/service.go` | path: `/product/v4` → `/api/v1/ic/products` |
+| `config/config.go` | default `ShopeeSMLURL` ยังเป็น 192.168.2.248 แต่ .env บน server override แล้ว |
+| **server `.env`** | `SHOPEE_SML_URL=http://localhost:8200` ✅ |
+
+### Auth headers — ไม่ต้องเปลี่ยน
+
+billflow ส่ง `guid` + `databaseName` — sml-api-bybos รับทั้งสองแบบ:
+- `guid: smlx` → ผ่าน API key check (`API_KEYS=dev-key,smlx`)
+- `databaseName: SML1_2026` → ผ่าน tenant check
+
+---
+
+## Endpoints ที่เปลี่ยน
+
+| เดิม (SML 248 direct) | ใหม่ (sml-api-bybos) |
+|---|---|
+| `POST /SMLJavaRESTService/v3/api/saleorder` | `POST /api/v1/ic/sale-orders` |
+| `POST /SMLJavaRESTService/restapi/saleinvoice` | `POST /api/v1/ic/sale-invoices` |
+| `POST /SMLJavaRESTService/v3/api/purchaseorder` | `POST /api/v1/ic/purchase-orders` |
+| `POST /SMLJavaRESTService/v3/api/product` | `POST /api/v1/ic/products` |
+| `GET /SMLJavaRESTService/v3/api/product/{code}` | `GET /api/v1/ic/products/{code}` |
+| `GET /SMLJavaRESTService/v3/api/customer` | `GET /api/v1/ar/customers` |
+| `GET /SMLJavaRESTService/v3/api/supplier` | `GET /api/v1/ap/suppliers` |
+| `GET /SMLJavaRESTService/warehouse/v4` | `GET /api/v1/ic/warehouses` |
+| `GET /SMLJavaRESTService/product/v4` (catalog sync) | `GET /api/v1/ic/products` |
+
+---
+
+## การตั้งค่า .env บน server
+
+```
+# ~/billflow/.env (ตั้งค่าแล้ว)
+SHOPEE_SML_URL=http://localhost:8200   ← sml-api-bybos
+SHOPEE_SML_GUID=smlx
+SHOPEE_SML_PROVIDER=SMLGOH
+SHOPEE_SML_CONFIG_FILE=SMLConfigSMLGOH.xml
+SHOPEE_SML_DATABASE=SML1_2026
+```
+
+---
+
+## ขั้นตอนทดสอบ
+
+1. เปิด http://192.168.2.109:3010/bills
+2. เลือกบิลที่ status = `pending` หรือ `failed`
+3. กด Retry → ดู log
+
+```bash
+docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
+```
+
+4. ตรวจว่า doc ขึ้นใน SML UI
+5. ทดสอบ import Shopee/Lazada/TikTok Excel ครบ flow
+
+---
+
+## สิ่งที่ยังไม่แตะ
+
+| Project | URL | สถานะ |
 |---|---|---|
-| `saleorder_client.go` | `POST /SMLJavaRESTService/v3/api/saleorder` | `POST /api/v1/ic/sale-orders` |
-| `saleinvoice_client.go` | `POST /SMLJavaRESTService/restapi/saleinvoice` | `POST /api/v1/ic/sale-invoices` |
-| `purchaseorder_client.go` | `POST /SMLJavaRESTService/v3/api/purchaseorder` | `POST /api/v1/ic/purchase-orders` |
-| `product_client.go` | `POST /SMLJavaRESTService/v3/api/product` | `POST /api/v1/ic/products` |
-| `party_client.go` | `GET /SMLJavaRESTService/v3/api/customer\|supplier` | `GET /api/v1/ar/customers`, `/api/v1/ap/suppliers` |
-| `warehouse_client.go` | `GET /SMLJavaRESTService/warehouse/v4` | `GET /api/v1/ic/warehouses` |
+| billflow-henna | :3030 | ยังใช้ 192.168.2.248:8080 โดยตรง — **ห้ามแตะ** |
+| billflow-thaisunsport | - | ยังใช้ 192.168.2.248:8080 โดยตรง — **ห้ามแตะ** |
 
-`BaseURL` ของ clients เหล่านี้ตอนนี้รับค่าจาก `cfg.ShopeeSMLURL`  
-ซึ่งใน `.env` ต้องตั้งเป็น `http://192.168.2.109:8200` แทน `http://192.168.2.248:8080`
+จะ migrate henna/thaisunsport หลังจาก billflow main ทดสอบผ่านแล้ว
 
 ---
 
-### ⚠️ ยังไม่เสร็จ — ส่วนที่ยังชี้ตรงไป SML 248
+## sml-api-bybos reference
 
-ส่วนเหล่านี้ยังใช้ `cfg.ShopeeSMLURL` แต่ส่งแบบ old compat path ผ่าน struct ที่ build URL เอง:
-
-| ไฟล์ | หน้าที่ | หมายเหตุ |
-|---|---|---|
-| `handlers/bills.go` | Retry บิล (sale/purchase) | ใช้ clients ที่ migrate แล้ว ✅ ผ่าน BaseURL |
-| `handlers/shopee_import.go` | Import Shopee Excel | ใช้ clients ที่ migrate แล้ว ✅ ผ่าน BaseURL |
-| `handlers/lazada_import.go` | Import Lazada Excel | ใช้ clients ที่ migrate แล้ว ✅ ผ่าน BaseURL |
-| `handlers/tiktok_import.go` | Import TikTok Excel | ใช้ clients ที่ migrate แล้ว ✅ ผ่าน BaseURL |
-| `services/catalog/service.go` | Sync catalog จาก SML | **⚠️ เรียก SML 248 โดยตรง** ต้องแก้ |
-| `config/config.go` | default URL | default ยังเป็น 192.168.2.248 ต้องเปลี่ยนใน .env |
-
----
-
-## วิธีเปิดใช้งาน sml-api-bybos
-
-### 1. แก้ `.env` บน server
-
-```bash
-# เดิม
-SHOPEE_SML_URL=http://192.168.2.248:8080
-
-# ใหม่
-SHOPEE_SML_URL=http://192.168.2.109:8200
-```
-
-> **Auth headers** (GUID, provider, configFileName, databaseName) ยังส่งเหมือนเดิม  
-> sml-api-bybos รับทั้ง `X-Api-Key` และ `guid` header — billflow ส่ง `guid` อยู่แล้ว ✅
-
-### 2. Restart backend
-
-```bash
-cd ~/billflow && docker compose up -d --build backend
-```
-
-### 3. ตรวจสอบ
-
-```bash
-# ดู log ว่า retry บิลไปที่ไหน
-docker logs billflow-backend --tail=50 | grep "sml\|POST\|BaseURL"
-
-# ทดสอบ retry บิล 1 ใบ จาก /bills UI
-```
-
----
-
-## สิ่งที่ยังต้องทำก่อน production
-
-- [ ] **catalog/service.go** — ยัง sync catalog จาก 192.168.2.248 โดยตรง  
-  ต้องเปลี่ยนให้ใช้ `GET /api/v1/ic/products` ของ sml-api-bybos แทน
-- [ ] ทดสอบ retry บิลจริงผ่าน UI ว่า doc ขึ้นใน SML ครบ
-- [ ] ทดสอบ import Shopee/Lazada/TikTok Excel ครบ flow
-
----
-
-## sml-api-bybos
-
-- **URL**: http://192.168.2.109:8200  
-- **Swagger**: http://192.168.2.109:8200/docs  
-- **Branch**: `feature/v1-unified-api` (local: `~/dev/sml-api-bybos`)  
-- **Auth**: header `guid` หรือ `X-Api-Key` + header `databaseName` หรือ `X-Tenant`
-
-### Endpoints ที่ billflow ใช้
-
-```
-POST /api/v1/ic/sale-orders        ← saleorder
-POST /api/v1/ic/sale-invoices      ← saleinvoice
-POST /api/v1/ic/purchase-orders    ← purchaseorder
-POST /api/v1/ic/products           ← create product
-GET  /api/v1/ic/products/:code     ← lookup product
-GET  /api/v1/ar/customers          ← party master customers
-GET  /api/v1/ap/suppliers          ← party master suppliers
-GET  /api/v1/ic/warehouses         ← warehouses
-```
-
----
-
-## henna / thaisunsport
-
-**ห้ามแตะ** — ยังใช้ `SHOPEE_SML_URL=http://192.168.2.248:8080` โดยตรง  
-จะ migrate หลังจาก billflow main ทดสอบผ่านแล้ว
+- **Container**: `sml-api-bybos-sml-api-1` (healthy)
+- **Port**: 8200
+- **Health**: `curl http://localhost:8200/health` → `{"status":"ok"}`
+- **Swagger**: http://192.168.2.109:8200/docs
+- **Source**: `~/dev/sml-api-bybos` branch `feature/v1-unified-api`
+- **API_KEYS**: `dev-key,smlx`
