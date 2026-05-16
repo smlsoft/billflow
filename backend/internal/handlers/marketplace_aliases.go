@@ -80,7 +80,7 @@ func (h *MarketplaceAliasHandler) Confirm(c *gin.Context) {
 
 	unitCode := req.UnitCode
 	if unitCode == "" && h.catalogRepo != nil {
-		if cat, _ := h.catalogRepo.GetActiveOne(req.ItemCode); cat != nil {
+		if cat, _ := h.catalogRepo.GetOne(req.ItemCode); cat != nil {
 			unitCode = cat.UnitCode
 		}
 	}
