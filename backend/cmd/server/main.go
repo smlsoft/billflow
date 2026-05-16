@@ -372,7 +372,7 @@ func main() {
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
-	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, partyCache, logger)
+	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
 	smlPartyH := handlers.NewSMLPartyHandler(partyCache, logger)
 	smlWarehouseH := handlers.NewSMLWarehouseHandler(warehouseCache, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
@@ -486,8 +486,6 @@ func main() {
 		// Channel defaults (admin only) — per-(channel, bill_type) party config
 		api.GET("/settings/channel-defaults", middleware.RequireRole("admin"), channelDefaultsH.List)
 		api.PUT("/settings/channel-defaults", middleware.RequireRole("admin"), channelDefaultsH.Upsert)
-		api.DELETE("/settings/channel-defaults/:channel/:bill_type", middleware.RequireRole("admin"), channelDefaultsH.Delete)
-		api.POST("/settings/channel-defaults/quick-setup", middleware.RequireRole("admin"), channelDefaultsH.QuickSetup)
 
 		// SML party master proxy — search customers/suppliers from cache
 		api.GET("/sml/customers", middleware.RequireRole("admin", "staff"), smlPartyH.SearchCustomers)
