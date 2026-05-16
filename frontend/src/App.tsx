@@ -25,6 +25,7 @@ import QuickReplies from './pages/QuickReplies'
 import Showcase from './pages/Showcase'
 import { ENABLE_CHAT, ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from './lib/featureFlags'
 import SetupCenter from './pages/SetupCenter'
+import OldDataSettings from './pages/OldDataSettings'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
@@ -76,6 +77,7 @@ export default function App() {
           <Route path="settings/line-oa" element={ENABLE_CHAT ? <LineOA /> : <Navigate to="/settings/instance" replace />} />
           <Route path="settings/quick-replies" element={ENABLE_CHAT ? <QuickReplies /> : <Navigate to="/settings/instance" replace />} />
           <Route path="settings/chat-tags" element={ENABLE_CHAT ? <ChatTags /> : <Navigate to="/settings/instance" replace />} />
+          <Route path="settings/old-data" element={<OldDataSettings />} />
         </Route>
       </Routes>
     </BrowserRouter>

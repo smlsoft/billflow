@@ -89,6 +89,7 @@ func main() {
 	platformRepo := repository.NewPlatformMappingRepo(db)
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	catalogRepo := repository.NewSMLCatalogRepo(db)
+	aliasRepo := repository.NewMarketplaceAliasRepo(db)
 	artifactRepo := repository.NewBillArtifactRepo(db)
 	channelDefaultRepo := repository.NewChannelDefaultRepo(db)
 	docCounterRepo := repository.NewDocCounterRepo(db)
@@ -101,6 +102,10 @@ func main() {
 	lineOARepo := repository.NewLineOAAccountRepo(db)
 	appSettingsRepo := repository.NewAppSettingsRepo(db)
 	aiUsageRepo := repository.NewAIUsageRepo(db)
+	// Migrate env-var values → DB on first boot (INSERT ... ON CONFLICT DO NOTHING)
+	if err := appSettingsRepo.SeedFromEnv(cfg); err != nil {
+		logger.Warn("seed instance settings from env", zap.Error(err))
+	}
 	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
 		logger.Warn("apply DB instance settings", zap.Error(err))
 	}
@@ -363,6 +368,7 @@ func main() {
 	lazadaH.SetArtifactService(artifactSvc)
 	tiktokH := handlers.NewTikTokImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	tiktokH.SetArtifactService(artifactSvc)
+	aliasH := handlers.NewMarketplaceAliasHandler(aliasRepo, catalogRepo, auditLogRepo, logger)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
@@ -402,6 +408,12 @@ func main() {
 		// EventSource uses as ?t=<token> on /api/admin/events. JWT-protected.
 		api.POST("/admin/events/token", sseH.IssueToken)
 
+		// Old Data (archive / purge) — admin only
+		oldDataH := handlers.NewOldDataHandler(db, logger)
+		api.GET("/bills/old-data/summary", middleware.RequireRole("admin"), oldDataH.Summary)
+		api.POST("/bills/old-data/archive", middleware.RequireRole("admin"), oldDataH.Archive)
+		api.POST("/bills/old-data/purge", middleware.RequireRole("admin"), oldDataH.Purge)
+
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/:id", billH.Get)
@@ -434,6 +446,7 @@ func main() {
 		api.GET("/settings/instance", middleware.RequireRole("admin"), instanceSettingsH.Get)
 		api.PUT("/settings/instance", middleware.RequireRole("admin"), instanceSettingsH.Update)
 		api.POST("/settings/instance/restart", middleware.RequireRole("admin"), instanceSettingsH.Restart)
+		api.POST("/settings/instance/test-connection", middleware.RequireRole("admin"), instanceSettingsH.TestConnection)
 
 		// Logs (Activity Log)
 		api.GET("/logs", middleware.RequireRole("admin", "staff"), logH.List)
@@ -461,6 +474,10 @@ func main() {
 		api.GET("/import/tiktok/runs", middleware.RequireRole("admin", "staff"), tiktokH.ListRuns)
 		api.POST("/import/tiktok/preview", middleware.RequireRole("admin", "staff"), tiktokH.Preview)
 		api.POST("/import/tiktok/confirm", middleware.RequireRole("admin", "staff"), tiktokH.Confirm)
+
+		// Marketplace aliases (review queue)
+		api.GET("/marketplace-aliases/review-groups", middleware.RequireRole("admin", "staff"), aliasH.ReviewGroups)
+		api.POST("/marketplace-aliases/confirm", middleware.RequireRole("admin", "staff"), aliasH.Confirm)
 
 		// Platform column mappings
 		api.GET("/settings/column-mappings/:platform", settingsH.GetColumnMappings)
