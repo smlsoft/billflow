@@ -20,9 +20,14 @@ export interface CatalogItem {
   item_name: string
   item_name2?: string
   unit_code: string
+  price?: number | null
   sale_price?: number | null
   embedding_status: 'pending' | 'done' | 'error'
   embedded_at?: string | null
+  synced_at?: string | null
+  last_seen_at?: string | null
+  is_active?: boolean
+  missing_at?: string | null
 }
 
 // ─── Bill ────────────────────────────────────────────────────────────────────
@@ -58,7 +63,7 @@ export interface BillRoutePreview {
   channel: string
   bill_type: string
   route?: string             // sale_reserve / saleorder / saleinvoice / purchaseorder
-  endpoint?: string          // free-form URL/path the admin set in /settings/channels
+  endpoint?: string          // tested SML destination path from /settings/channels
   doc_no?: string            // existing failed doc_no or next running preview (not reserved)
   doc_format?: string        // e.g. "BF-SO" + "YYMM####"
   doc_format_code?: string   // e.g. "SR", "INV", "PO"
@@ -99,11 +104,30 @@ export interface Bill {
   items?: BillItem[]
   created_at: string
   sent_at?: string | null
+  archived_at?: string | null
+  archived_by?: string | null
+  archive_reason?: string
   // computed in list view
   total_amount?: number | null
   // Only present in single-bill GET (not in list response).
   preview?: BillRoutePreview
   remark?: string
+  shopee_status?: ShopeeOrderEvent | null
+  shopee_events?: ShopeeOrderEvent[]
+}
+
+export interface ShopeeOrderEvent {
+  id: string
+  bill_id?: string | null
+  order_id: string
+  event_type: string
+  status_label: string
+  subject: string
+  from_addr: string
+  message_id: string
+  email_date?: string | null
+  raw_data?: Record<string, unknown> | null
+  created_at: string
 }
 
 export interface BillListResponse {
@@ -131,6 +155,19 @@ export interface MappingStats {
   total: number
   auto_confirmed: number
   needs_review: number
+}
+
+export interface MarketplaceAliasReviewGroup {
+  group_key: string
+  source: string
+  bill_type: string
+  source_sku: string
+  raw_name: string
+  normalized_key: string
+  bill_count: number
+  item_count: number
+  suggested_match?: CatalogMatch | null
+  candidates?: CatalogMatch[]
 }
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────

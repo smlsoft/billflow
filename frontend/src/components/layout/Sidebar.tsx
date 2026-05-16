@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   Building2,
+  Archive,
   Bot,
   ChevronsLeft,
   ChevronsRight,
@@ -18,7 +19,7 @@ import {
   Settings2,
   ShoppingBag,
   Tag,
-  Trash2,
+  Tags,
   Upload,
   UsersRound,
   Workflow,
@@ -49,6 +50,7 @@ import { ThemeToggle } from '@/components/common/ThemeToggle'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/lib/ui-store'
 import { cn } from '@/lib/utils'
+import { WORK_QUEUE_CHANGED_EVENT } from '@/lib/work-queue-events'
 import { ENABLE_CHAT, ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
 import client from '@/api/client'
 
@@ -65,8 +67,9 @@ interface NavItem {
   // hasBadge identifies which counter feeds the badge:
   //   document queues are counted per menu, not as one global pending count
   //   "messages" → unread chat conversation count (Phase 3)
+  //   "marketplace_aliases" → product groups that staff must confirm once
   // Boolean true is treated as "bills" for backward compat with existing code.
-  hasBadge?: boolean | 'bills' | 'purchase' | 'saleorder' | 'saleinvoice' | 'messages'
+  hasBadge?: boolean | 'bills' | 'purchase' | 'saleorder' | 'saleinvoice' | 'messages' | 'marketplace_aliases'
   // Optional English/short hint shown beneath the label in the collapsed-mode
   // tooltip — helps when admins ask dev "เปิด Quick Replies ที่ไหน" since the
   // visible label is now Thai-first.
@@ -94,9 +97,29 @@ async function countDocumentQueue(base: Record<string, string>) {
   return results.reduce((sum, n) => sum + n, 0)
 }
 
+async function countMarketplaceAliasQueue() {
+  if (!ENABLE_SALES_ORDERS) return 0
+  try {
+    const params = new URLSearchParams({ bill_type: 'sale', page: '1', per_page: '1' })
+    const res = await client.get<{ total?: number }>(`/api/marketplace-aliases/review-groups?${params}`)
+    return res.data.total ?? 0
+  } catch {
+    return 0
+  }
+}
+
+const URGENT_BADGES = new Set([
+  'bills',
+  'purchase',
+  'saleorder',
+  'saleinvoice',
+  'marketplace_aliases',
+])
+
 // NAV_GROUPS — ordered by daily-frequency. Top groups (Overview / Bills /
-// Chat) are what staff touch every day; bottom groups (Master Data / System
-// Settings) are setup-once. Within each group, the most-used items lead.
+// Review queues / Chat) are what staff touch every day; bottom groups (Master
+// Data / System Settings) are setup-once. Within each group, the most-used
+// items lead.
 //
 // Labels lean Thai-first; the `hint` field provides the English/setup name
 // in tooltips so a dev or new admin can connect Thai labels back to the
@@ -127,6 +150,12 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: 'งานที่ต้องตรวจ',
+    items: [
+      { to: '/marketplace-aliases', label: 'สินค้ารอยืนยัน', icon: Tags, hasBadge: 'marketplace_aliases', hint: 'ยืนยันครั้งเดียว ระบบจำให้บิลถัดไป', enabled: ENABLE_SALES_ORDERS },
+    ],
+  },
+  {
     label: 'ช่องทางรับข้อมูล',
     items: [
       { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail, hint: 'Email → ใบสั่งซื้อ' },
@@ -145,7 +174,14 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'ตั้งค่า',
+    label: 'ข้อมูลหลัก',
+    items: [
+      { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
+      { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
+    ],
+  },
+  {
+    label: 'ตั้งค่าระบบ',
     items: [
       {
         to: '/settings/channels',
@@ -153,12 +189,10 @@ const NAV_GROUPS: NavGroup[] = [
         icon: Building2,
         hint: 'Document Routing',
       },
-      { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow, hint: 'Item Mapping (raw_name → SML code)' },
-      { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database, hint: 'SML Catalog' },
+      { to: '/settings/old-data', label: 'จัดการข้อมูลเก่า', icon: Archive, hint: 'เก็บบิล / ลบถาวร' },
       { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot, hint: 'ค่าใช้จ่าย / รุ่น AI' },
       { to: '/settings/users', label: 'ผู้ใช้ระบบ', icon: UsersRound, hint: 'Roles and access' },
       { to: '/settings/instance', label: 'การเชื่อมต่อระบบ', icon: Settings2, hint: 'SML / OpenRouter / ร้านนี้' },
-      { to: '/settings/old-data', label: 'จัดการข้อมูลเก่า', icon: Trash2, hint: 'Archive / Purge old bills & logs' },
       { to: '/settings', label: 'ตั้งค่าทั่วไป', icon: Settings, end: true, hint: 'General Settings', minPhase: 2 },
     ],
   },
@@ -175,7 +209,7 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const collapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggle = useUIStore((s) => s.toggleSidebar)
-  const [queueCounts, setQueueCounts] = useState({ purchase: 0, saleorder: 0, saleinvoice: 0 })
+  const [queueCounts, setQueueCounts] = useState({ purchase: 0, saleorder: 0, saleinvoice: 0, marketplaceAliases: 0 })
   const [unreadMessages, setUnreadMessages] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -189,13 +223,14 @@ export default function Sidebar() {
       return
     }
     try {
-      const [stats, purchase, saleorder, saleinvoice] = await Promise.all([
+      const [stats, purchase, saleorder, saleinvoice, marketplaceAliases] = await Promise.all([
         client.get<{ unread_messages?: number }>('/api/dashboard/stats'),
         countDocumentQueue({ source: 'shopee_shipped', bill_type: 'purchase' }),
         countDocumentQueue({ bill_type: 'sale', document_route: 'saleorder' }),
         countDocumentQueue({ bill_type: 'sale', document_route: 'saleinvoice' }),
+        countMarketplaceAliasQueue(),
       ])
-      setQueueCounts({ purchase, saleorder, saleinvoice })
+      setQueueCounts({ purchase, saleorder, saleinvoice, marketplaceAliases })
       setUnreadMessages(stats.data.unread_messages ?? 0)
     } catch {
       /* silent */
@@ -217,6 +252,14 @@ export default function Sidebar() {
       if (intervalRef.current) clearInterval(intervalRef.current)
       document.removeEventListener('visibilitychange', onVisibility)
     }
+  }, [fetchStats])
+
+  useEffect(() => {
+    const onWorkQueueChanged = () => {
+      void fetchStats()
+    }
+    window.addEventListener(WORK_QUEUE_CHANGED_EVENT, onWorkQueueChanged)
+    return () => window.removeEventListener(WORK_QUEUE_CHANGED_EVENT, onWorkQueueChanged)
   }, [fetchStats])
 
   // SSE — instant unread badge updates. Server publishes UnreadChanged on
@@ -320,10 +363,13 @@ export default function Sidebar() {
                         ? queueCounts.saleorder
                         : badgeKind === 'saleinvoice'
                           ? queueCounts.saleinvoice
+                          : badgeKind === 'marketplace_aliases'
+                            ? queueCounts.marketplaceAliases
                           : badgeKind === 'bills'
                             ? queueCounts.purchase
                       : 0
                 const showBadge = !!badgeKind && badgeCount > 0
+                const urgentBadge = !!badgeKind && URGENT_BADGES.has(badgeKind)
 
                 const linkInner = (active: boolean) => (
                   <span
@@ -346,14 +392,22 @@ export default function Sidebar() {
                     <span className="relative">
                       <Icon className="h-[15px] w-[15px] shrink-0" strokeWidth={2} />
                       {showBadge && collapsed && (
-                        <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-warning" />
+                        <span
+                          className={cn(
+                            'absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full',
+                            urgentBadge ? 'bg-destructive' : 'bg-warning',
+                          )}
+                        />
                       )}
                     </span>
                     {!collapsed && (
                       <>
                         <span className="flex-1 truncate">{item.label}</span>
                         {showBadge && (
-                          <Badge variant="secondary" className="h-5 min-w-[20px] justify-center px-1.5 text-[10px]">
+                          <Badge
+                            variant={urgentBadge ? 'destructive' : 'secondary'}
+                            className="h-5 min-w-[20px] justify-center px-1.5 text-[10px]"
+                          >
                             {badgeCount > 99 ? '99+' : badgeCount}
                           </Badge>
                         )}

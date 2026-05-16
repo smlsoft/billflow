@@ -1,16 +1,19 @@
 import { useState, useEffect, useCallback } from 'react'
 import client from '../api/client'
+import { notifyWorkQueueChanged } from '../lib/work-queue-events'
 import type { Bill, BillListResponse } from '../types'
 
 interface BillsFilter {
   page?: number
   per_page?: number
   status?: string
+  shopee_status?: string
   source?: string
   bill_type?: string
   document_route?: string
   email_account_id?: string
   search?: string
+  archived?: 'include' | 'only' | ''
   date_from?: string
   date_to?: string
 }
@@ -43,11 +46,13 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.page) params.set('page', String(filter.page))
       if (filter.per_page) params.set('per_page', String(filter.per_page))
       if (filter.status) params.set('status', filter.status)
+      if (filter.shopee_status) params.set('shopee_status', filter.shopee_status)
       if (filter.source) params.set('source', filter.source)
       if (filter.bill_type) params.set('bill_type', filter.bill_type)
       if (filter.document_route) params.set('document_route', filter.document_route)
       if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
       if (filter.search) params.set('search', filter.search)
+      if (filter.archived) params.set('archived', filter.archived)
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)
       const res = await client.get<BillListResponse>(`/api/bills?${params}`)
@@ -73,5 +78,26 @@ export async function retryBill(
   id: string,
   body?: RetryBillPayload,
 ): Promise<void> {
-  await client.post(`/api/bills/${id}/retry`, body ?? {})
+  const res = await client.post<{ message?: string; error?: string }>(`/api/bills/${id}/retry`, body ?? {}, {
+    validateStatus: (status) => status >= 200 && status < 300,
+  })
+  if (res.status !== 200) {
+    throw new Error(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`)
+  }
+  notifyWorkQueueChanged()
+}
+
+export async function archiveBill(id: string, reason?: string): Promise<void> {
+  await client.post(`/api/bills/${id}/archive`, { reason })
+  notifyWorkQueueChanged()
+}
+
+export async function restoreBill(id: string): Promise<void> {
+  await client.post(`/api/bills/${id}/restore`)
+  notifyWorkQueueChanged()
+}
+
+export async function deleteBill(id: string): Promise<void> {
+  await client.delete(`/api/bills/${id}`, { data: { confirm: 'DELETE' } })
+  notifyWorkQueueChanged()
 }
