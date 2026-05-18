@@ -2550,6 +2550,8 @@ Phases:
                 + mobile responsive + 13 cross-page polish (6.29, session 19)
               + Send-to-SML validation guard + route preview chip + Cloudflare
                 Quick Tunnel drift cron (6.30, session 20)
+              + fresh-install setup UX — remove SeedFromEnv, test-connection card,
+                ConfirmDialog before save/restart, locked fields hidden (6.31, session 21)
   Phase 8    ⏳ cloudflared named tunnel + systemd (need domain decision)
 
 Pending (carry-over):
@@ -2560,6 +2562,36 @@ Pending (carry-over):
        4.13 mobile responsive, 4.14 profile refresh, 4.15 block/spam (overlap with archived)
   ⏳ LINE Push quota dashboard (free OA = 200/month — Reply API path is free)
   ⏳ Auto-discover Cloudflare URL from /tmp/billflow-tunnel.log (defer; admin paste works)
+
+Recent work (session 21 — 2026-05-18):
+  ⭐ feat(instance-settings): fresh-install setup UX — remove SeedFromEnv, test-connection, confirm dialogs
+       Fresh installs now start with empty app_settings — admin fills all values
+       via /settings/instance UI instead of having .env pre-seeded values appear
+       automatically (SeedFromEnv() removed from main.go startup). This makes
+       onboarding explicit: admin sees empty fields, fills them, saves.
+       - Remove SeedFromEnv(): app_settings_repo.go had INSERT ... ON CONFLICT DO NOTHING
+         that copied all .env values to DB on every boot — breaks fresh-install UX
+         because admin never sees which values are "required" vs "optional"
+       - TestConnection fallback for locked fields: sml.guid has Locked:true so it's
+         never written to DB. TestConnection now reads from cfgFallback map (h.cfg.ShopeeSMLGUID)
+         when DB value is empty — fixes "ยังไม่ได้ตั้งค่า guid" error on fresh installs
+       - Fix false-positive pending_restart banner: Get handler compared locked field's
+         empty DB value vs non-empty runtime value → triggered restart banner. Fixed by
+         adding `&& !def.Locked` to the comparison condition
+       - InstanceSettings.tsx UX improvements:
+         - Test connection button → POST /api/settings/instance/test-connection →
+           shows result card with SML/LINE/OpenRouter per-service status (CheckCircle2/XCircle)
+         - ConfirmDialog before save (when changed keys are restart_required/secret) and
+           before restart-only action — uses ConfirmDialog component
+         - Locked fields now completely hidden from grouped filter (not just disabled)
+           — prevents confusion from "API Key (guid)* ค่าตายตัว จำเป็นต้องกรอก" that admin can't fill
+         - Missing required fields highlighted with red border + "จำเป็นต้องกรอกก่อนบันทึก"
+       - MarketplaceAliases.tsx overflow fix: w-[35%] min-w-[240px] on product column header,
+         max-w-[380px] on product cell, title= tooltips on all truncated text
+       Verified: fresh DB (reset), SML ✅ LINE ✅ OpenRouter ✅ (credit: 2.54), all
+       3 backend fixes deployed, UI hides locked fields correctly.
+       Docker networking note: SML test connection requires http://172.24.0.1:8200 (Docker
+       gateway IP), not localhost:8200, since backend runs inside Docker container.
 
 Recent work (session 20 — 2026-04-30):
   ⭐ feat(bill): block Send-to-SML when items are invalid + route preview
@@ -3114,7 +3146,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-30 (session 20)*
+*Last updated: 2026-05-18 (session 21)*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*
