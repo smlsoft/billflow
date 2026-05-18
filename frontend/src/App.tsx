@@ -12,7 +12,6 @@ import TikTokImport from './pages/TikTokImport'
 import Mappings from './pages/Mappings'
 import MarketplaceAliases from './pages/MarketplaceAliases'
 import OldDataSettings from './pages/OldDataSettings'
-import Settings from './pages/Settings'
 import Logs from './pages/Logs'
 import CatalogSettings from './pages/CatalogSettings'
 import EmailAccounts from './pages/EmailAccounts'
@@ -27,8 +26,6 @@ import QuickReplies from './pages/QuickReplies'
 import Showcase from './pages/Showcase'
 import { ENABLE_CHAT, ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from './lib/featureFlags'
 import SetupCenter from './pages/SetupCenter'
-
-const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -69,7 +66,7 @@ export default function App() {
           <Route path="mappings" element={<Mappings />} />
           <Route path="marketplace-aliases" element={ENABLE_SALES_ORDERS ? <MarketplaceAliases /> : <Navigate to="/dashboard" replace />} />
           <Route path="settings/old-data" element={<OldDataSettings />} />
-          <Route path="settings" element={PHASE < 2 ? <Navigate to="/settings/instance" replace /> : <Settings />} />
+          <Route path="settings" element={<Navigate to="/settings/instance" replace />} />
           <Route path="logs" element={<Logs />} />
           <Route path="settings/catalog" element={<CatalogSettings />} />
           <Route path="settings/email" element={<EmailAccounts />} />

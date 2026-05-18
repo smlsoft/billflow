@@ -15,7 +15,6 @@ import {
   MessageSquare,
   MessageSquareQuote,
   ScrollText,
-  Settings,
   Settings2,
   ShoppingBag,
   Tag,
@@ -194,7 +193,6 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot, hint: 'ค่าใช้จ่าย / รุ่น AI' },
       { to: '/settings/users', label: 'ผู้ใช้ระบบ', icon: UsersRound, hint: 'Roles and access' },
       { to: '/settings/instance', label: 'การเชื่อมต่อระบบ', icon: Settings2, hint: 'SML / OpenRouter / ร้านนี้' },
-      { to: '/settings', label: 'ตั้งค่าทั่วไป', icon: Settings, end: true, hint: 'General Settings', minPhase: 2 },
     ],
   },
 ]
