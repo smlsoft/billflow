@@ -147,34 +147,7 @@ func RuntimeSettingValues(cfg *config.Config) map[string]string {
 	}
 }
 
-// SeedFromEnv writes env-derived values into app_settings on first boot using
-// INSERT ... ON CONFLICT DO NOTHING so existing DB values are never overwritten.
-func (r *AppSettingsRepo) SeedFromEnv(cfg *config.Config) error {
-	secretKeys := map[string]bool{
-		"ai.openrouter_api_key":            true,
-		"line.notify_channel_secret":       true,
-		"line.notify_channel_access_token": true,
-	}
-	tx, err := r.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for key, value := range RuntimeSettingValues(cfg) {
-		if value == "" {
-			continue
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO app_settings (key, value, is_secret, updated_at)
-			VALUES ($1, $2, $3, NOW())
-			ON CONFLICT (key) DO NOTHING`,
-			key, value, secretKeys[key],
-		); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
+
 
 func (r *AppSettingsRepo) PendingRestart(cfg *config.Config) (bool, []string, error) {
 	settings, err := r.All()

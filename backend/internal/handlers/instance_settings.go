@@ -88,7 +88,7 @@ func (h *InstanceSettingsHandler) Get(c *gin.Context) {
 		runtimeValue := runtimeValues[def.Key]
 		active := true
 		pendingRestart := false
-		if def.Restart && runtimeValue != "" && value != strings.TrimSpace(runtimeValue) {
+		if def.Restart && !def.Locked && runtimeValue != "" && value != strings.TrimSpace(runtimeValue) {
 			active = false
 			pendingRestart = true
 			pendingKeys = append(pendingKeys, def.Key)
@@ -231,8 +231,15 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลด config ไม่ได้"})
 		return
 	}
+	// fallbacks for locked fields that are never written to DB
+	cfgFallback := map[string]string{
+		"sml.guid": h.cfg.ShopeeSMLGUID,
+	}
 	get := func(key string) string {
-		return strings.TrimSpace(dbSettings[key].Value)
+		if v := strings.TrimSpace(dbSettings[key].Value); v != "" {
+			return v
+		}
+		return strings.TrimSpace(cfgFallback[key])
 	}
 
 	httpClient := &http.Client{Timeout: 8 * time.Second}

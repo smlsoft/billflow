@@ -443,10 +443,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           showShopeeStatusColumn={showShopeeStatusFilter}
           canManage={canManageBills}
           canPermanentDelete={canPermanentDelete}
-          onArchive={(bill) => setConfirmAction({ kind: 'archive', bill })}
-          onRestore={(bill) => setConfirmAction({ kind: 'restore', bill })}
-          onDelete={(bill) => setConfirmAction({ kind: 'delete', bill })}
-          onPermanentDelete={(bill) => setConfirmAction({ kind: 'permanent', bill })}
+          onArchive={(bill: Bill) => setConfirmAction({ kind: 'archive', bill })}
+          onRestore={(bill: Bill) => setConfirmAction({ kind: 'restore', bill })}
+          onDelete={(bill: Bill) => setConfirmAction({ kind: 'delete', bill })}
+          onPermanentDelete={(bill: Bill) => setConfirmAction({ kind: 'permanent', bill })}
           onRowClick={(id) => navigate(`${detailBasePath}/${id}`)}
         />
       )}

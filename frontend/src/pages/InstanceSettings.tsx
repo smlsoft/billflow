@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, AlertTriangle, Bell, Bot, Building2, CheckCircle2, Database, RotateCw, Save, Settings2 } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Bell, Bot, Building2, CheckCircle2, Database, Plug, RotateCw, Save, Settings2, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 
 import client from '@/api/client'
@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { PageHeader } from '@/components/common/PageHeader'
 import { cn } from '@/lib/utils'
 
@@ -29,6 +30,8 @@ type InstanceSetting = {
   runtime_value?: string
   active?: boolean
   pending_restart?: boolean
+  locked?: boolean
+  missing?: boolean
 }
 
 type Response = {
@@ -37,6 +40,9 @@ type Response = {
   pending_restart?: boolean
   pending_restart_settings?: string[]
 }
+
+type TestResult = { ok: boolean; error?: string; detail?: string }
+type TestResults = { sml?: TestResult; line?: TestResult; openrouter?: TestResult }
 
 const GROUP_META: Record<SettingGroup, { title: string; description: string; icon: typeof Building2 }> = {
   instance: {
@@ -75,9 +81,22 @@ const PHASE1_HIDDEN_KEYS = new Set([
   'automation.auto_confirm_threshold',
 ])
 
-function sourceLabel(source: InstanceSetting['source']) {
-  if (source === 'database') return 'ตั้งค่าแล้ว'
-  return 'ยังไม่ได้ตั้งค่าในระบบ'
+const TEST_SERVICE_LABEL: Record<string, string> = {
+  sml: 'SML ERP',
+  line: 'LINE แจ้งเตือน',
+  openrouter: 'OpenRouter AI',
+}
+
+function sourceLabel(s: InstanceSetting) {
+  if (s.locked) return 'ค่าตายตัว'
+  if (s.source === 'database') return 'ตั้งค่าแล้ว'
+  return 'ยังไม่ได้ตั้งค่า'
+}
+
+function sourceBadgeVariant(s: InstanceSetting): 'default' | 'outline' | 'secondary' {
+  if (s.locked) return 'secondary'
+  if (s.source === 'database') return 'default'
+  return 'outline'
 }
 
 export default function InstanceSettings() {
@@ -88,6 +107,13 @@ export default function InstanceSettings() {
   const [restarting, setRestarting] = useState(false)
   const [pendingRestart, setPendingRestart] = useState(false)
   const [restartKeys, setRestartKeys] = useState<string[]>([])
+
+  const [testing, setTesting] = useState(false)
+  const [testResults, setTestResults] = useState<TestResults | null>(null)
+
+  const [confirmSave, setConfirmSave] = useState(false)
+  const [confirmSaveDesc, setConfirmSaveDesc] = useState('')
+  const [confirmRestart, setConfirmRestart] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -113,7 +139,7 @@ export default function InstanceSettings() {
   const grouped = useMemo(() => {
     return GROUP_ORDER.map((group) => ({
       group,
-      items: settings.filter((s) => s.group === group && !(PHASE < 2 && PHASE1_HIDDEN_KEYS.has(s.key))),
+      items: settings.filter((s) => !s.locked && s.group === group && !(PHASE < 2 && PHASE1_HIDDEN_KEYS.has(s.key))),
     })).filter((g) => g.items.length > 0)
   }, [settings])
 
@@ -135,7 +161,7 @@ export default function InstanceSettings() {
     throw new Error('backend restart timeout')
   }
 
-  const save = async () => {
+  const doSave = async () => {
     setSaving(true)
     setRestarting(false)
     const toastID = toast.loading('กำลังบันทึกค่า...')
@@ -150,6 +176,7 @@ export default function InstanceSettings() {
       await client.post('/api/settings/instance/restart', {}, { timeout: 5000 })
       await waitForBackend()
       toast.success('บันทึกค่าแล้ว ระบบพร้อมใช้ค่าใหม่', { id: toastID })
+      setTestResults(null)
       await load()
     } catch {
       toast.error('บันทึกหรือเริ่มใช้ค่าใหม่ไม่สำเร็จ', { id: toastID })
@@ -159,7 +186,23 @@ export default function InstanceSettings() {
     }
   }
 
-  const restartOnly = async () => {
+  const requestSave = () => {
+    if (saving || restarting || loading) return
+    const changed = settings.filter(
+      (s) => visibleKeys.has(s.key) && !s.locked && (draft[s.key] ?? '') !== (s.source === 'database' ? s.value ?? '' : ''),
+    )
+    const important = changed.filter((s) => s.restart_required || s.group === 'sml' || s.group === 'ai' || s.secret)
+    if (important.length > 0) {
+      const labels = important.slice(0, 5).map((s) => s.label).join(', ')
+      const more = important.length > 5 ? ` และอีก ${important.length - 5} ค่า` : ''
+      setConfirmSaveDesc(`ค่าที่มีผลต่อระบบจริง:\n${labels}${more}\n\nระบบจะ restart backend เพื่อเริ่มใช้ค่าใหม่`)
+      setConfirmSave(true)
+    } else {
+      void doSave()
+    }
+  }
+
+  const doRestart = async () => {
     setRestarting(true)
     const toastID = toast.loading('กำลังรีสตาร์ท backend...')
     try {
@@ -174,6 +217,19 @@ export default function InstanceSettings() {
     }
   }
 
+  const testConnection = async () => {
+    setTesting(true)
+    setTestResults(null)
+    try {
+      const res = await client.post<TestResults>('/api/settings/instance/test-connection', {})
+      setTestResults(res.data)
+    } catch {
+      toast.error('ทดสอบการเชื่อมต่อไม่สำเร็จ')
+    } finally {
+      setTesting(false)
+    }
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -183,13 +239,17 @@ export default function InstanceSettings() {
           : 'ตั้งค่า SML ERP, OpenRouter และข้อมูลร้านที่ใช้กับ BillFlow ชุดนี้'}
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={testConnection} disabled={testing || saving || restarting || loading}>
+              <Plug className={cn('h-4 w-4', testing && 'animate-pulse')} />
+              {testing ? 'กำลังทดสอบ...' : 'ทดสอบการเชื่อมต่อ'}
+            </Button>
             {pendingRestart && (
-              <Button variant="outline" onClick={restartOnly} disabled={saving || restarting || loading}>
+              <Button variant="outline" onClick={() => setConfirmRestart(true)} disabled={saving || restarting || loading}>
                 <RotateCw className={cn('h-4 w-4', restarting && 'animate-spin')} />
                 {restarting ? 'กำลังรีสตาร์ท...' : 'รีสตาร์ทและใช้ค่าทันที'}
               </Button>
             )}
-            <Button onClick={save} disabled={saving || restarting || loading}>
+            <Button onClick={requestSave} disabled={saving || restarting || loading}>
               <Save className="h-4 w-4" />
               {restarting ? 'กำลังเริ่มใช้ค่าใหม่...' : saving ? 'กำลังบันทึก...' : 'บันทึกและเริ่มใช้ค่าใหม่'}
             </Button>
@@ -197,6 +257,7 @@ export default function InstanceSettings() {
         }
       />
 
+      {/* Status banner */}
       <div className={cn(
         'rounded-lg border p-3 text-sm',
         pendingRestart ? 'border-warning/35 bg-warning/[0.07]' : 'border-success/25 bg-success/[0.05]',
@@ -213,7 +274,7 @@ export default function InstanceSettings() {
             </p>
             <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
               {pendingRestart
-                ? 'กด “รีสตาร์ทและใช้ค่าทันที” ก่อน Sync สินค้าหรือส่ง SML เพื่อไม่ให้ระบบใช้ headers ชุดเก่า'
+                ? 'กด "รีสตาร์ทและใช้ค่าทันที" ก่อน Sync สินค้าหรือส่ง SML เพื่อไม่ให้ระบบใช้ headers ชุดเก่า'
                 : 'หลังบันทึก ระบบจะ restart backend อัตโนมัติและรอจนกลับมาพร้อมใช้งาน ปกติใช้เวลาประมาณ 10-30 วินาที'}
             </p>
             {pendingRestart && restartKeys.length > 0 && (
@@ -229,6 +290,42 @@ export default function InstanceSettings() {
         </div>
       </div>
 
+      {/* Test connection results */}
+      {testResults && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Plug className="h-4 w-4 text-primary" />
+              ผลการทดสอบการเชื่อมต่อ
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {(['sml', 'line', 'openrouter'] as const).map((svc) => {
+                const r = testResults[svc]
+                if (!r) return null
+                return (
+                  <div key={svc} className={cn(
+                    'flex items-start gap-3 rounded-md border px-3 py-2 text-sm',
+                    r.ok ? 'border-success/25 bg-success/[0.04]' : 'border-destructive/25 bg-destructive/[0.04]',
+                  )}>
+                    {r.ok
+                      ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                      : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />}
+                    <div className="min-w-0">
+                      <span className="font-medium">{TEST_SERVICE_LABEL[svc]}</span>
+                      {r.detail && <span className="ml-2 text-xs text-muted-foreground">{r.detail}</span>}
+                      {r.error && <p className="mt-0.5 text-xs text-destructive">{r.error}</p>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Setting groups */}
       {grouped.map(({ group, items }) => {
         const meta = GROUP_META[group]
         const Icon = meta.icon
@@ -247,65 +344,105 @@ export default function InstanceSettings() {
             </CardHeader>
             <CardContent>
               <div className="grid gap-4 lg:grid-cols-2">
-                {items.map((s) => (
-                  <div key={s.key} className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label htmlFor={s.key}>{s.label}</Label>
-                      <div className="flex items-center gap-1">
-                        <Badge variant={s.source === 'database' ? 'default' : 'outline'} className="h-5 px-1.5 text-[10px]">
-                          {sourceLabel(s.source)}
-                        </Badge>
-                        {s.pending_restart ? (
-                          <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
-                            รอรีสตาร์ท
+                {items.map((s) => {
+                  const draftVal = draft[s.key] ?? ''
+                  const isMissing = !!s.missing && draftVal === ''
+                  return (
+                    <div key={s.key} className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor={s.key} className={isMissing ? 'text-destructive' : undefined}>
+                          {s.label}
+                          {s.missing && <span className="ml-1 text-destructive">*</span>}
+                        </Label>
+                        <div className="flex items-center gap-1">
+                          <Badge
+                            variant={sourceBadgeVariant(s)}
+                            className="h-5 px-1.5 text-[10px]"
+                          >
+                            {sourceLabel(s)}
                           </Badge>
-                        ) : s.restart_required && (
-                          <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                            ใช้งานอยู่
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                    <Input
-                      id={s.key}
-                      type={s.type === 'password' ? 'password' : s.type}
-                      value={draft[s.key] ?? ''}
-                      placeholder={s.source === 'database' ? undefined : 'กรอกค่าของร้านนี้'}
-                      onChange={(e) => setDraft((d) => ({ ...d, [s.key]: e.target.value }))}
-                      className={s.key.includes('url') || s.key.includes('model') || s.key.includes('database') ? 'font-mono text-xs' : undefined}
-                    />
-                    {s.description && (
-                      <p className="text-[11px] leading-relaxed text-muted-foreground">
-                        {s.description}
-                      </p>
-                    )}
-                    {s.restart_required && s.runtime_value !== undefined && (
-                      <div className={cn(
-                        'rounded-md border px-2 py-1.5 text-[11px]',
-                        s.pending_restart ? 'border-warning/30 bg-warning/[0.06]' : 'border-border bg-muted/25',
-                      )}>
-                        <div className="flex items-start gap-1.5">
-                          {s.pending_restart ? (
-                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-                          ) : (
-                            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                          {!s.locked && (
+                            s.pending_restart ? (
+                              <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
+                                รอรีสตาร์ท
+                              </Badge>
+                            ) : s.restart_required && (
+                              <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                                ใช้งานอยู่
+                              </Badge>
+                            )
                           )}
-                          <div className="min-w-0">
-                            <span className="font-medium text-foreground">ค่าที่ backend ใช้อยู่ตอนนี้: </span>
-                            <span className="break-all font-mono text-muted-foreground">
-                              {s.runtime_value || '—'}
-                            </span>
-                          </div>
                         </div>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <Input
+                        id={s.key}
+                        type={s.type === 'password' ? 'password' : s.type}
+                        value={draftVal}
+                        placeholder={s.locked ? undefined : s.source === 'database' ? undefined : 'กรอกค่าของร้านนี้'}
+                        disabled={s.locked}
+                        onChange={(e) => setDraft((d) => ({ ...d, [s.key]: e.target.value }))}
+                        className={cn(
+                          s.key.includes('url') || s.key.includes('model') || s.key.includes('database') ? 'font-mono text-xs' : undefined,
+                          s.locked && 'cursor-not-allowed bg-muted opacity-60',
+                          isMissing && 'border-destructive focus-visible:ring-destructive',
+                        )}
+                      />
+                      {isMissing && (
+                        <p className="text-[11px] text-destructive">จำเป็นต้องกรอกก่อนบันทึก</p>
+                      )}
+                      {s.description && !isMissing && (
+                        <p className="text-[11px] leading-relaxed text-muted-foreground">
+                          {s.description}
+                        </p>
+                      )}
+                      {!s.locked && s.restart_required && s.runtime_value !== undefined && (
+                        <div className={cn(
+                          'rounded-md border px-2 py-1.5 text-[11px]',
+                          s.pending_restart ? 'border-warning/30 bg-warning/[0.06]' : 'border-border bg-muted/25',
+                        )}>
+                          <div className="flex items-start gap-1.5">
+                            {s.pending_restart ? (
+                              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                            ) : (
+                              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+                            )}
+                            <div className="min-w-0">
+                              <span className="font-medium text-foreground">ค่าที่ backend ใช้อยู่ตอนนี้: </span>
+                              <span className="break-all font-mono text-muted-foreground">
+                                {s.runtime_value || '—'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </CardContent>
           </Card>
         )
       })}
+
+      {/* Confirm save dialog */}
+      <ConfirmDialog
+        open={confirmSave}
+        onOpenChange={setConfirmSave}
+        title="บันทึกและ restart backend?"
+        description={confirmSaveDesc}
+        confirmLabel="บันทึกและเริ่มใช้ค่าใหม่"
+        onConfirm={doSave}
+      />
+
+      {/* Confirm restart dialog */}
+      <ConfirmDialog
+        open={confirmRestart}
+        onOpenChange={setConfirmRestart}
+        title="รีสตาร์ท backend?"
+        description="backend จะหยุดชั่วคราวประมาณ 10-30 วินาที แล้วกลับมาพร้อมใช้ค่าที่บันทึกไว้ล่าสุด"
+        confirmLabel="รีสตาร์ทเลย"
+        onConfirm={doRestart}
+      />
     </div>
   )
 }

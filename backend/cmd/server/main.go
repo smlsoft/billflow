@@ -102,10 +102,6 @@ func main() {
 	lineOARepo := repository.NewLineOAAccountRepo(db)
 	appSettingsRepo := repository.NewAppSettingsRepo(db)
 	aiUsageRepo := repository.NewAIUsageRepo(db)
-	// Migrate env-var values → DB on first boot (INSERT ... ON CONFLICT DO NOTHING)
-	if err := appSettingsRepo.SeedFromEnv(cfg); err != nil {
-		logger.Warn("seed instance settings from env", zap.Error(err))
-	}
 	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
 		logger.Warn("apply DB instance settings", zap.Error(err))
 	}

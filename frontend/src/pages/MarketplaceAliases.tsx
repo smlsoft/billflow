@@ -218,9 +218,9 @@ export default function MarketplaceAliases() {
             <TableHeader>
               <TableRow className="bg-muted/40">
                 <TableHead className="w-[120px]">ช่องทาง</TableHead>
-                <TableHead>สินค้า marketplace</TableHead>
+                <TableHead className="w-[35%] min-w-[240px]">สินค้า marketplace</TableHead>
                 <TableHead className="w-[110px] text-right">กระทบ</TableHead>
-                <TableHead className="w-[260px]">ระบบแนะนำ</TableHead>
+                <TableHead className="w-[240px]">ระบบแนะนำ</TableHead>
                 <TableHead className="w-[220px] text-right">จัดการ</TableHead>
               </TableRow>
             </TableHeader>
@@ -250,16 +250,18 @@ export default function MarketplaceAliases() {
                       <div className="space-y-1">
                         <Badge variant="secondary">{SOURCE_LABEL[group.source] ?? group.source}</Badge>
                         {group.source_sku && (
-                          <div className="max-w-[160px] truncate rounded-full border px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+                          <div className="max-w-[160px] truncate rounded-full border px-2 py-0.5 font-mono text-[11px] text-muted-foreground" title={`SKU ${group.source_sku}`}>
                             SKU {group.source_sku}
                           </div>
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="min-w-[360px] py-3">
-                      <div className="line-clamp-2 text-sm font-medium leading-5">{group.raw_name}</div>
-                      <div className="mt-1 truncate text-xs text-muted-foreground">
-                        key: <code>{group.normalized_key}</code>
+                    <TableCell className="py-3">
+                      <div className="max-w-[380px] space-y-1">
+                        <div className="line-clamp-2 text-sm font-medium leading-5" title={group.raw_name}>{group.raw_name}</div>
+                        <div className="truncate text-xs text-muted-foreground" title={group.normalized_key}>
+                          key: <code>{group.normalized_key}</code>
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell className="py-3 text-right text-sm tabular-nums">
@@ -279,7 +281,7 @@ export default function MarketplaceAliases() {
                             )}
                           </div>
                           <div className="font-mono text-sm font-semibold">{group.suggested_match.item_code}</div>
-                          <div className="line-clamp-1 text-xs text-muted-foreground">{group.suggested_match.item_name}</div>
+                          <div className="line-clamp-1 text-xs text-muted-foreground" title={group.suggested_match.item_name}>{group.suggested_match.item_name}</div>
                         </div>
                       ) : (
                         <span className="text-sm text-muted-foreground">ยังไม่มีสินค้าแนะนำ</span>

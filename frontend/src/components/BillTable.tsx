@@ -18,6 +18,13 @@ interface Props {
   bills: Bill[]
   loading?: boolean
   onRowClick: (id: string) => void
+  showShopeeStatusColumn?: boolean
+  canManage?: boolean
+  canPermanentDelete?: boolean
+  onArchive?: (bill: Bill) => void
+  onRestore?: (bill: Bill) => void
+  onDelete?: (bill: Bill) => void
+  onPermanentDelete?: (bill: Bill) => void
 }
 
 export default function BillTable({ bills, loading, onRowClick }: Props) {
