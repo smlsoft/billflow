@@ -157,6 +157,7 @@ billflow/
 |---|---|
 | [current-state.md](current-state.md) | snapshot จาก code + server + production DB |
 | [deploy-instances.md](deploy-instances.md) | registry port/folder/container/tunnel ของแต่ละร้าน |
+| [billflow-main-sml-api-architecture.md](billflow-main-sml-api-architecture.md) | architecture + data flow diagram ของ BillFlow main + sml-api-bybos |
 | [phase1-test-checklist.md](phase1-test-checklist.md) | checklist สำหรับทดสอบ Phase 1 ก่อน demo/customer test |
 | [line-oa.md](line-oa.md) | LINE OA human inbox |
 | [email.md](email.md) | Email IMAP pipeline |
