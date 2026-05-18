@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  ExternalLink,
   Loader2,
   RefreshCcw,
   RefreshCw,
@@ -43,6 +44,16 @@ interface CatalogStats {
   error: number
   index_size: number
   embed_running: boolean
+  embed_status?: {
+    running: boolean
+    session_id?: string
+    started_at?: string
+    finished_at?: string
+    total: number
+    done: number
+    errors: number
+    error?: string
+  }
   sync_running?: boolean
   sync_status?: {
     running: boolean
@@ -67,6 +78,37 @@ interface InstanceSettingsStatus {
 
 type StatusFilter = '' | 'pending' | 'done' | 'error'
 interface FetchParams { page: number; filter: StatusFilter; query: string }
+
+function formatEmbedProgress(status: NonNullable<CatalogStats['embed_status']>): string | null {
+  if (!status.session_id && !status.started_at) return null
+  const processed = status.done + status.errors
+  const total = status.total || processed
+  const parts = [
+    total > 0 ? `${processed.toLocaleString()} / ${total.toLocaleString()} รายการ` : `${processed.toLocaleString()} รายการ`,
+  ]
+  if (status.errors > 0) parts.push(`ผิดพลาด ${status.errors.toLocaleString()}`)
+  if (status.running && status.started_at) {
+    const elapsedSec = Math.max(1, (Date.now() - new Date(status.started_at).getTime()) / 1000)
+    const speed = processed / elapsedSec
+    if (speed > 0 && total > processed) {
+      const etaSec = Math.ceil((total - processed) / speed)
+      parts.push(`ประมาณ ${formatDuration(etaSec)} ที่เหลือ`)
+    }
+  } else if (status.finished_at) {
+    parts.push(`เสร็จล่าสุด ${new Date(status.finished_at).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}`)
+  }
+  if (status.error) parts.push(status.error)
+  return parts.join(' · ')
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds} วินาที`
+  const mins = Math.ceil(seconds / 60)
+  if (mins < 60) return `${mins} นาที`
+  const hours = Math.floor(mins / 60)
+  const rest = mins % 60
+  return rest ? `${hours} ชม. ${rest} นาที` : `${hours} ชม.`
+}
 
 function Pagination({
   page,
@@ -381,6 +423,7 @@ export default function CatalogSettings() {
 
   const isEmbedBusy = embedding || (stats?.embed_running ?? false)
   const isSyncBusy = syncing || (stats?.sync_running ?? false)
+  const embedProgress = stats?.embed_status ? formatEmbedProgress(stats.embed_status) : null
 
   const tabs: Array<{ key: StatusFilter; label: string; count?: number }> = [
     { key: '', label: 'ทั้งหมด', count: stats?.total },
@@ -393,7 +436,7 @@ export default function CatalogSettings() {
     <div className="space-y-4">
       <PageHeader
         title={PAGE_TITLE.catalog}
-        description="รายการสินค้าจาก SML ที่ใช้จับคู่กับชื่อสินค้าจากอีเมล Shopee"
+        description="รายการสินค้าจาก SML ที่ BillFlow ใช้จับคู่กับชื่อสินค้าจาก Email และ Marketplace"
         actions={
           <>
             <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncBusy || pendingRestart}>
@@ -460,7 +503,7 @@ export default function CatalogSettings() {
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-2.5">
           <span className="inline-flex min-w-0 items-center gap-2.5">
             <BookOpen className="h-4 w-4 shrink-0 text-info" strokeWidth={2.25} />
-            <span className="font-medium text-foreground">Catalog คือฐานสินค้า SML สำหรับจับคู่กับชื่อจากอีเมล Shopee</span>
+            <span className="font-medium text-foreground">Catalog คือฐานสินค้า SML สำหรับจับคู่ชื่อสินค้าจาก Email และ Marketplace</span>
           </span>
           <span className="text-[11px] text-primary group-open:hidden">รายละเอียด</span>
           <span className="hidden text-[11px] text-muted-foreground group-open:inline">ย่อ</span>
@@ -471,7 +514,7 @@ export default function CatalogSettings() {
           <div className="min-w-0 flex-1 space-y-1.5">
             <p className="text-[13px] leading-relaxed text-muted-foreground">
               <span className="font-medium text-foreground">รายการสินค้าจาก SML</span>
-              ที่ BillFlow ใช้เทียบกับชื่อสินค้าจากอีเมล Shopee และแนะนำรหัสสินค้าในหน้าบิล
+              ที่ BillFlow ใช้เทียบกับชื่อสินค้าจาก Email, Shopee, Lazada และ TikTok แล้วแนะนำรหัสสินค้าในหน้าบิล
             </p>
             <div className="text-[12px] leading-relaxed text-muted-foreground">
               <span className="font-medium text-foreground">เริ่มใช้งานครั้งแรก:</span>
@@ -481,7 +524,7 @@ export default function CatalogSettings() {
               </span>
             </div>
             <p className="text-[12px] text-muted-foreground">
-              💡 ต่างจาก{' '}
+              ต่างจาก{' '}
               <Link to="/mappings" className="font-medium text-primary hover:underline">
                 ตารางจับคู่สินค้า
               </Link>{' '}
@@ -516,14 +559,33 @@ export default function CatalogSettings() {
           <StatChip label="พร้อมจับคู่" value={stats.embedded.toLocaleString()} variant="success" />
           <StatChip label="รอเตรียมข้อมูล" value={stats.pending.toLocaleString()} variant="warning" />
           <StatChip label="โหลดไว้ใช้งาน" value={stats.index_size.toLocaleString()} variant="primary" />
-          {stats.embed_running ? (
+          {stats.embed_running || embedProgress ? (
             <Card className="flex-1 border-primary/30 bg-primary/5">
               <CardContent className="flex items-center gap-3 px-4 py-3">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                {stats.embed_running ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                ) : (
+                  <Sparkles className="h-4 w-4 text-primary" />
+                )}
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-primary">กำลังเตรียมข้อมูลจับคู่…</p>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <p className="text-sm font-medium text-primary">
+                      {stats.embed_running ? 'กำลังเตรียมข้อมูลจับคู่…' : 'รอบเตรียมข้อมูลล่าสุด'}
+                    </p>
+                    {stats.embed_status?.session_id && (
+                      <a
+                        href={`https://openrouter.ai/logs?tab=sessions&session_id=${encodeURIComponent(stats.embed_status.session_id)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        OpenRouter session
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
                   <p className="text-[11px] text-muted-foreground">
-                    รายการสินค้าเยอะ อาจใช้เวลาหลายนาที · ปิดหน้านี้ได้ · ระบบอัปเดตสถานะให้เอง
+                    {embedProgress ?? 'รายการสินค้าเยอะ อาจใช้เวลาหลายนาที · ปิดหน้านี้ได้ · ระบบอัปเดตสถานะให้เอง'}
                   </p>
                 </div>
               </CardContent>

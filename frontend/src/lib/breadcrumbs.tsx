@@ -15,20 +15,20 @@ interface BreadcrumbDef {
 const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
   { pattern: '/dashboard', crumbs: [{ label: 'ภาพรวม' }] },
   { pattern: '/setup', crumbs: [{ label: 'เริ่มต้นใช้งาน' }] },
-  { pattern: '/bills', crumbs: [{ label: 'ใบสั่งซื้อ' }] },
-  { pattern: '/sales-orders', crumbs: [{ label: 'ใบสั่งขาย' }] },
-  { pattern: '/sale-invoices', crumbs: [{ label: 'ขายสินค้าและบริการ' }] },
+  { pattern: '/bills', crumbs: [{ label: 'งานฝั่งซื้อ' }, { label: 'ใบสั่งซื้อ' }] },
+  { pattern: '/sales-orders', crumbs: [{ label: 'งานฝั่งขาย' }, { label: 'ใบสั่งขาย' }] },
+  { pattern: '/sale-invoices', crumbs: [{ label: 'งานฝั่งขาย' }, { label: 'ขายสินค้าและบริการ' }] },
   {
     pattern: '/bills/:id',
-    crumbs: [{ label: 'ใบสั่งซื้อ', href: '/bills' }, { label: ':id', dynamic: true }],
+    crumbs: [{ label: 'งานฝั่งซื้อ' }, { label: 'ใบสั่งซื้อ', href: '/bills' }, { label: ':id', dynamic: true }],
   },
   {
     pattern: '/sales-orders/:id',
-    crumbs: [{ label: 'ใบสั่งขาย', href: '/sales-orders' }, { label: ':id', dynamic: true }],
+    crumbs: [{ label: 'งานฝั่งขาย' }, { label: 'ใบสั่งขาย', href: '/sales-orders' }, { label: ':id', dynamic: true }],
   },
   {
     pattern: '/sale-invoices/:id',
-    crumbs: [{ label: 'ขายสินค้าและบริการ', href: '/sale-invoices' }, { label: ':id', dynamic: true }],
+    crumbs: [{ label: 'งานฝั่งขาย' }, { label: 'ขายสินค้าและบริการ', href: '/sale-invoices' }, { label: ':id', dynamic: true }],
   },
   {
     pattern: '/import',
@@ -46,27 +46,55 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
     pattern: '/import/tiktok',
     crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'TikTok Excel' }],
   },
-  { pattern: '/mappings', crumbs: [{ label: 'ตารางจับคู่สินค้า' }] },
-  { pattern: '/settings', crumbs: [{ label: 'ตั้งค่า' }] },
+  {
+    pattern: '/messages',
+    crumbs: [{ label: 'แชทลูกค้า' }, { label: 'ข้อความลูกค้า' }],
+  },
+  { pattern: '/mappings', crumbs: [{ label: 'ข้อมูลหลัก' }, { label: 'ตารางจับคู่สินค้า' }] },
+  {
+    pattern: '/marketplace-aliases',
+    crumbs: [{ label: 'งานที่ต้องตรวจ' }, { label: 'สินค้ารอยืนยัน' }],
+  },
+  { pattern: '/settings', crumbs: [{ label: 'ตั้งค่าระบบ' }, { label: 'ตั้งค่าทั่วไป' }] },
   {
     pattern: '/settings/catalog',
-    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'สินค้าใน SML' }],
+    crumbs: [{ label: 'ข้อมูลหลัก' }, { label: 'สินค้าใน SML' }],
   },
   {
     pattern: '/settings/channels',
-    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'เส้นทางเอกสาร SML' }],
+    crumbs: [{ label: 'ตั้งค่าระบบ' }, { label: 'เส้นทางเอกสาร SML' }],
   },
   {
     pattern: '/settings/ai-usage',
-    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'การใช้งาน AI' }],
+    crumbs: [{ label: 'ตั้งค่าระบบ' }, { label: 'การใช้งาน AI' }],
   },
   {
     pattern: '/settings/instance',
-    crumbs: [{ label: 'ตั้งค่า', href: '/settings' }, { label: 'การเชื่อมต่อระบบ' }],
+    crumbs: [{ label: 'ตั้งค่าระบบ' }, { label: 'การเชื่อมต่อระบบ' }],
   },
   {
     pattern: '/settings/email',
     crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'กล่องอีเมลรับบิล' }],
+  },
+  {
+    pattern: '/settings/line-oa',
+    crumbs: [{ label: 'แชทลูกค้า' }, { label: 'บัญชี LINE OA' }],
+  },
+  {
+    pattern: '/settings/quick-replies',
+    crumbs: [{ label: 'แชทลูกค้า' }, { label: 'ข้อความสำเร็จรูป' }],
+  },
+  {
+    pattern: '/settings/chat-tags',
+    crumbs: [{ label: 'แชทลูกค้า' }, { label: 'ป้ายลูกค้า' }],
+  },
+  {
+    pattern: '/settings/old-data',
+    crumbs: [{ label: 'ตั้งค่าระบบ' }, { label: 'จัดการข้อมูลเก่า' }],
+  },
+  {
+    pattern: '/settings/users',
+    crumbs: [{ label: 'ตั้งค่าระบบ' }, { label: 'ผู้ใช้ระบบ' }],
   },
   { pattern: '/logs', crumbs: [{ label: 'ประวัติการทำงาน' }] },
 ]

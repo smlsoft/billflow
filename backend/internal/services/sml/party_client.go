@@ -30,6 +30,7 @@ type PartyConfig struct {
 type Party struct {
 	Code      string `json:"code"`
 	Name      string `json:"name"`
+	Name1     string `json:"name_1,omitempty"`
 	TaxID     string `json:"tax_id,omitempty"`
 	Telephone string `json:"telephone,omitempty"`
 	Address   string `json:"address,omitempty"`
@@ -70,7 +71,12 @@ type partyListResponse struct {
 	Message string  `json:"message"`
 	Code    string  `json:"code"`
 	Data    []Party `json:"data"`
-	Pages   struct {
+	Meta    struct {
+		Total int `json:"total"`
+		Page  int `json:"page"`
+		Size  int `json:"size"`
+	} `json:"meta"`
+	Pages struct {
 		Size        int `json:"size"`
 		Page        int `json:"page"`
 		TotalRecord int `json:"total_record"`
@@ -122,6 +128,9 @@ func (c *PartyClient) fetchPage(ctx context.Context, endpoint string, page, size
 		}
 		return nil, fmt.Errorf("sml %s page %d: success=false code=%s message=%s", endpoint, page, pr.Code, detail)
 	}
+	for i := range pr.Data {
+		normalizeParty(&pr.Data[i])
+	}
 	return &pr, nil
 }
 
@@ -135,10 +144,21 @@ func (c *PartyClient) fetchAll(ctx context.Context, endpoint string) ([]Party, e
 			return nil, err
 		}
 		out = append(out, pr.Data...)
-		if len(out) >= pr.Pages.TotalRecord || len(pr.Data) == 0 {
+		total := pr.Pages.TotalRecord
+		if total == 0 {
+			total = pr.Meta.Total
+		}
+		maxPage := pr.Pages.MaxPage
+		if maxPage == 0 && pr.Meta.Size > 0 {
+			maxPage = (pr.Meta.Total + pr.Meta.Size - 1) / pr.Meta.Size
+		}
+		if len(pr.Data) == 0 {
 			break
 		}
-		if page >= pr.Pages.MaxPage {
+		if total > 0 && len(out) >= total {
+			break
+		}
+		if maxPage > 0 && page >= maxPage {
 			break
 		}
 	}
@@ -206,7 +226,14 @@ func (c *PartyClient) getOne(ctx context.Context, endpoint, code string) (*Party
 	if !pr.Success || pr.Data.Code == "" {
 		return nil, nil
 	}
+	normalizeParty(&pr.Data)
 	return &pr.Data, nil
+}
+
+func normalizeParty(p *Party) {
+	if p.Name == "" {
+		p.Name = p.Name1
+	}
 }
 
 // IsConfigured reports whether the client has the SML 248 base URL + headers

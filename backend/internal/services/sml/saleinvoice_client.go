@@ -72,11 +72,12 @@ type ProductInfo struct {
 type productV4Response struct {
 	Success bool `json:"success"`
 	Data    struct {
-		Code           string `json:"code"`
-		UnitStandard   string `json:"unit_standard"`
-		StartSaleUnit  string `json:"start_sale_unit"`
-		StartSaleWH    string `json:"start_sale_wh"`
-		StartSaleShelf string `json:"start_sale_shelf"`
+		Code             string `json:"code"`
+		UnitStandard     string `json:"unit_standard"`
+		UnitStandardName string `json:"unit_standard_name"`
+		StartSaleUnit    string `json:"start_sale_unit"`
+		StartSaleWH      string `json:"start_sale_wh"`
+		StartSaleShelf   string `json:"start_sale_shelf"`
 	} `json:"data"`
 }
 
@@ -219,7 +220,7 @@ type InvoiceResponse struct {
 	Status  string `json:"status"`  // v3 format: "success" | "error"
 	DocNo   string `json:"doc_no"`  // old restapi format
 	Message string `json:"message"`
-	Error   bool   `json:"error,omitempty"`
+	Error   any    `json:"error,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Data    struct {
 		DocNo string `json:"doc_no"`
@@ -237,6 +238,13 @@ func (r *InvoiceResponse) GetDocNo() string {
 		return r.Data.DocNo
 	}
 	return r.DocNo
+}
+
+func (r *InvoiceResponse) GetMessage() string {
+	if r.Message != "" {
+		return r.Message
+	}
+	return apiErrorMessage(r.Error)
 }
 
 // CreateInvoice posts a saleinvoice to SML and returns the response.

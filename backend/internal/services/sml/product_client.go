@@ -58,34 +58,41 @@ type ProductPriceFormula struct {
 // Fields use omitempty for optional values so the JSON payload matches what
 // SML accepts; required fields are always included.
 type CreateProductRequest struct {
-	Code           string                `json:"code"`
-	Name           string                `json:"name"`
-	Units          []ProductUnit         `json:"units"`
-	NameEng        string                `json:"name_eng,omitempty"`
-	NameEng2       string                `json:"name_eng_2,omitempty"`
-	TaxType        int                   `json:"tax_type"`
-	ItemType       int                   `json:"item_type"`
-	UnitType       int                   `json:"unit_type"`
-	UnitCost       string                `json:"unit_cost,omitempty"`
-	UnitStandard   string                `json:"unit_standard,omitempty"`
-	ItemCategory   string                `json:"item_category,omitempty"`
-	CategoryName   string                `json:"category_name,omitempty"`
-	GroupMain      string                `json:"group_main,omitempty"`
-	GroupMainName  string                `json:"group_main_name,omitempty"`
-	GroupSub       string                `json:"group_sub,omitempty"`
-	PurchasePoint  int                   `json:"purchase_point"`
-	PriceFormulas  []ProductPriceFormula `json:"price_formulas,omitempty"`
+	Code          string                `json:"code"`
+	Name          string                `json:"name"`
+	Units         []ProductUnit         `json:"units"`
+	NameEng       string                `json:"name_eng,omitempty"`
+	NameEng2      string                `json:"name_eng_2,omitempty"`
+	TaxType       int                   `json:"tax_type"`
+	ItemType      int                   `json:"item_type"`
+	UnitType      int                   `json:"unit_type"`
+	UnitCost      string                `json:"unit_cost,omitempty"`
+	UnitStandard  string                `json:"unit_standard,omitempty"`
+	ItemCategory  string                `json:"item_category,omitempty"`
+	CategoryName  string                `json:"category_name,omitempty"`
+	GroupMain     string                `json:"group_main,omitempty"`
+	GroupMainName string                `json:"group_main_name,omitempty"`
+	GroupSub      string                `json:"group_sub,omitempty"`
+	PurchasePoint int                   `json:"purchase_point"`
+	PriceFormulas []ProductPriceFormula `json:"price_formulas,omitempty"`
 }
 
 // CreateProductResponse handles both success and error shapes from the v3 API.
 type CreateProductResponse struct {
 	Success bool   `json:"success"`
-	Error   bool   `json:"error,omitempty"`
+	Error   any    `json:"error,omitempty"`
 	Code    string `json:"code,omitempty"` // error code on error path
 	Message string `json:"message,omitempty"`
 	Data    struct {
 		Code string `json:"code"` // SML-assigned product code (may differ from request)
 	} `json:"data"`
+}
+
+func (r *CreateProductResponse) GetMessage() string {
+	if r.Message != "" {
+		return r.Message
+	}
+	return apiErrorMessage(r.Error)
 }
 
 // ─── Create ───────────────────────────────────────────────────────────────────
@@ -153,7 +160,7 @@ func (c *ProductClient) CreateProduct(req CreateProductRequest) (int, *CreatePro
 			c.logger.Warn("sml_product_create_rejected",
 				zap.Int("status_code", resp.StatusCode),
 				zap.String("error_code", r.Code),
-				zap.String("message", r.Message),
+				zap.String("message", r.GetMessage()),
 				zap.Int64("duration_ms", durMs),
 			)
 		}

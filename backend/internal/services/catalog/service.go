@@ -31,6 +31,8 @@ type SMLCatalogService struct {
 	logger     *zap.Logger
 	// Background embed state
 	embedRunning atomic.Int32
+	embedMu      sync.RWMutex
+	embedStatus  EmbedStatus
 	// Background sync state. Full SML catalog sync can take minutes, so the
 	// HTTP handler starts it asynchronously and reports progress via stats.
 	syncRunning atomic.Int32
@@ -43,6 +45,17 @@ type SyncStatus struct {
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	Count      int        `json:"count"`
+	Error      string     `json:"error,omitempty"`
+}
+
+type EmbedStatus struct {
+	Running    bool       `json:"running"`
+	SessionID  string     `json:"session_id,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Total      int        `json:"total"`
+	Done       int        `json:"done"`
+	Errors     int        `json:"errors"`
 	Error      string     `json:"error,omitempty"`
 }
 
@@ -90,7 +103,9 @@ type smlProductItem struct {
 	Name2                 string            `json:"name_2"`
 	Unit                  string            `json:"unit_standard"`
 	GroupCode             string            `json:"group_main"`
+	GroupCodeV1           string            `json:"group_code"`
 	BalanceQty            float64           `json:"balance_qty"`
+	Price                 float64           `json:"price"`
 	InventoryBarcode      []smlBarcodeItem  `json:"inventory_barcode"`
 	InventoryPriceFormula []smlPriceFormula `json:"inventory_price_formula"`
 }
@@ -100,7 +115,7 @@ type smlProductItem struct {
 func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 	url := fmt.Sprintf("%s/api/v1/ic/products", s.smlBaseURL)
 	total := 0
-	page := 0
+	page := 1
 
 	for {
 		pageURL := fmt.Sprintf("%s?page=%d", url, page)
@@ -136,6 +151,12 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 				fmt.Sscanf(it.InventoryPriceFormula[0].Price0, "%f", &price)
 			} else if len(it.InventoryBarcode) > 0 {
 				price = it.InventoryBarcode[0].Price
+			} else if it.Price > 0 {
+				price = it.Price
+			}
+			groupCode := it.GroupCode
+			if groupCode == "" {
+				groupCode = it.GroupCodeV1
 			}
 			ci := models.CatalogItem{
 				ItemCode:  it.Code,
@@ -143,7 +164,7 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 				ItemName2: it.Name2,
 				UnitCode:  unit,
 				Price:     &price,
-				GroupCode: it.GroupCode,
+				GroupCode: groupCode,
 			}
 			qty := it.BalanceQty
 			ci.BalanceQty = &qty
@@ -155,7 +176,10 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 			}
 		}
 
-		if len(items) == 0 || page >= maxPage {
+		if len(items) == 0 {
+			break
+		}
+		if maxPage > 0 && page >= maxPage {
 			break
 		}
 		page++
@@ -210,9 +234,11 @@ type singleProductV3Response struct {
 	Data    struct {
 		Code         string  `json:"code"`
 		Name         string  `json:"name"`
+		Name1        string  `json:"name_1"`
 		Name2        string  `json:"name_2"`
 		UnitStandard string  `json:"unit_standard"`
 		GroupMain    string  `json:"group_main"`
+		GroupCode    string  `json:"group_code"`
 		BalanceQty   float64 `json:"balance_qty"`
 		Units        []struct {
 			UnitCode string `json:"unit_code"`
@@ -273,12 +299,16 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	if unit == "" && len(d.Units) > 0 {
 		unit = d.Units[0].UnitCode
 	}
+	name := d.Name
+	if name == "" {
+		name = d.Name1
+	}
 	ci := models.CatalogItem{
 		ItemCode:  d.Code,
-		ItemName:  d.Name,
+		ItemName:  name,
 		ItemName2: d.Name2,
 		UnitCode:  unit,
-		GroupCode: d.GroupMain,
+		GroupCode: firstNonEmpty(d.GroupMain, d.GroupCode),
 	}
 	bq := d.BalanceQty
 	ci.BalanceQty = &bq
@@ -312,6 +342,11 @@ func parseProductV4Response(body []byte) (items []smlProductItem, currentPage, m
 	var wrapped struct {
 		Data  []smlProductItem `json:"data"`
 		Items []smlProductItem `json:"items"`
+		Meta  *struct {
+			Total int `json:"total"`
+			Page  int `json:"page"`
+			Size  int `json:"size"`
+		} `json:"meta"`
 		Pages *struct {
 			Page    int `json:"page"`
 			MaxPage int `json:"max_page"`
@@ -327,6 +362,12 @@ func parseProductV4Response(body []byte) (items []smlProductItem, currentPage, m
 	if wrapped.Pages != nil {
 		currentPage = wrapped.Pages.Page
 		maxPage = wrapped.Pages.MaxPage
+	}
+	if wrapped.Meta != nil {
+		currentPage = wrapped.Meta.Page
+		if wrapped.Meta.Size > 0 {
+			maxPage = (wrapped.Meta.Total + wrapped.Meta.Size - 1) / wrapped.Meta.Size
+		}
 	}
 	return items, currentPage, maxPage, nil
 }
@@ -445,12 +486,25 @@ func normalizeHeader(h string) string {
 	return h
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // -------------------------------------------------------------------
 // Embed operations
 // -------------------------------------------------------------------
 
 // EmbedProduct generates and stores embedding for a single item
 func (s *SMLCatalogService) EmbedProduct(embSvc *EmbeddingService, itemCode string) error {
+	return s.embedProductWithSession(embSvc, itemCode, newOpenRouterSessionID("catalog-embed-single", itemCode))
+}
+
+func (s *SMLCatalogService) embedProductWithSession(embSvc *EmbeddingService, itemCode, sessionID string) error {
 	item, err := s.repo.GetOne(itemCode)
 	if err != nil || item == nil {
 		return fmt.Errorf("item not found: %s", itemCode)
@@ -461,7 +515,7 @@ func (s *SMLCatalogService) EmbedProduct(embSvc *EmbeddingService, itemCode stri
 		text += " " + item.ItemName2
 	}
 
-	emb, err := embSvc.EmbedText(text)
+	emb, err := embSvc.EmbedTextWithSession(text, sessionID)
 	if err != nil {
 		_ = s.repo.SetEmbeddingError(itemCode)
 		return fmt.Errorf("embed %s: %w", itemCode, err)
@@ -479,21 +533,49 @@ func (s *SMLCatalogService) EmbedAllPending(embSvc *EmbeddingService) (int, int,
 	defer s.embedRunning.Store(0)
 
 	done, errs := 0, 0
+	sessionID := newOpenRouterSessionID("catalog-embed-all", "pending")
+	startedAt := time.Now()
+	total, _ := s.repo.CountPending()
+	s.setEmbedStatus(EmbedStatus{
+		Running:   true,
+		SessionID: sessionID,
+		StartedAt: &startedAt,
+		Total:     total,
+	})
+	defer func() {
+		finishedAt := time.Now()
+		status := s.EmbedStatus()
+		status.Running = false
+		status.FinishedAt = &finishedAt
+		status.Done = done
+		status.Errors = errs
+		s.setEmbedStatus(status)
+	}()
+	s.logger.Info("catalog: embed-all session started", zap.String("session_id", sessionID), zap.Int("total", total))
 	for {
 		batch, err := s.repo.GetPendingBatch(50)
 		if err != nil {
+			status := s.EmbedStatus()
+			status.Error = err.Error()
+			status.Done = done
+			status.Errors = errs
+			s.setEmbedStatus(status)
 			return done, errs, err
 		}
 		if len(batch) == 0 {
 			break
 		}
 		for _, item := range batch {
-			if err := s.EmbedProduct(embSvc, item.ItemCode); err != nil {
+			if err := s.embedProductWithSession(embSvc, item.ItemCode, sessionID); err != nil {
 				s.logger.Warn("catalog: embed error", zap.String("code", item.ItemCode), zap.Error(err))
 				errs++
 			} else {
 				done++
 			}
+			status := s.EmbedStatus()
+			status.Done = done
+			status.Errors = errs
+			s.setEmbedStatus(status)
 			time.Sleep(50 * time.Millisecond) // small pause to avoid bursting OpenRouter
 		}
 	}
@@ -504,6 +586,18 @@ func (s *SMLCatalogService) EmbedAllPending(embSvc *EmbeddingService) (int, int,
 // IsEmbedRunning returns true if background embedding is in progress
 func (s *SMLCatalogService) IsEmbedRunning() bool {
 	return s.embedRunning.Load() == 1
+}
+
+func (s *SMLCatalogService) EmbedStatus() EmbedStatus {
+	s.embedMu.RLock()
+	defer s.embedMu.RUnlock()
+	return s.embedStatus
+}
+
+func (s *SMLCatalogService) setEmbedStatus(status EmbedStatus) {
+	s.embedMu.Lock()
+	defer s.embedMu.Unlock()
+	s.embedStatus = status
 }
 
 // -------------------------------------------------------------------

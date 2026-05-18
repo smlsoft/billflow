@@ -108,7 +108,9 @@ func main() {
 	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, auditLogRepo, logger)
 
 	// Services
-	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel).WithUsageLogger(aiUsageRepo)
+	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel).
+		WithAppAttribution(cfg.OpenRouterAppTitle, cfg.OpenRouterAppReferer).
+		WithUsageLogger(aiUsageRepo)
 	mapperSvc := mapper.New(mappingRepo)
 	anomalySvc := anomaly.New(billRepo).WithCustomerLookup(billRepo)
 	insightSvc := insight.New(aiClient)
@@ -208,7 +210,9 @@ func main() {
 		"databaseName":   cfg.ShopeeSMLDatabase,
 	}
 	catalogSvc := catalog.NewSMLCatalogService(catalogRepo, cfg.ShopeeSMLURL, smlHeaders, logger)
-	embSvc := catalog.NewEmbeddingService(cfg.OpenRouterAPIKey).WithUsageLogger(aiUsageRepo)
+	embSvc := catalog.NewEmbeddingService(cfg.OpenRouterAPIKey).
+		WithAppAttribution(cfg.OpenRouterAppTitle, cfg.OpenRouterAppReferer).
+		WithUsageLogger(aiUsageRepo)
 	catalogIdx := catalog.NewCatalogIndex()
 	// Load existing embeddings into memory at startup
 	if err := catalogIdx.Reload(catalogRepo); err != nil {

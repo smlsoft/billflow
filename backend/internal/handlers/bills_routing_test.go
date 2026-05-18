@@ -32,9 +32,9 @@ func TestResolveEndpointUsesExplicitEndpointKeyword(t *testing.T) {
 			wantOverride: "http://sml.local/SMLJavaRESTService/v3/api/purchaseorder",
 		},
 		{
-			name:         "sale reserve keyword does not override url",
+			name:         "legacy sale reserve path now falls back to saleorder",
 			endpoint:     "/api/sale_reserve",
-			wantKind:     "sale_reserve",
+			wantKind:     "saleorder",
 			wantOverride: "",
 		},
 		{
@@ -69,7 +69,7 @@ func TestResolveEndpointFallsBackBySourceAndBillType(t *testing.T) {
 		{name: "tiktok excel sale defaults to saleorder", source: "tiktok", billType: "sale", wantKind: "saleorder"},
 		{name: "shopee shipped defaults to purchaseorder", source: "shopee_shipped", billType: "purchase", wantKind: "purchaseorder"},
 		{name: "purchase bill defaults to purchaseorder", source: "email", billType: "purchase", wantKind: "purchaseorder"},
-		{name: "line sale defaults to sale reserve", source: "line", billType: "sale", wantKind: "sale_reserve"},
+		{name: "line sale defaults to saleorder", source: "line", billType: "sale", wantKind: "saleorder"},
 	}
 
 	for _, tt := range tests {

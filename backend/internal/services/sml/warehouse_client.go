@@ -72,7 +72,12 @@ type warehousePageInfo struct {
 type warehouseListResponse struct {
 	Success bool              `json:"success"`
 	Data    []warehouseRecord `json:"data"`
-	Pages   warehousePageInfo `json:"pages"`
+	Meta    struct {
+		Total int `json:"total"`
+		Page  int `json:"page"`
+		Size  int `json:"size"`
+	} `json:"meta"`
+	Pages warehousePageInfo `json:"pages"`
 }
 
 type warehouseOneResponse struct {
@@ -82,15 +87,18 @@ type warehouseOneResponse struct {
 
 type warehouseRecord struct {
 	Code       string        `json:"code"`
+	Name       string        `json:"name"`
 	Name1      string        `json:"name_1"`
 	Name2      string        `json:"name_2"`
 	Status     int           `json:"status"`
 	BranchCode string        `json:"branch_code"`
 	Shelves    []shelfRecord `json:"shelf"`
+	ShelvesV1  []shelfRecord `json:"shelves"`
 }
 
 type shelfRecord struct {
 	Code          string `json:"code"`
+	Name          string `json:"name"`
 	Name1         string `json:"name_1"`
 	Name2         string `json:"name_2"`
 	WarehouseCode string `json:"whcode"`
@@ -103,8 +111,15 @@ func normalizeWarehouse(w warehouseRecord) Warehouse {
 	if name == "" {
 		name = w.Name2
 	}
-	shelves := make([]Shelf, 0, len(w.Shelves))
-	for _, s := range w.Shelves {
+	if name == "" {
+		name = w.Name
+	}
+	shelfRows := w.Shelves
+	if len(shelfRows) == 0 {
+		shelfRows = w.ShelvesV1
+	}
+	shelves := make([]Shelf, 0, len(shelfRows))
+	for _, s := range shelfRows {
 		shelves = append(shelves, normalizeShelf(s, w.Code))
 	}
 	return Warehouse{
@@ -122,6 +137,9 @@ func normalizeShelf(s shelfRecord, fallbackWH string) Shelf {
 	name := s.Name1
 	if name == "" {
 		name = s.Name2
+	}
+	if name == "" {
+		name = s.Name
 	}
 	wh := s.WarehouseCode
 	if wh == "" {
@@ -185,11 +203,20 @@ func (c *WarehouseClient) FetchAll(ctx context.Context) ([]Warehouse, error) {
 		if total == 0 {
 			total = wr.Pages.TotalRecord
 		}
+		if total == 0 {
+			total = wr.Meta.Total
+		}
 		maxPage := wr.Pages.PageCount
 		if maxPage == 0 {
 			maxPage = wr.Pages.MaxPage
 		}
-		if len(out) >= total || len(wr.Data) == 0 {
+		if maxPage == 0 && wr.Meta.Size > 0 {
+			maxPage = (wr.Meta.Total + wr.Meta.Size - 1) / wr.Meta.Size
+		}
+		if len(wr.Data) == 0 {
+			break
+		}
+		if total > 0 && len(out) >= total {
 			break
 		}
 		if maxPage > 0 && page >= maxPage {

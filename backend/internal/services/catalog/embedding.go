@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +38,8 @@ type indexedItem struct {
 
 type EmbeddingService struct {
 	apiKey      string
+	appTitle    string
+	appReferer  string
 	client      *http.Client
 	usageLogger interface {
 		Log(models.AIUsageEntry) error
@@ -57,20 +60,43 @@ func (e *EmbeddingService) WithUsageLogger(logger interface {
 	return e
 }
 
+func (e *EmbeddingService) WithAppAttribution(title, referer string) *EmbeddingService {
+	e.appTitle = strings.TrimSpace(title)
+	e.appReferer = strings.TrimSpace(referer)
+	return e
+}
+
 func (e *EmbeddingService) IsConfigured() bool {
 	return e.apiKey != ""
 }
 
 // EmbedText calls OpenRouter text-embedding-3-small and returns a 1536-dim vector.
 func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
+	return e.EmbedTextWithSession(text, "")
+}
+
+func (e *EmbeddingService) EmbedTextWithSession(text, sessionID string) ([]float64, error) {
 	if !e.IsConfigured() {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY not configured")
 	}
 	start := time.Now()
+	if sessionID == "" {
+		sessionID = newOpenRouterSessionID("catalog-embed", "embed-text")
+	}
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
-		"model": EmbeddingModel,
-		"input": text,
+		"model":      EmbeddingModel,
+		"input":      text,
+		"session_id": sessionID,
+		"user":       "billflow-backend",
+		"trace": map[string]interface{}{
+			"trace_id":        sessionID,
+			"trace_name":      "BillFlow catalog embedding",
+			"span_name":       "embed_text",
+			"generation_name": "catalog_embed:embed_text",
+			"environment":     "production-main",
+			"feature":         "catalog_embed",
+		},
 	})
 
 	req, err := http.NewRequest(http.MethodPost, embeddingAPIURL, bytes.NewReader(reqBody))
@@ -79,6 +105,7 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+e.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	e.setOpenRouterHeaders(req)
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -86,6 +113,7 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 			Provider: "openrouter", Model: EmbeddingModel, Feature: "catalog_embed",
 			Operation: "embed_text", Status: "error", Error: err.Error(),
 			DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+			Metadata:   map[string]interface{}{"session_id": sessionID},
 		})
 		return nil, fmt.Errorf("openrouter embedding call: %w", err)
 	}
@@ -97,6 +125,7 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 			Provider: "openrouter", Model: EmbeddingModel, Feature: "catalog_embed",
 			Operation: "embed_text", Status: "error", Error: fmt.Sprintf("status %d", resp.StatusCode),
 			DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+			Metadata:   map[string]interface{}{"session_id": sessionID},
 		})
 		return nil, fmt.Errorf("openrouter embedding %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -131,8 +160,46 @@ func (e *EmbeddingService) EmbedText(text string) ([]float64, error) {
 		Operation: "embed_text", Status: "success", InputTokens: inputTokens,
 		TotalTokens: totalTokens, EstimatedCostUSD: estimateEmbeddingCostUSD(inputTokens),
 		DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+		Metadata:   map[string]interface{}{"session_id": sessionID},
 	})
 	return result.Data[0].Embedding, nil
+}
+
+func (e *EmbeddingService) setOpenRouterHeaders(req *http.Request) {
+	title := e.appTitle
+	if title == "" {
+		title = "BillFlow"
+	}
+	req.Header.Set("X-OpenRouter-Title", title)
+	req.Header.Set("X-Title", title)
+	if e.appReferer != "" {
+		req.Header.Set("HTTP-Referer", e.appReferer)
+	}
+}
+
+func newOpenRouterSessionID(feature, operation string) string {
+	return fmt.Sprintf("billflow:%s:%s:%s", safeTracePart(feature), safeTracePart(operation), time.Now().UTC().Format("20060102T150405.000000000Z"))
+}
+
+func safeTracePart(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return "unknown"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == ':':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func (e *EmbeddingService) logUsage(entry models.AIUsageEntry) {

@@ -254,7 +254,7 @@ export default function Settings() {
       {/* Pre-deploy notice — let admin know /settings shows live state, not config */}
       <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
         <CheckCircle2 className="h-3 w-3" />
-        BillFlow Phase 1 · สถานะสด · ตั้งค่าจริงในแต่ละหน้าย่อย
+        BillFlow Main · สถานะสด · ตั้งค่าจริงในแต่ละหน้าย่อย
       </p>
     </div>
   )

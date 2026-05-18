@@ -134,7 +134,7 @@ type PurchaseOrderResponse struct {
 	Status  string `json:"status"` // v3: "success" | "error"
 	DocNo   string `json:"doc_no"`
 	Message string `json:"message"`
-	Error   bool   `json:"error,omitempty"`
+	Error   any    `json:"error,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Data    struct {
 		DocNo string `json:"doc_no"`
@@ -150,6 +150,13 @@ func (r *PurchaseOrderResponse) GetDocNo() string {
 		return r.Data.DocNo
 	}
 	return r.DocNo
+}
+
+func (r *PurchaseOrderResponse) GetMessage() string {
+	if r.Message != "" {
+		return r.Message
+	}
+	return apiErrorMessage(r.Error)
 }
 
 // ─── Create ───────────────────────────────────────────────────────────────────

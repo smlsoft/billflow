@@ -23,7 +23,7 @@ Swagger docs: http://192.168.2.109:8200/docs
 | `services/sml/warehouse_client.go` | path: `/SMLJavaRESTService/warehouse/v4` → `/api/v1/ic/warehouses` |
 | `services/catalog/service.go` | path: `/product/v4` → `/api/v1/ic/products` |
 | `config/config.go` | default `ShopeeSMLURL` ยังเป็น 192.168.2.248 แต่ .env บน server override แล้ว |
-| **server `.env`** | `SHOPEE_SML_URL=http://localhost:8200` ✅ |
+| **server `.env`** | `SHOPEE_SML_URL=http://172.24.0.1:8200` ✅ |
 
 ### Auth headers — ไม่ต้องเปลี่ยน
 
@@ -53,7 +53,7 @@ billflow ส่ง `guid` + `databaseName` — sml-api-bybos รับทั้�
 
 ```
 # ~/billflow/.env (ตั้งค่าแล้ว)
-SHOPEE_SML_URL=http://localhost:8200   ← sml-api-bybos
+SHOPEE_SML_URL=http://172.24.0.1:8200   ← sml-api-bybos ผ่าน Docker gateway จาก billflow-backend container
 SHOPEE_SML_GUID=smlx
 SHOPEE_SML_PROVIDER=SMLGOH
 SHOPEE_SML_CONFIG_FILE=SMLConfigSMLGOH.xml
@@ -94,5 +94,18 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
 - **Port**: 8200
 - **Health**: `curl http://localhost:8200/health` → `{"status":"ok"}`
 - **Swagger**: http://192.168.2.109:8200/docs
-- **Source**: `~/dev/sml-api-bybos` branch `feature/v1-unified-api`
+- **Source**: `/home/bosscatdog/sml-api-bybos`
 - **API_KEYS**: `dev-key,smlx`
+
+## Latest verification — 2026-05-18
+
+- Deployed `sml-api-bybos` to `192.168.2.109:8200`.
+- Swagger UI serves local embedded official Swagger UI assets, not CDN; OpenAPI is available at `/docs/openapi.json` and `/openapi.json`.
+- Live smoke passed: `/health`, `/health/ready` with `SML1_2026`, `/docs`, `/openapi.json`.
+- Master reads passed on `SML1_2026`: customers `1004`, suppliers `500`, products `3005`, warehouses `4`, shelves `4`.
+- Golden writes passed:
+  - SO `BF-APIQA-SO-260518-001` (`trans_flag=36`)
+  - SI `BF-APIQA-SI-260518-001` (`trans_flag=44`)
+  - PO `BF-APIQA-PO-260518-001` (`trans_flag=6`)
+- Product create passed: `BFAPIQAPRD260518001`; duplicate returns `duplicate_product_code`.
+- BillFlow main backend was rebuilt/restarted with the new response parser; startup cache shows `warehouse_cache_refreshed warehouses=4 shelves=4` and `party_cache_refreshed customers=1004 suppliers=500`.

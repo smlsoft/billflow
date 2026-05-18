@@ -18,6 +18,8 @@ type Client struct {
 	model         string
 	fallbackModel string
 	audioModel    string
+	appTitle      string
+	appReferer    string
 	httpClient    *http.Client
 	usageLogger   UsageLogger
 }
@@ -38,6 +40,12 @@ func NewClient(apiKey, model, fallbackModel, audioModel string) *Client {
 
 func (c *Client) WithUsageLogger(logger UsageLogger) *Client {
 	c.usageLogger = logger
+	return c
+}
+
+func (c *Client) WithAppAttribution(title, referer string) *Client {
+	c.appTitle = strings.TrimSpace(title)
+	c.appReferer = strings.TrimSpace(referer)
 	return c
 }
 
@@ -69,9 +77,12 @@ type ExtractedItem struct {
 }
 
 type openRouterRequest struct {
-	Model     string    `json:"model"`
-	Messages  []message `json:"messages"`
-	MaxTokens int       `json:"max_tokens,omitempty"`
+	Model     string                 `json:"model"`
+	Messages  []message              `json:"messages"`
+	MaxTokens int                    `json:"max_tokens,omitempty"`
+	SessionID string                 `json:"session_id,omitempty"`
+	User      string                 `json:"user,omitempty"`
+	Trace     map[string]interface{} `json:"trace,omitempty"`
 }
 
 type message struct {
@@ -245,6 +256,7 @@ func (c *Client) TranscribeAudio(audioData []byte) (string, error) {
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	c.setOpenRouterHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -307,6 +319,15 @@ func (c *Client) doRequest(feature, operation string, reqBody openRouterRequest)
 	if reqBody.MaxTokens == 0 {
 		reqBody.MaxTokens = 4096
 	}
+	if reqBody.SessionID == "" {
+		reqBody.SessionID = newOpenRouterSessionID(feature, operation)
+	}
+	if reqBody.User == "" {
+		reqBody.User = "billflow-backend"
+	}
+	if reqBody.Trace == nil {
+		reqBody.Trace = openRouterTrace(reqBody.SessionID, feature, operation)
+	}
 	start := time.Now()
 	data, err := json.Marshal(reqBody)
 	if err != nil {
@@ -319,12 +340,14 @@ func (c *Client) doRequest(feature, operation string, reqBody openRouterRequest)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	c.setOpenRouterHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.logUsage(models.AIUsageEntry{
 			Provider: "openrouter", Model: reqBody.Model, Feature: feature, Operation: operation,
 			Status: "error", Error: err.Error(), DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+			Metadata: map[string]interface{}{"session_id": reqBody.SessionID},
 		})
 		return "", fmt.Errorf("openrouter request: %w", err)
 	}
@@ -339,7 +362,10 @@ func (c *Client) doRequest(feature, operation string, reqBody openRouterRequest)
 			Provider: "openrouter", Model: reqBody.Model, Feature: feature, Operation: operation,
 			Status: "error", Error: fmt.Sprintf("status %d", resp.StatusCode),
 			DurationMs: intPtr(int(time.Since(start).Milliseconds())),
-			Metadata:   map[string]interface{}{"response": truncate(string(respData), 500)},
+			Metadata: map[string]interface{}{
+				"response":   truncate(string(respData), 500),
+				"session_id": reqBody.SessionID,
+			},
 		})
 		return "", fmt.Errorf("openrouter status %d: %s", resp.StatusCode, string(respData))
 	}
@@ -349,6 +375,7 @@ func (c *Client) doRequest(feature, operation string, reqBody openRouterRequest)
 		c.logUsage(models.AIUsageEntry{
 			Provider: "openrouter", Model: reqBody.Model, Feature: feature, Operation: operation,
 			Status: "error", Error: "parse response: " + err.Error(), DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+			Metadata: map[string]interface{}{"session_id": reqBody.SessionID},
 		})
 		return "", fmt.Errorf("parse openrouter response: %w", err)
 	}
@@ -356,12 +383,14 @@ func (c *Client) doRequest(feature, operation string, reqBody openRouterRequest)
 		c.logUsage(models.AIUsageEntry{
 			Provider: "openrouter", Model: reqBody.Model, Feature: feature, Operation: operation,
 			Status: "error", Error: "empty choices", DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+			Metadata: map[string]interface{}{"session_id": reqBody.SessionID},
 		})
 		return "", fmt.Errorf("empty choices from openrouter")
 	}
 	entry := models.AIUsageEntry{
 		Provider: "openrouter", Model: reqBody.Model, Feature: feature, Operation: operation,
 		Status: "success", DurationMs: intPtr(int(time.Since(start).Milliseconds())),
+		Metadata: map[string]interface{}{"session_id": reqBody.SessionID},
 	}
 	if orResp.Usage != nil {
 		entry.InputTokens = orResp.Usage.PromptTokens
@@ -386,6 +415,54 @@ func (c *Client) logUsage(entry models.AIUsageEntry) {
 		return
 	}
 	_ = c.usageLogger.Log(entry)
+}
+
+func (c *Client) setOpenRouterHeaders(req *http.Request) {
+	title := c.appTitle
+	if title == "" {
+		title = "BillFlow"
+	}
+	req.Header.Set("X-OpenRouter-Title", title)
+	req.Header.Set("X-Title", title)
+	if c.appReferer != "" {
+		req.Header.Set("HTTP-Referer", c.appReferer)
+	}
+}
+
+func newOpenRouterSessionID(feature, operation string) string {
+	return fmt.Sprintf("billflow:%s:%s:%s", safeTracePart(feature), safeTracePart(operation), time.Now().UTC().Format("20060102T150405.000000000Z"))
+}
+
+func openRouterTrace(sessionID, feature, operation string) map[string]interface{} {
+	return map[string]interface{}{
+		"trace_id":        sessionID,
+		"trace_name":      "BillFlow " + feature,
+		"span_name":       operation,
+		"generation_name": feature + ":" + operation,
+		"environment":     "production-main",
+		"feature":         feature,
+	}
+}
+
+func safeTracePart(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return "unknown"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == ':':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func estimateTokensFromRequest(req openRouterRequest) int {

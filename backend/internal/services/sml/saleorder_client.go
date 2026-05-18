@@ -119,7 +119,7 @@ type SaleOrderResponse struct {
 	Status  string `json:"status"`
 	DocNo   string `json:"doc_no"`
 	Message string `json:"message"`
-	Error   bool   `json:"error,omitempty"`
+	Error   any    `json:"error,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Data    struct {
 		DocNo string `json:"doc_no"`
@@ -135,6 +135,13 @@ func (r *SaleOrderResponse) GetDocNo() string {
 		return r.Data.DocNo
 	}
 	return r.DocNo
+}
+
+func (r *SaleOrderResponse) GetMessage() string {
+	if r.Message != "" {
+		return r.Message
+	}
+	return apiErrorMessage(r.Error)
 }
 
 // ─── Create ───────────────────────────────────────────────────────────────────

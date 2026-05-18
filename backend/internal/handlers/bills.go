@@ -707,7 +707,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req Retr
 		case err != nil:
 			errMsg = err.Error()
 		case resp != nil:
-			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.Message)
+			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
 		default:
 			errMsg = fmt.Sprintf("HTTP %d", statusCode)
 		}
@@ -807,7 +807,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req Re
 		case err != nil:
 			errMsg = err.Error()
 		case resp != nil:
-			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.Message)
+			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
 		default:
 			errMsg = fmt.Sprintf("HTTP %d", statusCode)
 		}
@@ -904,7 +904,7 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 		case err != nil:
 			errMsg = err.Error()
 		case resp != nil:
-			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.Message)
+			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
 		default:
 			errMsg = fmt.Sprintf("HTTP %d", statusCode)
 		}

@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   Bot,
   Coins,
+  ExternalLink,
   RefreshCw,
   Search,
   Zap,
@@ -56,6 +57,7 @@ interface UsageLog {
   duration_ms?: number
   status: 'success' | 'error'
   error?: string
+  metadata?: Record<string, unknown>
   created_at: string
 }
 
@@ -220,7 +222,7 @@ export default function AIUsage() {
     const q = query.trim().toLowerCase()
     if (!q) return logs
     return logs.filter((l) =>
-      `${l.model} ${l.feature} ${l.operation} ${l.bill_id ?? ''} ${l.error ?? ''}`.toLowerCase().includes(q),
+      `${l.model} ${l.feature} ${l.operation} ${sessionID(l) ?? ''} ${l.bill_id ?? ''} ${l.error ?? ''}`.toLowerCase().includes(q),
     )
   }, [logs, query])
 
@@ -285,7 +287,7 @@ export default function AIUsage() {
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="ค้นหา model / feature / bill"
+              placeholder="ค้นหา model / feature / session / bill"
               className="h-8 pl-8 text-xs"
             />
           </div>
@@ -298,6 +300,7 @@ export default function AIUsage() {
                   <TableHead>Model</TableHead>
                   <TableHead className="text-right">Tokens</TableHead>
                   <TableHead className="text-right">Cost</TableHead>
+                  <TableHead>Session</TableHead>
                   <TableHead>Bill</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -305,7 +308,7 @@ export default function AIUsage() {
               <TableBody>
                 {filteredLogs.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
                       ยังไม่มี request log
                     </TableCell>
                   </TableRow>
@@ -326,6 +329,9 @@ export default function AIUsage() {
                     <TableCell className="text-right text-xs tabular-nums">
                       {moneyTHB(l.estimated_cost_usd, rate)}
                       <div className="text-muted-foreground">{moneyUSD(l.estimated_cost_usd)}</div>
+                    </TableCell>
+                    <TableCell>
+                      <SessionLink log={l} />
                     </TableCell>
                     <TableCell>
                       {l.bill_id ? (
@@ -355,5 +361,28 @@ export default function AIUsage() {
         หน้านี้ใช้เพื่อคุมต้นทุนและตรวจว่า AI ถูกใช้กับงานไหนมากที่สุด ค่าใช้จ่ายเป็นประมาณการเพื่อบริหารงานภายใน
       </div>
     </div>
+  )
+}
+
+function sessionID(log: UsageLog): string {
+  const v = log.metadata?.session_id
+  return typeof v === 'string' && v.trim() ? v : ''
+}
+
+function SessionLink({ log }: { log: UsageLog }) {
+  const id = sessionID(log)
+  if (!id) return <span className="text-xs text-muted-foreground">—</span>
+  const href = `https://openrouter.ai/logs?tab=sessions&session_id=${encodeURIComponent(id)}`
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex max-w-[180px] items-center gap-1 font-mono text-xs text-primary hover:underline"
+      title={id}
+    >
+      <span className="truncate">{id}</span>
+      <ExternalLink className="h-3 w-3 shrink-0" />
+    </a>
   )
 }

@@ -108,7 +108,7 @@ export default function Dashboard() {
               <div>
                 <p className="text-sm font-semibold">ระบบพร้อมแล้ว แต่ยังไม่มีเอกสาร</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  เริ่มจากนำเข้า Shopee Excel หรือกดดึงอีเมล Shopee เพื่อสร้างใบสั่งซื้อเข้าคิวตรวจ
+                  เริ่มจากนำเข้าไฟล์ Marketplace หรือดึงอีเมลรับบิลเพื่อสร้างเอกสารเข้าคิวตรวจ
                 </p>
               </div>
             </div>
@@ -151,7 +151,7 @@ export default function Dashboard() {
                 </h2>
               </div>
               <div className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-                Phase 1+
+                Multi-channel
               </div>
             </div>
             <ActionCards stats={stats} loading={loading} />
@@ -199,8 +199,8 @@ export default function Dashboard() {
           <CardContent className="grid gap-3 sm:grid-cols-2">
             <FlowStep
               icon={FileText}
-              title="Email บิลซื้อ Shopee"
-              desc="กล่องอีเมลรับบิล → ใบสั่งซื้อ → ซื้อ -> ใบสั่งซื้อ"
+              title="Email รับบิล"
+              desc="กล่องอีเมลรับบิล → ตรวจสินค้า → ใบสั่งซื้อหรือเอกสารขายตามเส้นทางที่ตั้งไว้"
             />
             {ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS && (
               <FlowStep
@@ -309,7 +309,7 @@ function ActionCenter({
   if (!loading && setupStatus?.ready && totalBills === 0) {
     actions.push({
       title: 'ระบบพร้อมแล้ว เริ่มนำเข้าข้อมูลชุดแรก',
-      desc: ENABLE_SALES_ORDERS ? 'เริ่มจาก Marketplace Excel หรือดึงอีเมล Shopee เพื่อสร้างคิวตรวจ' : 'เริ่มจากตั้งค่ากล่องอีเมลแล้วดึงบิลซื้อ Shopee',
+      desc: ENABLE_SALES_ORDERS ? 'เริ่มจาก Marketplace Excel หรือดึงอีเมลรับบิลเพื่อสร้างคิวตรวจ' : 'เริ่มจากตั้งค่ากล่องอีเมลแล้วดึงบิลซื้อ',
       to: ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? '/import/shopee' : '/settings/email',
       cta: 'เริ่มงานแรก',
       tone: 'primary',

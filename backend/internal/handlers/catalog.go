@@ -95,6 +95,7 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 		return
 	}
 	syncStatus := h.catalogSvc.SyncStatus()
+	embedStatus := h.catalogSvc.EmbedStatus()
 	c.JSON(http.StatusOK, gin.H{
 		"total":         total,
 		"embedded":      done,
@@ -102,6 +103,7 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 		"error":         errCount,
 		"index_size":    h.catalogIdx.Size(),
 		"embed_running": h.catalogSvc.IsEmbedRunning(),
+		"embed_status":  embedStatus,
 		"sync_running":  syncStatus.Running,
 		"sync_status":   syncStatus,
 	})
@@ -489,8 +491,8 @@ func (h *CatalogHandler) CreateProduct(c *gin.Context) {
 		switch {
 		case err != nil:
 			errMsg = err.Error()
-		case smlResp != nil && smlResp.Message != "":
-			errMsg = fmt.Sprintf("SML rejected (HTTP %d): %s", statusCode, smlResp.Message)
+		case smlResp != nil && smlResp.GetMessage() != "":
+			errMsg = fmt.Sprintf("SML rejected (HTTP %d): %s", statusCode, smlResp.GetMessage())
 		default:
 			errMsg = fmt.Sprintf("SML rejected (HTTP %d)", statusCode)
 		}

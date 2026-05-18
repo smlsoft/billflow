@@ -52,6 +52,8 @@ type Config struct {
 	OpenRouterModel      string
 	OpenRouterFallback   string
 	OpenRouterAudioModel string
+	OpenRouterAppTitle   string
+	OpenRouterAppReferer string
 
 	// Mistral
 	MistralAPIKey string
@@ -119,6 +121,8 @@ func Load() *Config {
 		OpenRouterModel:        getEnv("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
 		OpenRouterFallback:     getEnv("OPENROUTER_FALLBACK_MODEL", "google/gemini-flash-1.5"),
 		OpenRouterAudioModel:   getEnv("OPENROUTER_AUDIO_MODEL", "openai/whisper-1"),
+		OpenRouterAppTitle:     getEnv("OPENROUTER_APP_TITLE", "BillFlow"),
+		OpenRouterAppReferer:   getEnv("OPENROUTER_APP_REFERER", getEnv("PUBLIC_BASE_URL", "")),
 		MistralAPIKey:          getEnv("MISTRAL_API_KEY", ""),
 		ShopeeSMLURL:           getEnv("SHOPEE_SML_URL", "http://192.168.2.248:8080"),
 		ShopeeSMLGUID:          getEnv("SHOPEE_SML_GUID", "SMLX"),
