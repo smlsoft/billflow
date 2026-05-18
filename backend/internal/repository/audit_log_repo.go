@@ -4,12 +4,22 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"billflow/internal/models"
 )
 
 type AuditLogRepo struct {
 	db *sql.DB
+}
+
+type AuditLogListResult struct {
+	Logs       []models.AuditLog
+	Total      *int
+	HasMore    bool
+	NextCursor string
+	Page       int
+	PageSize   int
 }
 
 func NewAuditLogRepo(db *sql.DB) *AuditLogRepo {
@@ -42,13 +52,17 @@ func (r *AuditLogRepo) Log(e models.AuditEntry) error {
 	return err
 }
 
-// List returns audit logs with optional filters, newest first.
-func (r *AuditLogRepo) List(f models.AuditLogFilter) ([]models.AuditLog, int, error) {
+// List returns audit logs with optional filters, newest first. It supports both
+// legacy page/offset pagination and production keyset pagination via cursor.
+func (r *AuditLogRepo) List(f models.AuditLogFilter) (*AuditLogListResult, error) {
 	if f.Page < 1 {
 		f.Page = 1
 	}
 	if f.PageSize < 1 || f.PageSize > 200 {
 		f.PageSize = 50
+	}
+	if f.Limit < 1 || f.Limit > 200 {
+		f.Limit = f.PageSize
 	}
 
 	where := "WHERE 1=1"
@@ -86,45 +100,80 @@ func (r *AuditLogRepo) List(f models.AuditLogFilter) ([]models.AuditLog, int, er
 		n++
 	}
 
-	var total int
-	if err := r.db.QueryRow("SELECT COUNT(*) FROM audit_logs a "+where, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("audit count: %w", err)
+	var total *int
+	legacyOffset := !f.CursorMode && !f.IncludeTotal
+	if f.IncludeTotal || legacyOffset {
+		var t int
+		if err := r.db.QueryRow("SELECT COUNT(*) FROM audit_logs a "+where, args...).Scan(&t); err != nil {
+			return nil, fmt.Errorf("audit count: %w", err)
+		}
+		total = &t
 	}
 
+	useCursor := f.CursorMode
+	if f.Cursor != "" {
+		cursorTime, cursorID, err := decodeTimeIDCursor(f.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		where += fmt.Sprintf(" AND (a.created_at, a.id) < ($%d::timestamptz, $%d::uuid)", n, n+1)
+		args = append(args, cursorTime, cursorID)
+		n += 2
+	}
+
+	limit := f.PageSize
+	if useCursor {
+		limit = f.Limit
+	}
+	queryLimit := limit
+	if useCursor {
+		queryLimit = limit + 1
+	}
 	query := `SELECT a.id, a.user_id, COALESCE(u.name, ''), COALESCE(u.email, ''), COALESCE(u.role, ''),
 	                 a.action, a.target_id, a.source, a.level, a.duration_ms, a.trace_id, a.detail, a.created_at
 	          FROM audit_logs a
 	          LEFT JOIN users u ON u.id = a.user_id ` +
-		where + fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", n, n+1)
-	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
+		where + fmt.Sprintf(" ORDER BY a.created_at DESC, a.id DESC LIMIT $%d", n)
+	args = append(args, queryLimit)
+	if !useCursor {
+		query += fmt.Sprintf(" OFFSET $%d", n+1)
+		args = append(args, (f.Page-1)*f.PageSize)
+	}
 
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("audit list: %w", err)
+		return nil, fmt.Errorf("audit list: %w", err)
 	}
 	defer rows.Close()
 
 	var logs []models.AuditLog
 	for rows.Next() {
-		var l models.AuditLog
-		var source, traceID sql.NullString
-		var detailRaw []byte
-		var actorName, actorEmail, actorRole string
-		if err := rows.Scan(&l.ID, &l.UserID, &actorName, &actorEmail, &actorRole,
-			&l.Action, &l.TargetID,
-			&source, &l.Level, &l.DurationMs, &traceID,
-			&detailRaw, &l.CreatedAt); err != nil {
-			return nil, 0, err
-		}
-		l.Source = source.String
-		l.TraceID = traceID.String
-		l.Actor = buildAuditActor(l.UserID, actorName, actorEmail, actorRole, l.Source)
-		if detailRaw != nil {
-			l.Detail = json.RawMessage(detailRaw)
+		l, err := scanAuditLog(rows)
+		if err != nil {
+			return nil, err
 		}
 		logs = append(logs, l)
 	}
-	return logs, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	hasMore := len(logs) > limit
+	if hasMore {
+		logs = logs[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(logs) > 0 {
+		last := logs[len(logs)-1]
+		nextCursor = encodeTimeIDCursor(last.CreatedAt, last.ID)
+	}
+	return &AuditLogListResult{
+		Logs:       logs,
+		Total:      total,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
+		Page:       f.Page,
+		PageSize:   limit,
+	}, nil
 }
 
 // ListByTarget returns audit_log rows whose target_id matches, oldest-first.
@@ -150,25 +199,41 @@ func (r *AuditLogRepo) ListByTarget(targetID string) ([]models.AuditLog, error) 
 
 	var out []models.AuditLog
 	for rows.Next() {
-		var l models.AuditLog
-		var source, traceID sql.NullString
-		var detailRaw []byte
-		var actorName, actorEmail, actorRole string
-		if err := rows.Scan(&l.ID, &l.UserID, &actorName, &actorEmail, &actorRole,
-			&l.Action, &l.TargetID,
-			&source, &l.Level, &l.DurationMs, &traceID,
-			&detailRaw, &l.CreatedAt); err != nil {
+		l, err := scanAuditLog(rows)
+		if err != nil {
 			return nil, err
-		}
-		l.Source = source.String
-		l.TraceID = traceID.String
-		l.Actor = buildAuditActor(l.UserID, actorName, actorEmail, actorRole, l.Source)
-		if detailRaw != nil {
-			l.Detail = json.RawMessage(detailRaw)
 		}
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+type auditScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanAuditLog(s auditScanner) (models.AuditLog, error) {
+	var l models.AuditLog
+	var source, traceID sql.NullString
+	var detailRaw []byte
+	var actorName, actorEmail, actorRole string
+	if err := s.Scan(&l.ID, &l.UserID, &actorName, &actorEmail, &actorRole,
+		&l.Action, &l.TargetID,
+		&source, &l.Level, &l.DurationMs, &traceID,
+		&detailRaw, &l.CreatedAt); err != nil {
+		return l, err
+	}
+	l.Source = source.String
+	l.TraceID = traceID.String
+	l.Actor = buildAuditActor(l.UserID, actorName, actorEmail, actorRole, l.Source)
+	if detailRaw != nil {
+		l.Detail = json.RawMessage(detailRaw)
+	}
+	return l, nil
+}
+
+func auditCursorForTest(t time.Time, id string) string {
+	return encodeTimeIDCursor(t, id)
 }
 
 func buildAuditActor(userID *string, name, email, role, source string) *models.AuditActor {

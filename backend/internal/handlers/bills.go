@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -398,24 +399,50 @@ func (h *BillHandler) List(c *gin.Context) {
 	if f.PerPage > 0 {
 		f.PageSize = f.PerPage
 	}
+	f.CursorMode = c.Query("cursor") != "" || c.Query("limit") != ""
+	if v := c.Query("include_total"); v != "" {
+		f.IncludeTotal, _ = strconv.ParseBool(v)
+	}
 
-	bills, total, err := h.billRepo.List(f)
+	result, err := h.billRepo.List(f)
 	if err != nil {
 		h.log.Error("List bills", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	if bills == nil {
-		bills = []models.Bill{}
+	if result.Bills == nil {
+		result.Bills = []models.Bill{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data":      bills,
-		"total":     total,
-		"page":      f.Page,
-		"page_size": f.PageSize,
-		"per_page":  f.PageSize,
-	})
+	resp := gin.H{
+		"data":        result.Bills,
+		"page":        result.Page,
+		"page_size":   result.PageSize,
+		"per_page":    result.PageSize,
+		"limit":       result.PageSize,
+		"has_more":    result.HasMore,
+		"next_cursor": result.NextCursor,
+	}
+	if result.Total != nil {
+		resp["total"] = *result.Total
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// GET /api/bills/counts
+func (h *BillHandler) Counts(c *gin.Context) {
+	var f models.BillListFilter
+	if err := c.ShouldBindQuery(&f); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	counts, err := h.billRepo.QueueCounts(f)
+	if err != nil {
+		h.log.Error("Bill counts", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, counts)
 }
 
 // GET /api/bills/:id
@@ -490,6 +517,81 @@ func (h *BillHandler) Get(c *gin.Context) {
 	}
 	// Fallback if marshal/unmarshal hiccups — return the bill alone.
 	c.JSON(http.StatusOK, bill)
+}
+
+type archiveBillRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *BillHandler) Archive(c *gin.Context) {
+	id := c.Param("id")
+	var req archiveBillRequest
+	_ = c.ShouldBindJSON(&req)
+	if err := h.billRepo.Archive(id, c.GetString("user_id"), req.Reason); err != nil {
+		h.log.Error("Archive bill", zap.String("bill", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "archive failed"})
+		return
+	}
+	if h.auditRepo != nil {
+		billID := id
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "bill_archived",
+			TargetID: &billID,
+			UserID:   userID,
+			Source:   "system",
+			Level:    "info",
+			Detail: map[string]interface{}{
+				"reason": req.Reason,
+			},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *BillHandler) Restore(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.billRepo.Restore(id); err != nil {
+		h.log.Error("Restore bill", zap.String("bill", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "restore failed"})
+		return
+	}
+	if h.auditRepo != nil {
+		billID := id
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "bill_restored",
+			TargetID: &billID,
+			UserID:   userID,
+			Source:   "system",
+			Level:    "info",
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *BillHandler) Delete(c *gin.Context) {
+	id := c.Param("id")
+	var body struct {
+		Confirm string `json:"confirm"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if body.Confirm != "DELETE" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "confirm must be DELETE"})
+		return
+	}
+	if err := h.billRepo.Delete(id); err != nil {
+		h.log.Error("Delete bill", zap.String("bill", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "delete failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // mapSourceToChannel mirrors the same logic the retry handler uses to look
@@ -724,7 +826,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req Retr
 	}
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
-	h.recordSuccess(c, id, bill.Source, reqJSON, respJSON, docNo, start)
+	h.recordSuccess(c, id, bill.Source, respJSON, docNo, "SaleOrder", start)
 	c.JSON(http.StatusOK, gin.H{"message": "bill sent to SML (saleorder)", "doc_no": docNo})
 }
 
@@ -822,7 +924,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req Re
 	}
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
-	h.recordSuccess(c, id, bill.Source, reqJSON, respJSON, docNo, start)
+	h.recordSuccess(c, id, bill.Source, respJSON, docNo, "SaleInvoice", start)
 	c.JSON(http.StatusOK, gin.H{"message": "bill sent to SML (saleinvoice)", "doc_no": docNo})
 }
 
@@ -922,7 +1024,7 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 	}
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
-	h.recordSuccess(c, id, bill.Source, reqJSON, respJSON, docNo, start)
+	h.recordSuccess(c, id, bill.Source, respJSON, docNo, "PurchaseOrder", start)
 	c.JSON(http.StatusOK, gin.H{"message": "bill sent to SML (purchaseorder)", "doc_no": docNo})
 }
 
@@ -1211,10 +1313,12 @@ func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON [
 			TraceID:    c.GetString("trace_id"),
 			DurationMs: &durMs,
 			Detail: map[string]interface{}{
-				"sml_payload": json.RawMessage(reqJSON),
-				"error":       errMsg,
-				"route":       route,
-				"via":         "retry",
+				"doc_no":     docNoAttempted,
+				"error":      errMsg,
+				"error_code": inferSMLFailureCode(rawErr),
+				"message":    rawErr,
+				"route":      route,
+				"via":        "retry",
 			},
 		})
 	}
@@ -1224,7 +1328,7 @@ func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON [
 	c.JSON(http.StatusBadGateway, gin.H{"error": "SML send failed: " + errMsg})
 }
 
-func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, reqJSON, respJSON []byte, docNo string, start time.Time) {
+func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, respJSON []byte, docNo, route string, start time.Time) {
 	if h.auditRepo == nil {
 		return
 	}
@@ -1243,13 +1347,35 @@ func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, reqJSON, 
 		TraceID:    c.GetString("trace_id"),
 		DurationMs: &durMs,
 		Detail: map[string]interface{}{
-			"doc_no":       docNo,
-			"sml_payload":  json.RawMessage(reqJSON),
-			"sml_response": json.RawMessage(respJSON),
-			"via":          "retry",
+			"doc_no":        docNo,
+			"route":         route,
+			"response_size": len(respJSON),
+			"via":           "retry",
 		},
 	})
 	h.log.Info("Retry: bill sent", zap.String("bill", id), zap.String("doc", docNo))
+}
+
+func inferSMLFailureCode(msg string) string {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "duplicate") || strings.Contains(lower, "already exists"):
+		return "duplicate_doc_no"
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline"):
+		return "timeout"
+	case strings.Contains(lower, "connection refused") || strings.Contains(lower, "eof"):
+		return "connection_failed"
+	case strings.Contains(lower, "warehouse") || strings.Contains(lower, "wh_code") || strings.Contains(lower, "shelf"):
+		return "warehouse_invalid"
+	case strings.Contains(lower, "customer") || strings.Contains(lower, "supplier") || strings.Contains(lower, "party"):
+		return "party_invalid"
+	case strings.Contains(lower, "item") || strings.Contains(lower, "unit"):
+		return "item_invalid"
+	case strings.Contains(lower, "vat") || strings.Contains(lower, "tax"):
+		return "vat_invalid"
+	default:
+		return "sml_failed"
+	}
 }
 
 // ─── Item edit ───────────────────────────────────────────────────────────────

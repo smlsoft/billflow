@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"billflow/internal/models"
 	"github.com/lib/pq"
@@ -12,6 +13,24 @@ import (
 
 type BillRepo struct {
 	db *sql.DB
+}
+
+type BillListResult struct {
+	Bills      []models.Bill
+	Total      *int
+	HasMore    bool
+	NextCursor string
+	Page       int
+	PageSize   int
+}
+
+type BillQueueCounts struct {
+	NeedsReview int `json:"needs_review"`
+	Pending     int `json:"pending"`
+	Sent        int `json:"sent"`
+	Failed      int `json:"failed"`
+	Skipped     int `json:"skipped"`
+	Total       int `json:"total"`
 }
 
 func NewBillRepo(db *sql.DB) *BillRepo {
@@ -88,12 +107,14 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	err := r.db.QueryRow(
 		`SELECT id, bill_type, source, status, document_route, raw_data, sml_doc_no,
 		        sml_payload, sml_response, ai_confidence, anomalies,
-		        error_msg, created_by, created_at, sent_at, remark
+		        error_msg, created_by, created_at, sent_at, archived_at, archived_by,
+		        archive_reason, remark
 		 FROM bills WHERE id = $1`, id,
 	).Scan(
 		&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData,
 		&b.SMLDocNo, &smlPayloadRaw, &smlResponseRaw, &b.AIConfidence,
-		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt, &b.Remark,
+		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt,
+		&b.ArchivedAt, &b.ArchivedBy, &b.ArchiveReason, &b.Remark,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -118,18 +139,120 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	return b, nil
 }
 
-func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
+func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	if f.Page < 1 {
 		f.Page = 1
 	}
 	if f.PageSize < 1 || f.PageSize > 100 {
 		f.PageSize = 20
 	}
+	if f.Limit < 1 || f.Limit > 100 {
+		f.Limit = f.PageSize
+	}
 
+	where, args, argN := billWhere(f)
+	var total *int
+	legacyOffset := !f.CursorMode && !f.IncludeTotal
+	if f.IncludeTotal || legacyOffset {
+		var t int
+		if err := r.db.QueryRow("SELECT COUNT(*) FROM bills b "+where, args...).Scan(&t); err != nil {
+			return nil, fmt.Errorf("count: %w", err)
+		}
+		total = &t
+	}
+
+	useCursor := f.CursorMode
+	if f.Cursor != "" {
+		cursorTime, cursorID, err := decodeTimeIDCursor(f.Cursor)
+		if err != nil {
+			return nil, err
+		}
+		where += fmt.Sprintf(" AND (b.created_at, b.id) < ($%d::timestamptz, $%d::uuid)", argN, argN+1)
+		args = append(args, cursorTime, cursorID)
+		argN += 2
+	}
+	limit := f.PageSize
+	if useCursor {
+		limit = f.Limit
+	}
+	queryLimit := limit
+	if useCursor {
+		queryLimit = limit + 1
+	}
+	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
+	                 b.anomalies, b.error_msg, b.created_at, b.sent_at,
+	                 b.archived_at, b.archived_by, b.archive_reason,
+	                 COALESCE(SUM(bi.qty * bi.price), 0) AS total_amount,
+	                 COUNT(bi.id) AS item_count
+	          FROM bills b
+	          LEFT JOIN bill_items bi ON bi.bill_id = b.id
+	          ` + where + `
+	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
+	                   b.anomalies, b.error_msg, b.created_at, b.sent_at, b.archived_at, b.archived_by, b.archive_reason
+	          ORDER BY b.created_at DESC, b.id DESC` +
+		fmt.Sprintf(" LIMIT $%d", argN)
+	args = append(args, queryLimit)
+	if !useCursor {
+		query += fmt.Sprintf(" OFFSET $%d", argN+1)
+		args = append(args, (f.Page-1)*f.PageSize)
+	}
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("List bills: %w", err)
+	}
+	defer rows.Close()
+
+	var bills []models.Bill
+	for rows.Next() {
+		var b models.Bill
+		var anomaliesRaw []byte
+		var itemCount int
+		if err := rows.Scan(
+			&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData, &b.SMLDocNo, &b.AIConfidence,
+			&anomaliesRaw, &b.ErrorMsg, &b.CreatedAt, &b.SentAt, &b.ArchivedAt, &b.ArchivedBy, &b.ArchiveReason,
+			&b.TotalAmount, &itemCount,
+		); err != nil {
+			return nil, err
+		}
+		b.Anomalies = anomaliesRaw
+		enrichShopeeBillRawData(&b, itemCount, true)
+		bills = append(bills, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	hasMore := len(bills) > limit
+	if hasMore {
+		bills = bills[:limit]
+	}
+	nextCursor := ""
+	if hasMore && len(bills) > 0 {
+		last := bills[len(bills)-1]
+		nextCursor = encodeTimeIDCursor(last.CreatedAt, last.ID)
+	}
+	return &BillListResult{
+		Bills:      bills,
+		Total:      total,
+		HasMore:    hasMore,
+		NextCursor: nextCursor,
+		Page:       f.Page,
+		PageSize:   limit,
+	}, nil
+}
+
+func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 	where := "WHERE 1=1"
 	args := []interface{}{}
 	argN := 1
 
+	switch f.Archived {
+	case "include":
+	case "only":
+		where += " AND b.archived_at IS NOT NULL"
+	default:
+		where += " AND b.archived_at IS NULL"
+	}
 	if f.Status != "" {
 		where += fmt.Sprintf(" AND b.status = $%d", argN)
 		args = append(args, f.Status)
@@ -155,6 +278,24 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		args = append(args, f.EmailAccountID)
 		argN++
 	}
+	if f.ShopeeStatus != "" {
+		where += fmt.Sprintf(` AND EXISTS (
+			SELECT 1 FROM shopee_order_events soe
+			WHERE soe.bill_id = b.id AND soe.event_type = $%d
+		)`, argN)
+		args = append(args, f.ShopeeStatus)
+		argN++
+	}
+	if f.DateFrom != "" {
+		where += fmt.Sprintf(" AND b.created_at >= $%d::date", argN)
+		args = append(args, f.DateFrom)
+		argN++
+	}
+	if f.DateTo != "" {
+		where += fmt.Sprintf(" AND b.created_at < ($%d::date + INTERVAL '1 day')", argN)
+		args = append(args, f.DateTo)
+		argN++
+	}
 	if f.Search != "" {
 		where += fmt.Sprintf(
 			` AND (
@@ -169,48 +310,55 @@ func (r *BillRepo) List(f models.BillListFilter) ([]models.Bill, int, error) {
 		args = append(args, "%"+f.Search+"%")
 		argN++
 	}
+	return where, args, argN
+}
 
-	countQuery := "SELECT COUNT(*) FROM bills b " + where
-	var total int
-	if err := r.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count: %w", err)
+func (r *BillRepo) QueueCounts(f models.BillListFilter) (BillQueueCounts, error) {
+	f.Status = ""
+	where, args, _ := billWhere(f)
+	var c BillQueueCounts
+	err := r.db.QueryRow(`
+		SELECT
+		  COUNT(*) FILTER (WHERE b.status='needs_review'),
+		  COUNT(*) FILTER (WHERE b.status='pending'),
+		  COUNT(*) FILTER (WHERE b.status='sent'),
+		  COUNT(*) FILTER (WHERE b.status='failed'),
+		  COUNT(*) FILTER (WHERE b.status='skipped'),
+		  COUNT(*)
+		FROM bills b `+where, args...).Scan(&c.NeedsReview, &c.Pending, &c.Sent, &c.Failed, &c.Skipped, &c.Total)
+	return c, err
+}
+
+func (r *BillRepo) Archive(id, userID, reason string) error {
+	if reason == "" {
+		reason = "manual archive"
 	}
+	_, err := r.db.Exec(`
+		UPDATE bills
+		   SET archived_at = COALESCE(archived_at, NOW()),
+		       archived_by = NULLIF($2, '')::UUID,
+		       archive_reason = $3
+		 WHERE id = $1`, id, userID, reason)
+	return err
+}
 
-	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
-	                 b.anomalies, b.error_msg, b.created_at, b.sent_at,
-	                 COALESCE(SUM(bi.qty * bi.price), 0) AS total_amount,
-	                 COUNT(bi.id) AS item_count
-	          FROM bills b
-	          LEFT JOIN bill_items bi ON bi.bill_id = b.id
-	          ` + where + `
-	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
-	                   b.anomalies, b.error_msg, b.created_at, b.sent_at
-	          ORDER BY b.created_at DESC` +
-		fmt.Sprintf(" LIMIT $%d OFFSET $%d", argN, argN+1)
-	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
+func (r *BillRepo) Restore(id string) error {
+	_, err := r.db.Exec(`
+		UPDATE bills
+		   SET archived_at = NULL,
+		       archived_by = NULL,
+		       archive_reason = ''
+		 WHERE id = $1`, id)
+	return err
+}
 
-	rows, err := r.db.Query(query, args...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("List bills: %w", err)
-	}
-	defer rows.Close()
+func (r *BillRepo) Delete(id string) error {
+	_, err := r.db.Exec(`DELETE FROM bills WHERE id = $1`, id)
+	return err
+}
 
-	var bills []models.Bill
-	for rows.Next() {
-		var b models.Bill
-		var anomaliesRaw []byte
-		var itemCount int
-		if err := rows.Scan(
-			&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData, &b.SMLDocNo, &b.AIConfidence,
-			&anomaliesRaw, &b.ErrorMsg, &b.CreatedAt, &b.SentAt, &b.TotalAmount, &itemCount,
-		); err != nil {
-			return nil, 0, err
-		}
-		b.Anomalies = anomaliesRaw
-		enrichShopeeBillRawData(&b, itemCount, true)
-		bills = append(bills, b)
-	}
-	return bills, total, rows.Err()
+func billCursorForTest(t time.Time, id string) string {
+	return encodeTimeIDCursor(t, id)
 }
 
 func (r *BillRepo) UpdateStatus(id, status string, smlDocNo *string, smlResponse json.RawMessage, errMsg *string) error {

@@ -132,10 +132,13 @@ export interface ShopeeOrderEvent {
 
 export interface BillListResponse {
   data: Bill[]
-  total: number
+  total?: number
   page: number
   per_page: number
   page_size?: number
+  limit?: number
+  has_more?: boolean
+  next_cursor?: string
 }
 
 // ─── Mapping ─────────────────────────────────────────────────────────────────

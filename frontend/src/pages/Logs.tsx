@@ -65,9 +65,12 @@ dayjs.locale('th')
 
 interface LogsResponse {
   data: AuditLog[]
-  total: number
-  page: number
-  page_size: number
+  total?: number
+  page?: number
+  page_size?: number
+  limit?: number
+  has_more?: boolean
+  next_cursor?: string
 }
 
 const ALL = '__all__'
@@ -1111,8 +1114,9 @@ function ActorBadge({ log }: { log: AuditLog }) {
 
 export default function Logs() {
   const [logs, setLogs] = useState<AuditLog[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState<number | null>(null)
+  const [nextCursor, setNextCursor] = useState('')
+  const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [source, setSource] = useState<string>(ALL)
   const [action, setAction] = useState<string>(ALL)
@@ -1124,10 +1128,12 @@ export default function Logs() {
   const [devMode, setDevMode] = useState(false)
   const pageSize = 50
 
-  const load = async (p = page) => {
+  const load = async (opts: { cursor?: string; append?: boolean; includeTotal?: boolean } = {}) => {
     setLoading(true)
     try {
-      const params: Record<string, string | number> = { page: p, page_size: pageSize }
+      const params: Record<string, string | number | boolean> = { limit: pageSize }
+      if (opts.cursor) params.cursor = opts.cursor
+      if (opts.includeTotal) params.include_total = true
       if (source !== ALL) params.source = source
       if (action !== ALL) params.action = action
       if (level !== ALL) params.level = level
@@ -1135,20 +1141,21 @@ export default function Logs() {
       if (dateFrom) params.date_from = dateFrom
       if (dateTo) params.date_to = dateTo
       const res = await api.get<LogsResponse>('/api/logs', { params })
-      setLogs(res.data.data || [])
-      setTotal(res.data.total || 0)
-      setPage(p)
+      const rows = res.data.data || []
+      setLogs((prev) => opts.append ? [...prev, ...rows] : rows)
+      setTotal(typeof res.data.total === 'number' ? res.data.total : null)
+      setNextCursor(res.data.next_cursor || '')
+      setHasMore(!!res.data.has_more)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    load(1)
+    load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, action, level, userID, dateFrom, dateTo])
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const hasFilters =
     source !== ALL || action !== ALL || level !== ALL || userID !== ALL || !!dateFrom || !!dateTo || quickView !== 'all'
 
@@ -1219,7 +1226,7 @@ export default function Logs() {
                 variant="outline"
                 size="sm"
                 className="gap-1.5"
-                onClick={() => load(page)}
+                onClick={() => load()}
                 disabled={loading}
               >
                 <RotateCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
@@ -1387,7 +1394,11 @@ export default function Logs() {
         <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
           <span>
             แสดง <span className="font-medium text-foreground">{visibleLogs.length.toLocaleString()}</span>
-            {' '}จาก <span className="font-medium text-foreground">{total.toLocaleString()}</span> รายการ
+            {total != null && (
+              <>
+                {' '}จาก <span className="font-medium text-foreground">{total.toLocaleString()}</span> รายการ
+              </>
+            )}
           </span>
           {errorCount > 0 && (
             <span className="text-destructive">· ผิดพลาด {errorCount}</span>
@@ -1427,13 +1438,13 @@ export default function Logs() {
                         key={item.key}
                         group={item}
                         devMode={devMode}
-                        onRetried={() => load(page)}
+                        onRetried={() => load()}
                       />
                     ) : (
                       <LogRow
                         key={item.key}
                         log={item.log}
-                        onRetried={() => load(page)}
+                        onRetried={() => load()}
                         devMode={devMode}
                       />
                     ),
@@ -1444,26 +1455,15 @@ export default function Logs() {
           )}
         </div>
 
-        {totalPages > 1 && (
+        {hasMore && (
           <div className="flex items-center justify-end gap-2">
             <Button
               variant="outline"
               size="sm"
-              disabled={page <= 1}
-              onClick={() => load(page - 1)}
+              disabled={loading || !nextCursor}
+              onClick={() => load({ cursor: nextCursor, append: true })}
             >
-              ก่อนหน้า
-            </Button>
-            <span className="px-2 text-xs tabular-nums text-muted-foreground">
-              หน้า {page} / {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page >= totalPages}
-              onClick={() => load(page + 1)}
-            >
-              ถัดไป
+              โหลดเพิ่ม
             </Button>
           </div>
         )}

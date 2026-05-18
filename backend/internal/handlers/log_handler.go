@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -26,22 +27,32 @@ func (h *LogHandler) List(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	f.CursorMode = c.Query("cursor") != "" || c.Query("limit") != ""
+	if v := c.Query("include_total"); v != "" {
+		f.IncludeTotal, _ = strconv.ParseBool(v)
+	}
 
-	logs, total, err := h.auditRepo.List(f)
+	result, err := h.auditRepo.List(f)
 	if err != nil {
 		h.log.Error("list audit logs", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
 
-	if logs == nil {
-		logs = []models.AuditLog{}
+	if result.Logs == nil {
+		result.Logs = []models.AuditLog{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data":      logs,
-		"total":     total,
-		"page":      f.Page,
-		"page_size": f.PageSize,
-	})
+	resp := gin.H{
+		"data":        result.Logs,
+		"page":        result.Page,
+		"page_size":   result.PageSize,
+		"limit":       result.PageSize,
+		"has_more":    result.HasMore,
+		"next_cursor": result.NextCursor,
+	}
+	if result.Total != nil {
+		resp["total"] = *result.Total
+	}
+	c.JSON(http.StatusOK, resp)
 }

@@ -40,12 +40,16 @@ type AuditEntry struct {
 }
 
 type AuditLogFilter struct {
-	Source   string `form:"source"`    // line, email, shopee_excel, etc.
-	Level    string `form:"level"`     // info, warn, error
-	Action   string `form:"action"`    // e.g. bill_created
-	UserID   string `form:"user_id"`   // actor user id
-	DateFrom string `form:"date_from"` // YYYY-MM-DD
-	DateTo   string `form:"date_to"`   // YYYY-MM-DD
-	Page     int    `form:"page,default=1"`
-	PageSize int    `form:"page_size,default=50"`
+	Source       string `form:"source"`        // line, email, shopee_excel, etc.
+	Level        string `form:"level"`         // info, warn, error
+	Action       string `form:"action"`        // e.g. bill_created
+	UserID       string `form:"user_id"`       // actor user id
+	DateFrom     string `form:"date_from"`     // YYYY-MM-DD
+	DateTo       string `form:"date_to"`       // YYYY-MM-DD
+	Cursor       string `form:"cursor"`        // opaque cursor for keyset pagination
+	Limit        int    `form:"limit"`         // preferred keyset page size
+	CursorMode   bool   `form:"-"`             // set by handler when cursor/limit query is present
+	IncludeTotal bool   `form:"include_total"` // opt-in COUNT(*) for admin/export
+	Page         int    `form:"page,default=1"`
+	PageSize     int    `form:"page_size,default=50"`
 }

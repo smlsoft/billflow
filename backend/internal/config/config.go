@@ -89,10 +89,16 @@ type Config struct {
 	AutoConfirmThreshold float64
 
 	// Cron
-	InsightCronHour   int
-	BackupCronHour    int
-	InsightLineNotify bool
-	DiskWarnPercent   int
+	InsightCronHour       int
+	BackupCronHour        int
+	InsightLineNotify     bool
+	DiskWarnPercent       int
+	DataLifecycleEnabled  bool
+	DataLifecycleCronHour int
+	HotLogDays            int
+	AutoArchiveDays       int
+	SummaryRetentionDays  int
+	PurgeBatchSize        int
 
 	// Artifacts (original source files attached to each bill)
 	ArtifactsDir      string
@@ -145,6 +151,12 @@ func Load() *Config {
 		BackupCronHour:         getEnvInt("BACKUP_CRON_HOUR", 0),
 		InsightLineNotify:      getEnvBool("INSIGHT_LINE_NOTIFY", true),
 		DiskWarnPercent:        getEnvInt("DISK_WARN_PERCENT", 90),
+		DataLifecycleEnabled:   getEnvBool("DATA_LIFECYCLE_ENABLED", true),
+		DataLifecycleCronHour:  getEnvInt("DATA_LIFECYCLE_CRON_HOUR", 2),
+		HotLogDays:             getEnvInt("HOT_LOG_DAYS", 90),
+		AutoArchiveDays:        getEnvInt("AUTO_ARCHIVE_DAYS", 180),
+		SummaryRetentionDays:   getEnvInt("SUMMARY_RETENTION_DAYS", 730),
+		PurgeBatchSize:         getEnvInt("PURGE_BATCH_SIZE", 1000),
 		ArtifactsDir:           getEnv("ARTIFACTS_DIR", "/app/artifacts"),
 		ArtifactsMaxBytes:      int64(getEnvInt("ARTIFACTS_MAX_BYTES", 10*1024*1024)), // 10 MB
 	}

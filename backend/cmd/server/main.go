@@ -416,9 +416,13 @@ func main() {
 
 		// Bills
 		api.GET("/bills", billH.List)
+		api.GET("/bills/counts", billH.Counts)
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
 		api.POST("/bills/:id/retry", billH.Retry)
+		api.POST("/bills/:id/archive", middleware.RequireRole("admin", "staff"), billH.Archive)
+		api.POST("/bills/:id/restore", middleware.RequireRole("admin", "staff"), billH.Restore)
+		api.DELETE("/bills/:id", middleware.RequireRole("admin"), billH.Delete)
 		api.PUT("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.UpdateItem)
 		api.POST("/bills/:id/items", middleware.RequireRole("admin", "staff"), billH.AddItem)
 		api.DELETE("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.DeleteItemRow)
@@ -612,6 +616,18 @@ func main() {
 
 	diskMon := jobs.NewDiskMonitor(cfg.DiskWarnPercent, lineSvc, logger)
 	diskMon.Register(c)
+
+	if cfg.DataLifecycleEnabled {
+		lifecycle := jobs.NewDataLifecycle(
+			db,
+			cfg.HotLogDays,
+			cfg.AutoArchiveDays,
+			cfg.SummaryRetentionDays,
+			cfg.PurgeBatchSize,
+			logger,
+		)
+		lifecycle.Register(c, cfg.DataLifecycleCronHour)
+	}
 
 	if lineSvc != nil {
 		tokenChecker := jobs.NewTokenChecker(lineSvc, logger)

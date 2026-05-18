@@ -159,7 +159,16 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   // Seed filters from the URL so deep-links from the Dashboard ("บิลล้มเหลว"
   // shortcut → /bills?status=failed) land pre-filtered. After that, filters
   // are local state — admin can change them without bouncing the URL.
-  const [page, setPage] = useState(1)
+  const [cursor, setCursor] = useState('')
+  const [loadedBills, setLoadedBills] = useState<Bill[]>([])
+  const [counts, setCounts] = useState({
+    needs_review: 0,
+    pending: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    total: 0,
+  })
   const [status, setStatus] = useState<string>(() =>
     readURLFilter(searchParams, 'status', VALID_STATUSES),
   )
@@ -180,8 +189,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const canPermanentDelete = user?.role === 'admin'
 
   const { data, loading, refetch } = useBills({
-    page,
-    per_page: PER_PAGE,
+    limit: PER_PAGE,
+    cursor,
     status: status === ALL ? '' : status,
     shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
     source: config.source,
@@ -191,56 +200,35 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     search,
     archived: archiveMode === 'active' ? '' : archiveMode,
   })
-  const needsReviewCount = useBills({
-    page: 1,
-    per_page: 1,
-    status: 'needs_review',
-    source: config.source,
-    bill_type: config.billType,
-    document_route: config.documentRoute,
-  })
-  const pendingCount = useBills({
-    page: 1,
-    per_page: 1,
-    status: 'pending',
-    source: config.source,
-    bill_type: config.billType,
-    document_route: config.documentRoute,
-  })
-  const sentCount = useBills({
-    page: 1,
-    per_page: 1,
-    status: 'sent',
-    source: config.source,
-    bill_type: config.billType,
-    document_route: config.documentRoute,
-  })
-  const failedCount = useBills({
-    page: 1,
-    per_page: 1,
-    status: 'failed',
-    source: config.source,
-    bill_type: config.billType,
-    document_route: config.documentRoute,
-  })
-
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / PER_PAGE)) : 1
-  const hasMore = data ? page * PER_PAGE < data.total : false
-  const bulkCandidateCount = (pendingCount.data?.total ?? 0) + (needsReviewCount.data?.total ?? 0)
+  const hasMore = !!data?.has_more
+  const bulkCandidateCount = counts.pending + counts.needs_review
   const detailBasePath =
     mode === 'sale-invoice' ? '/sale-invoices' : mode === 'sales-order' ? '/sales-orders' : '/bills'
 
   const resetPage = (cb: () => void) => {
     cb()
-    setPage(1)
+    setCursor('')
+    setLoadedBills([])
   }
 
   const refreshAll = () => {
+    setCursor('')
+    setLoadedBills([])
     refetch()
-    pendingCount.refetch()
-    needsReviewCount.refetch()
-    sentCount.refetch()
-    failedCount.refetch()
+    fetchCounts()
+  }
+
+  const fetchCounts = async () => {
+    const params = new URLSearchParams()
+    if (config.source) params.set('source', config.source)
+    params.set('bill_type', config.billType)
+    if (config.documentRoute) params.set('document_route', config.documentRoute)
+    if (emailAccountId !== ALL) params.set('email_account_id', emailAccountId)
+    if (archiveMode !== 'active') params.set('archived', archiveMode)
+    if (showShopeeStatusFilter && shopeeStatus !== ALL) params.set('shopee_status', shopeeStatus)
+    if (search) params.set('search', search)
+    const res = await client.get<typeof counts>(`/api/bills/counts?${params}`)
+    setCounts(res.data)
   }
 
   const handleConfirmedAction = async () => {
@@ -278,6 +266,25 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   }, [])
 
   useEffect(() => {
+    fetchCounts().catch(() => {
+      setCounts({ needs_review: 0, pending: 0, sent: 0, failed: 0, skipped: 0, total: 0 })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.source, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, search])
+
+  useEffect(() => {
+    const rows = data?.data ?? []
+    if (!cursor) {
+      setLoadedBills(rows)
+      return
+    }
+    setLoadedBills((prev) => {
+      const seen = new Set(prev.map((b) => b.id))
+      return [...prev, ...rows.filter((b) => !seen.has(b.id))]
+    })
+  }, [data, cursor])
+
+  useEffect(() => {
     const next = new URLSearchParams(searchParams)
     if (status === ALL) next.delete('status')
     else next.set('status', status)
@@ -294,10 +301,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <QueueMetric label="ต้องตรวจสินค้า" value={needsReviewCount.data?.total ?? 0} icon={AlertTriangle} tone="warning" />
-        <QueueMetric label="พร้อมส่ง" value={pendingCount.data?.total ?? 0} icon={Clock} tone="primary" />
-        <QueueMetric label="ส่งแล้ว" value={sentCount.data?.total ?? 0} icon={CheckCircle2} tone="success" />
-        <QueueMetric label="ส่งไม่สำเร็จ" value={failedCount.data?.total ?? 0} icon={Send} tone="danger" />
+        <QueueMetric label="ต้องตรวจสินค้า" value={counts.needs_review} icon={AlertTriangle} tone="warning" />
+        <QueueMetric label="พร้อมส่ง" value={counts.pending} icon={Clock} tone="primary" />
+        <QueueMetric label="ส่งแล้ว" value={counts.sent} icon={CheckCircle2} tone="success" />
+        <QueueMetric label="ส่งไม่สำเร็จ" value={counts.failed} icon={Send} tone="danger" />
       </div>
 
       <div className="rounded-xl border border-border/70 bg-card p-3 shadow-sm">
@@ -415,7 +422,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
       </div>
 
-      {!loading && (data?.total ?? 0) === 0 && !search && status === ALL && shopeeStatus === ALL && archiveMode === 'active' ? (
+      {!loading && loadedBills.length === 0 && !search && status === ALL && shopeeStatus === ALL && archiveMode === 'active' ? (
         <EmptyState
           icon={mode === 'purchase-order' ? Mail : UploadCloud}
           title={config.emptyTitle}
@@ -438,7 +445,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         />
       ) : (
         <BillTable
-          bills={data?.data ?? []}
+          bills={loadedBills}
           loading={loading}
           showShopeeStatusColumn={showShopeeStatusFilter}
           canManage={canManageBills}
@@ -452,26 +459,19 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       )}
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>ทั้งหมด {(data?.total ?? 0).toLocaleString()} รายการ</span>
+        <span>
+          แสดง {loadedBills.length.toLocaleString()}
+          {typeof data?.total === 'number' ? ` จาก ${data.total.toLocaleString()}` : ''}
+          {' '}รายการ
+        </span>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            ก่อนหน้า
-          </Button>
-          <span className="px-1 tabular-nums text-foreground">
-            หน้า {page} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
             disabled={!hasMore}
-            onClick={() => setPage((p) => p + 1)}
+            onClick={() => setCursor(data?.next_cursor ?? '')}
           >
-            ถัดไป
+            โหลดเพิ่ม
           </Button>
         </div>
       </div>
@@ -488,10 +488,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         }}
         onDone={() => {
           refetch()
-          pendingCount.refetch()
-          needsReviewCount.refetch()
-          sentCount.refetch()
-          failedCount.refetch()
+          fetchCounts()
         }}
       />
 

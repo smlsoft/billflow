@@ -37,6 +37,8 @@ export const ACTION_META: Record<string, ActionMeta> = {
   // Bill lifecycle
   bill_created: { label: 'สร้างบิล', emoji: '📥', tone: 'info' },
   bill_pending: { label: 'รอตรวจสอบ', emoji: '⏳', tone: 'warning' },
+  bill_archived: { label: 'เก็บบิล', emoji: '🗄️', tone: 'muted' },
+  bill_restored: { label: 'กู้คืนบิล', emoji: '♻️', tone: 'info' },
   bill_item_added: { label: 'เพิ่มรายการในบิล', emoji: '➕', tone: 'info' },
   bill_item_deleted: { label: 'ลบรายการในบิล', emoji: '➖', tone: 'muted' },
   // SML push
@@ -208,6 +210,10 @@ export function summarize(log: AuditLog): string {
     case 'bill_item_added':
     case 'bill_item_deleted':
       return d.raw_name ? String(d.raw_name) : ''
+    case 'bill_archived':
+      return d.reason ? String(d.reason) : 'ซ่อนจาก queue ปกติ'
+    case 'bill_restored':
+      return 'นำกลับมาแสดงในรายการปกติ'
     // LINE / chat — short summaries from detail.
     case 'line_admin_reply':
       return d.text_preview ? `“${d.text_preview}”` : ''

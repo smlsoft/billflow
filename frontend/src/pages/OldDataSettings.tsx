@@ -21,9 +21,23 @@ interface Summary {
   archive_days: number
   purge_days: number
   bills: { to_archive: number; to_purge: number; archived: number }
-  audit_logs: { to_purge: number }
-  chat_messages: { to_purge: number }
+  audit_logs: TableMetrics
+  ai_usage_logs: TableMetrics
+  chat_messages: TableMetrics
   db_size_mb: number
+  policy?: {
+    hot_log_days: number
+    auto_archive_days: number
+    summary_days: number
+    purge_mode: string
+  }
+}
+
+interface TableMetrics {
+  to_purge: number
+  rows: number
+  size_mb: number
+  oldest_at?: string | null
 }
 
 export default function OldDataSettings() {
@@ -35,8 +49,9 @@ export default function OldDataSettings() {
   const [purging, setPurging] = useState(false)
 
   const [confirmPurge, setConfirmPurge] = useState(false)
-  const [purgeBills, setPurgeBills] = useState(true)
+  const [purgeBills, setPurgeBills] = useState(false)
   const [purgeAudit, setPurgeAudit] = useState(false)
+  const [purgeAI, setPurgeAI] = useState(false)
   const [purgeChat, setPurgeChat] = useState(false)
 
   const fetchSummary = async () => {
@@ -76,11 +91,13 @@ export default function OldDataSettings() {
         purge_days: purgeDays,
         purge_bills: purgeBills,
         purge_audit: purgeAudit,
+        purge_ai: purgeAI,
         purge_chat: purgeChat,
       })
       const parts: string[] = []
       if (res.data.purged_bills != null) parts.push(`บิล ${res.data.purged_bills} รายการ`)
       if (res.data.purged_audit_logs != null) parts.push(`audit log ${res.data.purged_audit_logs} รายการ`)
+      if (res.data.purged_ai_usage_logs != null) parts.push(`AI usage ${res.data.purged_ai_usage_logs} รายการ`)
       if (res.data.purged_chat_messages != null) parts.push(`chat ${res.data.purged_chat_messages} ข้อความ`)
       toast.success(`ลบข้อมูลสำเร็จ: ${parts.join(', ')}`)
       fetchSummary()
@@ -91,13 +108,14 @@ export default function OldDataSettings() {
     }
   }
 
-  const anyPurgeSelected = purgeBills || purgeAudit || purgeChat
+  const anyPurgeSelected = purgeBills || purgeAudit || purgeAI || purgeChat
 
   // Safe accessors — API may return partial data during loading transitions
   const toArchive = summary?.bills?.to_archive ?? 0
   const toPurgeBills = summary?.bills?.to_purge ?? 0
   const archivedCount = summary?.bills?.archived ?? 0
   const toPurgeAudit = summary?.audit_logs?.to_purge ?? 0
+  const toPurgeAI = summary?.ai_usage_logs?.to_purge ?? 0
   const toPurgeChat = summary?.chat_messages?.to_purge ?? 0
   const dbSizeMB = summary?.db_size_mb ?? 0
 
@@ -221,13 +239,19 @@ export default function OldDataSettings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {summary?.policy && (
+            <div className="rounded-lg border bg-info/5 p-3 text-xs text-muted-foreground">
+              Retention ปัจจุบัน: detailed logs {summary.policy.hot_log_days} วัน · auto-archive sent/skipped {summary.policy.auto_archive_days} วัน · summary {summary.policy.summary_days} วัน · purge mode {summary.policy.purge_mode}
+            </div>
+          )}
           {summary && (
             <div className="rounded-lg border bg-muted/30 p-4 space-y-2 text-sm">
               <p className="font-medium text-muted-foreground">ข้อมูลที่จะถูกลบเมื่อเก่ากว่า {summary.purge_days} วัน:</p>
               <ul className="space-y-1 text-muted-foreground">
                 <li>บิลทั้งหมด: <span className="font-semibold text-foreground tabular-nums">{toPurgeBills.toLocaleString()}</span> รายการ</li>
-                <li>Audit log: <span className="font-semibold text-foreground tabular-nums">{toPurgeAudit.toLocaleString()}</span> รายการ</li>
-                <li>Chat messages: <span className="font-semibold text-foreground tabular-nums">{toPurgeChat.toLocaleString()}</span> ข้อความ</li>
+                <li>Audit log: <span className="font-semibold text-foreground tabular-nums">{toPurgeAudit.toLocaleString()}</span> / {summary.audit_logs.rows.toLocaleString()} รายการ · {summary.audit_logs.size_mb.toFixed(1)} MB</li>
+                <li>AI usage: <span className="font-semibold text-foreground tabular-nums">{toPurgeAI.toLocaleString()}</span> / {summary.ai_usage_logs.rows.toLocaleString()} รายการ · {summary.ai_usage_logs.size_mb.toFixed(1)} MB</li>
+                <li>Chat messages: <span className="font-semibold text-foreground tabular-nums">{toPurgeChat.toLocaleString()}</span> / {summary.chat_messages.rows.toLocaleString()} ข้อความ · {summary.chat_messages.size_mb.toFixed(1)} MB</li>
               </ul>
             </div>
           )}
@@ -242,6 +266,10 @@ export default function OldDataSettings() {
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <Checkbox checked={purgeAudit} onCheckedChange={v => setPurgeAudit(!!v)} />
                 Audit log
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <Checkbox checked={purgeAI} onCheckedChange={v => setPurgeAI(!!v)} />
+                AI usage log
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <Checkbox checked={purgeChat} onCheckedChange={v => setPurgeChat(!!v)} />
