@@ -40,6 +40,13 @@ interface TableMetrics {
   oldest_at?: string | null
 }
 
+const emptyTableMetrics: TableMetrics = {
+  to_purge: 0,
+  rows: 0,
+  size_mb: 0,
+  oldest_at: null,
+}
+
 export default function OldDataSettings() {
   const [archiveDays, setArchiveDays] = useState(180)
   const [purgeDays, setPurgeDays] = useState(730)
@@ -114,9 +121,12 @@ export default function OldDataSettings() {
   const toArchive = summary?.bills?.to_archive ?? 0
   const toPurgeBills = summary?.bills?.to_purge ?? 0
   const archivedCount = summary?.bills?.archived ?? 0
-  const toPurgeAudit = summary?.audit_logs?.to_purge ?? 0
-  const toPurgeAI = summary?.ai_usage_logs?.to_purge ?? 0
-  const toPurgeChat = summary?.chat_messages?.to_purge ?? 0
+  const auditMetrics = summary?.audit_logs ?? emptyTableMetrics
+  const aiUsageMetrics = summary?.ai_usage_logs ?? emptyTableMetrics
+  const chatMetrics = summary?.chat_messages ?? emptyTableMetrics
+  const toPurgeAudit = auditMetrics.to_purge
+  const toPurgeAI = aiUsageMetrics.to_purge
+  const toPurgeChat = chatMetrics.to_purge
   const dbSizeMB = summary?.db_size_mb ?? 0
 
   return (
@@ -249,9 +259,9 @@ export default function OldDataSettings() {
               <p className="font-medium text-muted-foreground">ข้อมูลที่จะถูกลบเมื่อเก่ากว่า {summary.purge_days} วัน:</p>
               <ul className="space-y-1 text-muted-foreground">
                 <li>บิลทั้งหมด: <span className="font-semibold text-foreground tabular-nums">{toPurgeBills.toLocaleString()}</span> รายการ</li>
-                <li>Audit log: <span className="font-semibold text-foreground tabular-nums">{toPurgeAudit.toLocaleString()}</span> / {summary.audit_logs.rows.toLocaleString()} รายการ · {summary.audit_logs.size_mb.toFixed(1)} MB</li>
-                <li>AI usage: <span className="font-semibold text-foreground tabular-nums">{toPurgeAI.toLocaleString()}</span> / {summary.ai_usage_logs.rows.toLocaleString()} รายการ · {summary.ai_usage_logs.size_mb.toFixed(1)} MB</li>
-                <li>Chat messages: <span className="font-semibold text-foreground tabular-nums">{toPurgeChat.toLocaleString()}</span> / {summary.chat_messages.rows.toLocaleString()} ข้อความ · {summary.chat_messages.size_mb.toFixed(1)} MB</li>
+                <li>Audit log: <span className="font-semibold text-foreground tabular-nums">{toPurgeAudit.toLocaleString()}</span> / {auditMetrics.rows.toLocaleString()} รายการ · {auditMetrics.size_mb.toFixed(1)} MB</li>
+                <li>AI usage: <span className="font-semibold text-foreground tabular-nums">{toPurgeAI.toLocaleString()}</span> / {aiUsageMetrics.rows.toLocaleString()} รายการ · {aiUsageMetrics.size_mb.toFixed(1)} MB</li>
+                <li>Chat messages: <span className="font-semibold text-foreground tabular-nums">{toPurgeChat.toLocaleString()}</span> / {chatMetrics.rows.toLocaleString()} ข้อความ · {chatMetrics.size_mb.toFixed(1)} MB</li>
               </ul>
             </div>
           )}
