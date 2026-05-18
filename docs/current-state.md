@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-12 13:05 +07
+> Updated: 2026-05-18 14:30 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
 
 ## Latest Handoff For New Chat
@@ -8,6 +8,15 @@
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
+- BillFlow main production data lifecycle deployed 2026-05-18:
+  - Commit `ba2145f` adds migration `037_data_lifecycle.sql`, summary tables, indexes, cursor pagination, bill archive/restore/delete routes, and the daily lifecycle job.
+  - `/api/logs` now supports `limit`, `cursor`, `has_more`, `next_cursor`; it does not run `COUNT(*)` unless `include_total=true`.
+  - `/api/bills` supports `archived`, `date_from`, `date_to`, cursor pagination, and legacy `page/per_page`; default lists hide archived rows.
+  - `/api/bills/counts` returns queue counts in one request for the `/bills`, `/sales-orders`, and `/sale-invoices` list pages.
+  - SML audit logs no longer duplicate full `sml_payload` / `sml_response` into every audit row; they keep compact support fields (`doc_no`, route, error code, message, request/trace id).
+  - `/settings/old-data` shows row counts, table sizes, oldest rows, retention policy, and dry-run purge summaries. Purge is manual, batch-safe, and no purge option is selected by default.
+  - Verified on main after deploy: `go test ./...`, `npm run build`, `scripts/preflight-main.sh`, smoke checks for `/api/logs`, `/api/bills`, `/api/bills/counts`, and `/api/bills/old-data/summary`.
+  - Residual risk: current production workload passed, but the planned 1M audit log / 100k bill performance seed test is still recommended before claiming full one-year high-volume proof.
 - Thaisunsport แยก instance อยู่ที่ frontend `3020`, backend `8100`, postgres `5448`.
   - ล่าสุด deploy แล้วเมื่อ 2026-05-11 สำหรับ demo Phase 1 ฝั่งซื้อเท่านั้น.
   - Public URL: `https://pets-mini-museums-ships.trycloudflare.com/login`

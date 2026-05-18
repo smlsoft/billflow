@@ -135,6 +135,7 @@ flowchart TB
   Catalog --> CatalogTable
   Catalog --> AIUsage
   AIUsage --> Audit
+  Audit --> Lifecycle["Data Lifecycle\nrollup + batch purge"]
   SettingsUI --> Settings
   SMLClients --> Middleware
   Middleware --> DTOs
@@ -155,7 +156,7 @@ flowchart LR
   P2 --> P3["3. Send to SML"]
   P3 --> P4["4. sml-api-bybos\nvalidate + write"]
   P4 --> D3[("SML ERP DB\nSML1_2026")]
-  P3 --> D4[("Audit Logs\nSML responses")]
+  P3 --> D4[("Audit Logs\ncompact SML support fields")]
   P4 --> D4
   Admin["Admin / Staff"] --> P2
   Admin --> P3
@@ -286,7 +287,7 @@ flowchart LR
 }
 ```
 
-BillFlow clients parse this contract directly and store the response in `bills.sml_response` for support/debugging.
+BillFlow clients parse this contract directly and store the response in `bills.sml_response` for support/debugging. Audit logs keep compact debug summaries instead of copying full SML payload/response into every activity row.
 
 ---
 
@@ -336,6 +337,8 @@ flowchart LR
   AIUsage --> AIUI["/settings/ai-usage\nOpenRouter session link"]
 ```
 
+Detailed logs are hot data. BillFlow keeps `/logs` fast by using cursor pagination and by rolling detailed audit/AI usage rows into daily summaries before old detailed rows are purged in small batches.
+
 ### Typical Debug Order
 
 1. Check BillFlow bill status and `sml_response`.
@@ -346,7 +349,40 @@ flowchart LR
 
 ---
 
-## 10. Deployment and Readiness Checks
+## 10. Production Data Lifecycle
+
+```mermaid
+flowchart LR
+  HotBills[("bills\nactive review queues")] --> ArchiveJob["Daily lifecycle job\nsent/skipped older than 180d"]
+  ArchiveJob --> ArchivedBills[("bills\narchived_at set")]
+  HotLogs[("audit_logs + ai_usage_logs\nhot detail 90d")] --> Rollup["Daily summaries"]
+  Rollup --> Summary[("audit_log_daily_summaries\nai_usage_daily_summaries\nretain 730d")]
+  HotLogs --> BatchPurge["Batch purge\nmanual/scheduled safe batches"]
+  OldDataUI["/settings/old-data"] --> Metrics["row count, table size,\noldest row, eligible rows"]
+  OldDataUI --> DryRun["dry-run purge summary\nnothing selected by default"]
+```
+
+### Lifecycle Rules
+
+| Data | Hot Window | Long-Term Handling |
+|---|---:|---|
+| `bills` with `sent` / `skipped` | 180 days active | Auto-archive by setting `archived_at`; not deleted |
+| `failed` bills | No auto-archive | Kept visible for human investigation |
+| `audit_logs` detail | 90 days | Roll up to daily summary, then purge detail in batches |
+| `ai_usage_logs` detail | 90 days | Roll up to daily summary, then purge detail in batches |
+| Daily summaries | 730 days | Used for long-range old-data reporting |
+
+### List API Rules
+
+| Endpoint | Production Behavior |
+|---|---|
+| `/api/logs` | Cursor pagination with `limit`, `cursor`, `has_more`, `next_cursor`; no total unless `include_total=true` |
+| `/api/bills` | Cursor pagination plus legacy `page/per_page`; supports `archived`, `date_from`, `date_to`; defaults to active rows only |
+| `/api/bills/counts` | Counts review queues in one request for `/bills`, `/sales-orders`, and `/sale-invoices` |
+
+---
+
+## 11. Deployment and Readiness Checks
 
 ```mermaid
 flowchart LR
@@ -368,11 +404,12 @@ flowchart LR
 | sml-api-bybos readiness | `/health/ready` with `X-Tenant: SML1_2026` returns OK |
 | OpenAPI | `/openapi.json` parses and Swagger UI loads at `/docs` |
 | Catalog | Products synced and embeddings completed |
+| Data lifecycle | Migration `037_data_lifecycle.sql` applied; `/api/bills/old-data/summary` returns policy and table metrics |
 | Golden SML write | SO/SI/PO test docs write to `ic_trans` and `ic_trans_detail` |
 
 ---
 
-## 11. Failure Boundaries
+## 12. Failure Boundaries
 
 | Boundary | Example Failure | Where It Appears | Recovery |
 |---|---|---|---|
@@ -385,7 +422,7 @@ flowchart LR
 
 ---
 
-## 12. Source of Truth
+## 13. Source of Truth
 
 | Topic | Source |
 |---|---|
@@ -396,4 +433,3 @@ flowchart LR
 | sml-api-bybos API contract | `http://192.168.2.109:8200/docs` and `/openapi.json` |
 | BillFlow main code | `/Users/nontawatwongnuk/dev_bos/billflow` |
 | sml-api-bybos code | `/Users/nontawatwongnuk/dev/sml-api-bybos` |
-

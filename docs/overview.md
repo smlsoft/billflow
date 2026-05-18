@@ -1,6 +1,6 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-05-12 10:50 +07
+> อัพเดตล่าสุด: 2026-05-18 14:30 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
@@ -101,7 +101,7 @@ billflow/
 |---|---|
 | Health | `GET /health` |
 | Auth | `POST /api/auth/login`, `GET /api/auth/me` |
-| Bills | `GET /api/bills`, `GET /api/bills/:id`, `POST /api/bills/:id/retry`, item CRUD, timeline, artifact preview/download |
+| Bills | `GET /api/bills?limit=&cursor=`, `GET /api/bills/counts`, `GET /api/bills/:id`, `POST /api/bills/:id/retry`, archive/restore/delete, item CRUD, timeline, artifact preview/download |
 | Chat inbox | `/api/admin/conversations...` |
 | LINE OA | `POST /webhook/line/:oaId`, `POST /webhook/line`, `/api/settings/line-oa...` |
 | SSE | `POST /api/admin/events/token`, `GET /api/admin/events?t=...` |
@@ -109,7 +109,7 @@ billflow/
 | Channel defaults | `/api/settings/channel-defaults...` |
 | Catalog | `/api/catalog...` |
 | Imports | `/api/import/upload`, `/api/import/confirm`, `/api/import/shopee/preview`, `/api/import/shopee/confirm` |
-| Logs | `GET /api/logs` |
+| Logs | `GET /api/logs?limit=&cursor=`; no `COUNT(*)` unless `include_total=true` |
 
 ---
 
@@ -124,6 +124,17 @@ billflow/
 | LINE Token Checker | weekly | expiry reminder |
 | Reply Token Cleanup | hourly | clear LINE reply tokens older than 1 hour |
 | Tunnel Drift Monitor | daily 09:00 Bangkok | ping `PUBLIC_BASE_URL/health`, LINE alert if Cloudflare Quick Tunnel URL drifted |
+| Data Lifecycle | daily, default 02:00 | archive `sent/skipped` docs older than 180 days, roll up/purge detailed audit + AI logs older than 90 days in batches |
+
+---
+
+## Production Data Lifecycle
+
+- `/logs` uses cursor pagination with `limit`, `cursor`, `has_more`, and `next_cursor`. It avoids `COUNT(*)` by default; request `include_total=true` only when the UI explicitly needs a total.
+- `/bills`, `/sales-orders`, and `/sale-invoices` use the same document list backend. Default lists show only active rows (`archived_at IS NULL`) and support `archived`, `date_from`, `date_to`, and cursor pagination while keeping legacy `page/per_page` compatibility.
+- `/api/bills/counts` returns queue counts for `needs_review`, `pending`, `sent`, and `failed` in one query so list pages do not fire repeated count requests.
+- SML audit rows keep compact debug fields such as `doc_no`, `route`, `error_code`, `message`, `request_id`, and `target_id`; full SML payload/response is not copied into every audit log row.
+- `/settings/old-data` shows row counts, table sizes, oldest rows, retention policy, and dry-run purge summaries. Purge is manual, batch-safe, and nothing is selected by default.
 
 ---
 

@@ -101,9 +101,13 @@ Cloudflare Tunnel
 Go Backend (Gin) :8090
   ├── POST /webhook/line                    ← LINE OA events
   ├── POST /api/auth/login
-  ├── GET  /api/bills                       ← list (filter: status/source/bill_type)
+  ├── GET  /api/bills                       ← cursor list (status/source/bill_type/date/archived)
+  ├── GET  /api/bills/counts                ← queue counts for document lists
   ├── GET  /api/bills/:id
   ├── POST /api/bills/:id/retry             ← 4-way SML send (saleorder/saleinvoice/purchaseorder/sale_reserve)
+  ├── POST /api/bills/:id/archive           ← archive one bill
+  ├── POST /api/bills/:id/restore           ← restore one bill
+  ├── DEL  /api/bills/:id                   ← delete one bill
   ├── PUT  /api/bills/:id/items/:item_id    ← edit item + F1 auto-learn
   ├── POST /api/bills/:id/items             ← add new line item
   ├── DEL  /api/bills/:id/items/:item_id    ← delete line item
@@ -122,7 +126,7 @@ Go Backend (Gin) :8090
   ├── GET  /api/dashboard/stats
   ├── GET  /api/dashboard/insights
   ├── POST /api/dashboard/insights/generate
-  ├── GET  /api/logs                        ← Activity Log
+  ├── GET  /api/logs                        ← cursor Activity Log; total only with include_total=true
   ├── POST /api/import/upload               ← generic legacy Excel import
   ├── GET  /api/settings/lazada-config      ← Lazada SML route summary
   ├── POST /api/import/lazada/preview       ← Lazada Excel preview + dedup
@@ -318,8 +322,15 @@ Migrations (run in order, all idempotent):
 - [018_chat_reply_token.sql](backend/internal/database/migrations/018_chat_reply_token.sql) — chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method (Hybrid Reply+Push API — session 15, makes admin replies free when within reply token window)
 - [019_line_oa_mark_as_read.sql](backend/internal/database/migrations/019_line_oa_mark_as_read.sql) — line_oa_accounts.mark_as_read_enabled per-OA opt-in for LINE Premium "อ่านแล้ว" read receipts (session 17)
 - [020_bill_remark.sql](backend/internal/database/migrations/020_bill_remark.sql) — bills.remark for admin-entered remark passed through to SML purchaseorder
+- [037_data_lifecycle.sql](backend/internal/database/migrations/037_data_lifecycle.sql) — production data lifecycle: summary tables, log/bill indexes, cursor-friendly access paths
 
 Production DB note: server currently also has legacy `system_settings` and `sml_settings` tables that are not in current local migrations and are not referenced by current code.
+
+Production data lifecycle:
+- Detailed `/api/logs` and document lists are cursor-based to avoid expensive `COUNT(*) + OFFSET` patterns on large tables.
+- Audit logs keep compact SML support fields instead of copying full `sml_payload` / `sml_response` into every row.
+- Daily lifecycle job auto-archives `sent/skipped` bills older than 180 days and rollups/purges detailed audit + AI usage logs older than 90 days in batches.
+- `/settings/old-data` exposes table size, row count, oldest rows, eligible archive/purge rows, and dry-run purge summaries. Purge is manual and nothing is selected by default.
 
 ---
 
@@ -336,9 +347,13 @@ Production DB note: server currently also has legacy `system_settings` and `sml_
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/bills` | JWT | List bills (filter: status, source, bill_type, date) |
+| GET | `/api/bills` | JWT | List bills with cursor pagination; filters: status, source, bill_type, document_route, archived, date_from, date_to. Legacy page/per_page still works |
+| GET | `/api/bills/counts` | JWT | Queue counts for needs_review/pending/sent/failed in one request |
 | GET | `/api/bills/:id` | JWT | Bill detail with items |
 | POST | `/api/bills/:id/retry` | JWT | Manual confirm/send → SML (4-way route: sale_reserve/saleorder/saleinvoice/purchaseorder) |
+| POST | `/api/bills/:id/archive` | admin/staff | Archive one bill |
+| POST | `/api/bills/:id/restore` | admin/staff | Restore one archived bill |
+| DELETE | `/api/bills/:id` | admin/staff | Delete one bill |
 | PUT | `/api/bills/:id/items/:item_id` | admin/staff | Edit qty/price/item_code (F1 auto-learn on item_code change) |
 | POST | `/api/bills/:id/items` | admin/staff | Add a new line item |
 | DELETE | `/api/bills/:id/items/:item_id` | admin/staff | Remove a line item |
@@ -371,7 +386,7 @@ Production DB note: server currently also has legacy `system_settings` and `sml_
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/logs` | admin | Activity log (audit_logs table) |
+| GET | `/api/logs` | admin/staff | Activity log cursor pagination (`limit`, `cursor`, `has_more`, `next_cursor`); no total unless `include_total=true` |
 
 ### Settings
 

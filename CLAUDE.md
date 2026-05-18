@@ -99,8 +99,10 @@ billflow-postgres  → 5438
 │    GET  /api/auth/me               ← current user           │
 │                                                             │
 │    Bills (manual-confirm flow):                             │
-│    GET  /api/bills                 ← list (status/source/   │
-│                                       bill_type filter)     │
+│    GET  /api/bills                 ← cursor list (status,   │
+│                                       source, bill_type,    │
+│                                       date, archived)       │
+│    GET  /api/bills/counts          ← queue counts for lists │
 │    GET  /api/bills/:id             ← detail + items         │
 │    POST /api/bills/:id/retry       ← 4-way SML send         │
 │                                       (sale_reserve /       │
@@ -111,6 +113,9 @@ billflow-postgres  → 5438
 │                                       (also fires F1 hook)  │
 │    POST /api/bills/:id/items       ← add row                │
 │    DEL  /api/bills/:id/items/:iid  ← delete row             │
+│    POST /api/bills/:id/archive     ← archive one bill       │
+│    POST /api/bills/:id/restore     ← restore one bill       │
+│    DEL  /api/bills/:id             ← delete one bill        │
 │                                                             │
 │    Mappings + F1:                                           │
 │    GET  /api/mappings              ← list (manual + ai_*)   │
@@ -145,7 +150,8 @@ billflow-postgres  → 5438
 │    GET  /api/dashboard/stats                                │
 │    GET  /api/dashboard/insights                             │
 │    POST /api/dashboard/insights/generate (admin)            │
-│    GET  /api/logs                                           │
+│    GET  /api/logs                  ← cursor logs, no total  │
+│                                       unless include_total  │
 │    GET  /api/settings/status                                │
 │    GET  /api/settings/column-mappings/:platform             │
 │    PUT  /api/settings/column-mappings/:platform (admin)     │
@@ -596,6 +602,15 @@ CREATE TABLE imap_accounts (
 > - [017_chat_crm.sql](backend/internal/database/migrations/017_chat_crm.sql) — chat_conversations.phone + chat_notes + chat_tags + chat_conversation_tags (CRM lite Phase 4.7+4.8+4.9 — session 14)
 > - [018_chat_reply_token.sql](backend/internal/database/migrations/018_chat_reply_token.sql) — chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method (Hybrid Reply+Push API — session 15)
 > - [019_line_oa_mark_as_read.sql](backend/internal/database/migrations/019_line_oa_mark_as_read.sql) — line_oa_accounts.mark_as_read_enabled per-OA opt-in toggle for LINE Premium "อ่านแล้ว" read receipts (session 17)
+> - [037_data_lifecycle.sql](backend/internal/database/migrations/037_data_lifecycle.sql) — production data lifecycle: summary tables, log/bill indexes, cursor-friendly access paths
+
+> **Production data lifecycle**
+> - `/api/logs` uses cursor pagination (`limit`, `cursor`, `has_more`, `next_cursor`) and does not run `COUNT(*)` unless `include_total=true`.
+> - `/api/bills` supports cursor pagination plus legacy `page/per_page`, filters `archived`, `date_from`, `date_to`, and defaults to active rows only.
+> - `/api/bills/counts` returns queue counts for bills/sales-orders/sale-invoices in one request.
+> - SML audit rows store compact support fields instead of full `sml_payload` / `sml_response`.
+> - The daily lifecycle job auto-archives `sent/skipped` older than 180 days and rollups/purges detailed audit + AI logs older than 90 days in batch-safe chunks.
+> - `/settings/old-data` shows row count, table size, oldest row, policy, dry-run summary, and never selects purge by default.
 
 ---
 
