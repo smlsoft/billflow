@@ -47,6 +47,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ThemeToggle } from '@/components/common/ThemeToggle'
+import { BillFlowLogo } from '@/components/common/BillFlowLogo'
 import { useAuth } from '@/hooks/useAuth'
 import { useUIStore } from '@/lib/ui-store'
 import { cn } from '@/lib/utils'
@@ -209,6 +210,7 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const collapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggle = useUIStore((s) => s.toggleSidebar)
+  const [isNarrowViewport, setIsNarrowViewport] = useState(false)
   const [queueCounts, setQueueCounts] = useState({ purchase: 0, saleorder: 0, saleinvoice: 0, marketplaceAliases: 0 })
   const [unreadMessages, setUnreadMessages] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -287,6 +289,14 @@ export default function Sidebar() {
     return () => window.removeEventListener('keydown', onKey)
   }, [toggle])
 
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 767px)')
+    const sync = () => setIsNarrowViewport(mql.matches)
+    sync()
+    mql.addEventListener('change', sync)
+    return () => mql.removeEventListener('change', sync)
+  }, [])
+
   const handleLogout = () => {
     logout()
     navigate('/login')
@@ -302,7 +312,8 @@ export default function Sidebar() {
           .toUpperCase()
       : '?'
 
-  const sidebarWidth = collapsed ? 'w-14' : 'w-60'
+  const navCollapsed = collapsed || isNarrowViewport
+  const sidebarWidth = navCollapsed ? 'w-14' : 'w-60'
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -313,11 +324,9 @@ export default function Sidebar() {
         )}
       >
         {/* Logo */}
-        <div className={cn('flex h-14 items-center gap-2 px-3', collapsed && 'justify-center px-0')}>
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-            <FileText className="h-4 w-4" strokeWidth={2.25} />
-          </div>
-          {!collapsed && (
+        <div className={cn('flex h-14 items-center gap-2 px-3', navCollapsed && 'justify-center px-0')}>
+          <BillFlowLogo />
+          {!navCollapsed && (
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold leading-tight">BillFlow</div>
               <div className="truncate text-[10px] text-muted-foreground">
@@ -343,12 +352,12 @@ export default function Sidebar() {
             .filter((group) => group.items.length > 0)
             .map((group, gi) => (
             <div key={group.label} className={cn('flex flex-col gap-0.5', gi > 0 && 'mt-4')}>
-              {!collapsed && (
+              {!navCollapsed && (
                 <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                   {group.label}
                 </div>
               )}
-              {collapsed && gi > 0 && <Separator className="my-2" />}
+              {navCollapsed && gi > 0 && <Separator className="my-2" />}
 
               {group.items.map((item) => {
                 const Icon = item.icon
@@ -383,15 +392,15 @@ export default function Sidebar() {
                       active
                         ? 'bg-primary/10 text-primary font-semibold'
                         : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-                      collapsed && 'justify-center px-0',
+                      navCollapsed && 'justify-center px-0',
                     )}
                   >
-                    {active && !collapsed && (
+                    {active && !navCollapsed && (
                       <span className="absolute inset-y-1 left-0 w-0.5 rounded-r-full bg-primary" />
                     )}
                     <span className="relative">
                       <Icon className="h-[15px] w-[15px] shrink-0" strokeWidth={2} />
-                      {showBadge && collapsed && (
+                      {showBadge && navCollapsed && (
                         <span
                           className={cn(
                             'absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full',
@@ -400,7 +409,7 @@ export default function Sidebar() {
                         />
                       )}
                     </span>
-                    {!collapsed && (
+                    {!navCollapsed && (
                       <>
                         <span className="flex-1 truncate">{item.label}</span>
                         {showBadge && (
@@ -422,7 +431,7 @@ export default function Sidebar() {
                   </NavLink>
                 )
 
-                if (!collapsed) return link
+                if (!navCollapsed) return link
                 return (
                   <Tooltip key={item.to}>
                     <TooltipTrigger asChild>{link}</TooltipTrigger>
@@ -448,8 +457,8 @@ export default function Sidebar() {
             when sidebar collapsed — the dot still shows so admins notice
             'reconnecting' / 'offline'. */}
         {ENABLE_CHAT && PHASE >= 2 && (
-          <div className={cn('px-2 py-1.5', collapsed ? 'flex justify-center' : '')}>
-            <ConnectionDot collapsed={collapsed} />
+          <div className={cn('px-2 py-1.5', navCollapsed ? 'flex justify-center' : '')}>
+            <ConnectionDot collapsed={navCollapsed} />
           </div>
         )}
 
@@ -460,11 +469,11 @@ export default function Sidebar() {
             variant="ghost"
             size="sm"
             onClick={toggle}
-            className={cn('h-8 w-full justify-start gap-2 px-2 text-xs text-muted-foreground', collapsed && 'justify-center px-0')}
-            aria-label={collapsed ? 'ขยาย sidebar' : 'ยุบ sidebar'}
+            className={cn('h-8 w-full justify-start gap-2 px-2 text-xs text-muted-foreground', navCollapsed && 'justify-center px-0')}
+            aria-label={navCollapsed ? 'ขยาย sidebar' : 'ยุบ sidebar'}
           >
-            {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
-            {!collapsed && <span>ยุบเมนู</span>}
+            {navCollapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+            {!navCollapsed && <span>ยุบเมนู</span>}
           </Button>
         </div>
 
@@ -476,7 +485,7 @@ export default function Sidebar() {
                 type="button"
                 className={cn(
                   'flex w-full items-center gap-2 rounded-md p-1.5 text-left transition-colors hover:bg-accent',
-                  collapsed && 'justify-center',
+                  navCollapsed && 'justify-center',
                 )}
                 aria-label="เมนูผู้ใช้"
               >
@@ -485,7 +494,7 @@ export default function Sidebar() {
                     {initials}
                   </AvatarFallback>
                 </Avatar>
-                {!collapsed && (
+                {!navCollapsed && (
                   <div className="min-w-0 flex-1 leading-tight">
                     <div className="truncate text-xs font-medium">
                       {user?.name || user?.email}
