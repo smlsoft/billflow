@@ -18,12 +18,12 @@ import (
 // just pass the JWT).
 //
 // Auth flow:
-//   1. Browser already has JWT (from login). Calls POST /api/admin/events/token
-//      → server returns a short-lived (5 min) HMAC token bound to the admin's
-//      user_id.
-//   2. Browser opens EventSource('/api/admin/events?u=<userID>&t=<token>').
-//      Server validates token; if good, subscribes the client to the broker
-//      and streams events forever.
+//  1. Browser already has JWT (from login). Calls POST /api/admin/events/token
+//     → server returns a short-lived (5 min) HMAC token bound to the admin's
+//     user_id.
+//  2. Browser opens EventSource('/api/admin/events?u=<userID>&t=<token>').
+//     Server validates token; if good, subscribes the client to the broker
+//     and streams events forever.
 type SSEHandler struct {
 	broker *events.Broker
 	signer *media.Signer
@@ -47,8 +47,8 @@ func (h *SSEHandler) IssueToken(c *gin.Context) {
 	}
 	tok := h.signer.Sign(userID, 5*time.Minute)
 	c.JSON(http.StatusOK, gin.H{
-		"token":      tok,
-		"user_id":    userID,
+		"token":       tok,
+		"user_id":     userID,
 		"ttl_seconds": 300,
 	})
 }
@@ -81,6 +81,10 @@ func (h *SSEHandler) Stream(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
 		return
 	}
+	// The global HTTP server has a WriteTimeout for normal API safety, but
+	// this endpoint is a long-lived SSE stream. Clear the per-response write
+	// deadline so Go doesn't close the stream every 60 seconds.
+	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
 
 	ch, unsub := h.broker.Subscribe()
 	defer unsub()

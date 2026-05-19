@@ -214,12 +214,15 @@ func main() {
 		WithAppAttribution(cfg.OpenRouterAppTitle, cfg.OpenRouterAppReferer).
 		WithUsageLogger(aiUsageRepo)
 	catalogIdx := catalog.NewCatalogIndex()
-	// Load existing embeddings into memory at startup
-	if err := catalogIdx.Reload(catalogRepo); err != nil {
-		logger.Warn("catalog: reload index at startup", zap.Error(err))
-	} else {
+	// Load existing embeddings into memory in the background. This can be
+	// expensive after a full catalog sync, so it must not block HTTP startup.
+	go func() {
+		if err := catalogIdx.Reload(catalogRepo); err != nil {
+			logger.Warn("catalog: reload index at startup", zap.Error(err))
+			return
+		}
 		logger.Info("catalog: index loaded", zap.Int("size", catalogIdx.Size()))
-	}
+	}()
 
 	// LINE service (legacy single instance) — kept for PushAdmin paths used by
 	// insight cron, disk monitor, and email coordinator error notifications.
