@@ -25,7 +25,7 @@ func SkipMessage(code, label string) error {
 		code = "skipped"
 	}
 	if label == "" {
-		label = fmt.Sprintf("ข้ามเมลนี้ (%s)", code)
+		label = fmt.Sprintf("ไม่สร้างบิลใหม่ (%s)", code)
 	}
 	return &MessageSkipError{Code: code, Label: label}
 }
@@ -48,4 +48,14 @@ type Processors struct {
 	// (purchaseorder flow). Used for channel="shopee" when the subject
 	// contains "ถูกจัดส่งแล้ว".
 	ShopeeShipped ShopeeBodyProcessor
+
+	// DuplicateMessage returns true when a Message-ID has already been
+	// processed. It lets the poller avoid fetching body/AI work for old
+	// read+unread messages while still reporting a user-friendly summary.
+	DuplicateMessage func(messageID string) (bool, error)
+
+	// DuplicateMessages is the batch form used by IMAP envelope polling so a
+	// mailbox with hundreds of old read+unread messages does one DB lookup per
+	// batch instead of one lookup per message.
+	DuplicateMessages func(messageIDs []string) (map[string]bool, error)
 }

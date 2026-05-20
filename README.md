@@ -40,7 +40,7 @@
 | Shopee Excel | Export จาก Shopee Seller Center | บิลขาย | Phase 4a | ✅ deployed; SML send via Retry route |
 | Lazada Excel | Export จาก Lazada Seller Center | บิลขาย | Phase 4b | ✅ deployed main + Henna |
 | TikTok Excel/CSV | Export จาก TikTok Seller Center | บิลขาย | Phase 4c | ✅ deployed main + Henna |
-| Shopee API direct | Shopee Open Platform order sync | บิลขาย | Phase 4d | ⏭️ next phase; reuse Shopee Excel review/SML retry flow |
+| Shopee API direct | Shopee Open Platform order sync | บิลขาย | Phase 4d | ✅ readiness deployed on main; waiting for Shopee Go-Live approval |
 
 
 **Output:** สร้างบิลใน SML ERP ผ่าน JSON-RPC API + บันทึก log ลง PostgreSQL + แจ้ง admin ผ่าน LINE เมื่อเกิด error
@@ -119,6 +119,9 @@ Go Backend (Gin) :8090
   ├── GET  /api/mappings/stats
   ├── GET  /api/catalog                     ← SML product catalog list
   ├── GET  /api/catalog/search              ← embedding similarity search
+  ├── GET  /api/catalog/:code/image         ← authenticated SML image proxy
+  ├── GET  /api/catalog/:code/images        ← SML image metadata list
+  ├── GET  /api/catalog/:code/images/:roworder ← authenticated SML image proxy
   ├── POST /api/catalog/products            ← create new SML product (+ embed bg)
   ├── POST /api/catalog/sync                ← bulk sync from SML 248
   ├── POST /api/catalog/embed-all           ← background embed
@@ -135,6 +138,10 @@ Go Backend (Gin) :8090
   ├── POST /api/import/tiktok/preview       ← TikTok Excel/CSV preview + dedup
   ├── POST /api/import/tiktok/confirm       ← create local TikTok sale bills
   ├── GET  /api/settings/shopee-config
+  ├── GET  /api/settings/shopee-api/status  ← Shopee Open API readiness
+  ├── POST /api/shopee-api/auth-url         ← create Shopee OAuth URL
+  ├── GET  /api/shopee-api/callback         ← Shopee OAuth callback (state auth)
+  ├── POST /api/import/shopee/api/preview   ← Shopee API preview, no bill writes
   ├── POST /api/import/shopee/preview       ← parse + dedup check
   ├── POST /api/import/shopee/confirm       ← ส่ง SML 248
   ├── GET  /api/settings/column-mappings/:platform
@@ -379,6 +386,10 @@ Production data lifecycle:
 |---|---|---|---|
 | POST | `/api/import/upload` | admin/staff | Upload Lazada Excel → preview bills |
 | GET | `/api/settings/shopee-config` | JWT | Shopee SML defaults (pre-fill dialog) |
+| GET | `/api/settings/shopee-api/status` | admin/staff | Shopee Open API readiness + connection state |
+| POST | `/api/shopee-api/auth-url` | admin | Create Shopee OAuth URL with short-lived state |
+| GET | `/api/shopee-api/callback` | state auth | Shopee OAuth callback; exchanges code for shop token |
+| POST | `/api/import/shopee/api/preview` | admin/staff | Preview Shopee Open API orders without writing bills |
 | POST | `/api/import/shopee/preview` | admin/staff | Parse Shopee Excel + dedup check |
 | POST | `/api/import/shopee/confirm` | admin/staff | Create local Shopee bills; SML send happens via bill Retry route |
 
@@ -445,6 +456,9 @@ Production data lifecycle:
 | GET | `/api/catalog/stats` | JWT | Total, embedded, pending, error counts |
 | GET | `/api/catalog/search` | JWT | Cosine-similarity search (fallback to Levenshtein) |
 | GET | `/api/catalog/:code` | JWT | Catalog item detail |
+| GET | `/api/catalog/:code/image` | JWT | Authenticated primary SML product image proxy |
+| GET | `/api/catalog/:code/images` | JWT | SML product image metadata for gallery |
+| GET | `/api/catalog/:code/images/:roworder` | JWT | Authenticated specific SML product image proxy |
 | POST | `/api/catalog/sync` | admin | Sync from SML 248 product API |
 | POST | `/api/catalog/import-csv` | admin | Bulk CSV upload |
 | POST | `/api/catalog/embed-all` | admin | Background batch embedding |
@@ -878,14 +892,14 @@ sudo systemctl start cloudflared
 | 4a | Shopee import: Excel → local bills → Retry default SML 248 saleorder | ✅ Done |
 | 4b | Lazada import: Excel parser + Web UI | ✅ Deployed main + Henna |
 | 4c | TikTok import: Excel/CSV parser + Web UI | ✅ Deployed main + Henna |
-| 4d | Shopee API direct: Open Platform auth/token/order sync → local bills → existing review/SML retry flow | ⏭️ Next phase |
+| 4d | Shopee API direct: Open Platform auth/token/order preview → local bills → existing review/SML retry flow | ✅ Readiness deployed on main; waits for Shopee approval/live key |
 | 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped → PO) | ✅ Done |
 | 5+ | Manual-confirm flow — auto-send removed; user confirms in BillDetail UI | ✅ Done |
 | 6 | Web UI complete. Session 6: Tailwind/shadcn redesign + multi-account IMAP + artifacts. Session 7: channel_defaults + /settings/channels + SML party cache. Session 7-10: saleorder default + endpoint URL + doc_no generator + /logs redesign. Session 11: per-channel WH/Shelf/VAT override + ShopeeImport dialog removed + scrollable EditDialog. Session 12: marshalASCII permanent SML mojibake fix + catalog per-row Refresh/Delete. Session 13: LINE chatbot → human chat inbox + multi-OA (/messages, /settings/line-oa, webhook /webhook/line/:oaId, ~900 LOC chatbot removed) + Phase 4 quick wins (4.4 quick replies, 4.5 customer history panel, 4.11 browser notifications + chime). Session 14: composer redesign (auto-grow, paste, drag-drop) + admin send-image via Cloudflare Quick Tunnel + HMAC-signed /public/media/ URLs + conversation status (open/resolved/archived + auto-revive) + server-side inbox/thread search + CRM lite (phone detect, internal notes, tags + /settings/chat-tags). Session 15: hybrid Reply+Push API saving the 200/mo Free OA push quota (cached replyToken from inbound webhook → admin reply uses free Reply API; falls back to Push only when token expires). Session 16: closed audit log gaps for chat metadata (notes/tags/quick-reply CRUD + phone) — 17 new Thai-labeled actions in /logs; archived chats now disable composer with banner; CreateBillPanel auto-prefills phone from conversation; tag filter in inbox (multi-select with chips). Session 17: real-time inbox via Server-Sent Events (in-process broker + HMAC-signed token + EventSource singleton) — sub-second updates without WebSocket; polling kept at 30/60s safety net. Connection state indicator dot in sidebar. LINE markAsRead opt-in toggle per OA (Premium feature). Hourly stale reply-token cleanup. Server-restart pending-message recovery on boot. Self-tab dedup logic prevents duplicate bubbles when admin sends. Fixed major useEffect bug that was spamming mark-read every 30s and on every search keystroke. Session 18: 6-phase UX polish — /logs shows actual message content + Reply/Push chip; bill failures get a structured card (route badge + monospace error + copy-for-dev); sidebar reorganized into 5 domain groups (Overview / Bills / Chat / Master Data / System) with Thai labels + English tooltip hints; per-bill timeline reuses /logs ACTION_META; inline Retry button on /logs sml_failed rows; Dashboard "ต้อง action" widget with 4 click-through cards (บิลรอตรวจ / บิลล้มเหลว / ข้อความใหม่ / Email มีปัญหา) + URL-filter deep links. Session 19: heuristic evaluation pass — 16 fixes across all admin pages. Sprint A: lib/labels.ts SSOT (single status name everywhere), /settings rewrite with live multi-account status (LINE OA + IMAP counts) + Lazada column mapping moved into /import, composer disabled visual + Messages mobile responsive (back button), Catalog ↔ Mappings explainer banners, inline Retry on collapsed /logs rows. Sprint B: ShopeeImport preflight blocks file picker when channel config missing, Mappings empty-state CTA, tag-flow cross-links, Extract→CreateBill toast bridge, sidebar hints visible in expanded mode, BillDetail breathing room, Quick Setup tooltip. Sprint C: composer attachment count, catalog embedding async explainer, conversation freshness (relative time). Session 20: Send-to-SML validation guard (BillTotal disabled when items have unmapped item_code/unit_code, qty=0, or price=0; warning card lists each issue + "ดู →" jump-to-row; per-row AlertCircle icon in tiny status column). Route preview chip below Send button surfaces SML route + doc_no pattern so admins catch misconfigured channels before retry. Cloudflare Quick Tunnel drift monitor — daily 9am cron pings PUBLIC_BASE_URL/health and LINE-alerts admin (with inline recovery commands) when the tunnel URL has rolled. | ✅ Done |
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
-### Latest Production Check (2026-05-12)
+### Latest Production Check (2026-05-20)
 
 ```
 Server folder: /home/bosscatdog/billflow
@@ -896,8 +910,14 @@ Containers:
 Health:
   {"database":"ok","env":"production","status":"ok"}
 DB:
-  migrations through 020 present in code; production also has legacy
-  system_settings/sml_settings tables not referenced by current code.
+  migrations through 042 present in code, including Shopee Open API
+  tables/events and SML catalog image metadata.
+SML images:
+  active tenant SML1_2026 uses sml1_2026_images; image lookup index
+  images_trim_image_id_order_roworder_file_idx verified.
+Shopee Open API:
+  readiness UI/API deployed on main, live connection waits for Shopee
+  Go-Live approval and live partner key cutover.
 
 Email IMAP pipeline (2026-04-24):
 ✅ SASL PLAIN auth (Gmail App Password)
@@ -940,7 +960,7 @@ Marketplace import / next phase:
 ✅ Lazada Excel import deployed to main + Henna (Phase 4b)
 ✅ TikTok Excel/CSV import deployed to main + Henna (Phase 4c)
 ✅ Shopee Excel deployed; imports ready-to-ship rows and routes through local review/SML retry
-⬜ Shopee API direct is the next phase; start on BillFlow main, then main + Henna after UAT
+✅ Shopee API direct readiness deployed on BillFlow main; live connection waits for Shopee Go-Live approval
 ⬜ Thaisunsport remains Phase 1 purchase-only until explicitly enabled for sales
 ```
 
@@ -1043,6 +1063,8 @@ docker logs billflow-backend --tail=20 2>&1 | grep coordinator
 | [docs/line-oa.md](docs/line-oa.md) | LINE OA human inbox, multi-OA, Reply/Push, media |
 | [docs/email.md](docs/email.md) | Email IMAP workflow: poll, dedup, OCR, extract, SML |
 | [docs/shopee-import.md](docs/shopee-import.md) | Shopee Excel import → local bills → SML 248 Retry route |
+| [docs/sml-api-migration.md](docs/sml-api-migration.md) | BillFlow main → sml-api-bybos migration notes |
+| [docs/sml-image-db-maintenance.md](docs/sml-image-db-maintenance.md) | SML product image DB index/runbook for tenant moves |
 
 ---
 

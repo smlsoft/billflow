@@ -57,7 +57,7 @@ func (c *Coordinator) Start(parent context.Context) error {
 
 	c.logger.Info("coordinator_start", zap.Int("enabled_accounts", len(accounts)))
 	for _, a := range accounts {
-		c.startPoller(a)
+		c.startPoller(a, true)
 	}
 	return nil
 }
@@ -84,6 +84,16 @@ func (c *Coordinator) Stop() {
 // ReloadAccount stops any existing poller for this id then starts a fresh
 // one if the row is currently enabled. Idempotent.
 func (c *Coordinator) ReloadAccount(id string) error {
+	return c.reloadAccount(id, true)
+}
+
+// ReloadAccountIdle restarts the background ticker without the immediate
+// startup poll. Used after a manual one-off poll has already run.
+func (c *Coordinator) ReloadAccountIdle(id string) error {
+	return c.reloadAccount(id, false)
+}
+
+func (c *Coordinator) reloadAccount(id string, pollInitial bool) error {
 	account, err := c.repo.GetByID(id)
 	if err != nil {
 		return fmt.Errorf("coordinator reload: %w", err)
@@ -105,7 +115,7 @@ func (c *Coordinator) ReloadAccount(id string) error {
 		return nil
 	}
 
-	c.startPoller(account)
+	c.startPoller(account, pollInitial)
 	return nil
 }
 
@@ -181,8 +191,9 @@ func (c *Coordinator) TestConnection(ctx context.Context, a *models.IMAPAccount)
 	}
 }
 
-func (c *Coordinator) startPoller(a *models.IMAPAccount) {
+func (c *Coordinator) startPoller(a *models.IMAPAccount, pollInitial bool) {
 	p := NewAccountPoller(a.ID, c.repo, c.processors, c.lineSvc, c.logger)
+	p.skipInitial = !pollInitial
 	c.mu.Lock()
 	c.pollers[a.ID] = p
 	c.mu.Unlock()

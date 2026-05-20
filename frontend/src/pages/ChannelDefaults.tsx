@@ -151,7 +151,7 @@ function HelpBanner() {
             {phase1 ? (
               <p className="text-muted-foreground">
                 ใน Phase 1 หน้านี้เปิดเฉพาะเส้นทางที่พร้อมใช้งานก่อน ได้แก่{' '}
-                <b>Email Shopee → บิลซื้อ</b>{ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Shopee Excel → บิลขาย</b></> : null}{ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Lazada Excel → บิลขาย</b></> : null}{ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>TikTok Excel → บิลขาย</b></> : null}.
+                <b>Email Shopee → บิลซื้อ</b>{ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Shopee → บิลขาย</b></> : null}{ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Lazada Excel → บิลขาย</b></> : null}{ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>TikTok Excel → บิลขาย</b></> : null}.
                 ใช้กำหนดปลายทางที่จะส่งเอกสารเข้า SML ได้แก่ เมนู SML รหัสประเภทเอกสาร
                 และรูปแบบเลขเอกสาร. ส่วนคู่ค้า คลัง พื้นที่เก็บ และภาษี จะเลือกในขั้นตอนส่งบิล.
               </p>

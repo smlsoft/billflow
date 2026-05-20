@@ -109,3 +109,10 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
   - PO `BF-APIQA-PO-260518-001` (`trans_flag=6`)
 - Product create passed: `BFAPIQAPRD260518001`; duplicate returns `duplicate_product_code`.
 - BillFlow main backend was rebuilt/restarted with the new response parser; startup cache shows `warehouse_cache_refreshed warehouses=4 shelves=4` and `party_cache_refreshed customers=1004 suppliers=500`.
+
+## Product image DB operations — 2026-05-20
+
+- BillFlow main now lazy-loads SML product images through `sml-api-bybos`; BillFlow stores image metadata only in `sml_catalog`.
+- The active product tenant `SML1_2026` uses image DB `sml1_2026_images`.
+- Apply and verify the image lookup index with [../scripts/apply-sml-image-index.sh](../scripts/apply-sml-image-index.sh) before switching `/settings/instance` to a new SML tenant or a restored SML PostgreSQL server.
+- The operational runbook is [sml-image-db-maintenance.md](sml-image-db-maintenance.md).

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +62,8 @@ var instanceSettingDefs = []settingDef{
 	{Key: "automation.auto_confirm_threshold", Label: "เกณฑ์ confidence", Group: "automation", Type: "number", Restart: true},
 }
 
+var smlDatabaseNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
 func (h *InstanceSettingsHandler) Get(c *gin.Context) {
 	dbSettings, err := h.repo.All()
 	if err != nil {
@@ -74,21 +78,28 @@ func (h *InstanceSettingsHandler) Get(c *gin.Context) {
 	missingRequired := []string{}
 	for _, def := range instanceSettingDefs {
 		dbVal, fromDB := dbSettings[def.Key]
-		value := ""
+		dbValue := ""
 		if fromDB {
-			value = strings.TrimSpace(dbVal.Value)
+			dbValue = strings.TrimSpace(dbVal.Value)
 		}
+		runtimeValue := strings.TrimSpace(runtimeValues[def.Key])
+		value := dbValue
 		source := "unset"
-		if fromDB && value != "" {
+		if value != "" {
 			source = "database"
+		} else if runtimeValue != "" {
+			value = runtimeValue
+			source = "env"
+		} else if def.DefaultValue != "" {
+			value = def.DefaultValue
+			source = "default"
 		}
 
 		missing := def.Required && value == ""
 
-		runtimeValue := runtimeValues[def.Key]
 		active := true
 		pendingRestart := false
-		if def.Restart && !def.Locked && runtimeValue != "" && value != strings.TrimSpace(runtimeValue) {
+		if def.Restart && !def.Locked && dbValue != "" && runtimeValue != "" && dbValue != runtimeValue {
 			active = false
 			pendingRestart = true
 			pendingKeys = append(pendingKeys, def.Key)
@@ -174,6 +185,12 @@ func (h *InstanceSettingsHandler) Update(c *gin.Context) {
 		if def.Secret && strings.Contains(trimmed, "••••••••") {
 			continue // skip masked placeholder — user didn't change the secret
 		}
+		if normalized, msg := normalizeInstanceSetting(def, trimmed); msg != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg, "key": key})
+			return
+		} else {
+			trimmed = normalized
+		}
 		values[key] = trimmed
 	}
 	if len(values) == 0 {
@@ -231,11 +248,43 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลด config ไม่ได้"})
 		return
 	}
-	// fallbacks for locked fields that are never written to DB
-	cfgFallback := map[string]string{
-		"sml.guid": h.cfg.ShopeeSMLGUID,
+
+	allowed := map[string]settingDef{}
+	for _, def := range instanceSettingDefs {
+		allowed[def.Key] = def
 	}
+	var body struct {
+		Settings map[string]string `json:"settings"`
+	}
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	overrides := map[string]string{}
+	for key, value := range body.Settings {
+		def, ok := allowed[key]
+		if !ok || def.Locked {
+			continue
+		}
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || (def.Secret && strings.Contains(trimmed, "••••••••")) {
+			continue
+		}
+		if normalized, msg := normalizeInstanceSetting(def, trimmed); msg != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg, "key": key})
+			return
+		} else {
+			overrides[key] = normalized
+		}
+	}
+
+	cfgFallback := repository.RuntimeSettingValues(h.cfg)
 	get := func(key string) string {
+		if v := strings.TrimSpace(overrides[key]); v != "" {
+			return v
+		}
 		if v := strings.TrimSpace(dbSettings[key].Value); v != "" {
 			return v
 		}
@@ -245,9 +294,9 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 	httpClient := &http.Client{Timeout: 8 * time.Second}
 
 	type checkResult struct {
-		OK      bool   `json:"ok"`
-		Error   string `json:"error,omitempty"`
-		Detail  string `json:"detail,omitempty"`
+		OK     bool   `json:"ok"`
+		Error  string `json:"error,omitempty"`
+		Detail string `json:"detail,omitempty"`
 	}
 
 	doGET := func(url string, headers map[string]string) (int, []byte, error) {
@@ -276,8 +325,14 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 		smlResult.Error = "ยังไม่ได้ตั้งค่า SML REST URL, guid หรือ database"
 	} else {
 		// Use supplier list — always exists, returns 403 on wrong tenant, 401 on bad guid.
-		smlURL := strings.TrimRight(baseURL, "/") + "/api/v1/ap/suppliers?page=1&size=1"
-		code, body, err := doGET(smlURL, map[string]string{"guid": guid, "databaseName": database})
+		smlURL := strings.TrimRight(baseURL, "/") + "/api/v1/ic/products?page=1"
+		code, body, err := doGET(smlURL, map[string]string{
+			"guid":           guid,
+			"provider":       get("sml.provider"),
+			"configFileName": get("sml.config_file"),
+			"databaseName":   database,
+			"X-Tenant":       database,
+		})
 		if err != nil {
 			smlResult.Error = fmt.Sprintf("เชื่อมต่อไม่ได้: %v", err)
 		} else if code == http.StatusOK {
@@ -345,10 +400,10 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 
 	allOK := smlResult.OK && lineResult.OK && orResult.OK
 	c.JSON(http.StatusOK, gin.H{
-		"ok":          allOK,
-		"sml":         smlResult,
-		"line":        lineResult,
-		"openrouter":  orResult,
+		"ok":         allOK,
+		"sml":        smlResult,
+		"line":       lineResult,
+		"openrouter": orResult,
 	})
 }
 
@@ -357,6 +412,40 @@ func maskSecret(v string) string {
 		return "••••••••"
 	}
 	return v[:4] + "••••••••" + v[len(v)-4:]
+}
+
+func normalizeInstanceSetting(def settingDef, value string) (string, string) {
+	value = strings.TrimSpace(value)
+	switch def.Key {
+	case "sml.rest_base_url":
+		return normalizeInstanceURL(value)
+	case "sml.database":
+		if !smlDatabaseNamePattern.MatchString(value) {
+			return "", "Database (tenant) ใช้ได้เฉพาะตัวอักษร ตัวเลข และ _ เท่านั้น"
+		}
+	case "automation.auto_confirm_threshold":
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil || f < 0 || f > 1 {
+			return "", "เกณฑ์ confidence ต้องเป็นตัวเลขระหว่าง 0 ถึง 1"
+		}
+		return floatString(f), ""
+	}
+	return value, ""
+}
+
+func normalizeInstanceURL(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", "SML REST URL ต้องเป็น URL เต็ม เช่น http://192.168.2.109:8200"
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", "SML REST URL ต้องขึ้นต้นด้วย http:// หรือ https://"
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/"), ""
 }
 
 func floatString(v float64) string {

@@ -18,8 +18,8 @@ ENV VITE_ENABLE_TIKTOK_EXCEL=${VITE_ENABLE_TIKTOK_EXCEL}
 ARG VITE_ENABLE_CHAT=true
 ENV VITE_ENABLE_CHAT=${VITE_ENABLE_CHAT}
 
-COPY package.json ./
-RUN npm install --legacy-peer-deps
+COPY package.json package-lock.json ./
+RUN npm ci --legacy-peer-deps
 
 COPY . .
 

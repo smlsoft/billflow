@@ -1,5 +1,7 @@
-cd c:/DEV/billflow && BF_PASS=boss123456 python -c "
+cd c:/DEV/billflow && BF_PASS=<set-in-shell> python -c "
 import paramiko, os
+if not os.environ.get('BF_PASS'):
+    raise SystemExit('BF_PASS is required')
 c = paramiko.SSHClient()
 c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 c.connect('192.168.2.109', username='bosscatdog', password=os.environ['BF_PASS'])

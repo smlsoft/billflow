@@ -33,6 +33,13 @@ backend/server
 delete_bills.md
 deploy.sh
 
+# Local import samples / QA artifacts
+Order.all.*.xlsx
+lazada.xlsx
+tiktok_csv.csv
+tiktok_excel.xlsx
+shopee-go-live-screenshots/
+
 # macOS metadata
 ._*
 .DS_Store

@@ -6,28 +6,44 @@ import (
 )
 
 type Bill struct {
-	ID            string          `json:"id"`
-	BillType      string          `json:"bill_type"`
-	Source        string          `json:"source"`
-	Status        string          `json:"status"`
-	DocumentRoute string          `json:"document_route"`
-	RawData       json.RawMessage `json:"raw_data,omitempty"`
-	SMLDocNo      *string         `json:"sml_doc_no,omitempty"`
-	SMLOrderID    string          `json:"sml_order_id,omitempty"`
-	SMLPayload    json.RawMessage `json:"sml_payload,omitempty"`
-	SMLResponse   json.RawMessage `json:"sml_response,omitempty"`
-	AIConfidence  *float64        `json:"ai_confidence,omitempty"`
-	Anomalies     json.RawMessage `json:"anomalies"`
-	ErrorMsg      *string         `json:"error_msg,omitempty"`
-	CreatedBy     *string         `json:"created_by,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
-	SentAt        *time.Time      `json:"sent_at,omitempty"`
-	ArchivedAt    *time.Time      `json:"archived_at,omitempty"`
-	ArchivedBy    *string         `json:"archived_by,omitempty"`
-	ArchiveReason string          `json:"archive_reason,omitempty"`
-	TotalAmount   *float64        `json:"total_amount,omitempty"`
-	Remark        string          `json:"remark"`
-	Items         []BillItem      `json:"items,omitempty"`
+	ID            string             `json:"id"`
+	BillType      string             `json:"bill_type"`
+	Source        string             `json:"source"`
+	Status        string             `json:"status"`
+	DocumentRoute string             `json:"document_route"`
+	RawData       json.RawMessage    `json:"raw_data,omitempty"`
+	SMLDocNo      *string            `json:"sml_doc_no,omitempty"`
+	SMLOrderID    string             `json:"sml_order_id,omitempty"`
+	SMLPayload    json.RawMessage    `json:"sml_payload,omitempty"`
+	SMLResponse   json.RawMessage    `json:"sml_response,omitempty"`
+	AIConfidence  *float64           `json:"ai_confidence,omitempty"`
+	Anomalies     json.RawMessage    `json:"anomalies"`
+	ErrorMsg      *string            `json:"error_msg,omitempty"`
+	CreatedBy     *string            `json:"created_by,omitempty"`
+	CreatedAt     time.Time          `json:"created_at"`
+	SentAt        *time.Time         `json:"sent_at,omitempty"`
+	ArchivedAt    *time.Time         `json:"archived_at,omitempty"`
+	ArchivedBy    *string            `json:"archived_by,omitempty"`
+	ArchiveReason string             `json:"archive_reason,omitempty"`
+	TotalAmount   *float64           `json:"total_amount,omitempty"`
+	Remark        string             `json:"remark"`
+	Items         []BillItem         `json:"items,omitempty"`
+	ShopeeStatus  *ShopeeOrderEvent  `json:"shopee_status,omitempty"`
+	ShopeeEvents  []ShopeeOrderEvent `json:"shopee_events,omitempty"`
+}
+
+type ShopeeOrderEvent struct {
+	ID          string          `json:"id"`
+	BillID      *string         `json:"bill_id,omitempty"`
+	OrderID     string          `json:"order_id"`
+	EventType   string          `json:"event_type"`
+	StatusLabel string          `json:"status_label"`
+	Subject     string          `json:"subject"`
+	FromAddr    string          `json:"from_addr"`
+	MessageID   string          `json:"message_id"`
+	EmailDate   *time.Time      `json:"email_date,omitempty"`
+	RawData     json.RawMessage `json:"raw_data,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
 type DailyInsight struct {

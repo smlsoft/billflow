@@ -264,6 +264,7 @@ func (h *EmailHandler) processOneShippedOrder(
 	if err := h.billRepo.Create(bill); err != nil {
 		return false, fmt.Errorf("create shopee_shipped bill: %w", err)
 	}
+	h.recordShopeeOrderEvent(bill.ID, subject, from, messageID, source, orderID)
 	_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
 
 	// Save original email body as artifact on the first order only to avoid

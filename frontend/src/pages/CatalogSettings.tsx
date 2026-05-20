@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Database,
   ExternalLink,
+  ImageIcon,
   Loader2,
   RefreshCcw,
   RefreshCw,
@@ -31,7 +32,9 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { AuthImage } from '@/components/common/AuthImage'
 import { PageHeader } from '@/components/common/PageHeader'
+import { ProductImagePreviewDialog } from '@/components/common/ProductImagePreviewDialog'
 import api from '@/api/client'
 import { cn } from '@/lib/utils'
 import { PAGE_TITLE } from '@/lib/labels'
@@ -203,6 +206,50 @@ function StatChip({
         </p>
       </CardContent>
     </Card>
+  )
+}
+
+function CatalogThumbnail({
+  item,
+  onPreview,
+}: {
+  item: CatalogItem
+  onPreview: (item: CatalogItem) => void
+}) {
+  const count = item.image_count ?? 0
+  const hasImage = Boolean(item.image_url && count > 0)
+  const image = (
+    <AuthImage
+      src={hasImage ? item.image_url : undefined}
+      className="h-full w-full rounded-md border border-border bg-muted/35"
+      imgClassName="object-cover"
+      fallback={
+        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+          <ImageIcon className="h-4 w-4" />
+        </div>
+      }
+    >
+      {count > 1 && (
+        <span className="absolute bottom-0.5 right-0.5 rounded bg-background/90 px-1 text-[10px] font-medium tabular-nums text-foreground shadow-sm">
+          {count}
+        </span>
+      )}
+    </AuthImage>
+  )
+
+  if (!hasImage) {
+    return <div className="h-11 w-11 shrink-0">{image}</div>
+  }
+
+  return (
+    <button
+      type="button"
+      className="h-11 w-11 shrink-0 rounded-md outline-none ring-offset-background transition-transform hover:scale-[1.03] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      onClick={() => onPreview(item)}
+      aria-label={`ดูรูป ${item.item_code}`}
+    >
+      {image}
+    </button>
   )
 }
 
@@ -381,6 +428,7 @@ export default function CatalogSettings() {
   // its buttons and show a spinner without blocking the rest of the table.
   const [busyRow, setBusyRow] = useState<{ code: string; action: 'refresh' | 'delete' } | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  const [previewItem, setPreviewItem] = useState<CatalogItem | null>(null)
 
   async function handleRefreshOne(code: string) {
     setBusyRow({ code, action: 'refresh' })
@@ -718,24 +766,29 @@ export default function CatalogSettings() {
               </TableRow>
             ) : (
               items.map((item) => (
-                <TableRow key={item.item_code} className="h-12">
+                <TableRow key={item.item_code} className="h-16">
                   <TableCell className="py-2 font-mono text-xs font-medium">
                     {item.item_code}
                   </TableCell>
                   <TableCell className="py-2">
-                    <div className="line-clamp-2 text-sm leading-5">{item.item_name}</div>
-                    {item.item_name2 && (
-                      <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                        {item.item_name2}
+                    <div className="flex min-w-0 items-center gap-3">
+                      <CatalogThumbnail item={item} onPreview={setPreviewItem} />
+                      <div className="min-w-0 flex-1">
+                        <div className="line-clamp-2 text-sm leading-5">{item.item_name}</div>
+                        {item.item_name2 && (
+                          <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+                            {item.item_name2}
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </TableCell>
                   <TableCell className="py-2 text-xs text-muted-foreground">
                     {item.unit_code || '—'}
                   </TableCell>
                   <TableCell className="py-2 text-right tabular-nums">
-                    {item.sale_price != null
-                      ? `฿${item.sale_price.toLocaleString()}`
+                    {item.sale_price != null || item.price != null
+                      ? `฿${(item.sale_price ?? item.price ?? 0).toLocaleString()}`
                       : '—'}
                   </TableCell>
                   <TableCell className="py-2">
@@ -839,6 +892,15 @@ export default function CatalogSettings() {
         onConfirm={() => {
           if (pendingDelete) handleDeleteOne(pendingDelete)
         }}
+      />
+
+      <ProductImagePreviewDialog
+        open={!!previewItem}
+        onOpenChange={(v) => !v && setPreviewItem(null)}
+        imageUrl={previewItem?.image_url}
+        itemCode={previewItem?.item_code}
+        itemName={previewItem?.item_name}
+        imageCount={previewItem?.image_count ?? 0}
       />
     </div>
   )

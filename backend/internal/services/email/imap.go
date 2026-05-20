@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +53,7 @@ type PollConfig struct {
 	FilterFrom     string
 	FilterSubjects []string // lower-cased keywords; empty = match all
 	LookbackDays   int      // ≥1
+	LastSeenUID    int64
 	Channel        string   // "general" | "shopee" | "lazada"
 	ShopeeDomains  []string // accepted senders for channel="shopee" (legacy DB name)
 }
@@ -61,7 +65,11 @@ type PollResult struct {
 	MessagesFound   int
 	Processed       int
 	Skipped         int
+	Summary         models.IMAPPollSummary
 	Details         []models.IMAPPollDetail
+	LastSeenUID     int64
+	Limited         bool
+	Backlog         int
 	ProcessWarnings []string
 	Duration        time.Duration
 	Err             error
@@ -74,20 +82,50 @@ type imapMessageSummary struct {
 	FromAddr string
 }
 
-const imapFetchBatchSize = 25
+type imapUIDCandidates struct {
+	Selected []imap.UID
+	Total    int
+	Backlog  int
+	Limited  bool
+}
+
+const (
+	imapFetchBatchSize       = 25
+	defaultMaxMessagesPerRun = 150
+	minMaxMessagesPerRun     = 25
+	maxMaxMessagesPerRun     = 500
+)
 
 // Status returns a short tag suitable for `imap_accounts.last_poll_status`.
 func (r *PollResult) Status() string {
+	if r.Err != nil && errors.Is(r.Err, context.Canceled) {
+		if r.LastSeenUID > 0 && (r.Processed > 0 || r.Skipped > 0) {
+			return "partial"
+		}
+		return "interrupted"
+	}
 	if r.Err == nil {
 		if len(r.ProcessWarnings) > 0 {
 			return "warning"
+		}
+		if r.Limited || r.Backlog > 0 {
+			return "backlog"
+		}
+		if r.Processed == 0 {
+			return "no_new_mail"
 		}
 		return "ok"
 	}
 	switch r.FailureStage {
 	case "":
+		if r.LastSeenUID > 0 && (r.Processed > 0 || r.Skipped > 0) {
+			return "partial"
+		}
 		return "error"
 	default:
+		if r.LastSeenUID > 0 && (r.Processed > 0 || r.Skipped > 0) {
+			return "partial"
+		}
 		return r.FailureStage + "_failed"
 	}
 }
@@ -169,17 +207,31 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		return res
 	}
 
-	uids := searchData.AllUIDs()
-	res.MessagesFound = len(uids)
+	uidCandidates := candidateUIDs(searchData.AllUIDs(), cfg.LastSeenUID, configuredMaxMessagesPerRun())
+	uids := uidCandidates.Selected
+	res.MessagesFound = uidCandidates.Total
+	res.Summary.Scanned = len(uids)
+	res.Limited = uidCandidates.Limited
+	res.Backlog = uidCandidates.Backlog
+	res.LastSeenUID = cfg.LastSeenUID
 	if len(uids) == 0 {
 		logger.Info("imap_poll_done",
 			zap.String("trace_id", res.TraceID),
 			zap.Int("messages_found", 0),
+			zap.Int("scanned", res.Summary.Scanned),
+			zap.Int64("last_seen_uid", res.LastSeenUID),
 		)
 		return res
 	}
 
-	logger.Info("imap_messages_found", zap.String("trace_id", res.TraceID), zap.Int("count", len(uids)))
+	logger.Info("imap_messages_found",
+		zap.String("trace_id", res.TraceID),
+		zap.Int("remaining", res.MessagesFound),
+		zap.Int("selected", len(uids)),
+		zap.Int("backlog", res.Backlog),
+		zap.Int64("last_seen_uid", res.LastSeenUID),
+		zap.Bool("limited", res.Limited),
+	)
 
 	var processedUIDs imap.UIDSet
 
@@ -187,6 +239,9 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		select {
 		case <-ctx.Done():
 			res.Err = ctx.Err()
+			res.Summary.Interrupted = true
+			res.Backlog = countUIDsAfter(uids, res.LastSeenUID) + uidCandidates.Backlog
+			res.Limited = res.Backlog > 0
 			return res
 		default:
 		}
@@ -200,14 +255,46 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		if err != nil {
 			res.Err = fmt.Errorf("IMAP fetch envelope: %w", err)
 			res.FailureStage = "fetch"
+			res.Backlog = countUIDsAfter(uids, res.LastSeenUID) + uidCandidates.Backlog
+			res.Limited = res.Backlog > 0
 			return res
+		}
+		duplicateMessages := map[string]bool{}
+		if p != nil && p.DuplicateMessages != nil {
+			messageIDs := messageIDsFromSummaries(summaries)
+			if len(messageIDs) > 0 {
+				duplicates, err := p.DuplicateMessages(messageIDs)
+				if err != nil {
+					warning := fmt.Sprintf("check duplicate messages: %v", err)
+					res.ProcessWarnings = append(res.ProcessWarnings, warning)
+					logger.Warn("imap_duplicate_batch_precheck_failed",
+						zap.String("trace_id", res.TraceID),
+						zap.Int("message_count", len(messageIDs)),
+						zap.Error(err),
+					)
+				} else {
+					duplicateMessages = duplicates
+					if len(duplicates) > 0 {
+						logger.Info("imap_duplicate_batch_prechecked",
+							zap.String("trace_id", res.TraceID),
+							zap.Int("message_count", len(messageIDs)),
+							zap.Int("duplicate_count", len(duplicates)),
+						)
+					}
+				}
+			}
 		}
 
 		var batchProcessedUIDs imap.UIDSet
 		batchProcessed := 0
 		for _, summary := range summaries {
+			if int64(summary.UID) > res.LastSeenUID {
+				res.LastSeenUID = int64(summary.UID)
+			}
 			envelope := summary.Envelope
 			if envelope == nil {
+				res.ProcessWarnings = append(res.ProcessWarnings, "อ่านข้อมูลหัวอีเมลไม่ได้")
+				res.Summary.Failed++
 				res.addDetail(summary, "skipped", "missing_envelope", "อ่านข้อมูลหัวอีเมลไม่ได้")
 				res.Skipped++
 				continue
@@ -219,6 +306,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					zap.String("subject", envelope.Subject),
 					zap.String("reason", "subject_filter_mismatch"),
 				)
+				res.Summary.SkippedUser++
 				res.addDetail(summary, "skipped", "subject_filter_mismatch", "หัวข้ออีเมลไม่ตรงคำกรอง")
 				res.Skipped++
 				continue
@@ -230,9 +318,47 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					zap.String("from", summary.FromAddr),
 					zap.String("reason", "shopee_channel_non_shopee_from"),
 				)
+				res.Summary.SkippedUser++
 				res.addDetail(summary, "skipped", "sender_not_allowed", "ผู้ส่งไม่อยู่ในรายชื่อที่ยอมรับ")
 				res.Skipped++
 				continue
+			}
+
+			messageID := envelope.MessageID
+			if strings.TrimSpace(messageID) != "" && duplicateMessages[messageID] {
+				logger.Debug("imap_message_duplicate_prechecked",
+					zap.String("trace_id", res.TraceID),
+					zap.String("message_id", messageID),
+					zap.String("subject", envelope.Subject),
+				)
+				res.Summary.AlreadyProcessed++
+				res.Summary.SkippedUser++
+				res.addDetail(summary, "skipped", "duplicate", "เมลนี้เคยประมวลผลหรือเคยสร้างบิลแล้ว")
+				res.Skipped++
+				continue
+			}
+			if p != nil && p.DuplicateMessages == nil && p.DuplicateMessage != nil && strings.TrimSpace(messageID) != "" {
+				duplicate, err := p.DuplicateMessage(messageID)
+				if err != nil {
+					warning := fmt.Sprintf("check duplicate message %s: %v", messageID, err)
+					res.ProcessWarnings = append(res.ProcessWarnings, warning)
+					logger.Warn("imap_duplicate_precheck_failed",
+						zap.String("trace_id", res.TraceID),
+						zap.String("message_id", messageID),
+						zap.Error(err),
+					)
+				} else if duplicate {
+					logger.Debug("imap_message_duplicate_prechecked",
+						zap.String("trace_id", res.TraceID),
+						zap.String("message_id", messageID),
+						zap.String("subject", envelope.Subject),
+					)
+					res.Summary.AlreadyProcessed++
+					res.Summary.SkippedUser++
+					res.addDetail(summary, "skipped", "duplicate", "เมลนี้เคยประมวลผลหรือเคยสร้างบิลแล้ว")
+					res.Skipped++
+					continue
+				}
 			}
 
 			bodyBytes, err := fetchBodyForUID(c, summary.UID)
@@ -244,17 +370,19 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					zap.Error(err),
 				)
 				res.ProcessWarnings = append(res.ProcessWarnings, warning)
+				res.Summary.Failed++
 				res.addDetail(summary, "skipped", "fetch_body_failed", "ดึงเนื้อหาอีเมลไม่สำเร็จ")
 				res.Skipped++
 				continue
 			}
 			if len(bodyBytes) == 0 {
+				res.ProcessWarnings = append(res.ProcessWarnings, "อีเมลไม่มีเนื้อหาที่ระบบอ่านได้")
+				res.Summary.Failed++
 				res.addDetail(summary, "skipped", "empty_body", "อีเมลไม่มีเนื้อหาที่ระบบอ่านได้")
 				res.Skipped++
 				continue
 			}
 
-			messageID := envelope.MessageID
 			logger.Info("imap_message_received",
 				zap.String("trace_id", res.TraceID),
 				zap.String("message_id", messageID),
@@ -272,15 +400,23 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				batchProcessedUIDs.AddNum(summary.UID)
 				batchProcessed++
 				res.Processed++
+				res.Summary.Created++
 				res.addDetail(summary, "processed", "accepted", "ส่งเข้ากระบวนการสร้างบิลแล้ว")
 			} else {
 				if warning != "" {
 					code, label, userSkipped := classifyDispatchWarning(warning)
 					if !userSkipped {
 						res.ProcessWarnings = append(res.ProcessWarnings, warning)
+						res.Summary.Failed++
+					} else {
+						res.Summary.SkippedUser++
+						if code == "duplicate" {
+							res.Summary.AlreadyProcessed++
+						}
 					}
 					res.addDetail(summary, "skipped", code, label)
 				} else {
+					res.Summary.SkippedUser++
 					res.addDetail(summary, "skipped", "not_processed", "ไม่เข้าเงื่อนไขการสร้างบิล")
 				}
 				res.Skipped++
@@ -301,10 +437,70 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		zap.Int("messages_found", res.MessagesFound),
 		zap.Int("processed", res.Processed),
 		zap.Int("skipped", res.Skipped),
+		zap.Int("summary_scanned", res.Summary.Scanned),
+		zap.Int("summary_created", res.Summary.Created),
+		zap.Int("summary_already_processed", res.Summary.AlreadyProcessed),
+		zap.Int("summary_skipped_user", res.Summary.SkippedUser),
+		zap.Int("summary_failed", res.Summary.Failed),
+		zap.Int64("last_seen_uid", res.LastSeenUID),
+		zap.Bool("limited", res.Limited),
+		zap.Int("backlog", res.Backlog),
 		zap.Int64("duration_ms", time.Since(pollStart).Milliseconds()),
 	)
 
 	return res
+}
+
+func configuredMaxMessagesPerRun() int {
+	raw := strings.TrimSpace(os.Getenv("IMAP_MAX_MESSAGES_PER_RUN"))
+	if raw == "" {
+		return defaultMaxMessagesPerRun
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultMaxMessagesPerRun
+	}
+	if n < minMaxMessagesPerRun {
+		return minMaxMessagesPerRun
+	}
+	if n > maxMaxMessagesPerRun {
+		return maxMaxMessagesPerRun
+	}
+	return n
+}
+
+func candidateUIDs(all []imap.UID, lastSeenUID int64, maxPerRun int) imapUIDCandidates {
+	if maxPerRun <= 0 {
+		maxPerRun = defaultMaxMessagesPerRun
+	}
+	remaining := make([]imap.UID, 0, len(all))
+	for _, uid := range all {
+		if int64(uid) > lastSeenUID {
+			remaining = append(remaining, uid)
+		}
+	}
+	out := imapUIDCandidates{Total: len(remaining)}
+	if len(remaining) == 0 {
+		return out
+	}
+	if len(remaining) > maxPerRun {
+		out.Selected = remaining[:maxPerRun]
+		out.Backlog = len(remaining) - maxPerRun
+		out.Limited = true
+		return out
+	}
+	out.Selected = remaining
+	return out
+}
+
+func countUIDsAfter(all []imap.UID, lastSeenUID int64) int {
+	n := 0
+	for _, uid := range all {
+		if int64(uid) > lastSeenUID {
+			n++
+		}
+	}
+	return n
 }
 
 func (r *PollResult) addDetail(summary imapMessageSummary, status, code, label string) {
@@ -372,6 +568,26 @@ func fetchEnvelopeBatch(c *imapclient.Client, uids []imap.UID) ([]imapMessageSum
 		return summaries, err
 	}
 	return summaries, nil
+}
+
+func messageIDsFromSummaries(summaries []imapMessageSummary) []string {
+	if len(summaries) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		if summary.Envelope == nil {
+			continue
+		}
+		id := strings.TrimSpace(summary.Envelope.MessageID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func fetchBodyForUID(c *imapclient.Client, uid imap.UID) ([]byte, error) {

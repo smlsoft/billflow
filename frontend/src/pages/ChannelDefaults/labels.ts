@@ -170,7 +170,7 @@ export function destinationKindFor(
 export const CHANNEL_LABELS: Record<ChannelKey, string> = {
   line: 'LINE OA',
   email: 'Email',
-  shopee: 'Shopee Excel',
+  shopee: 'Shopee',
   shopee_email: 'Shopee Order',
   shopee_shipped: 'Email บิลซื้อ Shopee',
   lazada: 'Lazada Excel',

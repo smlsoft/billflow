@@ -115,7 +115,7 @@ export default function Dashboard() {
             <div className="flex flex-wrap gap-2">
               {ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS && (
                 <Button asChild size="sm">
-                  <Link to="/import/shopee">นำเข้า Shopee Excel</Link>
+                  <Link to="/import/shopee">เปิด Shopee</Link>
                 </Button>
               )}
               {ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS && (
@@ -205,8 +205,8 @@ export default function Dashboard() {
             {ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS && (
               <FlowStep
                 icon={ShoppingBag}
-                title="Shopee Excel"
-                desc="นำเข้าไฟล์จาก Seller Center → แยกตามปลายทางที่ตั้งไว้ → ใบสั่งขายหรือขายสินค้าและบริการ"
+                title="Shopee"
+                desc="ดึงผ่าน Open API หรืออัปโหลด Excel → แยกตามปลายทางที่ตั้งไว้ → ใบสั่งขายหรือขายสินค้าและบริการ"
               />
             )}
             {ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS && (

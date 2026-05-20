@@ -2,6 +2,7 @@ package emailservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,9 +27,10 @@ type AccountPoller struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	mu      sync.Mutex
-	running bool
-	pollMu  sync.Mutex
+	mu          sync.Mutex
+	running     bool
+	skipInitial bool
+	pollMu      sync.Mutex
 }
 
 // alertThrottle — minimum gap between LINE admin notifications per account
@@ -99,11 +101,13 @@ func (p *AccountPoller) Stop() {
 func (p *AccountPoller) run(ctx context.Context) {
 	defer close(p.done)
 
-	// Always poll once on start so admins see immediate feedback after
-	// adding or editing an account.
-	p.pollCycle(ctx)
-	if ctx.Err() != nil {
-		return
+	if !p.skipInitial {
+		// Always poll once on start so admins see immediate feedback after
+		// adding or editing an account.
+		p.pollCycle(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 	}
 
 	// Initial interval comes from the first DB read; re-read each tick so
@@ -168,18 +172,41 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 
 	cfg := pollConfigFromAccount(account)
 	res := PollOnce(ctx, cfg, p.processors, p.logger)
+	canceled := errors.Is(res.Err, context.Canceled)
+	if canceled && res.Processed == 0 && res.Skipped == 0 && res.LastSeenUID <= account.LastSeenUID {
+		p.logger.Info("imap_poll_interrupted_by_shutdown",
+			zap.String("trace_id", res.TraceID),
+			zap.Int("messages_found", res.MessagesFound),
+			zap.Int("processed", res.Processed),
+			zap.Int("skipped", res.Skipped),
+			zap.Int64("last_seen_uid", res.LastSeenUID),
+		)
+		return res
+	}
 
 	errMsg := ""
-	if res.Err != nil {
+	if res.Err != nil && !canceled {
 		errMsg = res.Err.Error()
 	} else if len(res.ProcessWarnings) > 0 {
 		errMsg = strings.Join(compactWarnings(res.ProcessWarnings, 8), "\n")
 	}
-	if updateErr := p.repo.UpdatePollStatus(account.ID, res.Status(), errMsg, res.MessagesFound, res.Processed, res.Skipped, res.Details); updateErr != nil {
+	if updateErr := p.repo.UpdatePollStatus(
+		account.ID,
+		res.Status(),
+		errMsg,
+		res.MessagesFound,
+		res.Processed,
+		res.Skipped,
+		res.Summary,
+		res.Details,
+		res.LastSeenUID,
+		res.Limited,
+		res.Backlog,
+	); updateErr != nil {
 		p.logger.Warn("imap_poller_status_update_failed", zap.Error(updateErr))
 	}
 
-	if res.Err != nil {
+	if res.Err != nil && !canceled {
 		p.maybeAlertAdmin(account, res)
 	}
 
@@ -260,6 +287,7 @@ func pollConfigFromAccount(a *models.IMAPAccount) PollConfig {
 		FilterFrom:     a.FilterFrom,
 		FilterSubjects: parseCSV(a.FilterSubjects, true),
 		LookbackDays:   a.LookbackDays,
+		LastSeenUID:    a.LastSeenUID,
 		Channel:        a.Channel,
 		ShopeeDomains:  parseCSV(a.ShopeeDomains, true),
 	}

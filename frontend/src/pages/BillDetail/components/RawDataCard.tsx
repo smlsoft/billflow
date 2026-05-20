@@ -73,7 +73,7 @@ export function RawDataCard({ data, items }: Props) {
   const isMultiOrderEmailFlow = flow === 'shopee_shipped'
   const sourceTitle =
     flow === 'shopee_excel'
-      ? 'ข้อมูลจาก Shopee Excel'
+      ? 'ข้อมูลจาก Shopee'
       : flow === 'lazada_excel'
         ? 'ข้อมูลจาก Lazada Excel'
         : flow === 'tiktok_excel'

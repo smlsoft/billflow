@@ -34,7 +34,7 @@ export const FLOW_META: Record<
     variant: 'bg-amber-100 text-amber-800',
   },
   shopee_excel: {
-    label: 'Shopee Excel',
+    label: 'Shopee',
     icon: '📊',
     variant: 'bg-green-100 text-green-700',
   },

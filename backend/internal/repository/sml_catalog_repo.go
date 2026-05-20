@@ -47,8 +47,17 @@ func (r *SMLCatalogRepo) Upsert(item models.CatalogItem) error {
 	_, err := r.db.Exec(`
 		INSERT INTO sml_catalog
 		  (item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
-		   price, group_code, balance_qty, synced_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+		   price, group_code, balance_qty, image_count, primary_image_roworder,
+		   primary_image_guid, primary_image_bytes, image_synced_at, synced_at)
+		VALUES (
+		  $1,$2,$3,$4,$5,$6,$7,$8,$9,
+		  CASE WHEN $14::boolean THEN $10::int ELSE 0 END,
+		  CASE WHEN $14::boolean THEN $11::int ELSE NULL::int END,
+		  CASE WHEN $14::boolean THEN $12::text ELSE '' END,
+		  CASE WHEN $14::boolean THEN $13::bigint ELSE NULL::bigint END,
+		  CASE WHEN $14::boolean THEN NOW() ELSE NULL END,
+		  NOW()
+		)
 		ON CONFLICT (item_code) DO UPDATE SET
 		  item_name   = EXCLUDED.item_name,
 		  item_name2  = EXCLUDED.item_name2,
@@ -58,6 +67,31 @@ func (r *SMLCatalogRepo) Upsert(item models.CatalogItem) error {
 		  price       = EXCLUDED.price,
 		  group_code  = EXCLUDED.group_code,
 		  balance_qty = EXCLUDED.balance_qty,
+		  image_count = CASE
+		    WHEN $14::boolean THEN EXCLUDED.image_count
+		    ELSE sml_catalog.image_count
+		  END,
+		  primary_image_roworder = CASE
+		    WHEN $14::boolean THEN EXCLUDED.primary_image_roworder
+		    ELSE sml_catalog.primary_image_roworder
+		  END,
+		  primary_image_guid = CASE
+		    WHEN $14::boolean THEN EXCLUDED.primary_image_guid
+		    ELSE sml_catalog.primary_image_guid
+		  END,
+		  primary_image_bytes = CASE
+		    WHEN $14::boolean THEN EXCLUDED.primary_image_bytes
+		    ELSE sml_catalog.primary_image_bytes
+		  END,
+		  image_synced_at = CASE
+		    WHEN $14::boolean AND (
+		      sml_catalog.image_count IS DISTINCT FROM EXCLUDED.image_count OR
+		      sml_catalog.primary_image_roworder IS DISTINCT FROM EXCLUDED.primary_image_roworder OR
+		      sml_catalog.primary_image_guid IS DISTINCT FROM EXCLUDED.primary_image_guid OR
+		      sml_catalog.primary_image_bytes IS DISTINCT FROM EXCLUDED.primary_image_bytes
+		    ) THEN NOW()
+		    ELSE sml_catalog.image_synced_at
+		  END,
 		  synced_at   = NOW(),
 		  -- Reset embedding if name changed
 		  embedding_status = CASE
@@ -82,6 +116,8 @@ func (r *SMLCatalogRepo) Upsert(item models.CatalogItem) error {
 		item.ItemCode, item.ItemName, item.ItemName2,
 		item.UnitCode, item.WHCode, item.ShelfCode,
 		item.Price, item.GroupCode, item.BalanceQty,
+		item.ImageCount, item.PrimaryImageRoworder, item.PrimaryImageGuid,
+		item.PrimaryImageBytes, item.ImageMetadataSynced,
 	)
 	return err
 }
@@ -131,14 +167,18 @@ func (r *SMLCatalogRepo) GetEmbedding(itemCode string) ([]float64, error) {
 
 // EmbeddedItem is used for in-memory catalog search index building
 type EmbeddedItem struct {
-	ItemCode  string
-	ItemName  string
-	ItemName2 string
-	UnitCode  string
-	WHCode    string
-	ShelfCode string
-	Price     *float64
-	Embedding []float64
+	ItemCode             string
+	ItemName             string
+	ItemName2            string
+	UnitCode             string
+	WHCode               string
+	ShelfCode            string
+	Price                *float64
+	ImageCount           int
+	PrimaryImageRoworder *int
+	PrimaryImageGuid     string
+	PrimaryImageBytes    *int64
+	Embedding            []float64
 }
 
 // LoadAllEmbeddings returns all items with embedding_status='done'
@@ -146,7 +186,8 @@ type EmbeddedItem struct {
 func (r *SMLCatalogRepo) LoadAllEmbeddings() ([]EmbeddedItem, error) {
 	rows, err := r.db.Query(`
 		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
-		       COALESCE(price, 0), embedding
+		       COALESCE(price, 0), image_count, primary_image_roworder,
+		       primary_image_guid, primary_image_bytes, embedding
 		FROM sml_catalog
 		WHERE embedding_status = 'done' AND embedding IS NOT NULL
 	`)
@@ -159,13 +200,17 @@ func (r *SMLCatalogRepo) LoadAllEmbeddings() ([]EmbeddedItem, error) {
 	for rows.Next() {
 		var it EmbeddedItem
 		var embJSON []byte
+		var primaryRoworder sql.NullInt64
+		var primaryBytes sql.NullInt64
 		if err := rows.Scan(
 			&it.ItemCode, &it.ItemName, &it.ItemName2,
 			&it.UnitCode, &it.WHCode, &it.ShelfCode,
-			&it.Price, &embJSON,
+			&it.Price, &it.ImageCount, &primaryRoworder,
+			&it.PrimaryImageGuid, &primaryBytes, &embJSON,
 		); err != nil {
 			continue
 		}
+		applyEmbeddedImageScan(&it, primaryRoworder, primaryBytes)
 		if embJSON != nil {
 			_ = json.Unmarshal(embJSON, &it.Embedding)
 		}
@@ -209,7 +254,9 @@ func (r *SMLCatalogRepo) List(page, perPage int, statusFilter, q string) ([]mode
 	n := len(listArgs)
 	query := fmt.Sprintf(`
 		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
-		       price, group_code, balance_qty, embedding_status, embedded_at, synced_at, created_at
+		       price, group_code, balance_qty, embedding_status, embedded_at,
+		       image_count, primary_image_roworder, primary_image_guid,
+		       primary_image_bytes, image_synced_at, synced_at, created_at
 		FROM sml_catalog
 		%s
 		ORDER BY item_code
@@ -225,15 +272,21 @@ func (r *SMLCatalogRepo) List(page, perPage int, statusFilter, q string) ([]mode
 	var items []models.CatalogItem
 	for rows.Next() {
 		var it models.CatalogItem
+		var primaryRoworder sql.NullInt64
+		var primaryBytes sql.NullInt64
+		var imageSyncedAt sql.NullTime
 		if err := rows.Scan(
 			&it.ItemCode, &it.ItemName, &it.ItemName2,
 			&it.UnitCode, &it.WHCode, &it.ShelfCode,
 			&it.Price, &it.GroupCode, &it.BalanceQty,
 			&it.EmbeddingStatus, &it.EmbeddedAt,
+			&it.ImageCount, &primaryRoworder, &it.PrimaryImageGuid,
+			&primaryBytes, &imageSyncedAt,
 			&it.SyncedAt, &it.CreatedAt,
 		); err != nil {
 			continue
 		}
+		applyCatalogImageScan(&it, primaryRoworder, primaryBytes, imageSyncedAt)
 		items = append(items, it)
 	}
 	return items, total, rows.Err()
@@ -282,19 +335,29 @@ func (r *SMLCatalogRepo) Delete(itemCode string) error {
 // GetOne returns a single catalog item
 func (r *SMLCatalogRepo) GetOne(itemCode string) (*models.CatalogItem, error) {
 	var it models.CatalogItem
+	var primaryRoworder sql.NullInt64
+	var primaryBytes sql.NullInt64
+	var imageSyncedAt sql.NullTime
 	err := r.db.QueryRow(`
 		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
-		       price, group_code, balance_qty, embedding_status, embedded_at, synced_at, created_at
+		       price, group_code, balance_qty, embedding_status, embedded_at,
+		       image_count, primary_image_roworder, primary_image_guid,
+		       primary_image_bytes, image_synced_at, synced_at, created_at
 		FROM sml_catalog WHERE item_code = $1
 	`, itemCode).Scan(
 		&it.ItemCode, &it.ItemName, &it.ItemName2,
 		&it.UnitCode, &it.WHCode, &it.ShelfCode,
 		&it.Price, &it.GroupCode, &it.BalanceQty,
 		&it.EmbeddingStatus, &it.EmbeddedAt,
+		&it.ImageCount, &primaryRoworder, &it.PrimaryImageGuid,
+		&primaryBytes, &imageSyncedAt,
 		&it.SyncedAt, &it.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if err == nil {
+		applyCatalogImageScan(&it, primaryRoworder, primaryBytes, imageSyncedAt)
 	}
 	return &it, err
 }
@@ -332,7 +395,9 @@ func (r *SMLCatalogRepo) GetPendingBatch(limit int) ([]models.CatalogItem, error
 // ListAllNames returns all item codes + names (for Levenshtein fallback)
 func (r *SMLCatalogRepo) ListAllNames() ([]models.CatalogItem, error) {
 	rows, err := r.db.Query(`
-		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code, COALESCE(price, 0)
+		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
+		       COALESCE(price, 0), image_count, primary_image_roworder,
+		       primary_image_guid, primary_image_bytes, image_synced_at
 		FROM sml_catalog
 		ORDER BY item_code
 	`)
@@ -345,10 +410,42 @@ func (r *SMLCatalogRepo) ListAllNames() ([]models.CatalogItem, error) {
 	for rows.Next() {
 		var it models.CatalogItem
 		var price float64
+		var primaryRoworder sql.NullInt64
+		var primaryBytes sql.NullInt64
+		var imageSyncedAt sql.NullTime
 		_ = rows.Scan(&it.ItemCode, &it.ItemName, &it.ItemName2,
-			&it.UnitCode, &it.WHCode, &it.ShelfCode, &price)
+			&it.UnitCode, &it.WHCode, &it.ShelfCode, &price,
+			&it.ImageCount, &primaryRoworder, &it.PrimaryImageGuid,
+			&primaryBytes, &imageSyncedAt)
 		it.Price = &price
+		applyCatalogImageScan(&it, primaryRoworder, primaryBytes, imageSyncedAt)
 		items = append(items, it)
 	}
 	return items, rows.Err()
+}
+
+func applyCatalogImageScan(it *models.CatalogItem, primaryRoworder, primaryBytes sql.NullInt64, imageSyncedAt sql.NullTime) {
+	if primaryRoworder.Valid {
+		roworder := int(primaryRoworder.Int64)
+		it.PrimaryImageRoworder = &roworder
+	}
+	if primaryBytes.Valid {
+		bytes := primaryBytes.Int64
+		it.PrimaryImageBytes = &bytes
+	}
+	if imageSyncedAt.Valid {
+		syncedAt := imageSyncedAt.Time
+		it.ImageSyncedAt = &syncedAt
+	}
+}
+
+func applyEmbeddedImageScan(it *EmbeddedItem, primaryRoworder, primaryBytes sql.NullInt64) {
+	if primaryRoworder.Valid {
+		roworder := int(primaryRoworder.Int64)
+		it.PrimaryImageRoworder = &roworder
+	}
+	if primaryBytes.Valid {
+		bytes := primaryBytes.Int64
+		it.PrimaryImageBytes = &bytes
+	}
 }

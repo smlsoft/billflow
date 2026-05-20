@@ -135,6 +135,14 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 		return nil, err
 	}
 	b.Items = items
+	if events, err := r.ListShopeeOrderEvents(id); err == nil {
+		b.ShopeeEvents = events
+		if len(events) > 0 {
+			b.ShopeeStatus = &events[0]
+		}
+	} else {
+		return nil, err
+	}
 	enrichShopeeBillRawData(b, len(items), false)
 	return b, nil
 }
@@ -230,6 +238,9 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	if hasMore && len(bills) > 0 {
 		last := bills[len(bills)-1]
 		nextCursor = encodeTimeIDCursor(last.CreatedAt, last.ID)
+	}
+	if err := r.EnrichLatestShopeeStatuses(bills); err != nil {
+		return nil, fmt.Errorf("enrich shopee status: %w", err)
 	}
 	return &BillListResult{
 		Bills:      bills,
@@ -355,6 +366,128 @@ func (r *BillRepo) Restore(id string) error {
 func (r *BillRepo) Delete(id string) error {
 	_, err := r.db.Exec(`DELETE FROM bills WHERE id = $1`, id)
 	return err
+}
+
+func (r *BillRepo) InsertShopeeOrderEvent(event *models.ShopeeOrderEvent) error {
+	if event == nil || event.EventType == "" || event.OrderID == "" {
+		return nil
+	}
+	raw := event.RawData
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	_, err := r.db.Exec(`
+		INSERT INTO shopee_order_events
+		  (bill_id, order_id, event_type, status_label, subject, from_addr, message_id, email_date, raw_data)
+		VALUES
+		  (NULLIF($1, '')::uuid, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (message_id, order_id, event_type) DO UPDATE
+		   SET bill_id = COALESCE(shopee_order_events.bill_id, EXCLUDED.bill_id),
+		       status_label = EXCLUDED.status_label,
+		       subject = COALESCE(NULLIF(shopee_order_events.subject, ''), EXCLUDED.subject),
+		       from_addr = COALESCE(NULLIF(shopee_order_events.from_addr, ''), EXCLUDED.from_addr),
+		       email_date = COALESCE(shopee_order_events.email_date, EXCLUDED.email_date),
+		       raw_data = shopee_order_events.raw_data || EXCLUDED.raw_data`,
+		stringOrEmpty(event.BillID), event.OrderID, event.EventType, event.StatusLabel,
+		event.Subject, event.FromAddr, event.MessageID, event.EmailDate, raw,
+	)
+	return err
+}
+
+func (r *BillRepo) EnrichLatestShopeeStatuses(bills []models.Bill) error {
+	if len(bills) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(bills))
+	index := make(map[string]int, len(bills))
+	for i := range bills {
+		ids = append(ids, bills[i].ID)
+		index[bills[i].ID] = i
+	}
+	rows, err := r.db.Query(`
+		SELECT DISTINCT ON (bill_id)
+		       id, bill_id::text, order_id, event_type, status_label, subject,
+		       from_addr, message_id, email_date, raw_data, created_at
+		  FROM shopee_order_events
+		 WHERE bill_id = ANY($1::uuid[])
+		 ORDER BY bill_id, COALESCE(email_date, created_at) DESC, created_at DESC`,
+		pq.Array(ids),
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		event, billID, err := scanShopeeOrderEvent(rows)
+		if err != nil {
+			return err
+		}
+		if i, ok := index[billID]; ok {
+			status := event
+			bills[i].ShopeeStatus = &status
+		}
+	}
+	return rows.Err()
+}
+
+func (r *BillRepo) ListShopeeOrderEvents(billID string) ([]models.ShopeeOrderEvent, error) {
+	rows, err := r.db.Query(`
+		SELECT id, bill_id::text, order_id, event_type, status_label, subject,
+		       from_addr, message_id, email_date, raw_data, created_at
+		  FROM shopee_order_events
+		 WHERE bill_id = $1
+		 ORDER BY COALESCE(email_date, created_at) DESC, created_at DESC`,
+		billID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []models.ShopeeOrderEvent{}
+	for rows.Next() {
+		event, _, err := scanShopeeOrderEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+type shopeeEventScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanShopeeOrderEvent(row shopeeEventScanner) (models.ShopeeOrderEvent, string, error) {
+	var event models.ShopeeOrderEvent
+	var billID sql.NullString
+	var emailDate sql.NullTime
+	var raw []byte
+	if err := row.Scan(
+		&event.ID, &billID, &event.OrderID, &event.EventType, &event.StatusLabel,
+		&event.Subject, &event.FromAddr, &event.MessageID, &emailDate, &raw, &event.CreatedAt,
+	); err != nil {
+		return event, "", err
+	}
+	if billID.Valid {
+		id := billID.String
+		event.BillID = &id
+	}
+	if emailDate.Valid {
+		t := emailDate.Time
+		event.EmailDate = &t
+	}
+	if len(raw) > 0 {
+		event.RawData = json.RawMessage(raw)
+	}
+	return event, billID.String, nil
+}
+
+func stringOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func billCursorForTest(t time.Time, id string) string {
@@ -699,6 +832,46 @@ func (r *BillRepo) FindByEmailMessageID(messageID string) (bool, error) {
 		messageID,
 	).Scan(&count)
 	return count > 0, err
+}
+
+// FindExistingEmailMessageIDs returns Message-IDs that already have a bill or
+// durable processed-email tombstone. Used by the IMAP poller to avoid fetching
+// old duplicate message bodies one by one.
+func (r *BillRepo) FindExistingEmailMessageIDs(messageIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	if len(messageIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(
+		`SELECT DISTINCT message_id
+		   FROM (
+		     SELECT raw_data->>'email_message_id' AS message_id
+		       FROM bills
+		      WHERE raw_data->>'email_message_id' = ANY($1)
+		     UNION
+		     SELECT raw_data->>'message_id' AS message_id
+		       FROM bills
+		      WHERE raw_data->>'message_id' = ANY($1)
+		     UNION
+		     SELECT message_id
+		       FROM processed_email_keys
+		      WHERE message_id = ANY($1)
+		   ) AS existing
+		  WHERE message_id IS NOT NULL AND message_id <> ''`,
+		pq.Array(messageIDs),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // FindByShopeeOrderID returns true if a Shopee email bill for this order already exists

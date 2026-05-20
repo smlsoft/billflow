@@ -239,6 +239,7 @@ type ConfirmRequest struct {
 	Orders      []ShopeeOrder       `json:"orders"`               // full parsed order data
 	FileToken   string              `json:"file_token,omitempty"` // returned by Preview, used for artifact archiving
 	ImportRunID string              `json:"import_run_id,omitempty"`
+	SourceFlow  string              `json:"source_flow,omitempty"` // shopee_excel (default) or shopee_api
 }
 
 // ConfirmResult is one processed order result.
@@ -497,6 +498,10 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 	documentRoute := shopeeImportRoute(req.Config)
 	destinationName := shopeeImportDocumentName(req.Config)
 	reviewPath := shopeeImportReviewPath(req.Config)
+	sourceFlow := strings.TrimSpace(req.SourceFlow)
+	if sourceFlow == "" {
+		sourceFlow = "shopee_excel"
+	}
 
 	// Default unit code from the request config; used as a fallback when
 	// catalog matching doesn't pick a specific unit.
@@ -655,7 +660,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 
 		aiConf := 1.0
 		rawData, _ := json.Marshal(map[string]interface{}{
-			"flow":               "shopee_excel",
+			"flow":               sourceFlow,
 			"shopee_order_id":    order.OrderID,
 			"order_id":           order.OrderID,
 			"doc_date":           order.DocDate,
@@ -757,7 +762,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 				Action:     "bill_created",
 				TargetID:   &billIDStr,
 				UserID:     userID,
-				Source:     "shopee_excel",
+				Source:     sourceFlow,
 				Level:      "info",
 				TraceID:    traceID,
 				DurationMs: &durMs,
@@ -795,7 +800,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		_ = h.auditRepo.Log(models.AuditEntry{
 			Action:     "shopee_import_done",
 			UserID:     userID,
-			Source:     "shopee_excel",
+			Source:     sourceFlow,
 			Level:      "info",
 			TraceID:    traceID,
 			DurationMs: &totalDurMs,

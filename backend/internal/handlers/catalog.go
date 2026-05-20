@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -32,6 +34,14 @@ type CatalogHandler struct {
 	cfg           *config.Config
 	logger        *zap.Logger
 	threshold     float64 // auto-confirm threshold
+}
+
+type catalogImageMeta struct {
+	Roworder   int    `json:"roworder"`
+	ImageOrder int    `json:"image_order"`
+	Guid       string `json:"guid"`
+	Bytes      int64  `json:"bytes"`
+	ImageURL   string `json:"image_url"`
 }
 
 func NewCatalogHandler(
@@ -79,6 +89,7 @@ func (h *CatalogHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	attachCatalogImageURLs(items)
 	c.JSON(http.StatusOK, gin.H{
 		"data":     items,
 		"total":    total,
@@ -179,6 +190,9 @@ func (h *CatalogHandler) RefreshOne(c *gin.Context) {
 	}
 	if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
 		h.logger.Warn("catalog: reload index after refresh", zap.Error(err))
+	}
+	if item != nil {
+		item.ImageURL = catalogImageURL(item.ItemCode, item.ImageCount, item.PrimaryImageRoworder)
 	}
 	if h.auditRepo != nil {
 		var userID *string
@@ -364,7 +378,13 @@ func (h *CatalogHandler) Search(c *gin.Context) {
 	var results []models.CatalogMatch
 	var method string
 
-	if h.embSvc.IsConfigured() && h.catalogIdx.Size() > 0 {
+	textResults, textErr := h.catalogSvc.SearchByText(q, top)
+	if textErr == nil && len(textResults) > 0 && textResults[0].Score >= 0.95 {
+		results = textResults
+		method = "text"
+	}
+
+	if len(results) == 0 && h.embSvc.IsConfigured() && h.catalogIdx.Size() > 0 {
 		// Embedding search
 		queryEmb, err := h.embSvc.EmbedText(q)
 		if err == nil {
@@ -377,14 +397,14 @@ func (h *CatalogHandler) Search(c *gin.Context) {
 
 	if len(results) == 0 {
 		// Fallback: text similarity
-		var err error
-		results, err = h.catalogSvc.SearchByText(q, top)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if textErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": textErr.Error()})
 			return
 		}
+		results = textResults
 		method = "text"
 	}
+	attachCatalogMatchImageURLs(results)
 
 	c.JSON(http.StatusOK, gin.H{
 		"query":   q,
@@ -405,7 +425,232 @@ func (h *CatalogHandler) GetOne(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	item.ImageURL = catalogImageURL(item.ItemCode, item.ImageCount, item.PrimaryImageRoworder)
 	c.JSON(http.StatusOK, item)
+}
+
+// GET /api/catalog/:code/image — authenticated proxy for the primary SML image.
+func (h *CatalogHandler) GetImage(c *gin.Context) {
+	code := strings.TrimSpace(c.Param("code"))
+	if code == "" || strings.ContainsAny(code, "\x00\r\n") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item code"})
+		return
+	}
+	if h.cfg == nil || strings.TrimSpace(h.cfg.ShopeeSMLURL) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML API is not configured"})
+		return
+	}
+
+	item, err := h.catalogRepo.GetOne(code)
+	if err != nil {
+		h.logger.Warn("catalog image: lookup failed", zap.String("code", code), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "catalog lookup failed"})
+		return
+	}
+	if item == nil || item.ImageCount <= 0 || item.PrimaryImageRoworder == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "product image not found"})
+		return
+	}
+	h.streamCatalogImage(c, item.ItemCode, *item.PrimaryImageRoworder)
+}
+
+// GET /api/catalog/:code/images — authenticated metadata list for SML product images.
+func (h *CatalogHandler) GetImages(c *gin.Context) {
+	code := strings.TrimSpace(c.Param("code"))
+	if code == "" || strings.ContainsAny(code, "\x00\r\n") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item code"})
+		return
+	}
+	if h.cfg == nil || strings.TrimSpace(h.cfg.ShopeeSMLURL) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML API is not configured"})
+		return
+	}
+
+	item, err := h.catalogRepo.GetOne(code)
+	if err != nil {
+		h.logger.Warn("catalog images: lookup failed", zap.String("code", code), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "catalog lookup failed"})
+		return
+	}
+	if item == nil || item.ImageCount <= 0 {
+		c.JSON(http.StatusOK, gin.H{"images": []catalogImageMeta{}})
+		return
+	}
+
+	listURL := fmt.Sprintf("%s/api/v1/ic/products/%s/images",
+		strings.TrimRight(h.cfg.ShopeeSMLURL, "/"),
+		url.PathEscape(item.ItemCode),
+	)
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, listURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "build image list request failed"})
+		return
+	}
+	for k, v := range h.smlImageHeaders() {
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		h.logger.Warn("catalog images: SML request failed", zap.String("code", code), zap.Error(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "read product images failed"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		c.JSON(http.StatusOK, gin.H{"images": []catalogImageMeta{}})
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		h.logger.Warn("catalog images: SML returned non-OK",
+			zap.String("code", code), zap.Int("status", resp.StatusCode))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "read product images failed"})
+		return
+	}
+
+	var payload struct {
+		Data *struct {
+			Images []catalogImageMeta `json:"images"`
+		} `json:"data"`
+		Images []catalogImageMeta `json:"images"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "decode product images failed"})
+		return
+	}
+	images := payload.Images
+	if payload.Data != nil {
+		images = payload.Data.Images
+	}
+	if images == nil {
+		images = []catalogImageMeta{}
+	}
+	for i := range images {
+		if images[i].Roworder <= 0 {
+			continue
+		}
+		images[i].ImageURL = catalogImageRowURL(item.ItemCode, images[i].Roworder)
+	}
+
+	c.Header("Cache-Control", "private, max-age=300")
+	c.JSON(http.StatusOK, gin.H{"images": images})
+}
+
+// GET /api/catalog/:code/images/:roworder — authenticated proxy for a specific SML image.
+func (h *CatalogHandler) GetImageByRoworder(c *gin.Context) {
+	code := strings.TrimSpace(c.Param("code"))
+	roworder, err := strconv.Atoi(c.Param("roworder"))
+	if code == "" || strings.ContainsAny(code, "\x00\r\n") || err != nil || roworder < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid image request"})
+		return
+	}
+	if h.cfg == nil || strings.TrimSpace(h.cfg.ShopeeSMLURL) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML API is not configured"})
+		return
+	}
+
+	item, err := h.catalogRepo.GetOne(code)
+	if err != nil {
+		h.logger.Warn("catalog image: lookup failed", zap.String("code", code), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "catalog lookup failed"})
+		return
+	}
+	if item == nil || item.ImageCount <= 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "product image not found"})
+		return
+	}
+	h.streamCatalogImage(c, item.ItemCode, roworder)
+}
+
+func (h *CatalogHandler) streamCatalogImage(c *gin.Context, itemCode string, roworder int) {
+	imageURL := fmt.Sprintf("%s/api/v1/ic/products/%s/images/%d",
+		strings.TrimRight(h.cfg.ShopeeSMLURL, "/"),
+		url.PathEscape(itemCode),
+		roworder,
+	)
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, imageURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "build image proxy request failed"})
+		return
+	}
+	for k, v := range h.smlImageHeaders() {
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		h.logger.Warn("catalog image: SML request failed", zap.String("code", itemCode), zap.Int("roworder", roworder), zap.Error(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "read product image failed"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		c.JSON(http.StatusNotFound, gin.H{"error": "product image not found"})
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		h.logger.Warn("catalog image: SML returned non-OK",
+			zap.String("code", itemCode), zap.Int("roworder", roworder), zap.Int("status", resp.StatusCode))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "read product image failed"})
+		return
+	}
+
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	extraHeaders := map[string]string{
+		"Cache-Control": "private, max-age=3600",
+	}
+	if etag := strings.TrimSpace(resp.Header.Get("ETag")); etag != "" {
+		extraHeaders["ETag"] = etag
+	}
+	c.DataFromReader(http.StatusOK, resp.ContentLength, contentType, resp.Body, extraHeaders)
+}
+
+func (h *CatalogHandler) smlImageHeaders() map[string]string {
+	if h.cfg == nil {
+		return map[string]string{}
+	}
+	return map[string]string{
+		"guid":           h.cfg.ShopeeSMLGUID,
+		"provider":       h.cfg.ShopeeSMLProvider,
+		"configFileName": h.cfg.ShopeeSMLConfigFile,
+		"databaseName":   h.cfg.ShopeeSMLDatabase,
+		"X-Tenant":       h.cfg.ShopeeSMLDatabase,
+	}
+}
+
+func attachCatalogImageURLs(items []models.CatalogItem) {
+	for i := range items {
+		items[i].ImageURL = catalogImageURL(items[i].ItemCode, items[i].ImageCount, items[i].PrimaryImageRoworder)
+	}
+}
+
+func attachCatalogMatchImageURLs(items []models.CatalogMatch) {
+	for i := range items {
+		items[i].ImageURL = catalogImageURL(items[i].ItemCode, items[i].ImageCount, items[i].PrimaryImageRoworder)
+	}
+}
+
+func catalogImageURL(itemCode string, imageCount int, primaryRoworder *int) string {
+	itemCode = strings.TrimSpace(itemCode)
+	if itemCode == "" || imageCount <= 0 || primaryRoworder == nil {
+		return ""
+	}
+	return "/api/catalog/" + url.PathEscape(itemCode) + "/image"
+}
+
+func catalogImageRowURL(itemCode string, roworder int) string {
+	itemCode = strings.TrimSpace(itemCode)
+	if itemCode == "" || roworder <= 0 {
+		return ""
+	}
+	return "/api/catalog/" + url.PathEscape(itemCode) + "/images/" + strconv.Itoa(roworder)
 }
 
 // ─── Create new product ──────────────────────────────────────────────────────

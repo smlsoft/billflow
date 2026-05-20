@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, CheckCircle2, Plus, Search } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, ImageIcon, Plus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { AuthImage } from '@/components/common/AuthImage'
+import { ProductImagePreviewDialog } from '@/components/common/ProductImagePreviewDialog'
 import {
   Dialog,
   DialogContent,
@@ -31,18 +33,18 @@ function ScorePill({ score, recommended = false }: { score: number; recommended?
   const pct = Math.round(score * 100)
   const s = scoreStyle(score)
   return (
-    <div className="flex min-w-[92px] flex-col items-end gap-1">
+    <div className="flex min-w-[72px] flex-col items-end gap-0.5">
       <span
         className={cn(
-          'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold tabular-nums',
+          'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-bold tabular-nums',
           s.bg,
           s.color,
         )}
       >
-        {recommended && <CheckCircle2 className="h-3.5 w-3.5" />}
+        {recommended && <CheckCircle2 className="h-3 w-3" />}
         {pct}%
       </span>
-      <div className="h-1 w-20 overflow-hidden rounded-full bg-muted">
+      <div className="h-1 w-14 overflow-hidden rounded-full bg-muted">
         <div
           className={cn(
             'h-full rounded-full',
@@ -52,6 +54,50 @@ function ScorePill({ score, recommended = false }: { score: number; recommended?
         />
       </div>
     </div>
+  )
+}
+
+function CatalogMatchThumbnail({
+  match,
+  onPreview,
+}: {
+  match: CatalogMatch
+  onPreview: (match: CatalogMatch) => void
+}) {
+  const count = match.image_count ?? 0
+  const hasImage = Boolean(match.image_url && count > 0)
+  const image = (
+    <AuthImage
+      src={hasImage ? match.image_url : undefined}
+      className="h-full w-full rounded-md border border-border bg-muted/35"
+      imgClassName="object-cover"
+      fallback={
+        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+          <ImageIcon className="h-4 w-4" />
+        </div>
+      }
+    >
+      {count > 1 && (
+        <span className="absolute bottom-0.5 right-0.5 rounded bg-background/90 px-1 text-[10px] font-medium tabular-nums text-foreground shadow-sm">
+          {count}
+        </span>
+      )}
+    </AuthImage>
+  )
+
+  if (!hasImage) {
+    return <div className="h-12 w-12 shrink-0">{image}</div>
+  }
+
+  return (
+    <button
+      type="button"
+      className="h-12 w-12 shrink-0 rounded-md outline-none ring-offset-background transition-transform hover:scale-[1.03] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      onClick={() => onPreview(match)}
+      aria-label={`ดูรูป ${match.item_code}`}
+    >
+      {image}
+    </button>
   )
 }
 
@@ -73,6 +119,7 @@ export function MapItemModal({
   const [results, setResults] = useState<CatalogMatch[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [previewMatch, setPreviewMatch] = useState<CatalogMatch | null>(null)
 
   // ── Create state ─────────────────────────────────────────────────────────────
   const [form, setForm] = useState({
@@ -140,6 +187,7 @@ export function MapItemModal({
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="grid max-h-[90vh] max-w-3xl grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden">
         <DialogHeader>
@@ -219,53 +267,58 @@ export function MapItemModal({
               </div>
             )}
 
-            <div className="min-h-0 space-y-1.5 overflow-y-auto pr-1">
+            <div className="min-h-0 space-y-1 overflow-y-auto pr-1">
               {results.map((r, index) => {
                 const recommended = index === 0 && r.score >= 0.75
                 const lowScore = r.score < 0.6
                 return (
-                <button
-                  key={r.item_code}
-                  type="button"
-                  onClick={() => {
-                    onPick(r.item_code, r.unit_code, r)
-                    onClose()
-                  }}
-                  className={cn(
-                    'w-full rounded-md border bg-background px-3 py-2 text-left',
-                    'cursor-pointer transition-colors hover:bg-muted/40',
-                    recommended && 'border-success/60 bg-success/[0.04]',
-                    !recommended && lowScore && 'border-border/80',
-                    !recommended && !lowScore && scoreBorderClass(r.score),
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-sm font-semibold text-foreground">
-                          {r.item_code}
-                        </span>
-                        {recommended && (
-                          <Badge className="h-5 bg-success text-[10px] text-success-foreground">
-                            แนะนำ
-                          </Badge>
-                        )}
-                        <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                          หน่วย {r.unit_code || '—'}
-                        </Badge>
-                      </div>
-                      <div className="mt-1 line-clamp-2 break-words text-sm leading-5 text-foreground">
-                        {r.item_name}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 flex-col items-end gap-2">
-                      <ScorePill score={r.score} recommended={recommended} />
-                      <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                        เลือก
-                      </span>
+                  <div
+                    key={r.item_code}
+                    className={cn(
+                      'w-full rounded-md border bg-background px-2.5 py-1.5 text-left',
+                      'transition-colors hover:bg-muted/40',
+                      recommended && 'border-success/60 bg-success/[0.04]',
+                      !recommended && lowScore && 'border-border/80',
+                      !recommended && !lowScore && scoreBorderClass(r.score),
+                    )}
+                  >
+                    <div className="flex min-h-[58px] items-center gap-2.5">
+                      <CatalogMatchThumbnail match={r} onPreview={setPreviewMatch} />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onPick(r.item_code, r.unit_code, r)
+                          onClose()
+                        }}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-mono text-[13px] font-semibold text-foreground">
+                              {r.item_code}
+                            </span>
+                            {recommended && (
+                              <Badge className="h-5 bg-success text-[10px] text-success-foreground">
+                                แนะนำ
+                              </Badge>
+                            )}
+                            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                              หน่วย {r.unit_code || '—'}
+                            </Badge>
+                          </div>
+                          <div className="mt-0.5 line-clamp-2 break-words text-[13px] leading-4 text-foreground">
+                            {r.item_name}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1.5">
+                          <ScorePill score={r.score} recommended={recommended} />
+                          <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                            เลือก
+                          </span>
+                        </div>
+                      </button>
                     </div>
                   </div>
-                </button>
                 )
               })}
             </div>
@@ -366,5 +419,14 @@ export function MapItemModal({
         </Tabs>
       </DialogContent>
     </Dialog>
+    <ProductImagePreviewDialog
+      open={!!previewMatch}
+      onOpenChange={(v) => !v && setPreviewMatch(null)}
+      imageUrl={previewMatch?.image_url}
+      itemCode={previewMatch?.item_code}
+      itemName={previewMatch?.item_name}
+      imageCount={previewMatch?.image_count ?? 0}
+    />
+    </>
   )
 }

@@ -4,7 +4,8 @@ import paramiko, sys, io, os, subprocess
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 env = os.environ.copy()
-env["BF_PASS"] = env.get("BF_PASS", "boss123456")
+if not env.get("BF_PASS"):
+    raise SystemExit("BF_PASS is required")
 
 # 1. Deploy first (build + restart) — so the new artifact-saving code is live.
 proc = subprocess.run(

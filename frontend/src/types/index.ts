@@ -11,8 +11,25 @@ export interface User {
 export interface CatalogMatch {
   item_code: string
   item_name: string
+  item_name2?: string
   unit_code: string
+  wh_code?: string
+  shelf_code?: string
+  price?: number
+  image_count?: number
+  primary_image_roworder?: number
+  primary_image_guid?: string
+  primary_image_bytes?: number
+  image_url?: string
   score: number
+}
+
+export interface CatalogImage {
+  roworder: number
+  image_order?: number
+  guid?: string
+  bytes?: number
+  image_url: string
 }
 
 export interface CatalogItem {
@@ -24,6 +41,12 @@ export interface CatalogItem {
   sale_price?: number | null
   embedding_status: 'pending' | 'done' | 'error'
   embedded_at?: string | null
+  image_count?: number
+  primary_image_roworder?: number
+  primary_image_guid?: string
+  primary_image_bytes?: number
+  image_synced_at?: string | null
+  image_url?: string
   synced_at?: string | null
   last_seen_at?: string | null
   is_active?: boolean

@@ -32,7 +32,7 @@ func TestBillWhereDateAndShopeeStatusFilters(t *testing.T) {
 		DateTo:       "2026-05-18",
 		ShopeeStatus: "shipped",
 	})
-	for _, want := range []string{"b.created_at >= $", "b.created_at < ($", "shopee_order_events"} {
+	for _, want := range []string{"b.created_at >= $", "b.created_at < ($", "shopee_order_events", "soe.bill_id = b.id"} {
 		if !strings.Contains(where, want) {
 			t.Fatalf("where = %q, missing %q", where, want)
 		}

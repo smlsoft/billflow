@@ -62,7 +62,7 @@ const NAV_ITEMS: Array<{
   { to: '/sales-orders', label: 'ใบสั่งขาย', icon: ShoppingBag, enabled: ENABLE_SALES_ORDERS },
   { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, enabled: ENABLE_SALES_ORDERS },
   { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail },
-  { to: '/import/shopee', label: 'Shopee Excel', icon: Upload, enabled: ENABLE_SHOPEE_EXCEL },
+  { to: '/import/shopee', label: 'Shopee', icon: Upload, enabled: ENABLE_SHOPEE_EXCEL },
   { to: '/import/lazada', label: 'Lazada Excel', icon: Upload, enabled: ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS },
   { to: '/import/tiktok', label: 'TikTok Excel', icon: Upload, enabled: ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS },
   { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow },

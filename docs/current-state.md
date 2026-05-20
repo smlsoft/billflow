@@ -1,13 +1,24 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-18 14:30 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production health checks, frontend routes, container uptime, migration logs, and PostgreSQL schema for all three instances.
+> Updated: 2026-05-20 15:04 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, frontend routes, container health, and PostgreSQL schema for BillFlow main.
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
+- BillFlow main latest deploy checkpoint, 2026-05-20:
+  - Shopee Open API readiness is deployed on `/import/shopee`: status checklist, OAuth URL generation, callback/token tables, preview-only API import, structured error UX, and live-cutover script/docs.
+  - Shopee app is still waiting for Go-Live approval. Until approval and live key cutover, the UI blocks real shop connection/API fetch and keeps Shopee Excel/email as fallback.
+  - `/settings/instance` now shows runtime/default/env-aware values, lets admin test draft SML REST URL + tenant before saving, and reminds that product images use the matching `{database}_images` DB.
+  - Email polling UX and backend state are hardened with poll summaries/details and indexes for message-id/dedup paths.
+- SML product images on BillFlow main are now lazy-loaded through `sml-api-bybos`; BillFlow keeps only image metadata in `sml_catalog`.
+  - Active tenant: `SML1_2026`; image DB: `sml1_2026_images`.
+  - Index/runbook for moving SML PostgreSQL or changing tenant: [sml-image-db-maintenance.md](sml-image-db-maintenance.md).
+  - Script to re-apply the expression index: [../scripts/apply-sml-image-index.sh](../scripts/apply-sml-image-index.sh).
+  - Current image index `images_trim_image_id_order_roworder_file_idx` was verified on `sml1_2026_images`; `scripts/apply-sml-image-index.sh` supports host `psql` and Docker-container `psql`.
+  - `/settings/catalog` and the bill item SML picker show fixed-size thumbnails, lazy-loaded images, fallback states, and full image preview/gallery.
 - BillFlow main production data lifecycle deployed 2026-05-18:
   - Commit `ba2145f` adds migration `037_data_lifecycle.sql`, summary tables, indexes, cursor pagination, bill archive/restore/delete routes, and the daily lifecycle job.
   - `/api/logs` now supports `limit`, `cursor`, `has_more`, `next_cursor`; it does not run `COUNT(*)` unless `include_total=true`.
@@ -183,7 +194,7 @@
   - Lazada Excel
   - TikTok Excel/CSV
 - Thaisunsport ยังเป็น Phase 1 ฝั่งซื้อเท่านั้น และยังไม่ควรเปิด sales/import channel.
-- Phase ถัดไปคือเชื่อม Shopee Open Platform API โดยตรง เพื่อดึง order เข้า BillFlow โดยไม่ต้อง export Excel.
+- Shopee Open Platform API readiness พร้อมบน BillFlow main แล้ว แต่ยังรอ Shopee approve Go-Live ก่อนเชื่อมร้านจริง.
 
 แนวทางที่ควรรักษาไว้:
 
@@ -196,14 +207,11 @@
 - เริ่ม implement/test บน BillFlow main ก่อน แล้วค่อย deploy main + Henna เมื่อผ่าน UAT.
 - ไม่ deploy ไป Thaisunsport เว้นแต่ผู้ใช้สั่งเปิด Phase 1+ / งานฝั่งขายให้ร้านนี้.
 
-สิ่งที่ต้องเตรียม/ยืนยันก่อน coding Shopee API:
+สิ่งที่เหลือก่อน live Shopee API:
 
-- Shopee Open Platform app credentials, partner ID/key, redirect URL, และ shop authorization flow.
-- Token storage/refresh design: access token, refresh token, expiry, shop_id, shop_name, enabled flag.
-- Order statuses ที่ต้อง sync เช่น `READY_TO_SHIP`, `SHIPPED`, `COMPLETED`, และ policy ว่าจะข้าม `CANCELLED` หรือเก็บเป็น skipped run detail.
-- Date range/cursor/pagination/rate limit ของ API และ dedup key หลัก (`order_sn` + shop/channel).
-- Mapping ระหว่าง Shopee API item fields กับ `bill_items`: item name, variation, model SKU, seller SKU, qty, price, discount, image URL.
-- Import run detail ควรแสดงเหมือน Excel/Email: พบกี่ order, สร้างกี่ bill, ข้ามเพราะอะไร.
+- Shopee Console ต้องเปลี่ยนเป็น live key หลัง approve และ Redirect URL Domain ต้องตรงกับ public URL ปัจจุบัน.
+- ใช้ [shopee-open-api-live-cutover.md](shopee-open-api-live-cutover.md) และ `scripts/shopee-live-cutover.py` เพื่อใส่ live partner id/key โดยไม่พิมพ์ secret ลง chat/log.
+- หลังเชื่อมร้านจริง ให้ดึงช่วงสั้นก่อน, ตรวจ preview count/order detail, แล้วค่อยกด confirm สร้าง local bills. ห้าม auto-send SML รอบแรก.
 
 ## Latest Deploy Notes — 2026-05-11
 
@@ -419,7 +427,7 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Bill detail | Shows route preview, blocks send when item validation fails, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML request/response before raw JSON. |
 | Logs | `/logs` shows action-specific summaries. Expanding a row shows key facts first (bill, doc_no, route, trace, error) and keeps raw JSON as a secondary technical view. |
 | UX guardrails | Empty queues guide users to import/email setup, channel API details are collapsed, email sender mismatch is surfaced in Thai, and logs classify common SML failures into user-fixable vs support-needed actions. |
-| Catalog | SML 248 catalog sync, product create, per-row refresh/delete, embeddings, and in-memory cosine index. |
+| Catalog | SML 248 catalog sync, product create, per-row refresh/delete, embeddings, in-memory cosine index, and SML product image thumbnails/gallery. |
 | SSE | `/api/admin/events` streams inbox/admin events with HMAC token from `/api/admin/events/token`. |
 | Background jobs | Daily insight, daily backup, disk monitor, LINE token checker, hourly reply-token cleanup, daily Cloudflare tunnel drift monitor, IMAP coordinator. |
 
@@ -427,8 +435,8 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 
 Local migrations currently run through:
 
-- `001_init.sql` through `031_imap_poll_details.sql`
-- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, `bills.document_route`, `bill_items.source_sku`, `bill_items.source_image_url`, and `imap_accounts.last_poll_details`.
+- `001_init.sql` through `042_sml_catalog_images.sql`
+- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, Shopee Open API tables/events, `bills.document_route`, `bill_items.source_sku`, `bill_items.source_image_url`, `imap_accounts.last_poll_details`, IMAP poll summary fields, and SML catalog image metadata.
 
 Production PostgreSQL also contains `system_settings` and `sml_settings`. These tables are not present in the current local migrations and are not referenced by the current codebase, so treat them as legacy leftovers until a future migration either formalizes or removes them.
 

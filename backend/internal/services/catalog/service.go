@@ -106,6 +106,10 @@ type smlProductItem struct {
 	GroupCodeV1           string            `json:"group_code"`
 	BalanceQty            float64           `json:"balance_qty"`
 	Price                 float64           `json:"price"`
+	ImageCount            int               `json:"image_count"`
+	PrimaryImageRoworder  *int              `json:"primary_image_roworder"`
+	PrimaryImageGuid      string            `json:"primary_image_guid"`
+	PrimaryImageBytes     int64             `json:"primary_image_bytes"`
 	InventoryBarcode      []smlBarcodeItem  `json:"inventory_barcode"`
 	InventoryPriceFormula []smlPriceFormula `json:"inventory_price_formula"`
 }
@@ -159,12 +163,20 @@ func (s *SMLCatalogService) SyncFromAPI() (int, error) {
 				groupCode = it.GroupCodeV1
 			}
 			ci := models.CatalogItem{
-				ItemCode:  it.Code,
-				ItemName:  it.Name,
-				ItemName2: it.Name2,
-				UnitCode:  unit,
-				Price:     &price,
-				GroupCode: groupCode,
+				ItemCode:             it.Code,
+				ItemName:             it.Name,
+				ItemName2:            it.Name2,
+				UnitCode:             unit,
+				Price:                &price,
+				GroupCode:            groupCode,
+				ImageCount:           it.ImageCount,
+				PrimaryImageRoworder: it.PrimaryImageRoworder,
+				PrimaryImageGuid:     it.PrimaryImageGuid,
+				ImageMetadataSynced:  true,
+			}
+			if it.PrimaryImageBytes > 0 {
+				bytes := it.PrimaryImageBytes
+				ci.PrimaryImageBytes = &bytes
 			}
 			qty := it.BalanceQty
 			ci.BalanceQty = &qty
@@ -240,6 +252,10 @@ type singleProductV3Response struct {
 		GroupMain    string  `json:"group_main"`
 		GroupCode    string  `json:"group_code"`
 		BalanceQty   float64 `json:"balance_qty"`
+		ImageCount   int     `json:"image_count"`
+		ImageRow     *int    `json:"primary_image_roworder"`
+		ImageGuid    string  `json:"primary_image_guid"`
+		ImageBytes   int64   `json:"primary_image_bytes"`
 		Units        []struct {
 			UnitCode string `json:"unit_code"`
 		} `json:"units"`
@@ -304,11 +320,19 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 		name = d.Name1
 	}
 	ci := models.CatalogItem{
-		ItemCode:  d.Code,
-		ItemName:  name,
-		ItemName2: d.Name2,
-		UnitCode:  unit,
-		GroupCode: firstNonEmpty(d.GroupMain, d.GroupCode),
+		ItemCode:             d.Code,
+		ItemName:             name,
+		ItemName2:            d.Name2,
+		UnitCode:             unit,
+		GroupCode:            firstNonEmpty(d.GroupMain, d.GroupCode),
+		ImageCount:           d.ImageCount,
+		PrimaryImageRoworder: d.ImageRow,
+		PrimaryImageGuid:     d.ImageGuid,
+		ImageMetadataSynced:  true,
+	}
+	if d.ImageBytes > 0 {
+		bytes := d.ImageBytes
+		ci.PrimaryImageBytes = &bytes
 	}
 	bq := d.BalanceQty
 	ci.BalanceQty = &bq
@@ -619,8 +643,7 @@ func (s *SMLCatalogService) SearchByText(query string, topK int) ([]models.Catal
 	}
 	results := make([]scored, 0, len(allItems))
 	for _, it := range allItems {
-		score := textSimilarity(queryLower, strings.ToLower(it.ItemName+" "+it.ItemName2))
-		results = append(results, scored{it, score})
+		results = append(results, scored{it, catalogTextScore(queryLower, it)})
 	}
 
 	// Sort descending
@@ -642,17 +665,36 @@ func (s *SMLCatalogService) SearchByText(query string, topK int) ([]models.Catal
 			price = *it.Price
 		}
 		matches = append(matches, models.CatalogMatch{
-			ItemCode:  it.ItemCode,
-			ItemName:  it.ItemName,
-			ItemName2: it.ItemName2,
-			UnitCode:  it.UnitCode,
-			WHCode:    it.WHCode,
-			ShelfCode: it.ShelfCode,
-			Price:     price,
-			Score:     results[i].score,
+			ItemCode:             it.ItemCode,
+			ItemName:             it.ItemName,
+			ItemName2:            it.ItemName2,
+			UnitCode:             it.UnitCode,
+			WHCode:               it.WHCode,
+			ShelfCode:            it.ShelfCode,
+			Price:                price,
+			ImageCount:           it.ImageCount,
+			PrimaryImageRoworder: it.PrimaryImageRoworder,
+			PrimaryImageGuid:     it.PrimaryImageGuid,
+			PrimaryImageBytes:    it.PrimaryImageBytes,
+			Score:                results[i].score,
 		})
 	}
 	return matches, nil
+}
+
+func catalogTextScore(queryLower string, it models.CatalogItem) float64 {
+	codeLower := strings.ToLower(it.ItemCode)
+	score := textSimilarity(queryLower, strings.ToLower(it.ItemCode+" "+it.ItemName+" "+it.ItemName2))
+	switch {
+	case codeLower == queryLower:
+		return 1
+	case strings.HasPrefix(codeLower, queryLower):
+		return maxFloat64(score, 0.98)
+	case strings.Contains(codeLower, queryLower):
+		return maxFloat64(score, 0.95)
+	default:
+		return score
+	}
 }
 
 // textSimilarity returns a 0–1 score using token overlap + substring check
@@ -686,6 +728,13 @@ func textSimilarity(a, b string) float64 {
 		return 0
 	}
 	return float64(inter) / float64(union)
+}
+
+func maxFloat64(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func tokenize(s string) []string {

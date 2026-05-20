@@ -1,15 +1,20 @@
-# Shopee Excel Import — การทำงาน
+# Shopee Import — การทำงาน
 
-> อัพเดตล่าสุด: 2026-05-06
-> สถานะ: ✅ Deployed — SML 248 (`192.168.2.248`) configured on server
+> อัพเดตล่าสุด: 2026-05-20
+> สถานะ: ✅ Excel deployed / Shopee Open API ready for approval cutover — SML 248 (`192.168.2.248`) configured on server
 
 ---
 
 ## ภาพรวม
 
 พนักงานนำ Excel export จาก Shopee Seller Center มา upload ที่ `/import/shopee`
+หรือดึง order ผ่าน Shopee Open API หลังเชื่อม OAuth สำเร็จ
 ระบบ parse orders → ตรวจ duplicate → แสดง preview → พนักงาน confirm → สร้าง bills ใน BillFlow แล้วให้ admin ตรวจ/Retry ส่งเข้า SML 248
 default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` ใช้ได้เมื่อ admin ตั้ง `channel_defaults.endpoint` ให้ชี้ `/SMLJavaRESTService/saleinvoice/v4`
+
+Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-api-live-cutover.md`](shopee-open-api-live-cutover.md)
+
+ระหว่างรอ Shopee approve, หน้า `/import/shopee` จะแสดง Open API readiness checklist และ block ปุ่ม live OAuth/API fetch ตามเหตุผลจริง เช่น ยังไม่ approve, redirect URL ไม่ตรง, ยังไม่เชื่อมร้าน, token หมดอายุ หรือ last sync error. Excel fallback ยังทำงานต่อเป็นทางหลักจนกว่าจะเชื่อมร้านจริงได้สำเร็จ.
 
 ---
 
@@ -30,6 +35,7 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
   ├── 2. Preflight config
   │   - ต้องมี channel_defaults สำหรับ Shopee sale ก่อน
   │   - UI block file picker ถ้า config ยังไม่พร้อม
+  │   - Open API card แสดง readiness/error state แต่ยังไม่แทน Excel จนกว่าจะ approve + OAuth
   │
   ├── 3. เลือกไฟล์ .xlsx จาก Shopee Seller Center
   │
@@ -65,6 +71,36 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
             ▼
       แสดง results: created / skipped / failed
 ```
+
+## Shopee Open API Readiness
+
+หน้า `/import/shopee` อ่านสถานะจาก:
+
+```
+GET /api/settings/shopee-api/status
+```
+
+ค่าที่ UI ใช้ตัดสินใจ:
+
+| Field | ใช้ทำอะไร |
+|---|---|
+| `can_connect` | เปิด/ปิดปุ่มเชื่อมต่อ OAuth |
+| `can_fetch` | เปิด/ปิดปุ่มดึง order preview |
+| `blocking_reason` | ข้อความหลักในกล่อง “สิ่งที่ต้องทำต่อ” |
+| `checks[]` | checklist แยกข้อ: config, redirect, environment, approval, OAuth, token, last sync |
+| `token_state` | แสดง token `valid`, `refresh_required`, `expired`, `missing` |
+
+Error จาก Shopee API ส่งกลับแบบ structured:
+
+```json
+{
+  "error": "ข้อความที่ admin อ่านแล้วรู้ว่าต้องทำอะไร",
+  "error_code": "RATE_LIMIT",
+  "retryable": true
+}
+```
+
+UI จะแสดง error เหล่านี้บน Open API card และ reload status หลังเกิด error เพื่อให้เห็น last sync error/token state ล่าสุด.
 
 ---
 

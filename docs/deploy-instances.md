@@ -116,6 +116,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-20 15:04 +07: BillFlow main Shopee API readiness, SML product images, and instance settings hardening deployed.
+- Scope: `billflow` only. Shopee Open API readiness is available on `/import/shopee` with approval/config gates, OAuth callback/token storage, preview-only API fetch, and friendly error UX; live connection is blocked until Shopee Go-Live approval and live key cutover.
+- Scope: SML product images now lazy-load through `sml-api-bybos`; BillFlow stores image metadata only, `/settings/catalog` and the bill item picker show thumbnails/full preview/gallery, and `sml1_2026_images.public.images` has the `images_trim_image_id_order_roworder_file_idx` expression index.
+- Scope: `/settings/instance` can test draft SML REST URL/database tenant before saving and documents the `{database}_images` image DB pattern.
+- Operational docs: [sml-image-db-maintenance.md](sml-image-db-maintenance.md), [sml-api-migration.md](sml-api-migration.md), and [shopee-open-api-live-cutover.md](shopee-open-api-live-cutover.md).
+- Verification: `go test ./...`, `npm run build`, `scripts/preflight-main.sh`, browser QA for `/import/shopee`, `/settings/catalog`, bill item picker, and `/settings/instance`; image index script verified against `sml1_2026_images`.
 - 2026-05-12 11:34 +07: Audit actor + production log accountability deployed to all three instances.
 - Scope: backend `/api/logs` now returns `actor` with user name/email/role when `user_id` exists, classifies background entries as worker/system, and supports `user_id` filtering.
 - Scope: `/logs` shows the actor badge in each row, adds a `ผู้ทำรายการ` filter, removes playful emoji from action labels, and keeps DEV payload copyable for admins/devs.

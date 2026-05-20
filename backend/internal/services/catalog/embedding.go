@@ -264,13 +264,17 @@ func (idx *CatalogIndex) Reload(repo *repository.SMLCatalogRepo) error {
 		}
 		items = append(items, indexedItem{
 			CatalogMatch: models.CatalogMatch{
-				ItemCode:  d.ItemCode,
-				ItemName:  d.ItemName,
-				ItemName2: d.ItemName2,
-				UnitCode:  d.UnitCode,
-				WHCode:    d.WHCode,
-				ShelfCode: d.ShelfCode,
-				Price:     price,
+				ItemCode:             d.ItemCode,
+				ItemName:             d.ItemName,
+				ItemName2:            d.ItemName2,
+				UnitCode:             d.UnitCode,
+				WHCode:               d.WHCode,
+				ShelfCode:            d.ShelfCode,
+				Price:                price,
+				ImageCount:           d.ImageCount,
+				PrimaryImageRoworder: d.PrimaryImageRoworder,
+				PrimaryImageGuid:     d.PrimaryImageGuid,
+				PrimaryImageBytes:    d.PrimaryImageBytes,
 			},
 			embedding: d.Embedding,
 		})

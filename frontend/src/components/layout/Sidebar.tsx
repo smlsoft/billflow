@@ -159,7 +159,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'ช่องทางรับข้อมูล',
     items: [
       { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail, hint: 'Email → ใบสั่งซื้อ' },
-      { to: '/import/shopee', label: 'Shopee Excel', icon: Upload, hint: 'นำเข้า Excel จาก Shopee', enabled: ENABLE_SHOPEE_EXCEL },
+      { to: '/import/shopee', label: 'Shopee', icon: Upload, hint: 'API + Excel จาก Shopee', enabled: ENABLE_SHOPEE_EXCEL },
       { to: '/import/lazada', label: 'Lazada Excel', icon: Upload, hint: 'Excel จาก Lazada', enabled: ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS },
       { to: '/import/tiktok', label: 'TikTok Excel', icon: Upload, hint: 'Excel/CSV จาก TikTok', enabled: ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS },
     ],

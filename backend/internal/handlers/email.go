@@ -667,6 +667,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 	if err := h.billRepo.Create(bill); err != nil {
 		return fmt.Errorf("create shopee_email bill: %w", err)
 	}
+	h.recordShopeeOrderEvent(bill.ID, subject, from, messageID, source, shopeeOrderID)
 	_ = h.billRepo.MarkProcessedEmailKey("shopee_email", messageID, shopeeOrderID)
 
 	// Save the email body as artifact. Prefer the rich HTML MIME part (bodyHTML)

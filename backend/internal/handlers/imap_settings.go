@@ -22,6 +22,11 @@ type IMAPSettingsHandler struct {
 	logger      *zap.Logger
 }
 
+type resetIMAPProgressRequest struct {
+	LookbackDays *int `json:"lookback_days"`
+	PollNow      bool `json:"poll_now"`
+}
+
 func NewIMAPSettingsHandler(
 	repo *repository.ImapAccountRepo,
 	coordinator *emailservice.Coordinator,
@@ -139,6 +144,52 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	resp := imapPollResponse(res)
+	c.JSON(http.StatusOK, resp)
+}
+
+// ResetProgress clears the resumable IMAP cursor so admins can intentionally
+// re-read a lookback window. It does not delete processed-message history or
+// any bills, so duplicate protection still applies.
+func (h *IMAPSettingsHandler) ResetProgress(c *gin.Context) {
+	id := c.Param("id")
+	var in resetIMAPProgressRequest
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if in.LookbackDays != nil && (*in.LookbackDays < 1 || *in.LookbackDays > 90) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "lookback_days must be between 1 and 90"})
+		return
+	}
+	if err := h.repo.ResetPollProgress(id, in.LookbackDays); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if in.PollNow {
+		h.coordinator.RemoveAccount(id)
+		res, err := h.coordinator.PollNow(id)
+		if reloadErr := h.coordinator.ReloadAccountIdle(id); reloadErr != nil {
+			h.logger.Warn("imap_reset_progress_reload_failed", zap.String("id", id), zap.Error(reloadErr))
+		}
+		if err != nil {
+			if strings.Contains(err.Error(), "poll already running") {
+				c.JSON(http.StatusConflict, gin.H{"error": "กล่องเมลนี้กำลังดึงอีเมลอยู่แล้ว กรุณารอสักครู่แล้วรีเฟรชสถานะ"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, imapPollResponse(res))
+		return
+	}
+	if err := h.coordinator.ReloadAccount(id); err != nil {
+		h.logger.Warn("imap_reset_progress_reload_failed", zap.String("id", id), zap.Error(err))
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func imapPollResponse(res emailservice.PollResult) gin.H {
 	resp := gin.H{
 		"trace_id":       res.TraceID,
 		"messages_found": res.MessagesFound,
@@ -146,7 +197,11 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 		"skipped":        res.Skipped,
 		"duration_ms":    res.Duration.Milliseconds(),
 		"status":         res.Status(),
+		"summary":        res.Summary,
 		"details":        res.Details,
+		"last_seen_uid":  res.LastSeenUID,
+		"limited":        res.Limited,
+		"backlog":        res.Backlog,
 	}
 	if res.Err != nil {
 		resp["error"] = res.Err.Error()
@@ -154,7 +209,7 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 		resp["error"] = res.ProcessWarnings[0]
 		resp["warnings"] = res.ProcessWarnings
 	}
-	c.JSON(http.StatusOK, resp)
+	return resp
 }
 
 // TestConnection runs a dry connect+auth+select cycle WITHOUT saving anything.

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, Fragment } from 'react'
+import { useState, useRef, useEffect, Fragment, type ComponentType } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertCircle,
@@ -12,6 +12,8 @@ import {
   FileSpreadsheet,
   Info,
   Loader2,
+  PlugZap,
+  RefreshCw,
   ShieldCheck,
 } from 'lucide-react'
 
@@ -104,6 +106,8 @@ interface PreviewResponse {
   import_run_id?: string
   preflight: ImportPreflight
   file_token?: string
+  more?: boolean
+  next_cursor?: string
 }
 interface ConfirmResult {
   order_id: string
@@ -127,6 +131,37 @@ interface ImportRunSummary {
   status: 'preview' | 'confirmed' | 'failed'
   created_at: string
   confirmed_at?: string
+}
+
+type ShopeeAPIReadinessCheckStatus = 'ok' | 'warning' | 'blocked'
+
+interface ShopeeAPIReadinessCheck {
+  key: string
+  label: string
+  status: ShopeeAPIReadinessCheckStatus
+  detail?: string
+}
+
+interface ShopeeAPIStatus {
+  enabled: boolean
+  configured: boolean
+  environment: string
+  base_url?: string
+  partner_id?: number
+  redirect_url?: string
+  connected: boolean
+  shop_id?: number
+  shop_name?: string
+  access_expires_at?: string
+  refresh_expires_at?: string
+  last_sync_at?: string
+  last_sync_status?: string
+  last_sync_error?: string
+  token_state?: string
+  can_connect?: boolean
+  can_fetch?: boolean
+  blocking_reason?: string
+  checks?: ShopeeAPIReadinessCheck[]
 }
 
 function fmt(n: number) {
@@ -168,6 +203,185 @@ function shopeeDestination(config?: ShopeeConfig | null) {
       }
 }
 
+type APIReadinessTone = 'success' | 'warning' | 'danger' | 'muted'
+
+interface APIReadinessStep {
+  label: string
+  done: boolean
+  status?: ShopeeAPIReadinessCheckStatus
+  detail?: string
+}
+
+interface APIReadiness {
+  title: string
+  description: string
+  tone: APIReadinessTone
+  steps: APIReadinessStep[]
+}
+
+function isLiveAPI(status: ShopeeAPIStatus) {
+  return (status.environment || '').toLowerCase() === 'live'
+}
+
+function shopeeAPIReadiness(status: ShopeeAPIStatus): APIReadiness {
+  const live = isLiveAPI(status)
+  const steps: APIReadinessStep[] =
+    status.checks && status.checks.length > 0
+      ? status.checks.map((check) => ({
+          label: check.label,
+          done: check.status === 'ok',
+          status: check.status,
+          detail: check.detail,
+        }))
+      : [
+          { label: 'เปิด Shopee Open API บน server', done: status.enabled },
+          { label: 'ตั้งค่า Partner ID / Key', done: status.configured },
+          { label: 'ใช้ Live key หลัง Shopee approve', done: live },
+          { label: 'เชื่อมร้านผ่าน OAuth', done: status.connected },
+        ]
+  const hasBlocked = steps.some((s) => s.status === 'blocked')
+  const hasWarning = steps.some((s) => s.status === 'warning' || !s.done)
+
+  if (!status.enabled) {
+    return {
+      title: 'Shopee Open API ยังปิดอยู่',
+      description: 'เปิด SHOPEE_OPEN_API_ENABLED=true ก่อนเริ่มเชื่อมร้าน',
+      tone: 'danger',
+      steps,
+    }
+  }
+  if (hasBlocked) {
+    return {
+      title: 'Shopee API ยังไม่พร้อมใช้งาน',
+      description: status.blocking_reason || 'มีรายการ preflight ที่ต้องแก้ก่อนเชื่อมต่อหรือดึง order',
+      tone: 'danger',
+      steps,
+    }
+  }
+  if (!status.configured) {
+    return {
+      title: 'ยังไม่ได้ตั้งค่า key บน server',
+      description: 'ต้องใส่ Partner ID และ Partner Key ให้ครบก่อนสร้างลิงก์ OAuth',
+      tone: 'warning',
+      steps,
+    }
+  }
+  if (!live && !status.connected) {
+    return {
+      title: 'พร้อมระดับ sandbox แต่ยังไม่พร้อมร้านจริง',
+      description: 'ตอนนี้ใช้ test key อยู่ ร้านจริงต้องรอ Shopee approve Go-Live แล้วเปลี่ยนเป็น live key ก่อนเชื่อม',
+      tone: 'warning',
+      steps,
+    }
+  }
+  if (live && !status.connected) {
+    return {
+      title: 'พร้อมเชื่อมร้านจริง',
+      description: 'ตรวจว่า Redirect URL Domain ใน Shopee Console ตรงกับ public URL ปัจจุบัน แล้วกดเชื่อมต่อ Shopee API',
+      tone: 'success',
+      steps,
+    }
+  }
+  if (hasWarning) {
+    return {
+      title: live ? 'พร้อมใช้งานแต่มีข้อควรตรวจ' : 'พร้อมระดับ sandbox แต่ยังไม่ใช่ live',
+      description: status.blocking_reason || 'ตรวจ warning ก่อนใช้งานจริง โดยเฉพาะ token, redirect และ sync ล่าสุด',
+      tone: 'warning',
+      steps,
+    }
+  }
+  return {
+    title: live ? 'เชื่อมร้านจริงแล้ว' : 'เชื่อม sandbox แล้ว',
+    description: 'ดึง order แบบ preview-only ก่อนสร้างบิล เพื่อให้ตรวจข้อมูลก่อนส่งเข้า SML',
+    tone: live ? 'success' : 'warning',
+    steps,
+  }
+}
+
+function readinessToneClass(tone: APIReadinessTone) {
+  if (tone === 'success') return 'border-success/30 bg-success/5 text-success'
+  if (tone === 'danger') return 'border-destructive/30 bg-destructive/5 text-destructive'
+  if (tone === 'warning') return 'border-warning/35 bg-warning/10 text-warning'
+  return 'border-border bg-muted/30 text-muted-foreground'
+}
+
+function readinessStepIcon(step: APIReadinessStep) {
+  if (step.status === 'blocked') return <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+  if (step.status === 'warning' || !step.done) return <Clock3 className="h-3.5 w-3.5 shrink-0 text-warning" />
+  return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+}
+
+function tokenStateLabel(v?: string) {
+  switch (v) {
+    case 'access_valid':
+      return 'พร้อมใช้'
+    case 'access_expiring':
+      return 'ใกล้ refresh'
+    case 'refresh_required':
+      return 'ต้อง refresh'
+    case 'refresh_expired':
+      return 'หมดอายุ'
+    default:
+      return '—'
+  }
+}
+
+function apiRangeError(from: string, to: string) {
+  if (!from || !to) return 'เลือกวันที่เริ่มต้นและสิ้นสุดให้ครบ'
+  const fromDate = new Date(`${from}T00:00:00`)
+  const toDate = new Date(`${to}T00:00:00`)
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+    return 'รูปแบบวันที่ไม่ถูกต้อง'
+  }
+  if (toDate < fromDate) return 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มต้น'
+  const days = Math.floor((toDate.getTime() - fromDate.getTime()) / 86400000) + 1
+  if (days > 15) return 'Shopee API จำกัดการดึงข้อมูลไม่เกิน 15 วันต่อครั้ง'
+  return ''
+}
+
+function apiErrorMessage(err: unknown, fallback: string) {
+  const data = (err as { response?: { data?: { error?: string; error_code?: string } } })?.response?.data
+  const raw = data?.error ?? ''
+  const lower = raw.toLowerCase()
+  switch (data?.error_code) {
+    case 'not_configured':
+      return 'Shopee Open API ยังไม่ได้ตั้งค่า Partner ID/Key บน server'
+    case 'redirect_not_ready':
+      return 'Redirect URL ยังไม่พร้อม ให้ตรวจ PUBLIC_BASE_URL และ Shopee Console ว่าตรงกัน'
+    case 'not_connected':
+      return 'ยังไม่ได้เชื่อมต่อร้าน Shopee ให้รอ Go-Live approve แล้วกดเชื่อมต่อ API'
+    case 'bad_signature':
+      return 'Shopee ปฏิเสธ signature ให้ตรวจ Partner ID/Key และ sandbox/live base URL'
+    case 'token_error':
+      return 'Shopee token ใช้งานไม่ได้หรือหมดอายุ ให้กดเชื่อมต่อร้านใหม่'
+    case 'permission_denied':
+      return 'Shopee ยังไม่อนุญาตสิทธิ์นี้ ให้ตรวจสถานะ Go-Live และ permission ของแอป'
+    case 'rate_limited':
+      return 'Shopee rate limit ให้รอสักครู่แล้วลองใหม่'
+    case 'network_timeout':
+      return 'เชื่อมต่อ Shopee ชั่วคราวไม่สำเร็จ ให้ลองใหม่อีกครั้ง'
+  }
+  if (lower.includes('wrong sign') || lower.includes('error_sign')) {
+    return 'Shopee ปฏิเสธ signature ให้ตรวจ Partner ID/Key และ sandbox/live base URL'
+  }
+  if (lower.includes('redirect') && lower.includes('domain')) {
+    return 'Shopee ปฏิเสธ Redirect URL Domain ให้ตรวจ public URL ใน Console ให้ตรงกับ server'
+  }
+  if (lower.includes('ยังไม่ได้เชื่อมต่อร้าน')) {
+    return 'ยังไม่ได้เชื่อมต่อร้าน Shopee ให้กดเชื่อมต่อ API ก่อนดึง order'
+  }
+  if (lower.includes('token')) {
+    return 'Shopee token ใช้งานไม่ได้หรือหมดอายุ ให้กดเชื่อมต่อร้านใหม่'
+  }
+  if (lower.includes('permission') || lower.includes('forbidden')) {
+    return 'Shopee ยังไม่อนุญาตสิทธิ์นี้ ให้ตรวจสถานะ Go-Live และ permission ของแอป'
+  }
+  if (lower.includes('rate') || lower.includes('429')) {
+    return 'Shopee rate limit ให้รอสักครู่แล้วลองใหม่'
+  }
+  return raw || fallback
+}
+
 function SummaryCard({
   label,
   value,
@@ -193,6 +407,42 @@ function SummaryCard({
   )
 }
 
+function StatusTile({
+  label,
+  value,
+  description,
+  icon: Icon,
+  tone = 'muted',
+}: {
+  label: string
+  value: string
+  description: string
+  icon: ComponentType<{ className?: string }>
+  tone?: 'success' | 'warning' | 'primary' | 'muted'
+}) {
+  const toneClass = {
+    success: 'border-success/25 bg-success/[0.04] text-success',
+    warning: 'border-warning/30 bg-warning/[0.08] text-warning',
+    primary: 'border-primary/25 bg-primary/[0.04] text-primary',
+    muted: 'border-border bg-card text-foreground',
+  }[tone]
+
+  return (
+    <div className={cn('rounded-lg border px-4 py-3', toneClass)}>
+      <div className="flex items-start gap-3">
+        <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {label}
+          </p>
+          <p className="mt-1 text-sm font-semibold leading-5 text-foreground">{value}</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type Step = 'idle' | 'uploading' | 'preview' | 'confirming' | 'done'
 
 export default function ShopeeImport() {
@@ -210,6 +460,15 @@ export default function ShopeeImport() {
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
   const [recentRuns, setRecentRuns] = useState<ImportRunSummary[]>([])
   const [confirmElapsed, setConfirmElapsed] = useState(0)
+  const [previewSource, setPreviewSource] = useState<'excel' | 'api'>('excel')
+  const [apiStatus, setAPIStatus] = useState<ShopeeAPIStatus | null>(null)
+  const [apiBusy, setAPIBusy] = useState(false)
+  const [apiFrom, setAPIFrom] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 7)
+    return d.toISOString().slice(0, 10)
+  })
+  const [apiTo, setAPITo] = useState(() => new Date().toISOString().slice(0, 10))
 
   // Track config load + ready states separately so preflight UI can render
   // a missing-config banner BEFORE admin uploads a file. Without this, file
@@ -217,6 +476,7 @@ export default function ShopeeImport() {
   // confusing "config missing" error.
   const [configLoading, setConfigLoading] = useState(true)
   const configReady = !configLoading
+  const channelReady = configReady && Boolean(config?.cust_code?.trim())
   const destination = shopeeDestination(config)
 
   const fallbackConfig: ShopeeConfig = {
@@ -255,6 +515,12 @@ export default function ShopeeImport() {
       .get<{ runs: ImportRunSummary[] }>('/api/import/shopee/runs?limit=5')
       .then((res) => {
         if (alive) setRecentRuns(res.data.runs ?? [])
+      })
+      .catch(() => undefined)
+    client
+      .get<ShopeeAPIStatus>('/api/settings/shopee-api/status')
+      .then((res) => {
+        if (alive) setAPIStatus(res.data)
       })
       .catch(() => undefined)
     return () => {
@@ -298,6 +564,7 @@ export default function ShopeeImport() {
         form,
         { headers: { 'Content-Type': 'multipart/form-data' } },
       )
+      setPreviewSource('excel')
       setPreview(res.data)
       setSelectedIDs(
         new Set(res.data.orders.filter((o) => !o.duplicate).map((o) => o.order_id)),
@@ -312,6 +579,57 @@ export default function ShopeeImport() {
     }
   }
 
+  const refreshAPIStatus = async () => {
+    try {
+      const res = await client.get<ShopeeAPIStatus>('/api/settings/shopee-api/status')
+      setAPIStatus(res.data)
+    } catch {
+      setError('โหลดสถานะ Shopee API ไม่ได้')
+    }
+  }
+
+  const handleConnectAPI = async () => {
+    setError('')
+    setAPIBusy(true)
+    try {
+      const res = await client.post<{ auth_url: string }>('/api/shopee-api/auth-url')
+      window.location.href = res.data.auth_url
+    } catch (err: unknown) {
+      setError(apiErrorMessage(err, 'สร้างลิงก์เชื่อมต่อ Shopee API ไม่ได้'))
+    } finally {
+      setAPIBusy(false)
+    }
+  }
+
+  const handleFetchAPI = async () => {
+    setStep('uploading')
+    setError('')
+    setPreview(null)
+    setResults(null)
+    setAPIBusy(true)
+    try {
+      const res = await client.post<PreviewResponse>('/api/import/shopee/api/preview', {
+        time_from: apiFrom,
+        time_to: apiTo,
+        time_range_field: 'create_time',
+        page_size: 20,
+      })
+      setPreviewSource('api')
+      setPreview(res.data)
+      setSelectedIDs(
+        new Set(res.data.orders.filter((o) => !o.duplicate).map((o) => o.order_id)),
+      )
+      setStep('preview')
+      void refreshAPIStatus()
+    } catch (err: unknown) {
+      setError(apiErrorMessage(err, 'ดึง order จาก Shopee API ไม่ได้'))
+      setStep('idle')
+      void refreshAPIStatus()
+    } finally {
+      setAPIBusy(false)
+    }
+  }
+
   const handleConfirm = async () => {
     if (!preview || selectedIDs.size === 0) return
     setStep('confirming')
@@ -323,6 +641,7 @@ export default function ShopeeImport() {
         orders: preview.orders,
         file_token: preview.file_token,
         import_run_id: preview.import_run_id,
+        source_flow: previewSource === 'api' ? 'shopee_api' : 'shopee_excel',
       }, { timeout: 120000 })
       setResults(res.data)
       setStep('done')
@@ -354,65 +673,61 @@ export default function ShopeeImport() {
       else s.add(id)
       return s
     })
+  const apiReadiness = apiStatus ? shopeeAPIReadiness(apiStatus) : null
+  const apiLive = apiStatus ? isLiveAPI(apiStatus) : false
+  const apiDateError = apiRangeError(apiFrom, apiTo)
+  const apiWaitingForLive =
+    !!apiStatus && apiStatus.enabled && apiStatus.configured && !apiLive && !apiStatus.connected
+  const apiCanConnect = apiStatus?.can_connect ?? (!!apiStatus?.configured && !apiWaitingForLive)
+  const apiCanFetch = apiStatus?.can_fetch ?? !!apiStatus?.connected
+  const apiConnectDisabled = apiBusy || !apiCanConnect
+  const apiFetchDisabled = apiBusy || !apiCanFetch || !!apiDateError
+  const apiConnectLabel = apiWaitingForLive
+    ? 'รอ Shopee approve'
+    : apiStatus?.connected
+      ? 'เชื่อมต่อใหม่'
+      : 'เชื่อมต่อ Shopee API'
+  const apiLastSyncError = apiStatus?.last_sync_error
+    ? apiErrorMessage({ response: { data: { error: apiStatus.last_sync_error } } }, apiStatus.last_sync_error)
+    : ''
+  const sourceSelectionVisible = step === 'idle' || step === 'uploading'
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Shopee Excel"
-        description={`อัปโหลดไฟล์จาก Shopee Seller Center แล้วสร้างเป็น${destination.documentName}สำหรับตรวจและส่งเข้า SML`}
+        title="Shopee"
+        description={`เชื่อม API เมื่อ Go-Live พร้อม หรืออัปโหลด Excel เพื่อสร้าง${destination.documentName}สำหรับตรวจและส่งเข้า SML`}
       />
 
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>ช่องทางรับข้อมูลสำหรับ{destination.shortName}</AlertTitle>
-        <AlertDescription>
-          หน้านี้ทำหน้าที่นำเข้าไฟล์เท่านั้น ระบบจะสร้างรายการไปที่เมนู{' '}
-          <Link to={destination.listPath} className="font-medium text-primary hover:underline">
-            {destination.listName}
-          </Link>{' '}
-          เพื่อให้ตรวจสินค้า หน่วย จำนวน ราคา และส่งเข้า SML ปลายทาง{' '}
-          <span className="font-medium text-foreground">{destination.smlPath}</span>
-        </AlertDescription>
-      </Alert>
-
-      {recentRuns.length > 0 && step === 'idle' && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <Clock3 className="h-4 w-4 text-muted-foreground" />
-              ประวัติการนำเข้าล่าสุด
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 pt-0">
-            {recentRuns.map((run) => (
-              <div
-                key={run.id}
-                className="grid gap-2 rounded-md border border-border px-3 py-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto]"
-              >
-                <div className="min-w-0">
-                  <div className="truncate font-medium text-foreground">
-                    {run.filename || 'Shopee Excel'}
-                  </div>
-                  <div className="mt-0.5 text-muted-foreground">
-                    {fmtDateTime(run.created_at)}
-                    {run.period_start && run.period_end
-                      ? ` · ${run.period_start} ถึง ${run.period_end}`
-                      : ''}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-1 sm:justify-end">
-                  <Badge variant={run.status === 'confirmed' ? 'default' : 'secondary'}>
-                    {run.status === 'confirmed' ? 'สร้างแล้ว' : 'Preview'}
-                  </Badge>
-                  <Badge variant="outline">ใหม่ {run.new_orders}</Badge>
-                  <Badge variant="outline">ซ้ำ {run.duplicate_orders}</Badge>
-                  <Badge variant="outline">ข้าม {run.skipped_orders}</Badge>
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      <div className="grid gap-3 md:grid-cols-3">
+        <StatusTile
+          icon={apiStatus?.connected ? CheckCircle2 : Clock3}
+          label="สถานะ API"
+          value={apiReadiness?.title ?? 'กำลังโหลดสถานะ'}
+          description={
+            apiWaitingForLive
+              ? 'รอ Go-Live approve แล้วเปลี่ยนเป็น live key'
+              : apiStatus?.connected
+                ? 'พร้อมดึง order แบบ preview ก่อนสร้างบิล'
+                : 'ตรวจ key และ redirect ก่อนเชื่อมร้าน'
+          }
+          tone={apiStatus?.connected ? 'success' : apiWaitingForLive ? 'warning' : 'muted'}
+        />
+        <StatusTile
+          icon={FileSpreadsheet}
+          label="ใช้งานได้ตอนนี้"
+          value={apiStatus?.connected ? 'API + Excel' : 'Excel fallback'}
+          description="อัปโหลดไฟล์จาก Seller Center ได้ทันทีระหว่างรอ API"
+          tone="primary"
+        />
+        <StatusTile
+          icon={ShieldCheck}
+          label="ปลายทาง"
+          value={destination.shortName}
+          description={destination.smlPath}
+          tone="muted"
+        />
+      </div>
 
       <input
         ref={fileRef}
@@ -429,39 +744,250 @@ export default function ShopeeImport() {
         </Alert>
       )}
 
-      {(step === 'idle' || step === 'uploading') && (
-        <>
-          <div
-            className={cn(
-              'flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/20 p-10 text-center',
-              step === 'uploading' && 'opacity-60',
-            )}
-          >
-            {step === 'uploading' ? (
-              <p className="text-sm text-muted-foreground">กำลังวิเคราะห์ไฟล์…</p>
-            ) : (
-              <>
-                <FileSpreadsheet className="mb-3 h-10 w-10 text-muted-foreground" />
-                <p className="text-sm font-medium text-foreground">
-                  คลิกเพื่อเลือกไฟล์ Excel (.xlsx) จาก Shopee
-                </p>
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  รองรับไฟล์ที่ export จาก Shopee Seller Center ที่มี column: หมายเลขคำสั่งซื้อ, ชื่อสินค้า, ตัวเลือกสินค้า, ราคาขาย, จำนวน
-                </p>
-                <Button
-                  className="mt-4"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={!configReady}
-                  title={!configReady ? 'กำลังเตรียมหน้า import' : undefined}
+      {sourceSelectionVisible && (
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
+          {apiStatus && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <PlugZap className="h-4 w-4 text-primary" />
+                    Shopee Open API
+                    <Badge variant={apiStatus.connected ? 'default' : 'secondary'}>
+                      {apiStatus.connected ? 'เชื่อมต่อแล้ว' : 'ยังไม่เชื่อมต่อ'}
+                    </Badge>
+                    <Badge variant="outline">{apiStatus.environment || 'sandbox'}</Badge>
+                  </CardTitle>
+                  <Button variant="ghost" size="sm" onClick={refreshAPIStatus} disabled={apiBusy}>
+                    <RefreshCw className="h-4 w-4" />
+                    รีเฟรช
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-0">
+                {apiReadiness && (
+                  <div className={cn('rounded-md border px-3 py-2 text-xs', readinessToneClass(apiReadiness.tone))}>
+                    <div className="flex items-start gap-2">
+                      {apiReadiness.tone === 'success' ? (
+                        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium">{apiReadiness.title}</p>
+                        <p className="mt-0.5 text-muted-foreground">{apiReadiness.description}</p>
+                        <div className="mt-2 grid gap-1.5 text-muted-foreground sm:grid-cols-2">
+                          {apiReadiness.steps.map((s) => (
+                            <div key={s.label} className="flex min-w-0 items-start gap-1.5">
+                              {readinessStepIcon(s)}
+                              <span className="min-w-0">
+                                <span>{s.label}</span>
+                                {s.detail && (
+                                  <span className="block truncate text-[11px]" title={s.detail}>
+                                    {s.detail}
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3 xl:grid-cols-6">
+                  <div className="rounded-md border border-border p-3">
+                    <p className="font-medium text-foreground">Partner</p>
+                    <p className="mt-1 font-mono">{apiStatus.partner_id || 'ยังไม่ได้ตั้งค่า'}</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3">
+                    <p className="font-medium text-foreground">Shop</p>
+                    <p className="mt-1 font-mono">{apiStatus.shop_id || '—'}</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3">
+                    <p className="font-medium text-foreground">Base URL</p>
+                    <p className="mt-1 truncate font-mono" title={apiStatus.base_url || '—'}>
+                      {apiStatus.base_url || '—'}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-border p-3">
+                    <p className="font-medium text-foreground">Redirect</p>
+                    <p className="mt-1 truncate font-mono" title={apiStatus.redirect_url || '—'}>
+                      {apiStatus.redirect_url || '—'}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-border p-3">
+                    <p className="font-medium text-foreground">Token</p>
+                    <p className="mt-1">{tokenStateLabel(apiStatus.token_state)}</p>
+                  </div>
+                  <div className="rounded-md border border-border p-3">
+                    <p className="font-medium text-foreground">Last sync</p>
+                    <p className="mt-1">
+                      {apiStatus.last_sync_at ? fmtDateTime(apiStatus.last_sync_at) : '—'}
+                    </p>
+                  </div>
+                </div>
+                {!apiStatus.configured && (
+                  <Alert>
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>ยังไม่ได้ตั้งค่า Shopee Open API บน server</AlertTitle>
+                    <AlertDescription>
+                      ต้องตั้งค่า partner_id และ partner_key ก่อนเชื่อมต่อร้าน
+                    </AlertDescription>
+                  </Alert>
+                )}
+                {apiStatus.blocking_reason && (
+                  <Alert>
+                    <Info className="h-4 w-4" />
+                    <AlertTitle>สิ่งที่ต้องทำต่อ</AlertTitle>
+                    <AlertDescription>{apiStatus.blocking_reason}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="rounded-md border border-border bg-muted/20 p-3">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <Button
+                      variant={apiStatus.connected ? 'outline' : 'default'}
+                      size="sm"
+                      onClick={handleConnectAPI}
+                      disabled={apiConnectDisabled}
+                      title={apiStatus.blocking_reason || undefined}
+                    >
+                      {apiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
+                      {apiConnectLabel}
+                    </Button>
+                    <label className="text-xs text-muted-foreground">
+                      จาก
+                      <input
+                        type="date"
+                        value={apiFrom}
+                        onChange={(e) => setAPIFrom(e.target.value)}
+                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                      />
+                    </label>
+                    <label className="text-xs text-muted-foreground">
+                      ถึง
+                      <input
+                        type="date"
+                        value={apiTo}
+                        onChange={(e) => setAPITo(e.target.value)}
+                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                      />
+                    </label>
+                    <Button
+                      size="sm"
+                      onClick={handleFetchAPI}
+                      disabled={apiFetchDisabled}
+                      title={apiDateError || apiStatus.blocking_reason || undefined}
+                    >
+                      {apiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+                      ดึงออเดอร์จาก API
+                    </Button>
+                  </div>
+                  {(apiDateError || apiLastSyncError) && (
+                    <div className="mt-2 space-y-1 text-xs">
+                      {apiDateError && <p className="text-warning">{apiDateError}</p>}
+                      {apiLastSyncError && <p className="text-destructive">{apiLastSyncError}</p>}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <FileSpreadsheet className="h-4 w-4 text-primary" />
+                  Excel fallback
+                  <Badge variant="outline">ใช้ได้ตอนนี้</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div
+                  className={cn(
+                    'flex min-h-[180px] flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/20 p-6 text-center',
+                    step === 'uploading' && !apiBusy && 'opacity-60',
+                  )}
                 >
-                  {configLoading
-                    ? 'กำลังโหลด config…'
-                    : 'เลือกไฟล์ Shopee'}
-                </Button>
-              </>
+                  {step === 'uploading' && !apiBusy ? (
+                    <p className="text-sm text-muted-foreground">กำลังวิเคราะห์ไฟล์…</p>
+                  ) : (
+                    <>
+                      <FileSpreadsheet className="mb-3 h-10 w-10 text-muted-foreground" />
+                      <p className="text-sm font-medium text-foreground">
+                        ไฟล์ Excel (.xlsx) จาก Shopee Seller Center
+                      </p>
+                      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                        ระบบจะ preview และข้าม Order ID ที่มีใน BillFlow แล้ว
+                      </p>
+                      <Button
+                        className="mt-4"
+                        onClick={() => fileRef.current?.click()}
+                        disabled={!channelReady}
+                        title={!configReady ? 'กำลังเตรียมหน้า import' : !channelReady ? 'ยังไม่ได้ตั้งค่า shopee/sale ในช่องทางรับข้อมูล' : undefined}
+                      >
+                        {configLoading ? 'กำลังโหลด config…' : 'เลือกไฟล์ Shopee'}
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {configReady && !channelReady && (
+                  <Alert className="mt-3">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>ยังไม่ได้ตั้งค่า Shopee sale defaults</AlertTitle>
+                    <AlertDescription>
+                      ตั้งค่าช่องทาง Shopee สำหรับบิลขายก่อนนำเข้า เพื่อให้บิลรู้ว่าจะใช้ลูกค้า คลัง ชั้น และ VAT ใด
+                      <Button asChild variant="link" className="h-auto px-1 py-0 text-xs">
+                        <Link to="/settings/channels">ไปตั้งค่าตอนนี้</Link>
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </CardContent>
+            </Card>
+
+            {recentRuns.length > 0 && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <Clock3 className="h-4 w-4 text-muted-foreground" />
+                    ประวัติการนำเข้าล่าสุด
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 pt-0">
+                  {recentRuns.map((run) => (
+                    <div
+                      key={run.id}
+                      className="grid gap-2 rounded-md border border-border px-3 py-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-foreground">
+                          {run.filename || 'Shopee Import'}
+                        </div>
+                        <div className="mt-0.5 text-muted-foreground">
+                          {fmtDateTime(run.created_at)}
+                          {run.period_start && run.period_end
+                            ? ` · ${run.period_start} ถึง ${run.period_end}`
+                            : ''}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge variant={run.status === 'confirmed' ? 'default' : 'secondary'}>
+                          {run.status === 'confirmed' ? 'สร้างแล้ว' : 'Preview'}
+                        </Badge>
+                        <Badge variant="outline">ใหม่ {run.new_orders}</Badge>
+                        <Badge variant="outline">ซ้ำ {run.duplicate_orders}</Badge>
+                        <Badge variant="outline">ข้าม {run.skipped_orders}</Badge>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
             )}
           </div>
-        </>
+        </div>
       )}
 
       {step === 'preview' && preview && (
@@ -710,10 +1236,10 @@ export default function ShopeeImport() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-foreground">
-                    กำลัง{destination.action}จาก Shopee Excel
+                    กำลัง{destination.action}จาก {previewSource === 'api' ? 'Shopee API' : 'Shopee Excel'}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    ระบบกำลังจับคู่สินค้า สร้างเอกสาร และแนบไฟล์ต้นฉบับไว้เป็นหลักฐาน
+                    ระบบกำลังจับคู่สินค้าและสร้างเอกสารไว้รอตรวจ ยังไม่ส่งเข้า SML อัตโนมัติ
                   </p>
                 </div>
                 <Badge variant="secondary" className="gap-1.5">

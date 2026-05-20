@@ -40,7 +40,7 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
   },
   {
     pattern: '/import/shopee',
-    crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'Shopee Excel' }],
+    crumbs: [{ label: 'ช่องทางรับข้อมูล' }, { label: 'Shopee' }],
   },
   {
     pattern: '/import/tiktok',

@@ -20,7 +20,7 @@ type InstanceSetting = {
   group: SettingGroup
   type: 'text' | 'url' | 'number' | 'password'
   value: string
-  source: 'database' | 'env' | 'default'
+  source: 'database' | 'env' | 'default' | 'unset'
   env_key?: string
   secret?: boolean
   has_secret?: boolean
@@ -89,13 +89,16 @@ const TEST_SERVICE_LABEL: Record<string, string> = {
 
 function sourceLabel(s: InstanceSetting) {
   if (s.locked) return 'ค่าตายตัว'
-  if (s.source === 'database') return 'ตั้งค่าแล้ว'
+  if (s.source === 'database') return 'ตั้งค่าในหน้านี้'
+  if (s.source === 'env') return 'ค่าจาก env'
+  if (s.source === 'default') return 'ค่าเริ่มต้น'
   return 'ยังไม่ได้ตั้งค่า'
 }
 
 function sourceBadgeVariant(s: InstanceSetting): 'default' | 'outline' | 'secondary' {
   if (s.locked) return 'secondary'
   if (s.source === 'database') return 'default'
+  if (s.source === 'env' || s.source === 'default') return 'secondary'
   return 'outline'
 }
 
@@ -123,7 +126,7 @@ export default function InstanceSettings() {
       setPendingRestart(!!res.data.pending_restart)
       setRestartKeys(res.data.pending_restart_settings ?? [])
       setDraft(
-        Object.fromEntries((res.data.settings ?? []).map((s) => [s.key, s.source === 'database' ? s.value ?? '' : ''])),
+        Object.fromEntries((res.data.settings ?? []).map((s) => [s.key, s.value ?? ''])),
       )
     } catch {
       toast.error('โหลดค่าการเชื่อมต่อไม่สำเร็จ')
@@ -189,7 +192,7 @@ export default function InstanceSettings() {
   const requestSave = () => {
     if (saving || restarting || loading) return
     const changed = settings.filter(
-      (s) => visibleKeys.has(s.key) && !s.locked && (draft[s.key] ?? '') !== (s.source === 'database' ? s.value ?? '' : ''),
+      (s) => visibleKeys.has(s.key) && !s.locked && (draft[s.key] ?? '') !== (s.value ?? ''),
     )
     const important = changed.filter((s) => s.restart_required || s.group === 'sml' || s.group === 'ai' || s.secret)
     if (important.length > 0) {
@@ -221,7 +224,10 @@ export default function InstanceSettings() {
     setTesting(true)
     setTestResults(null)
     try {
-      const res = await client.post<TestResults>('/api/settings/instance/test-connection', {})
+      const payload = Object.fromEntries(
+        Object.entries(draft).filter(([key]) => visibleKeys.has(key)),
+      )
+      const res = await client.post<TestResults>('/api/settings/instance/test-connection', { settings: payload })
       setTestResults(res.data)
     } catch {
       toast.error('ทดสอบการเชื่อมต่อไม่สำเร็จ')
@@ -241,7 +247,7 @@ export default function InstanceSettings() {
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" onClick={testConnection} disabled={testing || saving || restarting || loading}>
               <Plug className={cn('h-4 w-4', testing && 'animate-pulse')} />
-              {testing ? 'กำลังทดสอบ...' : 'ทดสอบการเชื่อมต่อ'}
+              {testing ? 'กำลังทดสอบ...' : 'ทดสอบค่าที่กรอกอยู่'}
             </Button>
             {pendingRestart && (
               <Button variant="outline" onClick={() => setConfirmRestart(true)} disabled={saving || restarting || loading}>
@@ -343,6 +349,11 @@ export default function InstanceSettings() {
               </CardTitle>
             </CardHeader>
             <CardContent>
+              {group === 'sml' && (
+                <div className="mb-4 rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                  เปลี่ยน SML REST URL หรือ Database แล้วให้กดทดสอบก่อนบันทึก หลังระบบ restart แล้วให้ Sync สินค้าใหม่อีกครั้ง รูปสินค้าจะอ่านจากฐานรูปคู่กันตาม pattern <span className="font-mono text-foreground">{'{database}_images'}</span>
+                </div>
+              )}
               <div className="grid gap-4 lg:grid-cols-2">
                 {items.map((s) => {
                   const draftVal = draft[s.key] ?? ''
