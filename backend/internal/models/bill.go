@@ -28,8 +28,48 @@ type Bill struct {
 	TotalAmount   *float64           `json:"total_amount,omitempty"`
 	Remark        string             `json:"remark"`
 	Items         []BillItem         `json:"items,omitempty"`
+	EmailGroup    *BillEmailGroup    `json:"email_group,omitempty"`
 	ShopeeStatus  *ShopeeOrderEvent  `json:"shopee_status,omitempty"`
 	ShopeeEvents  []ShopeeOrderEvent `json:"shopee_events,omitempty"`
+}
+
+type BillEmailGroup struct {
+	MessageID         string                 `json:"message_id"`
+	GroupKey          string                 `json:"group_key"`
+	Subject           string                 `json:"subject"`
+	From              string                 `json:"from"`
+	OrderCount        int                    `json:"order_count"`
+	HasPrintableEmail bool                   `json:"has_printable_email"`
+	RelatedBills      []BillEmailRelatedBill `json:"related_bills,omitempty"`
+	PrintEvents       []EmailPrintEvent      `json:"print_events,omitempty"`
+}
+
+type BillEmailRelatedBill struct {
+	ID            string    `json:"id"`
+	OrderID       string    `json:"order_id"`
+	PartyName     string    `json:"party_name"`
+	Source        string    `json:"source"`
+	BillType      string    `json:"bill_type"`
+	DocumentRoute string    `json:"document_route"`
+	Status        string    `json:"status"`
+	SMLDocNo      string    `json:"sml_doc_no,omitempty"`
+	TotalAmount   float64   `json:"total_amount"`
+	CreatedAt     time.Time `json:"created_at"`
+	IsCurrent     bool      `json:"is_current"`
+}
+
+type EmailPrintEvent struct {
+	ID               string    `json:"id"`
+	BillID           string    `json:"bill_id"`
+	ArtifactID       string    `json:"artifact_id,omitempty"`
+	EmailMessageID   string    `json:"email_message_id"`
+	EmailGroupKey    string    `json:"email_group_key"`
+	Subject          string    `json:"subject"`
+	From             string    `json:"from"`
+	RequestedBy      string    `json:"requested_by,omitempty"`
+	RequestedByEmail string    `json:"requested_by_email,omitempty"`
+	RequestedByName  string    `json:"requested_by_name,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type ShopeeOrderEvent struct {

@@ -436,6 +436,7 @@ func main() {
 		api.GET("/bills/:id/artifacts", billH.ListArtifacts)
 		api.GET("/bills/:id/artifacts/:artifact_id/download", billH.DownloadArtifact)
 		api.GET("/bills/:id/artifacts/:artifact_id/preview", billH.PreviewArtifact)
+		api.POST("/bills/:id/artifacts/:artifact_id/print-events", billH.RecordArtifactPrint)
 
 		// Mappings
 		api.GET("/mappings", mappingH.List)

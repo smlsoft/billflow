@@ -201,7 +201,7 @@ export default function BillDetail() {
           )}
 
           <div className="min-w-0 space-y-4">
-            <ArtifactList billId={bill.id} />
+            <ArtifactList billId={bill.id} emailGroup={bill.email_group} />
             <BillTimeline billId={bill.id} />
             <SmlPayloadSection
               smlPayload={bill.sml_payload}

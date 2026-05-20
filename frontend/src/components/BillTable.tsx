@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import type { MouseEvent } from 'react'
-import { Archive, RotateCcw, Trash2 } from 'lucide-react'
+import { Archive, Mail, RotateCcw, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import BillStatusBadge from '@/components/BillStatusBadge'
@@ -103,6 +103,7 @@ export default function BillTable({
                 {isShopeeSalesBill(b) && (
                   <ShopeeSalesSummary bill={b} />
                 )}
+                <EmailGroupLine bill={b} />
               </div>
             )
           },
@@ -359,6 +360,37 @@ function emailInboxLabel(bill: Bill): string {
   const user = rawString(raw, 'imap_username')
   if (name && user) return `${name} · ${user}`
   return name || user || ''
+}
+
+function EmailGroupLine({ bill }: { bill: Bill }) {
+  const group = bill.email_group
+  if (!group?.message_id || !group.group_key) return null
+
+  const isMultiOrder = (group.order_count ?? 0) > 1
+  const tooltip = [
+    group.subject ? `Subject: ${group.subject}` : '',
+    group.from ? `From: ${group.from}` : '',
+    `Message-ID: ${group.message_id}`,
+  ].filter(Boolean).join('\n')
+
+  return (
+    <div
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[11px] leading-4 ${
+        isMultiOrder
+          ? 'border-info/30 bg-info/10 text-info'
+          : 'border-border/70 bg-muted/30 text-muted-foreground'
+      }`}
+      title={tooltip}
+    >
+      <Mail className="h-3 w-3 shrink-0" />
+      <span className="min-w-0 truncate font-mono">Email #{group.group_key}</span>
+      {isMultiOrder && (
+        <span className="shrink-0 font-medium">
+          · {group.order_count.toLocaleString('th-TH')} คำสั่งซื้อ
+        </span>
+      )}
+    </div>
+  )
 }
 
 function ShopeeSalesSummary({ bill }: { bill: Bill }) {

@@ -144,6 +144,14 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 		return nil, err
 	}
 	enrichShopeeBillRawData(b, len(items), false)
+	single := []models.Bill{*b}
+	if err := r.attachEmailGroups(single); err != nil {
+		return nil, fmt.Errorf("attach email group: %w", err)
+	}
+	*b = single[0]
+	if err := r.attachEmailGroupDetails(b); err != nil {
+		return nil, fmt.Errorf("attach email group details: %w", err)
+	}
 	return b, nil
 }
 
@@ -242,6 +250,9 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	if err := r.EnrichLatestShopeeStatuses(bills); err != nil {
 		return nil, fmt.Errorf("enrich shopee status: %w", err)
 	}
+	if err := r.attachEmailGroups(bills); err != nil {
+		return nil, fmt.Errorf("attach email groups: %w", err)
+	}
 	return &BillListResult{
 		Bills:      bills,
 		Total:      total,
@@ -315,8 +326,12 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 			 OR b.raw_data->>'order_id' ILIKE $%d
 			 OR b.raw_data->>'shopee_order_id' ILIKE $%d
 			 OR b.raw_data->>'seller_name' ILIKE $%d
+			 OR b.raw_data->>'email_message_id' ILIKE $%d
+			 OR b.raw_data->>'message_id' ILIKE $%d
+			 OR b.raw_data->>'subject' ILIKE $%d
+			 OR b.raw_data->>'from' ILIKE $%d
 			)`,
-			argN, argN, argN, argN, argN,
+			argN, argN, argN, argN, argN, argN, argN, argN, argN,
 		)
 		args = append(args, "%"+f.Search+"%")
 		argN++

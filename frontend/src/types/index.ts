@@ -119,6 +119,45 @@ export interface BillRoutePreview {
   error?: string
 }
 
+export interface BillEmailGroup {
+  message_id: string
+  group_key: string
+  subject?: string
+  from?: string
+  order_count: number
+  has_printable_email?: boolean
+  related_bills?: BillEmailRelatedBill[]
+  print_events?: EmailPrintEvent[]
+}
+
+export interface BillEmailRelatedBill {
+  id: string
+  order_id?: string
+  party_name?: string
+  source: string
+  bill_type: string
+  document_route?: string
+  status: BillStatus
+  sml_doc_no?: string
+  total_amount?: number
+  created_at: string
+  is_current?: boolean
+}
+
+export interface EmailPrintEvent {
+  id: string
+  bill_id: string
+  artifact_id?: string
+  email_message_id: string
+  email_group_key: string
+  subject?: string
+  from?: string
+  requested_by?: string
+  requested_by_email?: string
+  requested_by_name?: string
+  created_at: string
+}
+
 export interface Bill {
   id: string
   bill_type: string
@@ -146,6 +185,7 @@ export interface Bill {
   remark?: string
   shopee_status?: ShopeeOrderEvent | null
   shopee_events?: ShopeeOrderEvent[]
+  email_group?: BillEmailGroup | null
 }
 
 export interface ShopeeOrderEvent {

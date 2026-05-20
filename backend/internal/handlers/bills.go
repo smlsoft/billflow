@@ -1630,6 +1630,55 @@ func (h *BillHandler) ListArtifacts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": items})
 }
 
+// POST /api/bills/:id/artifacts/:artifact_id/print-events
+func (h *BillHandler) RecordArtifactPrint(c *gin.Context) {
+	if h.billRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bill repository not configured"})
+		return
+	}
+	billID := c.Param("id")
+	artID := c.Param("artifact_id")
+	event, err := h.billRepo.RecordEmailPrintEvent(
+		billID,
+		artID,
+		c.GetString("user_id"),
+		c.GetString("user_email"),
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "not a printable email") || strings.Contains(err.Error(), "no email message id") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		h.log.Error("Record artifact print", zap.String("bill", billID), zap.String("artifact", artID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "record print event failed"})
+		return
+	}
+	if event == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "artifact not found for this bill"})
+		return
+	}
+
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "email_print_requested",
+			TargetID: &billID,
+			UserID:   userID,
+			Source:   "system",
+			Level:    "info",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"artifact_id":     artID,
+				"email_group_key": event.EmailGroupKey,
+			},
+		})
+	}
+	c.JSON(http.StatusCreated, gin.H{"data": event})
+}
+
 func (h *BillHandler) serveArtifact(c *gin.Context, inline bool) {
 	if h.artifactSvc == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact service not configured"})
