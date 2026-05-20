@@ -119,6 +119,7 @@ Go Backend (Gin) :8090
   ├── GET  /api/mappings/stats
   ├── GET  /api/catalog                     ← SML product catalog list
   ├── GET  /api/catalog/search              ← embedding similarity search
+  ├── GET  /api/catalog/:code/units         ← valid SML units for product
   ├── GET  /api/catalog/:code/image         ← authenticated SML image proxy
   ├── GET  /api/catalog/:code/images        ← SML image metadata list
   ├── GET  /api/catalog/:code/images/:roworder ← authenticated SML image proxy
@@ -426,6 +427,7 @@ Production data lifecycle:
 | GET | `/api/sml/suppliers` | admin/staff | Searchable supplier list (PartyCache) |
 | POST | `/api/sml/refresh-parties` | admin | Re-fetch party master from SML |
 | GET | `/api/sml/parties/last-sync` | admin/staff | Last sync timestamp |
+| GET | `/api/sml/units` | admin/staff | Searchable SML unit master from api-bybos `ic_unit` |
 
 ### Settings — Email Inboxes (admin only)
 
@@ -456,6 +458,7 @@ Production data lifecycle:
 | GET | `/api/catalog/stats` | JWT | Total, embedded, pending, error counts |
 | GET | `/api/catalog/search` | JWT | Cosine-similarity search (fallback to Levenshtein) |
 | GET | `/api/catalog/:code` | JWT | Catalog item detail |
+| GET | `/api/catalog/:code/units` | admin/staff | Valid units from SML `ic_unit_use`, with `ic_inventory.unit_standard` fallback |
 | GET | `/api/catalog/:code/image` | JWT | Authenticated primary SML product image proxy |
 | GET | `/api/catalog/:code/images` | JWT | SML product image metadata for gallery |
 | GET | `/api/catalog/:code/images/:roworder` | JWT | Authenticated specific SML product image proxy |
@@ -733,6 +736,12 @@ Response: {"success":true,"data":{"code":"..."}} (use response code as canonical
 Wired via POST /api/catalog/products → upserts sml_catalog + bg embed.
 Client: backend/internal/services/sml/product_client.go
 ```
+
+Unit dropdowns:
+- `GET /api/sml/units` proxies api-bybos `GET /api/v1/ic/units` for the create-product unit dropdown.
+- `GET /api/catalog/:code/units` proxies api-bybos `GET /api/v1/ic/products/:code/units` for Bill Detail / Sales Order / Sale Invoice item rows.
+- api-bybos reads `ic_unit_use WHERE ic_code = :code`; if no unit-use row exists, it falls back to `ic_inventory.unit_standard`.
+- The create-product quick form no longer asks for price; BillFlow sends initial `price: 0`.
 
 **SML 248 config ที่ใช้งานจริง (confirmed 2026-04-24):**
 ```

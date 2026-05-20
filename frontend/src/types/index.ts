@@ -32,6 +32,15 @@ export interface CatalogImage {
   image_url: string
 }
 
+export interface UnitOption {
+  code: string
+  name_1?: string
+  name_2?: string
+  stand_value?: number
+  divide_value?: number
+  is_default?: boolean
+}
+
 export interface CatalogItem {
   item_code: string
   item_name: string

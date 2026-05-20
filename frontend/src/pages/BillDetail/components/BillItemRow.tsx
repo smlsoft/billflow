@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { TableRow, TableCell } from '@/components/ui/table'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { UnitSelect } from '@/components/common/UnitSelect'
 import { cn } from '@/lib/utils'
 import api from '@/api/client'
 import type { BillItem, CatalogMatch } from '@/types'
@@ -279,7 +280,7 @@ export function BillItemRow({
           sourceImageUrl={item.source_image_url}
           rawNameLabel={rawNameLabel}
           onPick={(code, unit, picked) => {
-            setDraft((d) => ({ ...d, item_code: code, unit_code: unit || d.unit_code }))
+            setDraft((d) => ({ ...d, item_code: code, unit_code: unit || '' }))
             setPickedMatch(picked ?? null)
           }}
           onClose={() => setShowMapModal(false)}
@@ -340,14 +341,16 @@ export function BillItemRow({
                     className="h-10 text-right"
                   />
                 </label>
-                <label className="space-y-1.5">
+                <div className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">หน่วย</span>
-                  <Input
+                  <UnitSelect
                     value={draft.unit_code}
-                    onChange={(e) => setDraft((d) => ({ ...d, unit_code: e.target.value }))}
-                    className="h-10"
+                    productCode={draft.item_code}
+                    onValueChange={(unit_code) => setDraft((d) => ({ ...d, unit_code }))}
+                    disabled={!draft.item_code}
+                    autoSelectSingle
                   />
-                </label>
+                </div>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">ราคา</span>
                   <Input

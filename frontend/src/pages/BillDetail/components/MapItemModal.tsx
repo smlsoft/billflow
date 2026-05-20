@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { AuthImage } from '@/components/common/AuthImage'
 import { ProductImagePreviewDialog } from '@/components/common/ProductImagePreviewDialog'
+import { UnitSelect } from '@/components/common/UnitSelect'
 import {
   Dialog,
   DialogContent,
@@ -106,7 +107,6 @@ export function MapItemModal({
   rawName,
   currentCode,
   currentUnit,
-  currentPrice,
   sourceImageUrl,
   rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
   onPick,
@@ -126,7 +126,6 @@ export function MapItemModal({
     code: '',
     name: rawName.slice(0, 80),
     unit_code: currentUnit || 'ชิ้น',
-    price: String(currentPrice || 0),
   })
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -165,7 +164,7 @@ export function MapItemModal({
         code: form.code.trim(),
         name: form.name.trim(),
         unit_code: form.unit_code.trim(),
-        price: Number(form.price) || 0,
+        price: 0,
       }
       const res = await api.post<{ code: string; unit_code: string }>(
         '/api/catalog/products',
@@ -364,26 +363,16 @@ export function MapItemModal({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-sm text-muted-foreground">
-                    หน่วย <span className="text-destructive">*</span>
-                  </label>
-                  <Input
-                    value={form.unit_code}
-                    placeholder="เช่น ชิ้น, ถุง, กระป๋อง"
-                    onChange={(e) => setForm((f) => ({ ...f, unit_code: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm text-muted-foreground">ราคา/หน่วย</label>
-                  <Input
-                    type="number"
-                    step="any"
-                    value={form.price}
-                    onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-                  />
-                </div>
+              <div className="space-y-1.5">
+                <label className="text-sm text-muted-foreground">
+                  หน่วย <span className="text-destructive">*</span>
+                </label>
+                <UnitSelect
+                  value={form.unit_code}
+                  onValueChange={(unit_code) => setForm((f) => ({ ...f, unit_code }))}
+                  disabled={creating}
+                  placeholder="เลือกหน่วยจาก SML"
+                />
               </div>
 
               {createError && (

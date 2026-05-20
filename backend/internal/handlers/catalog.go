@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,15 @@ type catalogImageMeta struct {
 	Guid       string `json:"guid"`
 	Bytes      int64  `json:"bytes"`
 	ImageURL   string `json:"image_url"`
+}
+
+type catalogUnitOption struct {
+	Code        string  `json:"code"`
+	Name1       string  `json:"name_1"`
+	Name2       string  `json:"name_2"`
+	StandValue  float64 `json:"stand_value,omitempty"`
+	DivideValue float64 `json:"divide_value,omitempty"`
+	IsDefault   bool    `json:"is_default,omitempty"`
 }
 
 func NewCatalogHandler(
@@ -429,6 +439,146 @@ func (h *CatalogHandler) GetOne(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+// GET /api/sml/units — authenticated proxy for SML unit master data.
+func (h *CatalogHandler) GetUnits(c *gin.Context) {
+	if h.cfg == nil || strings.TrimSpace(h.cfg.ShopeeSMLURL) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML API is not configured"})
+		return
+	}
+
+	search := strings.TrimSpace(c.Query("search"))
+	limit := queryLimit(c, 100, 500)
+	listURL := fmt.Sprintf("%s/api/v1/ic/units?size=%d",
+		strings.TrimRight(h.cfg.ShopeeSMLURL, "/"),
+		limit,
+	)
+	if search != "" {
+		listURL += "&search=" + url.QueryEscape(search)
+	}
+
+	units, statusCode, err := h.fetchSMLUnits(c.Request.Context(), listURL)
+	if err != nil {
+		h.logger.Warn("catalog units: SML request failed", zap.Int("status", statusCode), zap.Error(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "อ่านหน่วยนับจาก SML ไม่สำเร็จ"})
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=300")
+	c.JSON(http.StatusOK, gin.H{"units": units})
+}
+
+// GET /api/catalog/:code/units — authenticated proxy for units valid for one SML item.
+func (h *CatalogHandler) GetProductUnits(c *gin.Context) {
+	code := strings.TrimSpace(c.Param("code"))
+	if code == "" || strings.ContainsAny(code, "\x00\r\n") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item code"})
+		return
+	}
+	if h.cfg == nil || strings.TrimSpace(h.cfg.ShopeeSMLURL) == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML API is not configured"})
+		return
+	}
+
+	listURL := fmt.Sprintf("%s/api/v1/ic/products/%s/units",
+		strings.TrimRight(h.cfg.ShopeeSMLURL, "/"),
+		url.PathEscape(code),
+	)
+	units, statusCode, err := h.fetchSMLUnits(c.Request.Context(), listURL)
+	if err != nil {
+		if statusCode == http.StatusNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "product units not found"})
+			return
+		}
+		h.logger.Warn("catalog product units: SML request failed",
+			zap.String("code", code), zap.Int("status", statusCode), zap.Error(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "อ่านหน่วยนับสินค้าจาก SML ไม่สำเร็จ"})
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=300")
+	c.JSON(http.StatusOK, gin.H{"units": units})
+}
+
+func (h *CatalogHandler) fetchSMLUnits(ctx context.Context, listURL string) ([]catalogUnitOption, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("build unit request: %w", err)
+	}
+	for k, v := range h.smlHeaders() {
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, resp.StatusCode, fmt.Errorf("SML units HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	units, err := decodeSMLUnitsPayload(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return units, resp.StatusCode, nil
+}
+
+func decodeSMLUnitsPayload(r io.Reader) ([]catalogUnitOption, error) {
+	var payload struct {
+		Data  json.RawMessage     `json:"data"`
+		Units []catalogUnitOption `json:"units"`
+	}
+	if err := json.NewDecoder(r).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode unit response: %w", err)
+	}
+
+	units := payload.Units
+	if len(payload.Data) > 0 && string(payload.Data) != "null" {
+		var dataObj struct {
+			Units []catalogUnitOption `json:"units"`
+		}
+		if err := json.Unmarshal(payload.Data, &dataObj); err == nil && dataObj.Units != nil {
+			units = dataObj.Units
+		} else {
+			var dataArray []catalogUnitOption
+			if err := json.Unmarshal(payload.Data, &dataArray); err == nil {
+				units = dataArray
+			}
+		}
+	}
+	if units == nil {
+		units = []catalogUnitOption{}
+	}
+
+	cleaned := make([]catalogUnitOption, 0, len(units))
+	seen := make(map[string]struct{}, len(units))
+	for _, u := range units {
+		u.Code = strings.TrimSpace(u.Code)
+		u.Name1 = strings.TrimSpace(u.Name1)
+		u.Name2 = strings.TrimSpace(u.Name2)
+		if u.Code == "" {
+			continue
+		}
+		if _, ok := seen[u.Code]; ok {
+			continue
+		}
+		seen[u.Code] = struct{}{}
+		if u.Name1 == "" {
+			u.Name1 = u.Code
+		}
+		if u.StandValue < 0 {
+			u.StandValue = 0
+		}
+		if u.DivideValue < 0 {
+			u.DivideValue = 0
+		}
+		cleaned = append(cleaned, u)
+	}
+	return cleaned, nil
+}
+
 // GET /api/catalog/:code/image — authenticated proxy for the primary SML image.
 func (h *CatalogHandler) GetImage(c *gin.Context) {
 	code := strings.TrimSpace(c.Param("code"))
@@ -613,6 +763,10 @@ func (h *CatalogHandler) streamCatalogImage(c *gin.Context, itemCode string, row
 }
 
 func (h *CatalogHandler) smlImageHeaders() map[string]string {
+	return h.smlHeaders()
+}
+
+func (h *CatalogHandler) smlHeaders() map[string]string {
 	if h.cfg == nil {
 		return map[string]string{}
 	}
