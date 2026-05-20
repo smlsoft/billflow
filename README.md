@@ -105,6 +105,10 @@ Go Backend (Gin) :8090
   ├── GET  /api/bills/counts                ← queue counts for document lists
   ├── GET  /api/bills/:id
   ├── POST /api/bills/:id/retry             ← 4-way SML send (saleorder/saleinvoice/purchaseorder/sale_reserve)
+  ├── POST /api/bills/bulk-send-jobs        ← async SML bulk send job
+  ├── GET  /api/bills/bulk-send-jobs/active ← resume active bulk send job
+  ├── GET  /api/bills/bulk-send-jobs/:id    ← poll bulk send progress/results
+  ├── POST /api/bills/bulk-send-jobs/:id/retry-failed
   ├── POST /api/bills/:id/archive           ← archive one bill
   ├── POST /api/bills/:id/restore           ← restore one bill
   ├── DEL  /api/bills/:id                   ← delete one bill
@@ -331,6 +335,7 @@ Migrations (run in order, all idempotent):
 - [019_line_oa_mark_as_read.sql](backend/internal/database/migrations/019_line_oa_mark_as_read.sql) — line_oa_accounts.mark_as_read_enabled per-OA opt-in for LINE Premium "อ่านแล้ว" read receipts (session 17)
 - [020_bill_remark.sql](backend/internal/database/migrations/020_bill_remark.sql) — bills.remark for admin-entered remark passed through to SML purchaseorder
 - [037_data_lifecycle.sql](backend/internal/database/migrations/037_data_lifecycle.sql) — production data lifecycle: summary tables, log/bill indexes, cursor-friendly access paths
+- [044_sml_bulk_jobs.sql](backend/internal/database/migrations/044_sml_bulk_jobs.sql) — DB-backed async SML bulk send jobs and per-bill progress/results
 
 Production DB note: server currently also has legacy `system_settings` and `sml_settings` tables that are not in current local migrations and are not referenced by current code.
 
@@ -339,6 +344,7 @@ Production data lifecycle:
 - Audit logs keep compact SML support fields instead of copying full `sml_payload` / `sml_response` into every row.
 - Daily lifecycle job auto-archives `sent/skipped` bills older than 180 days and rollups/purges detailed audit + AI usage logs older than 90 days in batches.
 - `/settings/old-data` exposes table size, row count, oldest rows, eligible archive/purge rows, and dry-run purge summaries. Purge is manual and nothing is selected by default.
+- Bulk SML send uses `sml_bulk_jobs` and `sml_bulk_job_items`; jobs are capped at 100 bills, sent serially, and can retry failed rows only.
 
 ---
 
@@ -359,6 +365,10 @@ Production data lifecycle:
 | GET | `/api/bills/counts` | JWT | Queue counts for needs_review/pending/sent/failed in one request |
 | GET | `/api/bills/:id` | JWT | Bill detail with items |
 | POST | `/api/bills/:id/retry` | JWT | Manual confirm/send → SML (4-way route: sale_reserve/saleorder/saleinvoice/purchaseorder) |
+| POST | `/api/bills/bulk-send-jobs` | admin/staff | Create DB-backed async SML bulk send job from ordered bill IDs |
+| GET | `/api/bills/bulk-send-jobs/active` | admin/staff | Resume current active bulk send job for a document route/user |
+| GET | `/api/bills/bulk-send-jobs/:job_id` | admin/staff | Poll bulk send progress, counts, and item results |
+| POST | `/api/bills/bulk-send-jobs/:job_id/retry-failed` | admin/staff | Create a new bulk send job from failed rows only |
 | POST | `/api/bills/:id/archive` | admin/staff | Archive one bill |
 | POST | `/api/bills/:id/restore` | admin/staff | Restore one archived bill |
 | DELETE | `/api/bills/:id` | admin/staff | Delete one bill |
@@ -820,6 +830,7 @@ Dedicated flow mirrors Shopee/Lazada Excel:
 | Backup | Cron 00:00 | `pg_dump` → `backups/YYYYMMDD.sql.gz` |
 | Token Checker | ทุกอาทิตย์ | ตรวจ LINE token — แจ้งล่วงหน้า 7 วัน |
 | Disk Monitor | ทุกวัน | แจ้ง admin ถ้า disk > `DISK_WARN_PERCENT` (90%) |
+| SML Bulk Send Worker | on job create | ส่ง SML ทีละบิลจาก `sml_bulk_jobs`, เก็บ progress/result, และ retry failed ได้ |
 
 ---
 
@@ -919,14 +930,18 @@ Containers:
 Health:
   {"database":"ok","env":"production","status":"ok"}
 DB:
-  migrations through 042 present in code, including Shopee Open API
-  tables/events and SML catalog image metadata.
+  migrations through 044 present in code, including Shopee Open API,
+  SML catalog image metadata, and async SML bulk job tables.
 SML images:
   active tenant SML1_2026 uses sml1_2026_images; image lookup index
   images_trim_image_id_order_roworder_file_idx verified.
 Shopee Open API:
   readiness UI/API deployed on main, live connection waits for Shopee
   Go-Live approval and live partner key cutover.
+Async SML bulk send:
+  deployed on main; DB-backed jobs with progress/resume/retry-failed.
+  Live smoke passed: job 128ceffe-5055-4863-8944-c6ce52301d26
+  sent bill 20275aed-fe5f-402f-9160-a93a3f5b2ccb to SML PO BF-PO26050001.
 
 Email IMAP pipeline (2026-04-24):
 ✅ SASL PLAIN auth (Gmail App Password)
@@ -1074,6 +1089,7 @@ docker logs billflow-backend --tail=20 2>&1 | grep coordinator
 | [docs/shopee-import.md](docs/shopee-import.md) | Shopee Excel import → local bills → SML 248 Retry route |
 | [docs/sml-api-migration.md](docs/sml-api-migration.md) | BillFlow main → sml-api-bybos migration notes |
 | [docs/sml-image-db-maintenance.md](docs/sml-image-db-maintenance.md) | SML product image DB index/runbook for tenant moves |
+| [docs/sml-bulk-send-jobs.md](docs/sml-bulk-send-jobs.md) | Async SML bulk send job design, API, DB tables, QA, and latest smoke result |
 
 ---
 

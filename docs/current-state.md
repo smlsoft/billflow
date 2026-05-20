@@ -1,18 +1,25 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-20 15:04 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, frontend routes, container health, and PostgreSQL schema for BillFlow main.
+> Updated: 2026-05-20 20:03 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test, frontend routes, container health, and PostgreSQL schema for BillFlow main.
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
-- BillFlow main latest deploy checkpoint, 2026-05-20:
+- BillFlow main latest code checkpoint, 2026-05-20:
+  - Git `main` is pushed to `smlsoft/billflow` at commit `871e8f5 feat: add async SML bulk send jobs`.
+  - Worktree was clean after push.
+  - Latest validation before this docs update: `go test ./...`, `npm --prefix frontend run build`, and `scripts/preflight-main.sh` passed.
+- BillFlow main latest deploy/runtime checkpoint, 2026-05-20:
   - Shopee Open API readiness is deployed on `/import/shopee`: status checklist, OAuth URL generation, callback/token tables, preview-only API import, structured error UX, and live-cutover script/docs.
   - Shopee app is still waiting for Go-Live approval. Until approval and live key cutover, the UI blocks real shop connection/API fetch and keeps Shopee Excel/email as fallback.
   - `/settings/instance` now shows runtime/default/env-aware values, lets admin test draft SML REST URL + tenant before saving, and reminds that product images use the matching `{database}_images` DB.
   - Email polling UX and backend state are hardened with poll summaries/details and indexes for message-id/dedup paths.
+  - `/bills`, `/sales-orders`, and `/sale-invoices` now use DB-backed async SML bulk jobs instead of a single long frontend request. The dialog shows progress, can be closed/reopened, and supports retrying only failed rows.
+  - Bulk send runbook: [sml-bulk-send-jobs.md](sml-bulk-send-jobs.md).
+  - Live SML smoke test passed with one Shopee shipped purchase bill: bill `20275aed-fe5f-402f-9160-a93a3f5b2ccb` created SML purchaseorder `BF-PO26050001` through bulk job `128ceffe-5055-4863-8944-c6ce52301d26`; sent `1`, failed `0`, skipped `0`.
 - SML product images on BillFlow main are now lazy-loaded through `sml-api-bybos`; BillFlow keeps only image metadata in `sml_catalog`.
   - Active tenant: `SML1_2026`; image DB: `sml1_2026_images`.
   - Index/runbook for moving SML PostgreSQL or changing tenant: [sml-image-db-maintenance.md](sml-image-db-maintenance.md).
@@ -79,7 +86,9 @@
   - Dialog ล่าสุดจัดรายการเอกสารเป็นตารางอ่านง่ายขึ้น แสดงลำดับส่ง, order no, สถานะ, และ `doc_no` ที่คาดว่าจะได้ต่อแถว.
   - เมื่อ backend preview คืนเลขเริ่มต้นเดียวกันหลายบิล frontend จะคำนวณเลขคาดการณ์ตามลำดับส่ง เช่น `...001`, `...002`, `...003`; backend ยังเป็นผู้จองเลขจริงตอนกดส่ง.
   - เพิ่ม `สรุปก่อนส่ง` ให้ตรวจลูกค้า/ผู้ขาย, ปลายทาง, ช่วง doc_no, คลัง/พื้นที่เก็บ, VAT, เวลาเอกสาร ก่อนกดส่ง.
-  - หลัง bulk send จบ dialog แสดงผลสำเร็จ/ไม่สำเร็จ/ข้าม พร้อมปุ่มคัดลอก error summary และลิงก์ไปบิลแรกที่ส่งไม่สำเร็จ.
+  - Bulk send now creates a server-side job (`sml_bulk_jobs` + `sml_bulk_job_items`) and polls progress every second; closing/reopening the dialog resumes the active or recent job.
+  - Worker sends serially with concurrency `1`, revalidates each bill before send, skips bills that are no longer sendable, suppresses per-bill LINE spam during bulk, and writes audit details with `via=bulk_job`.
+  - หลัง bulk send จบ dialog แสดงผลสำเร็จ/ไม่สำเร็จ/ข้าม พร้อมปุ่มคัดลอก error summary, retry failed, และลิงก์ไปบิลแรกที่ส่งไม่สำเร็จ.
 - Shopee Excel import ล่าสุดรองรับปลายทาง SML ทั้ง `saleorder` และ `saleinvoice`; เมื่อ channel default เปลี่ยน endpoint เมนูและข้อความจะเปลี่ยนตาม.
 - Shopee Excel status filter ล่าสุดนำเข้าแถวสถานะ `ที่ต้องจัดส่ง` แล้ว; filter ออกเฉพาะ `ยกเลิกแล้ว`.
 - Lazada Excel import deployed on BillFlow main + Henna:
@@ -213,7 +222,25 @@
 - ใช้ [shopee-open-api-live-cutover.md](shopee-open-api-live-cutover.md) และ `scripts/shopee-live-cutover.py` เพื่อใส่ live partner id/key โดยไม่พิมพ์ secret ลง chat/log.
 - หลังเชื่อมร้านจริง ให้ดึงช่วงสั้นก่อน, ตรวจ preview count/order detail, แล้วค่อยกด confirm สร้าง local bills. ห้าม auto-send SML รอบแรก.
 
-## Latest Deploy Notes — 2026-05-11
+## Latest Deploy Notes
+
+### BillFlow Main — Async Bulk SML Jobs
+
+- Change type: SML send reliability / long-running admin workflow.
+- Deploy target: `billflow` main only in this session.
+- Commit: `871e8f5 feat: add async SML bulk send jobs` pushed to `main`.
+- Scope:
+  - Added migration `044_sml_bulk_jobs.sql`.
+  - Added server-side job persistence for `ส่ง SML ทั้งหมด`.
+  - Added duplicate `client_request_id` handling, active-job conflict guard, startup recovery for interrupted jobs, serial worker execution, progress polling, close/reopen resume, copyable errors, and retry failed only.
+  - Single-bill `/api/bills/:id/retry` still uses the same core send path and remains available.
+- Verification:
+  - `go test ./...` passed.
+  - `npm --prefix frontend run build` passed. Vite still warns about the existing large bundle/sonner dynamic import; build succeeds.
+  - `scripts/preflight-main.sh` passed after deploy and after live smoke.
+  - Live smoke sent one real Shopee shipped purchase bill through the async job and created SML purchaseorder `BF-PO26050001`.
+- Next safe test:
+  - Use 5-10 pending bills first, inspect progress/results/logs, then test up to the 100-bill cap.
 
 ### Main + Henna — Lazada Excel Phase 1+ Sales Flow
 
@@ -366,7 +393,7 @@
 ### Local Workspace
 
 - Git branch: `main`.
-- Last known committed change before this docs update: `21c0815 Harden SML party cache refresh`.
+- Last known committed code change before this docs update: `871e8f5 feat: add async SML bulk send jobs`.
 - Untracked customer sample file remains local: `Order.all.20260401_20260430.xlsx`. Do not commit unless explicitly requested.
 - Codex skill `buddhist-method` is installed locally and updated with principles 7-16; current session can use it.
 
@@ -420,7 +447,7 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Shopee SKU handling | Source SKU from Excel is stored separately as `bill_items.source_sku`. It only becomes SML `item_code` when the same code exists in local SML Catalog; otherwise the row remains needs review. |
 | Shopee shipped email | Routes to purchase bill and SML 248 `purchaseorder`. |
 | Bill Retry | 4-way dispatch: `sale_reserve`, `saleorder`, `saleinvoice`, `purchaseorder`, selected by source/bill type plus `channel_defaults.endpoint`. Phase 1 purchase send uses the Bill Detail confirmation dialog for supplier, warehouse, shelf, VAT, document time, branch/sale code, and remark. |
-| Bulk SML send | `/bills`, `/sales-orders`, and `/sale-invoices` have `ส่ง SML ทั้งหมด` for `pending` documents. It loads a preview, validates each bill, skips invalid rows, shows expected sequential `doc_no` per ready row, and sends ready bills one-by-one using shared dialog values. |
+| Bulk SML send | `/bills`, `/sales-orders`, and `/sale-invoices` have `ส่ง SML ทั้งหมด` for `pending` documents. It loads a preview, validates each bill, shows expected sequential `doc_no` per ready row, then creates a DB-backed async job capped at 100 bills. The worker sends serially, stores progress/results, supports close/reopen resume, and can retry failed rows only. |
 | Mapping dashboard | `/mappings` shows the saved mapping table plus a sidebar hotspot panel for raw product names still appearing in `needs_review` bills, so admins can fix repeated names before they cause more manual review. |
 | หน้าเริ่มต้นใช้งาน | `/setup` checks required setup steps, shows shop/system counters, and provides an admin-only test-data reset dialog that preserves settings/catalog/mappings/AI usage by default. |
 | Sidebar navigation | Sidebar groups document work by purchase/sale: `งานฝั่งซื้อ` and `งานฝั่งขาย`. Badges are per-document-route queue counts, not global pending count. |
@@ -435,8 +462,13 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 
 Local migrations currently run through:
 
-- `001_init.sql` through `042_sml_catalog_images.sql`
-- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, Shopee Open API tables/events, `bills.document_route`, `bill_items.source_sku`, `bill_items.source_image_url`, `imap_accounts.last_poll_details`, IMAP poll summary fields, and SML catalog image metadata.
+- `001_init.sql` through `044_sml_bulk_jobs.sql`
+- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, Shopee Open API tables/events, `bills.document_route`, `bill_items.source_sku`, `bill_items.source_image_url`, `imap_accounts.last_poll_details`, IMAP poll summary fields, SML catalog image metadata, and async SML bulk job tables.
+
+Async SML bulk job tables:
+- `sml_bulk_jobs`: job header, status, counts, payload/filter snapshots, `client_request_id`, creator, timestamps.
+- `sml_bulk_job_items`: ordered bill rows, item status, attempts, attempted/final `doc_no`, error, timestamps.
+- On backend startup, stale queued/running jobs are marked failed with `server interrupted` so users can retry failed safely.
 
 Production PostgreSQL also contains `system_settings` and `sml_settings`. These tables are not present in the current local migrations and are not referenced by the current codebase, so treat them as legacy leftovers until a future migration either formalizes or removes them.
 

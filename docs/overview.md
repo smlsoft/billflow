@@ -1,6 +1,6 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-05-20 15:04 +07
+> อัพเดตล่าสุด: 2026-05-20 20:03 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
@@ -9,7 +9,7 @@
 
 BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
 
-สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow และ marketplace Excel sale flow: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Shopee Open API readiness ถูก deploy บน BillFlow main แล้ว แต่ live connection ยังรอ Shopee approve ก่อน.
+สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow และ marketplace Excel sale flow: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API readiness ถูก deploy บน BillFlow main แล้ว แต่ live connection ยังรอ Shopee approve ก่อน.
 
 ---
 
@@ -45,6 +45,7 @@ SML Retry Dispatch
   - saleorder     → SML #2 REST 248 default sale route
   - saleinvoice   → SML #2 REST 248 saleinvoice v4 endpoint
   - purchaseorder → SML #2 REST 248 purchase route
+  - bulk send     → DB-backed async job, serial worker, retry failed only
         │
         ▼
 PostgreSQL + Audit Logs + LINE admin notifications
@@ -102,7 +103,7 @@ billflow/
 |---|---|
 | Health | `GET /health` |
 | Auth | `POST /api/auth/login`, `GET /api/auth/me` |
-| Bills | `GET /api/bills?limit=&cursor=`, `GET /api/bills/counts`, `GET /api/bills/:id`, `POST /api/bills/:id/retry`, archive/restore/delete, item CRUD, timeline, artifact preview/download |
+| Bills | `GET /api/bills?limit=&cursor=`, `GET /api/bills/counts`, `GET /api/bills/:id`, `POST /api/bills/:id/retry`, async bulk send jobs, archive/restore/delete, item CRUD, timeline, artifact preview/download |
 | Chat inbox | `/api/admin/conversations...` |
 | LINE OA | `POST /webhook/line/:oaId`, `POST /webhook/line`, `/api/settings/line-oa...` |
 | SSE | `POST /api/admin/events/token`, `GET /api/admin/events?t=...` |
@@ -161,6 +162,16 @@ billflow/
 
 ทั้ง 3 เมนูมีปุ่ม `ส่ง SML ทั้งหมด` สำหรับเอกสารสถานะพร้อมส่ง (`pending`) โดยมี preview/validation ก่อนส่งจริง.
 
+## Async Bulk SML Send
+
+- ใช้ใน `/bills`, `/sales-orders`, และ `/sale-invoices`.
+- Frontend ยัง preview/validate รายการก่อนส่ง และจำกัดงานละไม่เกิน 100 บิล.
+- เมื่อกดส่ง ระบบสร้าง job ใน `sml_bulk_jobs` และรายการย่อยใน `sml_bulk_job_items`.
+- Backend worker ส่งเข้า SML ทีละบิล (`concurrency=1`) เพื่อลดความเสี่ยง duplicate/โหลดกระแทก SML.
+- Dialog poll progress ทุก 1 วินาที แสดง sent/failed/skipped/remaining และสามารถปิดแล้วกลับมาดูต่อได้.
+- ถ้าบางบิล fail ระบบสรุป error ให้ copy ได้ และ retry เฉพาะ failed rows เป็น job ใหม่.
+- Live smoke ล่าสุดบน BillFlow main สร้าง SML purchaseorder `BF-PO26050001` สำเร็จจาก bulk job หนึ่งบิล.
+
 ---
 
 ## เอกสารอื่น
@@ -170,6 +181,7 @@ billflow/
 | [current-state.md](current-state.md) | snapshot จาก code + server + production DB |
 | [deploy-instances.md](deploy-instances.md) | registry port/folder/container/tunnel ของแต่ละร้าน |
 | [billflow-main-sml-api-architecture.md](billflow-main-sml-api-architecture.md) | architecture + data flow diagram ของ BillFlow main + sml-api-bybos |
+| [sml-bulk-send-jobs.md](sml-bulk-send-jobs.md) | async bulk send SML: endpoints, DB tables, worker behavior, QA, and rollback notes |
 | [phase1-test-checklist.md](phase1-test-checklist.md) | checklist สำหรับทดสอบ Phase 1 ก่อน demo/customer test |
 | [line-oa.md](line-oa.md) | LINE OA human inbox |
 | [email.md](email.md) | Email IMAP pipeline |

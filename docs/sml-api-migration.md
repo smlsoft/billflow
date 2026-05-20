@@ -9,7 +9,7 @@ Swagger docs: http://192.168.2.109:8200/docs
 
 ---
 
-## สถานะ (2026-05-16) — ✅ พร้อมทดสอบ
+## สถานะ (2026-05-20) — ✅ พร้อมใช้งานบน BillFlow main
 
 ### การเปลี่ยนแปลงที่ทำแล้ว
 
@@ -74,6 +74,7 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
 
 4. ตรวจว่า doc ขึ้นใน SML UI
 5. ทดสอบ import Shopee/Lazada/TikTok Excel ครบ flow
+6. ทดสอบ `ส่ง SML ทั้งหมด` ผ่าน async bulk job อย่างน้อย 1 บิล แล้วค่อยขยับเป็น 5-10 บิล
 
 ---
 
@@ -116,3 +117,11 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
 - The active product tenant `SML1_2026` uses image DB `sml1_2026_images`.
 - Apply and verify the image lookup index with [../scripts/apply-sml-image-index.sh](../scripts/apply-sml-image-index.sh) before switching `/settings/instance` to a new SML tenant or a restored SML PostgreSQL server.
 - The operational runbook is [sml-image-db-maintenance.md](sml-image-db-maintenance.md).
+
+## Async bulk SML send — 2026-05-20
+
+- BillFlow main now sends `ส่ง SML ทั้งหมด` through DB-backed async jobs instead of one long frontend request.
+- Job data is stored in BillFlow tables `sml_bulk_jobs` and `sml_bulk_job_items`; SML writes still flow through the same BillFlow SML clients and `sml-api-bybos` routes as single-bill retry.
+- Worker concurrency is `1` to avoid SML duplicate/race issues.
+- Live smoke passed: bulk job `128ceffe-5055-4863-8944-c6ce52301d26` sent bill `20275aed-fe5f-402f-9160-a93a3f5b2ccb` and created SML purchaseorder `BF-PO26050001`.
+- Runbook: [sml-bulk-send-jobs.md](sml-bulk-send-jobs.md).

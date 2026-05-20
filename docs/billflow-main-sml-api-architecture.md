@@ -1,6 +1,6 @@
 # BillFlow Main + sml-api-bybos Architecture & Data Flow
 
-> Updated: 2026-05-18  
+> Updated: 2026-05-20
 > Scope: BillFlow main only (`backend :8090`, `frontend :3010`, tenant `SML1_2026`)  
 > Out of scope for this document: Henna and Thaisunsport instances
 
@@ -96,6 +96,7 @@ flowchart TB
     ImportHandlers["Import Handlers\nShopee/Lazada/TikTok"]
     EmailCoordinator["Email Coordinator\nIMAP polling"]
     BillHandlers["Bill Review + Retry Handlers"]
+    BulkJobs["Async SML Bulk Jobs\nprogress + retry failed"]
     Mapping["Product Mapping\nmanual + learned aliases"]
     Catalog["SML Catalog Service\nsync + embedding index"]
     AIUsage["AI Usage Logging\nrequest/session metadata"]
@@ -108,6 +109,7 @@ flowchart TB
     CatalogTable[("sml_catalog")]
     Mappings[("mappings\nmarketplace aliases")]
     Audit[("audit_logs\nai_usage_logs")]
+    BulkJobTables[("sml_bulk_jobs\nsml_bulk_job_items")]
     Settings[("channel_defaults\nimap_accounts\ninstance_settings")]
   end
 
@@ -132,6 +134,9 @@ flowchart TB
   BillHandlers --> Items
   BillHandlers --> Mapping
   BillHandlers --> SMLClients
+  BillHandlers --> BulkJobs
+  BulkJobs --> BulkJobTables
+  BulkJobs --> BillHandlers
   Catalog --> CatalogTable
   Catalog --> AIUsage
   AIUsage --> Audit
@@ -153,7 +158,7 @@ flowchart LR
   P1 --> D1[("BillFlow DB\nlocal documents")]
   D1 --> P2["2. Review + Match Products"]
   P2 --> D2[("Catalog + Mapping Data")]
-  P2 --> P3["3. Send to SML"]
+  P2 --> P3["3. Send to SML\nsingle retry or async bulk job"]
   P3 --> P4["4. sml-api-bybos\nvalidate + write"]
   P4 --> D3[("SML ERP DB\nSML1_2026")]
   P3 --> D4[("Audit Logs\ncompact SML support fields")]
@@ -170,7 +175,7 @@ flowchart LR
 |---|---|---|
 | 1. Ingest Documents | BillFlow imports email or marketplace files and creates local bills | source file/email, parsed header, parsed items |
 | 2. Review + Match Products | Staff verifies party, route, item codes, units, warehouse/shelf, VAT | bill, bill_items, candidates, catalog, aliases |
-| 3. Send to SML | Staff clicks retry/send; BillFlow builds SML payload | saleorder, saleinvoice, purchaseorder payload |
+| 3. Send to SML | Staff clicks retry/send or creates a bulk job; BillFlow builds SML payload per bill | saleorder, saleinvoice, purchaseorder payload, bulk job progress/results |
 | 4. sml-api-bybos | API validates tenant/master data/totals and writes SML tables | `ic_trans`, `ic_trans_detail`, master lookups |
 
 ---
@@ -243,6 +248,8 @@ sequenceDiagram
   BE-->>FE: Updated bill status
   FE-->>Staff: Show sent/failed state and details
 ```
+
+Bulk send uses the same send core as the single-bill retry path, but the browser first creates `POST /api/bills/bulk-send-jobs`. The backend stores `sml_bulk_jobs` + ordered `sml_bulk_job_items`, sends serially with concurrency `1`, polls progress through `GET /api/bills/bulk-send-jobs/:id`, and supports `retry-failed` as a new job that reuses the original payload snapshot.
 
 ---
 
@@ -379,6 +386,7 @@ flowchart LR
 | `/api/logs` | Cursor pagination with `limit`, `cursor`, `has_more`, `next_cursor`; no total unless `include_total=true` |
 | `/api/bills` | Cursor pagination plus legacy `page/per_page`; supports `archived`, `date_from`, `date_to`; defaults to active rows only |
 | `/api/bills/counts` | Counts review queues in one request for `/bills`, `/sales-orders`, and `/sale-invoices` |
+| `/api/bills/bulk-send-jobs` | DB-backed async SML bulk send jobs; cap 100 bills, progress polling, resume active job, retry failed only |
 
 ---
 
@@ -405,6 +413,7 @@ flowchart LR
 | OpenAPI | `/openapi.json` parses and Swagger UI loads at `/docs` |
 | Catalog | Products synced and embeddings completed |
 | Data lifecycle | Migration `037_data_lifecycle.sql` applied; `/api/bills/old-data/summary` returns policy and table metrics |
+| Async bulk SML send | Migration `044_sml_bulk_jobs.sql` applied; one-bill smoke or 5-10 bill batch completes with accurate sent/failed/skipped counts |
 | Golden SML write | SO/SI/PO test docs write to `ic_trans` and `ic_trans_detail` |
 
 ---

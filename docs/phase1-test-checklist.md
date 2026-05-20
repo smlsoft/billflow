@@ -1,6 +1,7 @@
 # BillFlow Phase 1 — Test Checklist
 
 > ใช้ก่อนส่งให้ลูกค้าทดสอบ
+> อัปเดตล่าสุด: 2026-05-20
 > Scope: Shopee email purchase bill → BillFlow review → SML `purchaseorder`
 
 ---
@@ -148,6 +149,29 @@ select * from ic_trans_detail where doc_no = '<DOC_NO>';
 - [ ] `price` ถูกต้อง
 - [ ] `sum_amount` ถูกต้อง
 - [ ] `wh_code` / `shelf_code` เข้าตามที่ SML persist ได้
+
+---
+
+## 5b. ทดสอบ Bulk Send แบบ Async
+
+ทำหลัง single-bill send ผ่านแล้ว:
+
+- [ ] เปิด `/bills?status=pending`
+- [ ] กด `ส่ง SML ทั้งหมด`
+- [ ] ตรวจ preview ว่ารายการพร้อมส่ง/ต้องข้ามถูกต้อง
+- [ ] เริ่มจาก 1 บิล หรือ 5-10 บิลก่อน ไม่เริ่มที่ 100 ทันที
+- [ ] ระหว่างส่ง เห็น progress sent/failed/skipped/remaining
+- [ ] ปิด dialog แล้วเปิดใหม่ ยังเห็นสถานะ job เดิมหรือผลล่าสุด
+- [ ] ถ้ามี failed row ให้กด `Retry failed` แล้วระบบส่งเฉพาะ failed bills
+- [ ] `/logs` มี `via=bulk_job` และ actor ของผู้กด
+- [ ] บิลที่สำเร็จไม่ถูกส่งซ้ำตอน retry failed
+
+Live smoke ล่าสุดบน BillFlow main:
+
+- Job `128ceffe-5055-4863-8944-c6ce52301d26`
+- Bill `20275aed-fe5f-402f-9160-a93a3f5b2ccb`
+- SML doc `BF-PO26050001`
+- sent `1`, failed `0`, skipped `0`
 
 ---
 

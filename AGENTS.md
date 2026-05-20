@@ -110,6 +110,10 @@ billflow-postgres  → 5438
 │                                        saleorder /          │
 │                                        saleinvoice /        │
 │                                        purchaseorder)       │
+│    POST /api/bills/bulk-send-jobs  ← async bulk SML job    │
+│    GET  /api/bills/bulk-send-jobs/active ← resume job      │
+│    GET  /api/bills/bulk-send-jobs/:id ← progress/results   │
+│    POST /api/bills/bulk-send-jobs/:id/retry-failed         │
 │    PUT  /api/bills/:id/items/:iid  ← edit qty/price/code    │
 │                                       (also fires F1 hook)  │
 │    POST /api/bills/:id/items       ← add row                │
@@ -611,11 +615,13 @@ CREATE TABLE imap_accounts (
 > - [018_chat_reply_token.sql](backend/internal/database/migrations/018_chat_reply_token.sql) — chat_conversations.last_reply_token + last_reply_token_at + chat_messages.delivery_method (Hybrid Reply+Push API — session 15)
 > - [019_line_oa_mark_as_read.sql](backend/internal/database/migrations/019_line_oa_mark_as_read.sql) — line_oa_accounts.mark_as_read_enabled per-OA opt-in toggle for LINE Premium "อ่านแล้ว" read receipts (session 17)
 > - [037_data_lifecycle.sql](backend/internal/database/migrations/037_data_lifecycle.sql) — production data lifecycle: summary tables, log/bill indexes, cursor-friendly access paths
+> - [044_sml_bulk_jobs.sql](backend/internal/database/migrations/044_sml_bulk_jobs.sql) — DB-backed async SML bulk send jobs and per-bill item progress/results
 
 > **Production data lifecycle**
 > - `/api/logs` uses cursor pagination (`limit`, `cursor`, `has_more`, `next_cursor`) and does not run `COUNT(*)` unless `include_total=true`.
 > - `/api/bills` supports cursor pagination plus legacy `page/per_page`, filters `archived`, `date_from`, `date_to`, and defaults to active rows only.
 > - `/api/bills/counts` returns queue counts for bills/sales-orders/sale-invoices in one request.
+> - `/api/bills/bulk-send-jobs` creates async SML jobs capped at 100 bills; worker sends serially, stores progress, supports resume after dialog close, and retries failed rows only.
 > - SML audit rows store compact support fields instead of full `sml_payload` / `sml_response`.
 > - The daily lifecycle job auto-archives `sent/skipped` older than 180 days and rollups/purges detailed audit + AI logs older than 90 days in batch-safe chunks.
 > - `/settings/old-data` shows row count, table size, oldest row, policy, dry-run summary, and never selects purge by default.

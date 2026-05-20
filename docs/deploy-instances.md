@@ -116,11 +116,17 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-20 20:03 +07: BillFlow main async SML bulk send jobs deployed, verified, committed, and pushed.
+- Scope: `billflow` only. `/bills`, `/sales-orders`, and `/sale-invoices` now create DB-backed bulk jobs for `ส่ง SML ทั้งหมด`; UI shows progress, can resume after close/reload, and can retry failed rows only.
+- Backend: migration `044_sml_bulk_jobs.sql`, `sml_bulk_jobs`, `sml_bulk_job_items`, serial worker, duplicate `client_request_id` guard, active-job conflict guard, startup recovery for interrupted jobs, and audit detail `via=bulk_job`.
+- Verification: `go test ./...`, `npm --prefix frontend run build`, `scripts/preflight-main.sh`, and live SML smoke test passed.
+- Live smoke: bulk job `128ceffe-5055-4863-8944-c6ce52301d26` sent bill `20275aed-fe5f-402f-9160-a93a3f5b2ccb` to SML purchaseorder `BF-PO26050001` with sent `1`, failed `0`, skipped `0`.
+- Git: commit `871e8f5 feat: add async SML bulk send jobs` pushed to `main`.
 - 2026-05-20 15:04 +07: BillFlow main Shopee API readiness, SML product images, and instance settings hardening deployed.
 - Scope: `billflow` only. Shopee Open API readiness is available on `/import/shopee` with approval/config gates, OAuth callback/token storage, preview-only API fetch, and friendly error UX; live connection is blocked until Shopee Go-Live approval and live key cutover.
 - Scope: SML product images now lazy-load through `sml-api-bybos`; BillFlow stores image metadata only, `/settings/catalog` and the bill item picker show thumbnails/full preview/gallery, and `sml1_2026_images.public.images` has the `images_trim_image_id_order_roworder_file_idx` expression index.
 - Scope: `/settings/instance` can test draft SML REST URL/database tenant before saving and documents the `{database}_images` image DB pattern.
-- Operational docs: [sml-image-db-maintenance.md](sml-image-db-maintenance.md), [sml-api-migration.md](sml-api-migration.md), and [shopee-open-api-live-cutover.md](shopee-open-api-live-cutover.md).
+- Operational docs: [sml-image-db-maintenance.md](sml-image-db-maintenance.md), [sml-api-migration.md](sml-api-migration.md), [sml-bulk-send-jobs.md](sml-bulk-send-jobs.md), and [shopee-open-api-live-cutover.md](shopee-open-api-live-cutover.md).
 - Verification: `go test ./...`, `npm run build`, `scripts/preflight-main.sh`, browser QA for `/import/shopee`, `/settings/catalog`, bill item picker, and `/settings/instance`; image index script verified against `sml1_2026_images`.
 - 2026-05-12 11:34 +07: Audit actor + production log accountability deployed to all three instances.
 - Scope: backend `/api/logs` now returns `actor` with user name/email/role when `user_id` exists, classifies background entries as worker/system, and supports `user_id` filtering.
