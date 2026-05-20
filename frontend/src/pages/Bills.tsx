@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, CheckCircle2, Clock, Info, Mail, Search, Send, Settings, UploadCloud } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Info, Mail, Search, Send, Settings, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -20,7 +20,9 @@ import {
 } from '@/lib/labels'
 import type { Bill } from '@/types'
 
-const PER_PAGE = 20
+const DEFAULT_PER_PAGE = 20
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
+const BULK_BATCH_SIZE = 100
 const ALL = '__all__'
 
 interface InboxOption {
@@ -151,16 +153,28 @@ function readURLArchive(params: URLSearchParams): ArchiveMode {
   return v === 'include' || v === 'only' ? v : 'active'
 }
 
+function readURLPage(params: URLSearchParams): number {
+  const n = Number(params.get('page'))
+  return Number.isInteger(n) && n > 0 ? n : 1
+}
+
+function readURLPerPage(params: URLSearchParams): typeof PAGE_SIZE_OPTIONS[number] {
+  const n = Number(params.get('per_page'))
+  return PAGE_SIZE_OPTIONS.includes(n as typeof PAGE_SIZE_OPTIONS[number])
+    ? n as typeof PAGE_SIZE_OPTIONS[number]
+    : DEFAULT_PER_PAGE
+}
+
 export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode }) {
   const config = MODE_CONFIG[mode]
   const { user } = useAuth()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  // Seed filters from the URL so deep-links from the Dashboard ("บิลล้มเหลว"
-  // shortcut → /bills?status=failed) land pre-filtered. After that, filters
-  // are local state — admin can change them without bouncing the URL.
-  const [cursor, setCursor] = useState('')
-  const [loadedBills, setLoadedBills] = useState<Bill[]>([])
+  // Seed filters from the URL so deep-links/shared links keep the exact queue
+  // view, including page and page size.
+  const [page, setPage] = useState(() => readURLPage(searchParams))
+  const [perPage, setPerPage] = useState<typeof PAGE_SIZE_OPTIONS[number]>(() => readURLPerPage(searchParams))
+  const [pageJumpInput, setPageJumpInput] = useState(() => String(readURLPage(searchParams)))
   const [counts, setCounts] = useState({
     needs_review: 0,
     pending: 0,
@@ -175,9 +189,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [shopeeStatus, setShopeeStatus] = useState<string>(() =>
     readURLFilter(searchParams, 'shopee_status', VALID_SHOPEE_STATUSES),
   )
-  const [emailAccountId, setEmailAccountId] = useState(ALL)
+  const [emailAccountId, setEmailAccountId] = useState(() => searchParams.get('email_account_id') || ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '')
   const [archiveMode, setArchiveMode] = useState<ArchiveMode>(() => readURLArchive(searchParams))
   const [bulkOpen, setBulkOpen] = useState(false)
   const [confirmAction, setConfirmAction] = useState<{
@@ -189,8 +203,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const canPermanentDelete = user?.role === 'admin'
 
   const { data, loading, refetch } = useBills({
-    limit: PER_PAGE,
-    cursor,
+    page,
+    per_page: perPage,
+    include_total: true,
     status: status === ALL ? '' : status,
     shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
     source: config.source,
@@ -200,22 +215,54 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     search,
     archived: archiveMode === 'active' ? '' : archiveMode,
   })
-  const hasMore = !!data?.has_more
-  const bulkCandidateCount = counts.pending + counts.needs_review
+  const bills = data?.data ?? []
+  const total = typeof data?.total === 'number' ? data.total : counts.total
+  const totalPages = Math.max(1, Math.ceil(total / perPage))
+  const pageStart = total === 0 ? 0 : (page - 1) * perPage + 1
+  const pageEnd = total === 0 ? 0 : Math.min(page * perPage, total)
+  const hasPreviousPage = page > 1
+  const hasNextPage = page < totalPages
+  const bulkCandidateCount = counts.pending
+  const bulkStatusAllowed = status === ALL || status === 'pending'
+  const bulkDisabled = bulkCandidateCount === 0 || archiveMode !== 'active' || !bulkStatusAllowed
+  const bulkButtonLabel =
+    archiveMode !== 'active'
+      ? 'ส่ง SML ใช้ได้เฉพาะรายการปกติ'
+      : !bulkStatusAllowed
+        ? 'ส่ง SML ใช้ได้เมื่อดูทุกสถานะ/พร้อมส่ง'
+        : bulkCandidateCount > BULK_BATCH_SIZE
+          ? `ส่ง SML ชุดแรก ${BULK_BATCH_SIZE}/${bulkCandidateCount.toLocaleString()} รายการ`
+          : `ส่ง SML พร้อมส่ง ${bulkCandidateCount.toLocaleString()} รายการ`
   const detailBasePath =
     mode === 'sale-invoice' ? '/sale-invoices' : mode === 'sales-order' ? '/sales-orders' : '/bills'
 
   const resetPage = (cb: () => void) => {
     cb()
-    setCursor('')
-    setLoadedBills([])
+    setPage(1)
   }
 
   const refreshAll = () => {
-    setCursor('')
-    setLoadedBills([])
+    setPage(1)
     refetch()
     fetchCounts()
+  }
+
+  const handlePerPageChange = (value: string) => {
+    const next = Number(value)
+    if (!PAGE_SIZE_OPTIONS.includes(next as typeof PAGE_SIZE_OPTIONS[number])) return
+    setPerPage(next as typeof PAGE_SIZE_OPTIONS[number])
+    setPage(1)
+  }
+
+  const handleJumpToPage = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const next = Number(pageJumpInput)
+    if (!Number.isInteger(next) || next < 1) {
+      setPageJumpInput(String(page))
+      toast.error('เลขหน้าต้องเป็นจำนวนเต็มตั้งแต่ 1 ขึ้นไป')
+      return
+    }
+    setPage(Math.min(next, totalPages))
   }
 
   const fetchCounts = async () => {
@@ -273,16 +320,14 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   }, [config.source, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, search])
 
   useEffect(() => {
-    const rows = data?.data ?? []
-    if (!cursor) {
-      setLoadedBills(rows)
-      return
+    if (!loading && data && page > totalPages) {
+      setPage(totalPages)
     }
-    setLoadedBills((prev) => {
-      const seen = new Set(prev.map((b) => b.id))
-      return [...prev, ...rows.filter((b) => !seen.has(b.id))]
-    })
-  }, [data, cursor])
+  }, [data, loading, page, totalPages])
+
+  useEffect(() => {
+    setPageJumpInput(String(page))
+  }, [page])
 
   useEffect(() => {
     const next = new URLSearchParams(searchParams)
@@ -292,11 +337,30 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.delete('shopee_status')
     if (archiveMode === 'active') next.delete('archived')
     else next.set('archived', archiveMode)
+    if (emailAccountId === ALL) next.delete('email_account_id')
+    else next.set('email_account_id', emailAccountId)
+    if (search.trim()) next.set('search', search)
+    else next.delete('search')
+    if (page > 1) next.set('page', String(page))
+    else next.delete('page')
+    if (perPage !== DEFAULT_PER_PAGE) next.set('per_page', String(perPage))
+    else next.delete('per_page')
     const nextString = next.toString()
     if (nextString !== searchParams.toString()) {
       setSearchParams(next, { replace: true })
     }
-  }, [status, shopeeStatus, archiveMode, showShopeeStatusFilter, searchParams, setSearchParams])
+  }, [
+    status,
+    shopeeStatus,
+    archiveMode,
+    emailAccountId,
+    search,
+    page,
+    perPage,
+    showShopeeStatusFilter,
+    searchParams,
+    setSearchParams,
+  ])
 
   return (
     <div className="space-y-5">
@@ -411,18 +475,30 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
             type="button"
             size="sm"
             className="w-full min-w-0 justify-center gap-1.5 sm:ml-auto sm:w-auto"
-            disabled={bulkCandidateCount === 0 || archiveMode === 'only'}
+            disabled={bulkDisabled}
             onClick={() => setBulkOpen(true)}
+            title={
+              archiveMode !== 'active'
+                ? 'Bulk send ปิดไว้เมื่อดูบิลที่เก็บแล้ว เพื่อไม่ส่งเอกสารย้อนหลังโดยไม่ตั้งใจ'
+                : !bulkStatusAllowed
+                  ? 'Bulk send ส่งเฉพาะสถานะพร้อมส่ง จึงเปิดได้เมื่อเลือกทุกสถานะหรือพร้อมส่ง'
+                : counts.needs_review > 0
+                  ? `มีรายการต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ปุ่มนี้ส่งเฉพาะสถานะพร้อมส่ง`
+                  : undefined
+            }
           >
             <Send className="h-3.5 w-3.5" />
-            <span className="truncate">
-              ส่ง SML ทั้งหมด {bulkCandidateCount.toLocaleString()} รายการ
-            </span>
+            <span className="truncate">{bulkButtonLabel}</span>
           </Button>
         </div>
+        {counts.needs_review > 0 && archiveMode === 'active' && (
+          <div className="mt-2 text-[11px] text-muted-foreground">
+            รายการต้องตรวจสินค้า {counts.needs_review.toLocaleString()} รายการจะไม่ถูกรวมในปุ่มส่ง SML
+          </div>
+        )}
       </div>
 
-      {!loading && loadedBills.length === 0 && !search && status === ALL && shopeeStatus === ALL && archiveMode === 'active' ? (
+      {!loading && bills.length === 0 && !search && status === ALL && shopeeStatus === ALL && archiveMode === 'active' ? (
         <EmptyState
           icon={mode === 'purchase-order' ? Mail : UploadCloud}
           title={config.emptyTitle}
@@ -445,11 +521,12 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         />
       ) : (
         <BillTable
-          bills={loadedBills}
+          bills={bills}
           loading={loading}
           showShopeeStatusColumn={showShopeeStatusFilter}
           canManage={canManageBills}
           canPermanentDelete={canPermanentDelete}
+          virtualize={perPage >= 100}
           onArchive={(bill: Bill) => setConfirmAction({ kind: 'archive', bill })}
           onRestore={(bill: Bill) => setConfirmAction({ kind: 'restore', bill })}
           onDelete={(bill: Bill) => setConfirmAction({ kind: 'delete', bill })}
@@ -458,20 +535,72 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         />
       )}
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <div className="flex flex-col gap-2 text-xs text-muted-foreground lg:flex-row lg:items-center lg:justify-between">
         <span>
-          แสดง {loadedBills.length.toLocaleString()}
-          {typeof data?.total === 'number' ? ` จาก ${data.total.toLocaleString()}` : ''}
-          {' '}รายการ
+          {total > 0
+            ? `แสดง ${pageStart.toLocaleString()}-${pageEnd.toLocaleString()} จาก ${total.toLocaleString()} รายการ`
+            : `แสดง ${bills.length.toLocaleString()} รายการ`}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+          <label className="inline-flex items-center gap-1.5">
+            <span>ต่อหน้า</span>
+            <select
+              value={String(perPage)}
+              onChange={(e) => handlePerPageChange(e.target.value)}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+              aria-label="จำนวนรายการต่อหน้า"
+            >
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
           <Button
             variant="outline"
             size="sm"
-            disabled={!hasMore}
-            onClick={() => setCursor(data?.next_cursor ?? '')}
+            disabled={!hasPreviousPage}
+            onClick={() => setPage(1)}
           >
-            โหลดเพิ่ม
+            หน้าแรก
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasPreviousPage}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            ก่อนหน้า
+          </Button>
+          <span className="min-w-[92px] text-center tabular-nums">
+            หน้า {page.toLocaleString()} / {totalPages.toLocaleString()}
+          </span>
+          <form className="inline-flex items-center gap-1.5" onSubmit={handleJumpToPage}>
+            <span>ไปหน้า</span>
+            <Input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={totalPages}
+              value={pageJumpInput}
+              onChange={(e) => setPageJumpInput(e.target.value)}
+              className="h-8 w-20 px-2 text-center text-xs tabular-nums"
+              aria-label="ไปหน้าที่"
+            />
+            <Button type="submit" variant="outline" size="sm" disabled={totalPages <= 1}>
+              ไป
+            </Button>
+          </form>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasNextPage}
+            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+          >
+            ถัดไป
+            <ChevronRight className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
@@ -485,8 +614,12 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           source: config.source,
           bill_type: config.billType,
           document_route: config.documentRoute,
+          email_account_id: emailAccountId === ALL ? '' : emailAccountId,
+          shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
+          search,
         }}
         onDone={() => {
+          setPage(1)
           refetch()
           fetchCounts()
         }}

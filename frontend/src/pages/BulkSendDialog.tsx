@@ -27,6 +27,8 @@ import { getBill, retryBill, type RetryBillPayload } from '@/hooks/useBills'
 import type { Bill } from '@/types'
 import { validateForSML, issueLabel } from '@/pages/BillDetail/utils/validation'
 
+const BULK_BATCH_SIZE = 100
+
 function currentTimeHHMM() {
   const now = new Date()
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
@@ -97,6 +99,9 @@ interface Props {
     source: string
     bill_type: 'purchase' | 'sale'
     document_route?: string
+    email_account_id?: string
+    shopee_status?: string
+    search?: string
   }
   onDone?: () => void
 }
@@ -222,9 +227,13 @@ export function BulkSendDialog({
           bill_type: filters.bill_type,
           status: 'pending',
           page: '1',
-          per_page: '100',
+          per_page: String(BULK_BATCH_SIZE),
+          include_total: 'true',
         })
         if (filters.document_route) params.set('document_route', filters.document_route)
+        if (filters.email_account_id) params.set('email_account_id', filters.email_account_id)
+        if (filters.shopee_status) params.set('shopee_status', filters.shopee_status)
+        if (filters.search) params.set('search', filters.search)
         const res = await client.get<{ data: Bill[]; total: number }>(`/api/bills?${params}`)
         const list = res.data.data ?? []
         const details = await Promise.all(list.map((b) => getBill(b.id)))
@@ -260,7 +269,16 @@ export function BulkSendDialog({
     return () => {
       alive = false
     }
-  }, [open, filters.source, filters.bill_type, filters.document_route, billType])
+  }, [
+    open,
+    filters.source,
+    filters.bill_type,
+    filters.document_route,
+    filters.email_account_id,
+    filters.shopee_status,
+    filters.search,
+    billType,
+  ])
 
   const payload = (): RetryBillPayload => ({
     party_code: party?.code,
@@ -328,7 +346,7 @@ export function BulkSendDialog({
     <Dialog open={open} onOpenChange={(v) => { if (!sending) onOpenChange(v) }}>
       <DialogContent className="grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>ส่ง SML ทั้งหมด: {title}</DialogTitle>
+          <DialogTitle>ส่ง SML รายการพร้อมส่ง: {title}</DialogTitle>
         </DialogHeader>
 
         <div className="-mx-6 space-y-4 overflow-y-auto px-6 py-2">
@@ -501,7 +519,7 @@ export function BulkSendDialog({
                 <span>พร้อมส่ง {readyCount}</span>
                 <span>ต้องข้าม {skippedCount}</span>
                 {docNoRange && <span className="font-mono text-foreground">{docNoRange}</span>}
-                {totalPending > candidates.length && <span>โหลด 100/{totalPending}</span>}
+                {totalPending > candidates.length && <span>โหลด {BULK_BATCH_SIZE}/{totalPending}</span>}
               </div>
             </div>
             {!loading && candidates.length > 0 && (

@@ -24,6 +24,7 @@ interface Props {
   showShopeeStatusColumn?: boolean
   canManage?: boolean
   canPermanentDelete?: boolean
+  virtualize?: boolean
   onArchive?: (bill: Bill) => void
   onRestore?: (bill: Bill) => void
   onDelete?: (bill: Bill) => void
@@ -37,6 +38,7 @@ export default function BillTable({
   showShopeeStatusColumn = true,
   canManage = true,
   canPermanentDelete = false,
+  virtualize = false,
   onArchive,
   onRestore,
   onDelete,
@@ -47,8 +49,13 @@ export default function BillTable({
       data={bills}
       loading={loading}
       onRowClick={(b) => onRowClick(b.id)}
+      getRowKey={(b) => b.id}
       empty="ไม่พบรายการบิล"
       dense
+      virtualize={virtualize}
+      virtualizeThreshold={100}
+      virtualRowHeight={76}
+      virtualMaxHeight={620}
       columns={[
         {
           key: 'doc',
