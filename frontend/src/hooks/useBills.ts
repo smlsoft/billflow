@@ -36,6 +36,54 @@ export interface RetryBillPayload {
   vat_rate?: number
 }
 
+export type BulkSendJobStatus =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'completed_with_errors'
+  | 'failed'
+
+export type BulkSendJobItemStatus = 'queued' | 'running' | 'sent' | 'failed' | 'skipped'
+
+export interface BulkSendJobItem {
+  id: string
+  job_id: string
+  bill_id: string
+  sequence: number
+  status: BulkSendJobItemStatus
+  order_no: string
+  doc_no_attempted: string
+  doc_no: string
+  error: string
+  attempts: number
+  started_at?: string
+  finished_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface BulkSendJob {
+  id: string
+  client_request_id: string
+  status: BulkSendJobStatus
+  source: string
+  bill_type: string
+  document_route: string
+  title: string
+  request_payload: RetryBillPayload
+  filter_snapshot: Record<string, unknown>
+  total_count: number
+  sent_count: number
+  failed_count: number
+  skipped_count: number
+  last_error: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+  updated_at: string
+  items?: BulkSendJobItem[]
+}
+
 export function useBills(filter: BillsFilter = {}) {
   const [data, setData] = useState<BillListResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -91,6 +139,53 @@ export async function retryBill(
     throw new Error(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`)
   }
   notifyWorkQueueChanged()
+}
+
+export async function createBulkSendJob(body: {
+  client_request_id: string
+  bill_ids: string[]
+  payload: RetryBillPayload
+  filter_snapshot: Record<string, unknown>
+  source: string
+  bill_type: string
+  document_route?: string
+  title: string
+}): Promise<BulkSendJob> {
+  const res = await client.post<{ job_id: string; job: BulkSendJob }>('/api/bills/bulk-send-jobs', body)
+  notifyWorkQueueChanged()
+  return res.data.job
+}
+
+export async function getBulkSendJob(id: string): Promise<BulkSendJob> {
+  const res = await client.get<BulkSendJob>(`/api/bills/bulk-send-jobs/${id}`)
+  return res.data
+}
+
+export async function getActiveBulkSendJob(params: {
+  source: string
+  bill_type: string
+  document_route?: string
+}): Promise<BulkSendJob | null> {
+  const search = new URLSearchParams()
+  if (params.source) search.set('source', params.source)
+  if (params.bill_type) search.set('bill_type', params.bill_type)
+  if (params.document_route) search.set('document_route', params.document_route)
+  try {
+    const res = await client.get<BulkSendJob>(`/api/bills/bulk-send-jobs/active?${search}`)
+    return res.data
+  } catch (err) {
+    const maybe = err as { response?: { status?: number } }
+    if (maybe.response?.status === 404) return null
+    throw err
+  }
+}
+
+export async function retryFailedBulkSendJob(id: string, clientRequestID: string): Promise<BulkSendJob> {
+  const res = await client.post<{ job_id: string; job: BulkSendJob }>(`/api/bills/bulk-send-jobs/${id}/retry-failed`, {
+    client_request_id: clientRequestID,
+  })
+  notifyWorkQueueChanged()
+  return res.data.job
 }
 
 export async function archiveBill(id: string, reason?: string): Promise<void> {

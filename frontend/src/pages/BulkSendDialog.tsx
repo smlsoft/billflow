@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, CheckCircle2, Clipboard, ExternalLink, Loader2, Send } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clipboard, ExternalLink, Loader2, RotateCcw, Send } from 'lucide-react'
 import { toast } from 'sonner'
 
 import client from '@/api/client'
@@ -23,7 +23,15 @@ import {
 } from '@/components/ui/select'
 import { PartyPicker, type Party } from '@/pages/ChannelDefaults/PartyPicker'
 import { ShelfPicker, WarehousePicker } from '@/pages/BillDetail/components/WarehousePicker'
-import { getBill, retryBill, type RetryBillPayload } from '@/hooks/useBills'
+import {
+  createBulkSendJob,
+  getActiveBulkSendJob,
+  getBill,
+  getBulkSendJob,
+  retryFailedBulkSendJob,
+  type BulkSendJob,
+  type RetryBillPayload,
+} from '@/hooks/useBills'
 import type { Bill } from '@/types'
 import { validateForSML, issueLabel } from '@/pages/BillDetail/utils/validation'
 
@@ -37,6 +45,31 @@ function currentTimeHHMM() {
 function errorMessage(err: unknown) {
   const maybe = err as { response?: { data?: { error?: string } }; message?: string }
   return maybe.response?.data?.error ?? maybe.message ?? 'ส่งไม่สำเร็จ'
+}
+
+function isActiveJob(job: BulkSendJob | null) {
+  return job?.status === 'queued' || job?.status === 'running'
+}
+
+function shouldRestoreJob(job: BulkSendJob | null) {
+  if (!job) return false
+  if (isActiveJob(job)) return true
+  const updated = new Date(job.updated_at || job.finished_at || job.created_at).getTime()
+  return Number.isFinite(updated) && Date.now() - updated < 30 * 60 * 1000
+}
+
+function jobItemResult(status?: string): 'sent' | 'failed' | 'skipped' | undefined {
+  if (status === 'sent') return 'sent'
+  if (status === 'failed') return 'failed'
+  if (status === 'skipped') return 'skipped'
+  return undefined
+}
+
+function newClientRequestID() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
 function sourceOrderNo(bill: Bill) {
@@ -76,6 +109,34 @@ function billDetailPath(bill: Bill) {
   return route === 'saleinvoice' ? `/sale-invoices/${bill.id}` : `/sales-orders/${bill.id}`
 }
 
+function bulkJobStorageKey(filters: Props['filters']) {
+  return [
+    'billflow',
+    'bulk-sml-job',
+    filters.source || '',
+    filters.bill_type || '',
+    filters.document_route || '',
+  ].join(':')
+}
+
+function jobToCandidates(job: BulkSendJob): Candidate[] {
+  return (job.items ?? []).map((item) => ({
+    bill: {
+      id: item.bill_id,
+      bill_type: job.bill_type,
+      source: job.source,
+      document_route: job.document_route,
+      status: item.status === 'sent' ? 'sent' : 'pending',
+      sml_doc_no: item.doc_no || item.doc_no_attempted || undefined,
+      created_at: item.created_at,
+    } as Bill,
+    ready: true,
+    issues: [],
+    result: jobItemResult(item.status),
+    message: item.error,
+  }))
+}
+
 type Candidate = {
   bill: Bill
   ready: boolean
@@ -88,6 +149,7 @@ type DisplayRow = Candidate & {
   sequence: number | null
   orderNo: string
   docNo: string
+  jobStatus?: string
 }
 
 interface Props {
@@ -128,25 +190,48 @@ export function BulkSendDialog({
   const [remark, setRemark] = useState('')
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [totalPending, setTotalPending] = useState(0)
+  const [job, setJob] = useState<BulkSendJob | null>(null)
+  const [jobError, setJobError] = useState('')
+  const storageKey = useMemo(() => bulkJobStorageKey(filters), [filters.source, filters.bill_type, filters.document_route])
 
   const readyCount = candidates.filter((c) => c.ready).length
   const skippedCount = candidates.length - readyCount
-  const sentCount = candidates.filter((c) => c.result === 'sent').length
-  const failedCount = candidates.filter((c) => c.result === 'failed').length
+  const activeJob = isActiveJob(job)
+  const controlsLocked = sending || activeJob
+  const jobItems = job?.items ?? []
+  const jobItemByBillID = useMemo(() => {
+    const map = new Map<string, NonNullable<BulkSendJob['items']>[number]>()
+    jobItems.forEach((item) => map.set(item.bill_id, item))
+    return map
+  }, [jobItems])
+  const sentCount = job ? job.sent_count : candidates.filter((c) => c.result === 'sent').length
+  const failedCount = job ? job.failed_count : candidates.filter((c) => c.result === 'failed').length
+  const jobSkippedCount = job ? job.skipped_count : candidates.filter((c) => c.result === 'skipped').length
+  const remainingCount = job ? Math.max(job.total_count - sentCount - failedCount - jobSkippedCount, 0) : readyCount
+  const progressTotal = job?.total_count ?? readyCount
+  const progressDone = job ? sentCount + failedCount + jobSkippedCount : 0
+  const progressPct = progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0
   const displayRows = useMemo(() => {
     const previewOffsets = new Map<string, number>()
     let readySeq = 0
     return candidates.map((row) => {
+      const jobItem = jobItemByBillID.get(row.bill.id)
       const baseDocNo = previewDocNo(row.bill)
       let docNo = ''
       let sequence: number | null = null
 
-      if (row.ready) {
+      if (jobItem) {
+        sequence = jobItem.sequence
+      } else if (row.ready) {
         readySeq += 1
         sequence = readySeq
       }
 
-      if (row.bill.sml_doc_no) {
+      if (jobItem?.doc_no) {
+        docNo = jobItem.doc_no
+      } else if (jobItem?.doc_no_attempted) {
+        docNo = jobItem.doc_no_attempted
+      } else if (row.bill.sml_doc_no) {
         docNo = row.bill.sml_doc_no
       } else if (row.ready && baseDocNo) {
         const offset = previewOffsets.get(baseDocNo) ?? 0
@@ -156,12 +241,15 @@ export function BulkSendDialog({
 
       return {
         ...row,
+        result: jobItemResult(jobItem?.status) ?? row.result,
+        message: jobItem?.error || row.message,
         sequence,
-        orderNo: sourceOrderNo(row.bill),
+        orderNo: jobItem?.order_no || sourceOrderNo(row.bill),
         docNo,
+        jobStatus: jobItem?.status,
       }
     }) satisfies DisplayRow[]
-  }, [candidates])
+  }, [candidates, jobItemByBillID])
   const firstDocNo = displayRows.find((row) => row.ready && row.docNo)?.docNo
   const lastDocNo = [...displayRows].reverse().find((row) => row.ready && row.docNo)?.docNo
   const docNoRange =
@@ -178,7 +266,8 @@ export function BulkSendDialog({
     vatRateStr.trim() !== '' &&
     Number.isFinite(vatRateNum) &&
     docTime.trim() !== '' &&
-    !sending
+    !controlsLocked &&
+    !job
   const missingFields = [
     !party?.code ? (billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย') : '',
     whCode.trim() === '' ? 'คลัง' : '',
@@ -189,8 +278,8 @@ export function BulkSendDialog({
   ].filter(Boolean)
   const failedRows = displayRows.filter((row) => row.result === 'failed')
   const completedRows = displayRows.filter((row) => row.result)
-  const resultSkippedCount = candidates.filter((c) => c.result === 'skipped').length
-  const finished = completedRows.length > 0 && !sending
+  const resultSkippedCount = (job ? job.skipped_count : candidates.filter((c) => c.result === 'skipped').length) + (job && !activeJob ? skippedCount : 0)
+  const finished = job ? !activeJob : completedRows.length > 0 && !sending
 
   const destination = useMemo(() => {
     if (filters.document_route === 'saleinvoice') {
@@ -202,11 +291,7 @@ export function BulkSendDialog({
     return { label: 'ซื้อ -> ใบสั่งซื้อ', code: 'PO' }
   }, [filters.document_route])
 
-  useEffect(() => {
-    if (!open) return
-    let alive = true
-    setLoading(true)
-    setSending(false)
+  const resetFormDefaults = () => {
     setParty(null)
     setDocTime(currentTimeHHMM())
     setWhCode('')
@@ -217,11 +302,91 @@ export function BulkSendDialog({
     setBranchCode('')
     setSaleCode('')
     setRemark('')
+  }
+
+  const applyPayloadToForm = (p?: RetryBillPayload) => {
+    if (!p) {
+      resetFormDefaults()
+      return
+    }
+    setParty(p.party_code ? { code: p.party_code, name: p.party_name || '' } : null)
+    setDocTime(p.doc_time || currentTimeHHMM())
+    setWhCode(p.wh_code || '')
+    setShelfCode(p.shelf_code || '')
+    setManualWarehouse(false)
+    setVatTypeStr(typeof p.vat_type === 'number' ? String(p.vat_type) : '')
+    setVatRateStr(typeof p.vat_rate === 'number' ? String(p.vat_rate) : '7')
+    setBranchCode(p.branch_code || '')
+    setSaleCode(p.sale_code || '')
+    setRemark(p.remark || '')
+  }
+
+  const restoreJob = (next: BulkSendJob) => {
+    setJob(next)
+    setCandidates(jobToCandidates(next))
+    setTotalPending(next.total_count)
+    applyPayloadToForm(next.request_payload)
+    try {
+      window.localStorage.setItem(storageKey, next.id)
+    } catch {
+      // localStorage can be unavailable in some private contexts; backend active lookup still works.
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return
+    if (job) return
+    let alive = true
+    setLoading(true)
+    setSending(false)
+    setJobError('')
+    resetFormDefaults()
     setCandidates([])
     setTotalPending(0)
 
     async function load() {
       try {
+        const storedJobID = (() => {
+          try {
+            return window.localStorage.getItem(storageKey) || ''
+          } catch {
+            return ''
+          }
+        })()
+        if (storedJobID) {
+          try {
+            const storedJob = await getBulkSendJob(storedJobID)
+            if (!alive) return
+            if (shouldRestoreJob(storedJob)) {
+              restoreJob(storedJob)
+              return
+            }
+            window.localStorage.removeItem(storageKey)
+          } catch (err) {
+            const maybe = err as { response?: { status?: number } }
+            if (maybe.response?.status === 404) {
+              try {
+                window.localStorage.removeItem(storageKey)
+              } catch {
+                // ignore unavailable localStorage
+              }
+            } else if (alive) {
+              setJobError(errorMessage(err))
+            }
+          }
+        }
+
+        const active = await getActiveBulkSendJob({
+          source: filters.source,
+          bill_type: filters.bill_type,
+          document_route: filters.document_route,
+        })
+        if (!alive) return
+        if (active) {
+          restoreJob(active)
+          return
+        }
+
         const params = new URLSearchParams({
           source: filters.source,
           bill_type: filters.bill_type,
@@ -278,6 +443,8 @@ export function BulkSendDialog({
     filters.shopee_status,
     filters.search,
     billType,
+    job,
+    storageKey,
   ])
 
   const payload = (): RetryBillPayload => ({
@@ -292,6 +459,39 @@ export function BulkSendDialog({
     vat_type: Number(vatTypeStr),
     vat_rate: vatRateNum,
   })
+
+  useEffect(() => {
+    if (!job?.id) return
+    if (!isActiveJob(job)) {
+      setSending(false)
+      return
+    }
+    let alive = true
+    setSending(true)
+
+    async function poll() {
+      try {
+        const next = await getBulkSendJob(job!.id)
+        if (!alive) return
+        setJob(next)
+        setJobError('')
+        if (!isActiveJob(next)) {
+          setSending(false)
+          onDone?.()
+        }
+      } catch (err) {
+        if (!alive) return
+        setJobError(errorMessage(err))
+      }
+    }
+
+    void poll()
+    const timer = window.setInterval(poll, 1000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [job?.id, job?.status, onDone])
 
   const copyFailureSummary = async () => {
     if (failedRows.length === 0) return
@@ -318,32 +518,67 @@ export function BulkSendDialog({
   const handleSend = async () => {
     if (!canSend) return
     setSending(true)
-    const body = payload()
-    for (const row of candidates) {
-      if (!row.ready) {
-        setCandidates((prev) =>
-          prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'skipped', message: 'ยังไม่พร้อมส่ง' } : c),
-        )
-        continue
-      }
+    setJobError('')
+    try {
+      const next = await createBulkSendJob({
+        client_request_id: newClientRequestID(),
+        bill_ids: candidates.filter((row) => row.ready).map((row) => row.bill.id),
+        payload: payload(),
+        filter_snapshot: filters,
+        source: filters.source,
+        bill_type: filters.bill_type,
+        document_route: filters.document_route,
+        title,
+      })
+      setJob(next)
       try {
-        await retryBill(row.bill.id, body)
-        setCandidates((prev) =>
-          prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'sent', message: 'ส่งสำเร็จ' } : c),
-        )
-      } catch (err) {
-        const msg = errorMessage(err)
-        setCandidates((prev) =>
-          prev.map((c) => c.bill.id === row.bill.id ? { ...c, result: 'failed', message: msg } : c),
-        )
+        window.localStorage.setItem(storageKey, next.id)
+      } catch {
+        // backend active lookup covers resume when localStorage is unavailable.
       }
+      toast.success('เริ่มส่ง SML แบบ batch แล้ว')
+    } catch (err) {
+      setJobError(errorMessage(err))
+      toast.error(errorMessage(err))
+      setSending(false)
     }
-    setSending(false)
-    onDone?.()
+  }
+
+  const handleRetryFailed = async () => {
+    if (!job || failedCount === 0 || activeJob) return
+    setSending(true)
+    setJobError('')
+    try {
+      const next = await retryFailedBulkSendJob(job.id, newClientRequestID())
+      setJob(next)
+      setCandidates(jobToCandidates(next))
+      try {
+        window.localStorage.setItem(storageKey, next.id)
+      } catch {
+        // ignore unavailable localStorage
+      }
+      toast.success('เริ่ม retry เฉพาะรายการที่ไม่สำเร็จแล้ว')
+    } catch (err) {
+      setJobError(errorMessage(err))
+      toast.error(errorMessage(err))
+      setSending(false)
+    }
+  }
+
+  const resetJobResult = () => {
+    if (activeJob) return
+    setJob(null)
+    setJobError('')
+    setCandidates((prev) => prev.map((row) => ({ ...row, result: undefined, message: undefined })))
+    try {
+      window.localStorage.removeItem(storageKey)
+    } catch {
+      // ignore unavailable localStorage
+    }
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!sending) onOpenChange(v) }}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>ส่ง SML รายการพร้อมส่ง: {title}</DialogTitle>
@@ -362,6 +597,33 @@ export function BulkSendDialog({
             <div className="rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
               รอบนี้โหลดมา {candidates.length} จาก {totalPending} รายการเพื่อให้ระบบทำงานนิ่ง
               หลังส่งชุดแรกเสร็จ ให้เปิด dialog นี้อีกครั้งเพื่อส่งรายการที่เหลือ
+            </div>
+          )}
+          {job && (
+            <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2.5 text-xs">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="font-medium text-foreground">
+                  Bulk job <span className="font-mono">{job.id.slice(0, 8)}</span>
+                </div>
+                <div className="text-muted-foreground">
+                  {activeJob ? 'กำลังส่งทีละบิล' : job.status === 'completed' ? 'เสร็จสมบูรณ์' : job.status === 'completed_with_errors' ? 'เสร็จพร้อมรายการไม่สำเร็จ' : 'หยุดด้วยข้อผิดพลาด'}
+                </div>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full bg-info transition-all" style={{ width: `${progressPct}%` }} />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                <span>สำเร็จ {sentCount}</span>
+                <span>ไม่สำเร็จ {failedCount}</span>
+                <span>ข้าม {jobSkippedCount}</span>
+                <span>เหลือ {remainingCount}</span>
+                <span>{progressPct}%</span>
+              </div>
+              {jobError && (
+                <div className="mt-2 rounded-md border border-warning/35 bg-warning/[0.07] px-2 py-1.5 text-warning">
+                  Poll job ไม่สำเร็จชั่วคราว: {jobError}
+                </div>
+              )}
             </div>
           )}
 
@@ -397,7 +659,7 @@ export function BulkSendDialog({
 
           <div className="space-y-1.5">
             <Label>{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'} <span className="text-destructive">*</span></Label>
-            <PartyPicker billType={billType} value={party} onChange={setParty} />
+            <PartyPicker billType={billType} value={party} onChange={setParty} disabled={controlsLocked} />
             {!party?.code && (
               <p className="text-[11px] text-warning">
                 ต้องเลือก{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'}ก่อนส่งเข้า SML
@@ -413,13 +675,14 @@ export function BulkSendDialog({
                 onChange={(e) => setDocTime(e.target.value)}
                 placeholder="เช่น 09:00"
                 className="font-mono"
+                disabled={controlsLocked}
               />
             </div>
 
             <div className="space-y-1">
               <div className="flex items-center justify-between gap-2">
                 <Label className="text-xs">คลัง <span className="text-destructive">*</span></Label>
-                <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => setManualWarehouse((v) => !v)}>
+                <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => setManualWarehouse((v) => !v)} disabled={controlsLocked}>
                   {manualWarehouse ? 'เลือกจาก SML' : 'พิมพ์รหัสเอง'}
                 </Button>
               </div>
@@ -432,10 +695,12 @@ export function BulkSendDialog({
                   }}
                   placeholder="เช่น WH-01"
                   className="font-mono"
+                  disabled={controlsLocked}
                 />
               ) : (
                 <WarehousePicker
                   value={whCode}
+                  disabled={controlsLocked}
                   onChange={(warehouse) => {
                     setWhCode(warehouse.code)
                     setShelfCode('')
@@ -451,15 +716,16 @@ export function BulkSendDialog({
                   onChange={(e) => setShelfCode(e.target.value.toUpperCase())}
                   placeholder="เช่น SH-01"
                   className="font-mono"
+                  disabled={controlsLocked}
                 />
               ) : (
-                <ShelfPicker warehouseCode={whCode} value={shelfCode} onChange={(shelf) => setShelfCode(shelf.code)} />
+                <ShelfPicker warehouseCode={whCode} value={shelfCode} onChange={(shelf) => setShelfCode(shelf.code)} disabled={controlsLocked} />
               )}
             </div>
 
             <div className="space-y-1">
               <Label className="text-xs">ประเภทภาษี <span className="text-destructive">*</span></Label>
-              <Select value={vatTypeStr} onValueChange={setVatTypeStr}>
+              <Select value={vatTypeStr} onValueChange={setVatTypeStr} disabled={controlsLocked}>
                 <SelectTrigger className="h-9 text-sm">
                   <SelectValue placeholder="เลือกประเภทภาษี" />
                 </SelectTrigger>
@@ -473,7 +739,7 @@ export function BulkSendDialog({
 
             <div className="space-y-1">
               <Label className="text-xs">อัตราภาษี (%) <span className="text-destructive">*</span></Label>
-              <Input type="number" step="0.001" value={vatRateStr} onChange={(e) => setVatRateStr(e.target.value)} className="font-mono" />
+              <Input type="number" step="0.001" value={vatRateStr} onChange={(e) => setVatRateStr(e.target.value)} className="font-mono" disabled={controlsLocked} />
             </div>
             <details className="space-y-2 rounded-md border border-border bg-background px-3 py-2 sm:col-span-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
@@ -482,11 +748,11 @@ export function BulkSendDialog({
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
                   <Label className="text-xs">Branch code</Label>
-                  <Input value={branchCode} onChange={(e) => setBranchCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" />
+                  <Input value={branchCode} onChange={(e) => setBranchCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" disabled={controlsLocked} />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Sale code</Label>
-                  <Input value={saleCode} onChange={(e) => setSaleCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" />
+                  <Input value={saleCode} onChange={(e) => setSaleCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" disabled={controlsLocked} />
                 </div>
               </div>
             </details>
@@ -504,6 +770,7 @@ export function BulkSendDialog({
               rows={3}
               className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
               placeholder="หมายเหตุสำหรับ SML (ถ้ามี)"
+              disabled={controlsLocked}
             />
           </div>
 
@@ -569,6 +836,10 @@ export function BulkSendDialog({
                         <span className="inline-flex items-center gap-1 text-success"><CheckCircle2 className="h-3.5 w-3.5" />สำเร็จ</span>
                       ) : row.result === 'failed' ? (
                         <span className="inline-flex items-center gap-1 text-destructive"><AlertTriangle className="h-3.5 w-3.5" />ไม่สำเร็จ</span>
+                      ) : row.jobStatus === 'running' ? (
+                        <span className="inline-flex items-center gap-1 text-info"><Loader2 className="h-3.5 w-3.5 animate-spin" />กำลังส่ง</span>
+                      ) : row.jobStatus === 'queued' ? (
+                        <span className="text-muted-foreground">รอคิว</span>
                       ) : row.ready ? (
                         <span className="text-success">พร้อม</span>
                       ) : (
@@ -596,6 +867,10 @@ export function BulkSendDialog({
                 </div>
                 {failedRows.length > 0 && (
                   <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" className="h-8 gap-1.5" onClick={handleRetryFailed} disabled={controlsLocked}>
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Retry failed
+                    </Button>
                     <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={copyFailureSummary}>
                       <Clipboard className="h-3.5 w-3.5" />
                       คัดลอก error
@@ -641,16 +916,22 @@ export function BulkSendDialog({
 
         <DialogFooter className="items-center gap-2 sm:justify-between">
           <div className="text-xs text-muted-foreground">
-            {sending ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount}` : finished ? `สำเร็จ ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
+            {activeJob ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount} · เหลือ ${remainingCount}` : finished ? `สำเร็จ ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
           </div>
           <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               ปิด
             </Button>
-            <Button type="button" onClick={handleSend} disabled={!canSend} className="gap-2">
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              ส่ง SML {readyCount} รายการ
-            </Button>
+            {finished ? (
+              <Button type="button" onClick={resetJobResult} variant="outline" disabled={activeJob}>
+                โหลดรายการใหม่
+              </Button>
+            ) : (
+              <Button type="button" onClick={handleSend} disabled={!canSend} className="gap-2">
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                ส่ง SML {readyCount} รายการ
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

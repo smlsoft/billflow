@@ -319,7 +319,9 @@ func main() {
 
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, artifactSvc, warehouseCache, logger)
+	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, logger)
+	billH.RecoverInterruptedBulkSendJobs()
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
 	imapConfigured := false
@@ -424,6 +426,10 @@ func main() {
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)
+		api.POST("/bills/bulk-send-jobs", middleware.RequireRole("admin", "staff"), billH.CreateBulkSendJob)
+		api.GET("/bills/bulk-send-jobs/active", middleware.RequireRole("admin", "staff"), billH.GetActiveBulkSendJob)
+		api.GET("/bills/bulk-send-jobs/:job_id", middleware.RequireRole("admin", "staff"), billH.GetBulkSendJob)
+		api.POST("/bills/bulk-send-jobs/:job_id/retry-failed", middleware.RequireRole("admin", "staff"), billH.RetryFailedBulkSendJob)
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
 		api.POST("/bills/:id/retry", billH.Retry)

@@ -32,6 +32,7 @@ type BillHandler struct {
 	catalogRepo     *repository.SMLCatalogRepo     // for unit_code defaults on item edit
 	channelDefaults *repository.ChannelDefaultRepo // per-(channel,bill_type) party config
 	docCounters     *repository.DocCounterRepo     // atomic doc_no generator
+	bulkJobRepo     *repository.SMLBulkJobRepo     // async SML bulk send jobs
 	artifactSvc     *artifact.Service              // source-artifact storage (PDF/HTML/etc.)
 	warehouseCache  *sml.WarehouseCache            // optional validation for wh/shelf chosen in dialog
 	log             *zap.Logger
@@ -49,6 +50,7 @@ func NewBillHandler(
 	catalogRepo *repository.SMLCatalogRepo,
 	channelDefaults *repository.ChannelDefaultRepo,
 	docCounters *repository.DocCounterRepo,
+	bulkJobRepo *repository.SMLBulkJobRepo,
 	artifactSvc *artifact.Service,
 	warehouseCache *sml.WarehouseCache,
 	log *zap.Logger,
@@ -65,6 +67,7 @@ func NewBillHandler(
 		catalogRepo:     catalogRepo,
 		channelDefaults: channelDefaults,
 		docCounters:     docCounters,
+		bulkJobRepo:     bulkJobRepo,
 		artifactSvc:     artifactSvc,
 		warehouseCache:  warehouseCache,
 		log:             log,
@@ -658,6 +661,26 @@ type RetryRequest struct {
 	VATRate    *float64 `json:"vat_rate"`
 }
 
+type retrySendOptions struct {
+	UserID            string
+	TraceID           string
+	Via               string
+	BulkJobID         string
+	BulkJobItemID     string
+	BulkItemSequence  int
+	SuppressLineAlert bool
+}
+
+type retrySendResult struct {
+	HTTPStatus     int
+	Message        string
+	Error          string
+	DocNo          string
+	DocNoAttempted string
+	Route          string
+	Skipped        bool
+}
+
 func (h *BillHandler) Retry(c *gin.Context) {
 	id := c.Param("id")
 	bill, err := h.billRepo.FindByID(id)
@@ -677,16 +700,43 @@ func (h *BillHandler) Retry(c *gin.Context) {
 	var req RetryRequest
 	_ = c.ShouldBindJSON(&req)
 
-	// Look up channel default once; pass to retry handlers + use to decide
-	// which SML endpoint to dispatch to. The URL override (if admin typed one)
-	// is threaded down to the client via context.
-	def, _ := h.channelDefaults.Get(bill.Source, bill.BillType)
-	kind, urlOverride := resolveEndpoint(def, bill.Source, bill.BillType)
-	c.Set("sml_url_override", urlOverride)
+	result := h.sendBillToSML(bill, req, retrySendOptions{
+		UserID:  c.GetString("user_id"),
+		TraceID: c.GetString("trace_id"),
+		Via:     "retry",
+	})
+	if result.HTTPStatus == http.StatusOK {
+		c.JSON(http.StatusOK, gin.H{"message": result.Message, "doc_no": result.DocNo})
+		return
+	}
+	if result.HTTPStatus == http.StatusAccepted {
+		c.JSON(http.StatusAccepted, gin.H{"message": result.Message})
+		return
+	}
+	if result.HTTPStatus == 0 {
+		result.HTTPStatus = http.StatusInternalServerError
+	}
+	c.JSON(result.HTTPStatus, gin.H{"error": result.Error})
+}
 
-	// Verify all items mapped. For REST SML documents, the item_code must also
-	// exist in the local SML catalog; Shopee SKU is only a source hint, not
-	// proof that the SML product exists.
+func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts retrySendOptions) retrySendResult {
+	if bill == nil {
+		return retrySendResult{HTTPStatus: http.StatusNotFound, Error: "bill not found"}
+	}
+	if opts.Via == "" {
+		opts.Via = "retry"
+	}
+	switch bill.Status {
+	case "failed", "pending", "needs_review":
+		// ok
+	default:
+		return retrySendResult{
+			HTTPStatus: http.StatusBadRequest,
+			Error:      "only failed/pending/needs_review bills can be sent",
+			Skipped:    true,
+		}
+	}
+
 	allMapped := true
 	missingCatalogCode := ""
 	for _, item := range bill.Items {
@@ -704,32 +754,684 @@ func (h *BillHandler) Retry(c *gin.Context) {
 		}
 	}
 	if !allMapped {
-		_ = h.billRepo.UpdateStatus(id, "needs_review", nil, nil, nil)
+		_ = h.billRepo.UpdateStatus(bill.ID, "needs_review", nil, nil, nil)
 		if missingCatalogCode != "" {
-			c.JSON(http.StatusAccepted, gin.H{"message": fmt.Sprintf("ไม่พบรหัสสินค้า %s ในสินค้า SML — bill set to needs_review", missingCatalogCode)})
-			return
+			return retrySendResult{
+				HTTPStatus: http.StatusAccepted,
+				Message:    fmt.Sprintf("ไม่พบรหัสสินค้า %s ในสินค้า SML — bill set to needs_review", missingCatalogCode),
+				Skipped:    true,
+			}
 		}
-		c.JSON(http.StatusAccepted, gin.H{"message": "some items still unmapped — bill set to needs_review"})
-		return
+		return retrySendResult{
+			HTTPStatus: http.StatusAccepted,
+			Message:    "some items still unmapped — bill set to needs_review",
+			Skipped:    true,
+		}
 	}
 
 	// Persist remark on the bill for all routes (not just purchase).
 	// retryPurchaseOrder also calls UpdateRemark with its own value — that's
 	// fine because req.Remark is the same string both times.
 	if req.Remark != "" {
-		if err := h.billRepo.UpdateRemark(id, req.Remark); err != nil {
+		if err := h.billRepo.UpdateRemark(bill.ID, req.Remark); err != nil {
 			h.log.Warn("UpdateRemark failed", zap.Error(err))
 		}
 	}
 
+	def, _ := h.channelDefaults.Get(bill.Source, bill.BillType)
+	kind, urlOverride := resolveEndpoint(def, bill.Source, bill.BillType)
 	switch kind {
 	case "purchaseorder":
-		h.retryPurchaseOrder(c, bill, req)
+		return h.sendPurchaseOrderToSML(bill, req, urlOverride, opts)
 	case "saleinvoice":
-		h.retrySaleInvoice(c, bill, req)
+		return h.sendSaleInvoiceToSML(bill, req, urlOverride, opts)
 	default:
-		h.retrySaleOrder(c, bill, req)
+		return h.sendSaleOrderToSML(bill, req, urlOverride, opts)
 	}
+}
+
+func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, urlOverride string, opts retrySendOptions) retrySendResult {
+	id := bill.ID
+	route := "SaleOrder"
+	if h.saleOrderClient == nil {
+		return retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "saleorder client not configured", Route: route}
+	}
+
+	items := make([]sml.SOItem, 0, len(bill.Items))
+	for _, it := range bill.Items {
+		if it.ItemCode == nil {
+			continue
+		}
+		price := 0.0
+		if it.Price != nil {
+			price = *it.Price
+		}
+		unit := ""
+		if it.UnitCode != nil {
+			unit = *it.UnitCode
+		}
+		items = append(items, sml.SOItem{
+			ItemCode: *it.ItemCode,
+			ItemName: h.resolveItemName(*it.ItemCode, it.RawName),
+			Qty:      it.Qty,
+			Price:    price,
+			UnitCode: unit,
+		})
+	}
+
+	def, err := h.lookupChannelDefault(bill.Source, "sale")
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+	cfg := h.resolvedSaleOrderConfig(def, req)
+	if req.PartyCode != "" {
+		cfg.CustCode = req.PartyCode
+	}
+	if cfg.CustCode == "" {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "กรุณาเลือกลูกค้าก่อนส่ง SML", Route: route}
+	}
+	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+
+	docDate := docDateFromBill(bill)
+	docRef := docRefFromBill(bill)
+	docRefDate := ""
+	if docRef != "" {
+		docRefDate = docDate
+	}
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-SO")
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
+	}
+	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
+	payload := sml.BuildSaleOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
+	reqJSON, _ := json.Marshal(payload)
+
+	start := time.Now()
+	statusCode, resp, err := h.saleOrderClient.CreateSaleOrder(payload, urlOverride)
+	if err != nil || resp == nil || !resp.IsSuccess() {
+		errMsg := smlSendErrorMessage(statusCode, resp, err)
+		storedErr := h.recordFailureForSend(id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, route, reqDocNo, opts)
+		return retrySendResult{
+			HTTPStatus:     http.StatusBadGateway,
+			Error:          "SML send failed: " + storedErr,
+			DocNoAttempted: reqDocNo,
+			Route:          route,
+		}
+	}
+
+	respJSON, _ := json.Marshal(resp)
+	docNo := resp.GetDocNo()
+	if docNo == "" {
+		docNo = reqDocNo
+	}
+	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
+	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
+	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	return retrySendResult{
+		HTTPStatus:     http.StatusOK,
+		Message:        "bill sent to SML (saleorder)",
+		DocNo:          docNo,
+		DocNoAttempted: reqDocNo,
+		Route:          route,
+	}
+}
+
+func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, urlOverride string, opts retrySendOptions) retrySendResult {
+	id := bill.ID
+	route := "SaleInvoice"
+	if h.invoiceClient == nil {
+		return retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "saleinvoice client not configured", Route: route}
+	}
+
+	items := make([]sml.ShopeeOrderItem, 0, len(bill.Items))
+	for _, it := range bill.Items {
+		if it.ItemCode == nil {
+			continue
+		}
+		price := 0.0
+		if it.Price != nil {
+			price = *it.Price
+		}
+		items = append(items, sml.ShopeeOrderItem{
+			SKU:         *it.ItemCode,
+			ProductName: h.resolveItemName(*it.ItemCode, it.RawName),
+			Price:       price,
+			Qty:         it.Qty,
+		})
+	}
+
+	def, err := h.lookupChannelDefault(bill.Source, "sale")
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+	cfg := h.resolvedInvoiceConfig(def, req)
+	if req.PartyCode != "" {
+		cfg.CustCode = req.PartyCode
+	}
+	if cfg.CustCode == "" {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "กรุณาเลือกลูกค้าก่อนส่ง SML", Route: route}
+	}
+	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+	productCache := map[string]*sml.ProductInfo{}
+	for _, it := range bill.Items {
+		if it.ItemCode == nil || it.UnitCode == nil {
+			continue
+		}
+		productCache[*it.ItemCode] = &sml.ProductInfo{
+			Code:          *it.ItemCode,
+			StartSaleUnit: *it.UnitCode,
+		}
+	}
+
+	docDate := docDateFromBill(bill)
+	docRef := docRefFromBill(bill)
+	docRefDate := ""
+	if docRef != "" {
+		docRefDate = docDate
+	}
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-INV")
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
+	}
+	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
+	payload := sml.BuildInvoicePayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, productCache, req.Remark)
+	reqJSON, _ := json.Marshal(payload)
+
+	start := time.Now()
+	statusCode, resp, err := h.invoiceClient.CreateInvoice(payload, urlOverride)
+	if err != nil || resp == nil || !resp.IsSuccess() {
+		errMsg := smlSendErrorMessage(statusCode, resp, err)
+		storedErr := h.recordFailureForSend(id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, route, reqDocNo, opts)
+		return retrySendResult{
+			HTTPStatus:     http.StatusBadGateway,
+			Error:          "SML send failed: " + storedErr,
+			DocNoAttempted: reqDocNo,
+			Route:          route,
+		}
+	}
+
+	respJSON, _ := json.Marshal(resp)
+	docNo := resp.GetDocNo()
+	if docNo == "" {
+		docNo = reqDocNo
+	}
+	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
+	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
+	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	return retrySendResult{
+		HTTPStatus:     http.StatusOK,
+		Message:        "bill sent to SML (saleinvoice)",
+		DocNo:          docNo,
+		DocNoAttempted: reqDocNo,
+		Route:          route,
+	}
+}
+
+func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest, urlOverride string, opts retrySendOptions) retrySendResult {
+	id := bill.ID
+	route := "PurchaseOrder"
+	if h.poClient == nil {
+		return retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "purchaseorder client not configured", Route: route}
+	}
+
+	items := make([]sml.POItem, 0, len(bill.Items))
+	for _, it := range bill.Items {
+		if it.ItemCode == nil {
+			continue
+		}
+		price := 0.0
+		if it.Price != nil {
+			price = *it.Price
+		}
+		unit := ""
+		if it.UnitCode != nil {
+			unit = *it.UnitCode
+		}
+		items = append(items, sml.POItem{
+			ItemCode: *it.ItemCode,
+			ItemName: h.resolveItemName(*it.ItemCode, it.RawName),
+			Qty:      it.Qty,
+			Price:    price,
+			UnitCode: unit,
+		})
+	}
+
+	def, err := h.lookupChannelDefault(bill.Source, "purchase")
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+	cfg := h.resolvedPurchaseConfig(def, req)
+	if req.PartyCode != "" {
+		cfg.CustCode = req.PartyCode
+	}
+	if req.PartyName != "" {
+		cfg.SupplierName = req.PartyName
+	}
+	if cfg.CustCode == "" {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "กรุณาเลือกผู้ขายก่อนส่ง SML", Route: route}
+	}
+	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+
+	docDate := docDateFromBill(bill)
+	docRef := docRefFromBill(bill)
+	docRefDate := ""
+	if docRef != "" {
+		docRefDate = docDate
+	}
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO")
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
+	}
+	if req.Remark != "" {
+		_ = h.billRepo.UpdateRemark(id, req.Remark)
+	}
+	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
+	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
+	reqJSON, _ := json.Marshal(payload)
+
+	start := time.Now()
+	statusCode, resp, err := h.poClient.CreatePurchaseOrder(payload, urlOverride)
+	if err != nil || resp == nil || !resp.IsSuccess() {
+		errMsg := smlSendErrorMessage(statusCode, resp, err)
+		storedErr := h.recordFailureForSend(id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, route, reqDocNo, opts)
+		return retrySendResult{
+			HTTPStatus:     http.StatusBadGateway,
+			Error:          "SML send failed: " + storedErr,
+			DocNoAttempted: reqDocNo,
+			Route:          route,
+		}
+	}
+
+	respJSON, _ := json.Marshal(resp)
+	docNo := resp.GetDocNo()
+	if docNo == "" {
+		docNo = reqDocNo
+	}
+	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
+	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
+	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	return retrySendResult{
+		HTTPStatus:     http.StatusOK,
+		Message:        "bill sent to SML (purchaseorder)",
+		DocNo:          docNo,
+		DocNoAttempted: reqDocNo,
+		Route:          route,
+	}
+}
+
+type smlMessageResponse interface {
+	GetMessage() string
+}
+
+func smlSendErrorMessage(statusCode int, resp smlMessageResponse, err error) string {
+	switch {
+	case err != nil:
+		return err.Error()
+	case resp != nil:
+		return fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
+	default:
+		return fmt.Sprintf("HTTP %d", statusCode)
+	}
+}
+
+type createBulkSendJobRequest struct {
+	ClientRequestID string                 `json:"client_request_id"`
+	BillIDs         []string               `json:"bill_ids"`
+	Payload         RetryRequest           `json:"payload"`
+	FilterSnapshot  map[string]interface{} `json:"filter_snapshot"`
+	Source          string                 `json:"source"`
+	BillType        string                 `json:"bill_type"`
+	DocumentRoute   string                 `json:"document_route"`
+	Title           string                 `json:"title"`
+}
+
+type retryFailedBulkSendJobRequest struct {
+	ClientRequestID string `json:"client_request_id"`
+}
+
+func (h *BillHandler) CreateBulkSendJob(c *gin.Context) {
+	if h.bulkJobRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bulk send job store not configured"})
+		return
+	}
+	var req createBulkSendJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
+	if req.ClientRequestID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "client_request_id is required"})
+		return
+	}
+	if existing, err := h.bulkJobRepo.FindByClientRequestID(req.ClientRequestID); err == nil && existing != nil {
+		c.JSON(http.StatusAccepted, gin.H{"job_id": existing.ID, "job": existing})
+		return
+	}
+	if err := validateBulkBillIDs(req.BillIDs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	payloadJSON, _ := json.Marshal(req.Payload)
+	filterJSON, _ := json.Marshal(req.FilterSnapshot)
+	job, err := h.bulkJobRepo.Create(repository.CreateSMLBulkJobInput{
+		ClientRequestID: req.ClientRequestID,
+		BillIDs:         req.BillIDs,
+		Source:          req.Source,
+		BillType:        req.BillType,
+		DocumentRoute:   req.DocumentRoute,
+		Title:           req.Title,
+		RequestPayload:  payloadJSON,
+		FilterSnapshot:  filterJSON,
+		CreatedBy:       c.GetString("user_id"),
+		CreatedByEmail:  c.GetString("user_email"),
+	})
+	if err != nil {
+		switch e := err.(type) {
+		case repository.ActiveBulkJobConflictError:
+			c.JSON(http.StatusConflict, gin.H{
+				"error":    "บางบิลอยู่ใน bulk job ที่ยังทำงานอยู่",
+				"bill_ids": e.BillIDs,
+			})
+		default:
+			h.log.Error("create bulk send job", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "create bulk send job failed"})
+		}
+		return
+	}
+	go h.runBulkSendJob(job.ID)
+	c.JSON(http.StatusAccepted, gin.H{"job_id": job.ID, "job": job})
+}
+
+func (h *BillHandler) GetBulkSendJob(c *gin.Context) {
+	if h.bulkJobRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bulk send job store not configured"})
+		return
+	}
+	job, err := h.bulkJobRepo.Get(c.Param("job_id"))
+	if err != nil {
+		h.log.Error("get bulk send job", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "get bulk send job failed"})
+		return
+	}
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bulk send job not found"})
+		return
+	}
+	c.JSON(http.StatusOK, job)
+}
+
+func (h *BillHandler) GetActiveBulkSendJob(c *gin.Context) {
+	if h.bulkJobRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bulk send job store not configured"})
+		return
+	}
+	job, err := h.bulkJobRepo.FindActive(
+		c.Query("source"),
+		c.Query("bill_type"),
+		c.Query("document_route"),
+		c.GetString("user_id"),
+	)
+	if err != nil {
+		h.log.Error("get active bulk send job", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "get active bulk send job failed"})
+		return
+	}
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "active bulk send job not found"})
+		return
+	}
+	c.JSON(http.StatusOK, job)
+}
+
+func (h *BillHandler) RetryFailedBulkSendJob(c *gin.Context) {
+	if h.bulkJobRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bulk send job store not configured"})
+		return
+	}
+	jobID := c.Param("job_id")
+	original, err := h.bulkJobRepo.Get(jobID)
+	if err != nil {
+		h.log.Error("get bulk send job for retry failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "get bulk send job failed"})
+		return
+	}
+	if original == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bulk send job not found"})
+		return
+	}
+	var req retryFailedBulkSendJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
+	if req.ClientRequestID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "client_request_id is required"})
+		return
+	}
+	if existing, err := h.bulkJobRepo.FindByClientRequestID(req.ClientRequestID); err == nil && existing != nil {
+		c.JSON(http.StatusAccepted, gin.H{"job_id": existing.ID, "job": existing})
+		return
+	}
+	failedBillIDs, err := h.bulkJobRepo.FailedBillIDs(jobID)
+	if err != nil {
+		h.log.Error("list failed bulk job bills", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed bills failed"})
+		return
+	}
+	if len(failedBillIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ไม่มีรายการที่ไม่สำเร็จให้ retry"})
+		return
+	}
+	filterJSON := appendRetryOfJob(original.FilterSnapshot, original.ID)
+	newJob, err := h.bulkJobRepo.Create(repository.CreateSMLBulkJobInput{
+		ClientRequestID: req.ClientRequestID,
+		BillIDs:         failedBillIDs,
+		Source:          original.Source,
+		BillType:        original.BillType,
+		DocumentRoute:   original.DocumentRoute,
+		Title:           original.Title + " (retry failed)",
+		RequestPayload:  original.RequestPayload,
+		FilterSnapshot:  filterJSON,
+		CreatedBy:       c.GetString("user_id"),
+		CreatedByEmail:  c.GetString("user_email"),
+	})
+	if err != nil {
+		switch e := err.(type) {
+		case repository.ActiveBulkJobConflictError:
+			c.JSON(http.StatusConflict, gin.H{
+				"error":    "บางบิลอยู่ใน bulk job ที่ยังทำงานอยู่",
+				"bill_ids": e.BillIDs,
+			})
+		default:
+			h.log.Error("create retry failed bulk send job", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "create retry failed bulk send job failed"})
+		}
+		return
+	}
+	go h.runBulkSendJob(newJob.ID)
+	c.JSON(http.StatusAccepted, gin.H{"job_id": newJob.ID, "job": newJob})
+}
+
+func (h *BillHandler) RecoverInterruptedBulkSendJobs() {
+	if h.bulkJobRepo == nil {
+		return
+	}
+	n, err := h.bulkJobRepo.RecoverInterruptedActiveJobs("server interrupted bulk SML send; retry failed rows safely")
+	if err != nil {
+		h.log.Warn("recover interrupted bulk send jobs failed", zap.Error(err))
+		return
+	}
+	if n > 0 {
+		h.log.Warn("recovered interrupted bulk send jobs", zap.Int("jobs", n))
+	}
+}
+
+func (h *BillHandler) runBulkSendJob(jobID string) {
+	if h.bulkJobRepo == nil {
+		return
+	}
+	if err := h.bulkJobRepo.StartJob(jobID); err != nil {
+		h.log.Error("start bulk send job", zap.String("job_id", jobID), zap.Error(err))
+		_ = h.bulkJobRepo.MarkJobFailed(jobID, err.Error())
+		return
+	}
+	job, err := h.bulkJobRepo.Get(jobID)
+	if err != nil || job == nil {
+		if err != nil {
+			h.log.Error("load bulk send job", zap.String("job_id", jobID), zap.Error(err))
+			_ = h.bulkJobRepo.MarkJobFailed(jobID, err.Error())
+		}
+		return
+	}
+	var payload RetryRequest
+	if len(job.RequestPayload) > 0 {
+		if err := json.Unmarshal(job.RequestPayload, &payload); err != nil {
+			_ = h.bulkJobRepo.MarkJobFailed(jobID, "invalid bulk job payload: "+err.Error())
+			return
+		}
+	}
+	traceID := fmt.Sprintf("bulk-job-%s", job.ID)
+	userID := ""
+	if job.CreatedBy != nil {
+		userID = *job.CreatedBy
+	}
+
+	for _, item := range job.Items {
+		if item.Status != models.SMLBulkJobItemQueued {
+			continue
+		}
+		if err := h.bulkJobRepo.StartItem(item.ID); err != nil {
+			h.log.Error("start bulk send item", zap.String("job_id", jobID), zap.String("item_id", item.ID), zap.Error(err))
+			continue
+		}
+
+		bill, err := h.billRepo.FindByID(item.BillID)
+		if err != nil || bill == nil {
+			reason := "bill not found"
+			if err != nil {
+				reason = "load bill failed: " + err.Error()
+			}
+			_ = h.bulkJobRepo.FinishItemSkipped(item.ID, reason)
+			_ = h.bulkJobRepo.RefreshCounts(jobID)
+			continue
+		}
+		if bill.ArchivedAt != nil {
+			_ = h.bulkJobRepo.FinishItemSkipped(item.ID, "บิลถูก archive แล้ว")
+			_ = h.bulkJobRepo.RefreshCounts(jobID)
+			continue
+		}
+		if bill.Status != "pending" && bill.Status != "failed" && bill.Status != "needs_review" {
+			_ = h.bulkJobRepo.FinishItemSkipped(item.ID, "สถานะบิลเปลี่ยนเป็น "+bill.Status)
+			_ = h.bulkJobRepo.RefreshCounts(jobID)
+			continue
+		}
+
+		result := h.sendBillToSML(bill, payload, retrySendOptions{
+			UserID:            userID,
+			TraceID:           traceID,
+			Via:               "bulk_job",
+			BulkJobID:         job.ID,
+			BulkJobItemID:     item.ID,
+			BulkItemSequence:  item.Sequence,
+			SuppressLineAlert: true,
+		})
+		switch {
+		case result.HTTPStatus == http.StatusOK:
+			_ = h.bulkJobRepo.FinishItemSent(item.ID, result.DocNo, result.DocNoAttempted)
+		case result.Skipped || result.HTTPStatus == http.StatusAccepted:
+			msg := result.Message
+			if msg == "" {
+				msg = result.Error
+			}
+			_ = h.bulkJobRepo.FinishItemSkipped(item.ID, msg)
+		default:
+			msg := result.Error
+			if msg == "" {
+				msg = "ส่ง SML ไม่สำเร็จ"
+			}
+			_ = h.bulkJobRepo.FinishItemFailed(item.ID, msg, result.DocNoAttempted)
+		}
+		_ = h.bulkJobRepo.RefreshCounts(jobID)
+	}
+	if err := h.bulkJobRepo.FinalizeJob(jobID); err != nil {
+		h.log.Error("finalize bulk send job", zap.String("job_id", jobID), zap.Error(err))
+		_ = h.bulkJobRepo.MarkJobFailed(jobID, err.Error())
+		return
+	}
+	h.notifyBulkSendSummary(jobID)
+}
+
+func (h *BillHandler) notifyBulkSendSummary(jobID string) {
+	if h.lineSvc == nil || h.bulkJobRepo == nil {
+		return
+	}
+	job, err := h.bulkJobRepo.Get(jobID)
+	if err != nil || job == nil || job.FailedCount == 0 {
+		return
+	}
+	_ = h.lineSvc.PushAdmin(fmt.Sprintf(
+		"⚠️ Bulk SML send finished with failures\nJob: %s\nสำเร็จ: %d\nไม่สำเร็จ: %d\nข้าม: %d\nเปิด BillFlow แล้วกด Retry failed เฉพาะรายการที่พลาด",
+		job.ID, job.SentCount, job.FailedCount, job.SkippedCount,
+	))
+}
+
+func validateBulkBillIDs(ids []string) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("bill_ids is required")
+	}
+	if len(ids) > 100 {
+		return fmt.Errorf("bulk send จำกัดที่ 100 บิลต่อรอบ")
+	}
+	seen := map[string]bool{}
+	for i, id := range ids {
+		id = strings.TrimSpace(id)
+		if !isUUIDLike(id) {
+			return fmt.Errorf("bill_ids[%d] is not a valid UUID", i)
+		}
+		if seen[id] {
+			return fmt.Errorf("bill_ids contains duplicate bill: %s", id)
+		}
+		seen[id] = true
+		ids[i] = id
+	}
+	return nil
+}
+
+func isUUIDLike(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, ch := range value {
+		switch i {
+		case 8, 13, 18, 23:
+			if ch != '-' {
+				return false
+			}
+		default:
+			if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func appendRetryOfJob(raw json.RawMessage, jobID string) json.RawMessage {
+	out := map[string]interface{}{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	out["retry_of_job_id"] = jobID
+	b, _ := json.Marshal(out)
+	return b
 }
 
 // ─── Route 1: SML 248 saleorder REST ─────────────────────────────────────────
@@ -1278,6 +1980,15 @@ type failureDetail struct {
 }
 
 func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON []byte, err error, start time.Time, route, docNoAttempted string) {
+	errMsg := h.recordFailureForSend(id, source, reqJSON, err, start, route, docNoAttempted, retrySendOptions{
+		UserID:  c.GetString("user_id"),
+		TraceID: c.GetString("trace_id"),
+		Via:     "retry",
+	})
+	c.JSON(http.StatusBadGateway, gin.H{"error": "SML send failed: " + errMsg})
+}
+
+func (h *BillHandler) recordFailureForSend(id, source string, reqJSON []byte, err error, start time.Time, route, docNoAttempted string, opts retrySendOptions) string {
 	rawErr := err.Error()
 	fail := failureDetail{
 		Route:          route,
@@ -1296,13 +2007,30 @@ func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON [
 	if len(reqJSON) > 0 {
 		_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	}
-	h.log.Error("Retry: SML failed", zap.String("bill", id), zap.String("route", route), zap.Error(err))
+	h.log.Error("SML send failed", zap.String("bill", id), zap.String("route", route), zap.String("via", opts.Via), zap.Error(err))
 	if h.auditRepo != nil {
 		billID := id
 		durMs := int(time.Since(start).Milliseconds())
 		var userID *string
-		if uid := c.GetString("user_id"); uid != "" {
+		if uid := opts.UserID; uid != "" {
 			userID = &uid
+		}
+		detail := map[string]interface{}{
+			"doc_no":     docNoAttempted,
+			"error":      errMsg,
+			"error_code": inferSMLFailureCode(rawErr),
+			"message":    rawErr,
+			"route":      route,
+			"via":        opts.Via,
+		}
+		if opts.BulkJobID != "" {
+			detail["bulk_job_id"] = opts.BulkJobID
+		}
+		if opts.BulkJobItemID != "" {
+			detail["bulk_job_item_id"] = opts.BulkJobItemID
+		}
+		if opts.BulkItemSequence > 0 {
+			detail["bulk_item_sequence"] = opts.BulkItemSequence
 		}
 		_ = h.auditRepo.Log(models.AuditEntry{
 			Action:     "sml_failed",
@@ -1310,33 +2038,49 @@ func (h *BillHandler) recordFailure(c *gin.Context, id, source string, reqJSON [
 			UserID:     userID,
 			Source:     source,
 			Level:      "error",
-			TraceID:    c.GetString("trace_id"),
+			TraceID:    opts.TraceID,
 			DurationMs: &durMs,
-			Detail: map[string]interface{}{
-				"doc_no":     docNoAttempted,
-				"error":      errMsg,
-				"error_code": inferSMLFailureCode(rawErr),
-				"message":    rawErr,
-				"route":      route,
-				"via":        "retry",
-			},
+			Detail:     detail,
 		})
 	}
-	if h.lineSvc != nil {
+	if h.lineSvc != nil && !opts.SuppressLineAlert {
 		_ = h.lineSvc.PushAdmin(fmt.Sprintf("⚠️ Bill retry SML failed (%s)\nBill: %s\nError: %s", route, id, errMsg))
 	}
-	c.JSON(http.StatusBadGateway, gin.H{"error": "SML send failed: " + errMsg})
+	return errMsg
 }
 
 func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, respJSON []byte, docNo, route string, start time.Time) {
+	h.recordSuccessForSend(id, source, respJSON, docNo, route, start, retrySendOptions{
+		UserID:  c.GetString("user_id"),
+		TraceID: c.GetString("trace_id"),
+		Via:     "retry",
+	})
+}
+
+func (h *BillHandler) recordSuccessForSend(id, source string, respJSON []byte, docNo, route string, start time.Time, opts retrySendOptions) {
 	if h.auditRepo == nil {
 		return
 	}
 	billID := id
 	durMs := int(time.Since(start).Milliseconds())
 	var userID *string
-	if uid := c.GetString("user_id"); uid != "" {
+	if uid := opts.UserID; uid != "" {
 		userID = &uid
+	}
+	detail := map[string]interface{}{
+		"doc_no":        docNo,
+		"route":         route,
+		"response_size": len(respJSON),
+		"via":           opts.Via,
+	}
+	if opts.BulkJobID != "" {
+		detail["bulk_job_id"] = opts.BulkJobID
+	}
+	if opts.BulkJobItemID != "" {
+		detail["bulk_job_item_id"] = opts.BulkJobItemID
+	}
+	if opts.BulkItemSequence > 0 {
+		detail["bulk_item_sequence"] = opts.BulkItemSequence
 	}
 	_ = h.auditRepo.Log(models.AuditEntry{
 		Action:     "sml_sent",
@@ -1344,16 +2088,11 @@ func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, respJSON 
 		UserID:     userID,
 		Source:     source,
 		Level:      "info",
-		TraceID:    c.GetString("trace_id"),
+		TraceID:    opts.TraceID,
 		DurationMs: &durMs,
-		Detail: map[string]interface{}{
-			"doc_no":        docNo,
-			"route":         route,
-			"response_size": len(respJSON),
-			"via":           "retry",
-		},
+		Detail:     detail,
 	})
-	h.log.Info("Retry: bill sent", zap.String("bill", id), zap.String("doc", docNo))
+	h.log.Info("SML bill sent", zap.String("bill", id), zap.String("doc", docNo), zap.String("via", opts.Via))
 }
 
 func inferSMLFailureCode(msg string) string {

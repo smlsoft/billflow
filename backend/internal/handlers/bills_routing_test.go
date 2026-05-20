@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"testing"
 
 	"billflow/internal/models"
@@ -103,5 +104,41 @@ func TestMapSourceToChannelMatchesRetryLookupKey(t *testing.T) {
 				t.Fatalf("mapSourceToChannel(%q) = %q, want %q", tt.source, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateBulkBillIDsGuardsProductionBatch(t *testing.T) {
+	validA := "11111111-1111-1111-1111-111111111111"
+	validB := "22222222-2222-2222-2222-222222222222"
+	if err := validateBulkBillIDs([]string{validA, validB}); err != nil {
+		t.Fatalf("valid ids rejected: %v", err)
+	}
+	if err := validateBulkBillIDs(nil); err == nil {
+		t.Fatal("empty batch should be rejected")
+	}
+	if err := validateBulkBillIDs([]string{"not-a-uuid"}); err == nil {
+		t.Fatal("invalid UUID should be rejected")
+	}
+	if err := validateBulkBillIDs([]string{validA, validA}); err == nil {
+		t.Fatal("duplicate bill id should be rejected")
+	}
+	tooMany := make([]string, 101)
+	for i := range tooMany {
+		tooMany[i] = "11111111-1111-1111-1111-111111111111"
+	}
+	if err := validateBulkBillIDs(tooMany); err == nil {
+		t.Fatal("batch over 100 should be rejected")
+	}
+}
+
+func TestAppendRetryOfJobKeepsFilterSnapshot(t *testing.T) {
+	raw := json.RawMessage(`{"source":"shopee_shipped","page":3}`)
+	out := appendRetryOfJob(raw, "job-123")
+	var got map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal retry filter: %v", err)
+	}
+	if got["source"] != "shopee_shipped" || got["retry_of_job_id"] != "job-123" {
+		t.Fatalf("filter snapshot = %#v", got)
 	}
 }
