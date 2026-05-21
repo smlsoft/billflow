@@ -910,6 +910,7 @@ export default function ShopeeImport() {
       (preview.preflight?.amount_mismatch_orders ?? 0) +
       (preview.warnings?.length ?? 0)
     : 0
+  const previewHasNoOrders = !!preview && preview.orders.length === 0
   const resetPreviewLabel = previewSource === 'api' ? 'กลับไปเลือกช่วงวันที่ใหม่' : 'เลือกไฟล์ใหม่'
   const resetDoneLabel = previewSource === 'api' ? 'ดึงออเดอร์ใหม่' : 'นำเข้าไฟล์ใหม่'
 
@@ -1035,6 +1036,11 @@ export default function ShopeeImport() {
                           </option>
                         ))}
                       </select>
+                      {apiOrderStatus === 'ready_to_bill' && (
+                        <p className="mt-1 text-[11px] font-normal leading-4 text-muted-foreground">
+                          รวม order ที่จัดส่งแล้ว รอลูกค้ายืนยันรับสินค้า และสำเร็จแล้ว
+                        </p>
+                      )}
                     </label>
                     <Button
                       className="h-10 self-end"
@@ -1361,6 +1367,32 @@ export default function ShopeeImport() {
             </Alert>
           )}
 
+          {previewHasNoOrders && (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center gap-2 px-6 py-10 text-center">
+                <Database className="h-8 w-8 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    ไม่พบ order ในช่วงที่เลือก
+                  </p>
+                  <p className="mt-1 max-w-xl text-sm leading-6 text-muted-foreground">
+                    ลองขยายช่วงวันที่ เปลี่ยนสถานะ order หรือสลับจากวันที่สร้างเป็นวันที่อัปเดต แล้วกดดึงออเดอร์ใหม่อีกครั้ง
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setStep('idle')
+                    setPreview(null)
+                  }}
+                >
+                  {resetPreviewLabel}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           {preview.more && (
             <Alert>
               <AlertTriangle className="h-4 w-4" />
@@ -1395,58 +1427,60 @@ export default function ShopeeImport() {
             </Alert>
           )}
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={toggleAll}>
-              {selectedIDs.size === preview.orders.filter((o) => !o.duplicate).length
-                ? 'ยกเลิกทั้งหมด'
-                : 'เลือกทั้งหมด'}
-            </Button>
-            <Button
-              size="sm"
-              disabled={confirmDisabled}
-              onClick={handleConfirm}
-              title={confirmTitle}
-            >
-              {destination.action} {selectedIDs.size} รายการ
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setStep('idle')
-                setPreview(null)
-              }}
-            >
-              {resetPreviewLabel}
-            </Button>
-          </div>
+          {!previewHasNoOrders && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={toggleAll}>
+                  {selectedIDs.size === preview.orders.filter((o) => !o.duplicate).length
+                    ? 'ยกเลิกทั้งหมด'
+                    : 'เลือกทั้งหมด'}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={confirmDisabled}
+                  onClick={handleConfirm}
+                  title={confirmTitle}
+                >
+                  {destination.action} {selectedIDs.size} รายการ
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setStep('idle')
+                    setPreview(null)
+                  }}
+                >
+                  {resetPreviewLabel}
+                </Button>
+              </div>
 
-          <div className="overflow-hidden rounded-lg border border-border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/40">
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={
-                        selectedIDs.size ===
-                        preview.orders.filter((o) => !o.duplicate).length
-                      }
-                      onCheckedChange={toggleAll}
-                      aria-label="เลือกทั้งหมด"
-                    />
-                  </TableHead>
-                  <TableHead>Order ID</TableHead>
-                  <TableHead>วันที่</TableHead>
-                  <TableHead>ผู้ซื้อ</TableHead>
-                  <TableHead>สถานะ</TableHead>
-                  <TableHead>สินค้า</TableHead>
-                  <TableHead className="text-right">Qty รวม</TableHead>
-                  <TableHead className="text-right">ยอดชำระ</TableHead>
-                  <TableHead>ตรวจเบื้องต้น</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {preview.orders.map((order) => {
+              <div className="overflow-hidden rounded-lg border border-border bg-card">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/40">
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={
+                            selectedIDs.size ===
+                            preview.orders.filter((o) => !o.duplicate).length
+                          }
+                          onCheckedChange={toggleAll}
+                          aria-label="เลือกทั้งหมด"
+                        />
+                      </TableHead>
+                      <TableHead>Order ID</TableHead>
+                      <TableHead>วันที่</TableHead>
+                      <TableHead>ผู้ซื้อ</TableHead>
+                      <TableHead>สถานะ</TableHead>
+                      <TableHead>สินค้า</TableHead>
+                      <TableHead className="text-right">Qty รวม</TableHead>
+                      <TableHead className="text-right">ยอดชำระ</TableHead>
+                      <TableHead>ตรวจเบื้องต้น</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {preview.orders.map((order) => {
                   const expanded = expandedOrders.has(order.order_id)
                   return (
                     <Fragment key={order.order_id}>
@@ -1604,10 +1638,12 @@ export default function ShopeeImport() {
                       )}
                     </Fragment>
                   )
-                })}
-              </TableBody>
-            </Table>
-          </div>
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
         </>
       )}
 

@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"billflow/internal/config"
@@ -191,6 +193,64 @@ func TestShopeeAPIConnectionDisplayLabelPrefersShopNameOverDefaultLabel(t *testi
 	conn.Label = "ชื่อที่ตั้งเอง"
 	if got := conn.DisplayLabel(); got != "ชื่อที่ตั้งเอง" {
 		t.Fatalf("custom DisplayLabel() = %q", got)
+	}
+}
+
+func TestAuditShopeeAPIPreviewWritesTraceableMetadata(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("user_id", "8bdb5d26-86fc-4a58-a6a9-0376a48180a1")
+	c.Set("trace_id", "trace-shopee-preview")
+
+	handler := &ShopeeImportHandler{
+		auditRepo: repository.NewAuditLogRepo(db),
+		logger:    zap.NewNop(),
+	}
+	conn := &ShopeeAPIConnection{
+		ID:       "33333333-3333-3333-3333-333333333333",
+		ShopID:   264993963,
+		ShopName: "Henna.milkford",
+		Label:    "Shop 264993963",
+	}
+	from := time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 21, 23, 59, 59, 0, time.UTC)
+
+	mock.ExpectExec("INSERT INTO audit_logs").
+		WithArgs(
+			"shopee_api_preview_requested",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			"shopee_api",
+			"info",
+			sqlmock.AnyArg(),
+			"trace-shopee-preview",
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	handler.auditShopeeAPIPreview(
+		c,
+		conn,
+		ShopeeAPIPreviewRequest{OrderStatus: "ready_to_bill"},
+		from,
+		to,
+		"create_time",
+		shopeeAPIOrderStatusPlanForStatuses(shopeeAPIReadyToBillStatuses),
+		"ok",
+		"",
+		123*time.Millisecond,
+		map[string]interface{}{"returned_orders": 0},
+	)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
 	}
 }
 

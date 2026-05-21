@@ -346,6 +346,7 @@ func (h *ShopeeImportHandler) APICallback(c *gin.Context) {
 // PreviewFromAPI fetches Shopee orders and returns the same preview shape as
 // Shopee Excel. It does not write bills or call SML.
 func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
+	startedAt := time.Now()
 	var req ShopeeAPIPreviewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "request ไม่ถูกต้อง: " + err.Error()})
@@ -405,6 +406,7 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 	if err != nil {
 		msg := shopeeAPIErrorMessage(err, "ดึงรายการ order จาก Shopee ไม่สำเร็จ").Message
 		h.markShopeeAPISync(c.Request.Context(), &conn.ShopID, "error", msg)
+		h.auditShopeeAPIPreview(c, conn, req, timeFrom, timeTo, timeField, statusPlan, "error", msg, time.Since(startedAt), nil)
 		respondShopeeAPIError(c, http.StatusBadGateway, err, "ดึงรายการ order จาก Shopee ไม่สำเร็จ")
 		return
 	}
@@ -412,6 +414,11 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 	if err != nil {
 		msg := shopeeAPIErrorMessage(err, "ดึงรายละเอียด order จาก Shopee ไม่สำเร็จ").Message
 		h.markShopeeAPISync(c.Request.Context(), &conn.ShopID, "error", msg)
+		h.auditShopeeAPIPreview(c, conn, req, timeFrom, timeTo, timeField, statusPlan, "error", msg, time.Since(startedAt), map[string]interface{}{
+			"fetched_order_sns": len(orderSNs),
+			"more":              more,
+			"next_cursor":       nextCursor,
+		})
 		respondShopeeAPIError(c, http.StatusBadGateway, err, "ดึงรายละเอียด order จาก Shopee ไม่สำเร็จ")
 		return
 	}
@@ -435,6 +442,17 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 	preflight := buildShopeePreflight(orders, 0, dupCount)
 	importRunID := h.createShopeeImportRun(c, "Shopee API "+time.Now().Format("20060102-150405"), "", orders, warnings, preflight)
 	h.markShopeeAPISync(c.Request.Context(), &conn.ShopID, "ok", "")
+	h.auditShopeeAPIPreview(c, conn, req, timeFrom, timeTo, timeField, statusPlan, "ok", "", time.Since(startedAt), map[string]interface{}{
+		"fetched_order_sns": len(orderSNs),
+		"returned_orders":   len(orders),
+		"new_orders":        len(orders) - dupCount,
+		"duplicate_orders":  dupCount,
+		"warnings":          len(warnings),
+		"more":              more,
+		"next_cursor":       nextCursor,
+		"import_run_id":     importRunID,
+		"preflight":         preflight,
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"orders":          orders,
@@ -449,6 +467,61 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		"more":            more,
 		"next_cursor":     nextCursor,
 	})
+}
+
+func (h *ShopeeImportHandler) auditShopeeAPIPreview(c *gin.Context, conn *ShopeeAPIConnection, req ShopeeAPIPreviewRequest, timeFrom, timeTo time.Time, timeField string, statusPlan shopeeAPIOrderStatusSelection, result, message string, elapsed time.Duration, extra map[string]interface{}) {
+	if h.auditRepo == nil || conn == nil {
+		return
+	}
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	targetID := conn.ID
+	level := "info"
+	if result != "ok" {
+		level = "error"
+	}
+	durationMs := int(elapsed.Milliseconds())
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = shopeeAPIDefaultPageSize
+	}
+	if pageSize > shopeeAPIMaxDetailBatchSize {
+		pageSize = shopeeAPIMaxDetailBatchSize
+	}
+	detail := map[string]interface{}{
+		"result":           result,
+		"shop_id":          conn.ShopID,
+		"shop_label":       conn.DisplayLabel(),
+		"connection_id":    conn.ID,
+		"time_from":        timeFrom.Format("2006-01-02"),
+		"time_to":          timeTo.Format("2006-01-02"),
+		"time_range_field": timeField,
+		"order_status":     strings.TrimSpace(req.OrderStatus),
+		"page_size":        pageSize,
+		"cursor_used":      strings.TrimSpace(req.Cursor) != "",
+		"request_statuses": statusPlan.RequestStatuses,
+		"local_statuses":   statusPlan.LocalStatuses,
+	}
+	if message != "" {
+		detail["message"] = message
+	}
+	for k, v := range extra {
+		detail[k] = v
+	}
+	if err := h.auditRepo.Log(models.AuditEntry{
+		Action:     "shopee_api_preview_requested",
+		TargetID:   &targetID,
+		UserID:     userID,
+		Source:     "shopee_api",
+		Level:      level,
+		DurationMs: &durationMs,
+		TraceID:    c.GetString("trace_id"),
+		Detail:     detail,
+	}); err != nil {
+		h.logger.Warn("shopee_api: audit preview request failed", zap.Error(err))
+	}
 }
 
 func (c *ShopeeAPIConnection) DisplayLabel() string {
