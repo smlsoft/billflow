@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, Fragment, type ComponentType } from 'react'
+import { useState, useRef, useEffect, Fragment } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertCircle,
@@ -370,6 +370,16 @@ function apiRangeError(from: string, to: string) {
   return ''
 }
 
+const shopeeOrderStatusOptions = [
+  { value: 'ready_to_bill', label: 'พร้อมออกบิล (จัดส่งแล้ว/รอรับสินค้า/สำเร็จ)' },
+  { value: 'all', label: 'ทั้งหมด' },
+  { value: 'SHIPPED', label: 'จัดส่งแล้ว (SHIPPED)' },
+  { value: 'TO_CONFIRM_RECEIVE', label: 'รอลูกค้ายืนยันรับสินค้า (TO_CONFIRM_RECEIVE)' },
+  { value: 'COMPLETED', label: 'สำเร็จแล้ว (COMPLETED)' },
+  { value: 'READY_TO_SHIP', label: 'พร้อมจัดส่ง (READY_TO_SHIP)' },
+  { value: 'PROCESSED', label: 'กำลังเตรียมพัสดุ (PROCESSED)' },
+]
+
 function apiErrorMessage(err: unknown, fallback: string) {
   const data = (err as { response?: { data?: { error?: string; error_code?: string } } })?.response?.data
   const raw = data?.error ?? ''
@@ -438,42 +448,6 @@ function SummaryCard({
   )
 }
 
-function StatusTile({
-  label,
-  value,
-  description,
-  icon: Icon,
-  tone = 'muted',
-}: {
-  label: string
-  value: string
-  description: string
-  icon: ComponentType<{ className?: string }>
-  tone?: 'success' | 'warning' | 'primary' | 'muted'
-}) {
-  const toneClass = {
-    success: 'border-success/25 bg-success/[0.04] text-success',
-    warning: 'border-warning/30 bg-warning/[0.08] text-warning',
-    primary: 'border-primary/25 bg-primary/[0.04] text-primary',
-    muted: 'border-border bg-card text-foreground',
-  }[tone]
-
-  return (
-    <div className={cn('rounded-lg border px-4 py-3', toneClass)}>
-      <div className="flex items-start gap-3">
-        <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-        <div className="min-w-0">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            {label}
-          </p>
-          <p className="mt-1 text-sm font-semibold leading-5 text-foreground">{value}</p>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 type Step = 'idle' | 'uploading' | 'preview' | 'confirming' | 'done'
 
 export default function ShopeeImport() {
@@ -495,6 +469,8 @@ export default function ShopeeImport() {
   const [previewSource, setPreviewSource] = useState<'excel' | 'api'>('excel')
   const [apiStatus, setAPIStatus] = useState<ShopeeAPIStatus | null>(null)
   const [apiConnections, setAPIConnections] = useState<ShopeeAPIConnection[]>([])
+  const [apiStatusLoadError, setAPIStatusLoadError] = useState('')
+  const [apiConnectionsLoadError, setAPIConnectionsLoadError] = useState('')
   const [selectedConnectionID, setSelectedConnectionID] = useState('')
   const [editingConnectionID, setEditingConnectionID] = useState('')
   const [editingLabel, setEditingLabel] = useState('')
@@ -558,19 +534,30 @@ export default function ShopeeImport() {
     client
       .get<ShopeeAPIStatus>('/api/settings/shopee-api/status')
       .then((res) => {
-        if (alive) setAPIStatus(res.data)
+        if (!alive) return
+        setAPIStatus(res.data)
+        setAPIStatusLoadError('')
       })
-      .catch(() => undefined)
+      .catch((err: unknown) => {
+        if (!alive) return
+        setAPIStatus(null)
+        setAPIStatusLoadError(apiErrorMessage(err, 'โหลดสถานะ Shopee API ไม่ได้'))
+      })
     client
       .get<{ data: ShopeeAPIConnection[] }>('/api/shopee-api/connections')
       .then((res) => {
         if (!alive) return
         const rows = res.data.data ?? []
         setAPIConnections(rows)
+        setAPIConnectionsLoadError('')
         const firstActive = rows.find((c) => !c.disabled_at)
         if (firstActive) setSelectedConnectionID((current) => current || firstActive.id)
       })
-      .catch(() => undefined)
+      .catch((err: unknown) => {
+        if (!alive) return
+        setAPIConnections([])
+        setAPIConnectionsLoadError(apiErrorMessage(err, 'โหลดรายการร้าน Shopee ไม่ได้'))
+      })
     return () => {
       alive = false
     }
@@ -640,8 +627,11 @@ export default function ShopeeImport() {
     try {
       const res = await client.get<ShopeeAPIStatus>('/api/settings/shopee-api/status')
       setAPIStatus(res.data)
-    } catch {
-      setError('โหลดสถานะ Shopee API ไม่ได้')
+      setAPIStatusLoadError('')
+    } catch (err: unknown) {
+      setAPIStatus(null)
+      setAPIConnections([])
+      setAPIStatusLoadError(apiErrorMessage(err, 'โหลดสถานะ Shopee API ไม่ได้'))
     }
   }
 
@@ -655,13 +645,17 @@ export default function ShopeeImport() {
         if (current && active.some((c) => c.id === current)) return current
         return active[0]?.id ?? ''
       })
-    } catch {
-      setError('โหลดรายการร้าน Shopee ไม่ได้')
+      setAPIConnectionsLoadError('')
+    } catch (err: unknown) {
+      setAPIConnections([])
+      setAPIConnectionsLoadError(apiErrorMessage(err, 'โหลดรายการร้าน Shopee ไม่ได้'))
     }
   }
 
   const handleRefreshAPISection = async () => {
     setError('')
+    setAPIStatusLoadError('')
+    setAPIConnectionsLoadError('')
     await Promise.all([refreshAPIStatus(), refreshAPIConnections()])
   }
 
@@ -823,6 +817,7 @@ export default function ShopeeImport() {
       else s.add(id)
       return s
     })
+  const apiLoadError = apiStatusLoadError || apiConnectionsLoadError
   const apiReadiness = apiStatus ? shopeeAPIReadiness(apiStatus) : null
   const apiLive = apiStatus ? isLiveAPI(apiStatus) : false
   const apiDateError = apiRangeError(apiFrom, apiTo)
@@ -837,18 +832,86 @@ export default function ShopeeImport() {
   const apiWaitingForLive =
     !!apiStatus && apiStatus.enabled && apiStatus.configured && !apiLive && !apiStatus.connected
   const apiCanConnect = apiStatus?.can_connect ?? (!!apiStatus?.configured && !apiWaitingForLive)
-  const apiCanFetch = selectedConnection?.can_fetch ?? false
+  const apiCanFetch = (apiStatus?.can_fetch ?? false) && Boolean(selectedConnection?.can_fetch)
   const apiConnectDisabled = apiBusy || !apiCanConnect
   const apiFetchDisabled = apiBusy || !apiCanFetch || !!apiDateError || needsShopSelection
+  const confirmDisabled = selectedIDs.size === 0 || !!preview?.more || !channelReady
+  const confirmTitle = !channelReady
+    ? 'ยังไม่ได้ตั้งค่า shopee/sale ในช่องทางรับข้อมูล'
+    : preview?.more
+      ? 'ลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า'
+      : undefined
   const apiConnectLabel = apiWaitingForLive
     ? 'รอ Shopee approve'
     : activeConnections.length > 0
-      ? 'เชื่อมร้านเพิ่ม / reconnect'
-      : 'เชื่อมต่อ Shopee API'
+      ? 'เชื่อมร้านเพิ่ม'
+      : 'เชื่อมต่อร้าน Shopee'
   const apiLastSyncError = apiStatus?.last_sync_error
     ? apiErrorMessage({ response: { data: { error: apiStatus.last_sync_error } } }, apiStatus.last_sync_error)
     : ''
   const sourceSelectionVisible = step === 'idle' || step === 'uploading'
+  const apiSummary = (() => {
+    if (apiLoadError) {
+      return {
+        title: 'Shopee API ยังไม่พร้อม',
+        description: 'ใช้การนำเข้าจาก Excel ได้ และแจ้งแอดมินตรวจการเชื่อมต่อ',
+        tone: 'warning' as const,
+      }
+    }
+    if (!apiStatus) {
+      return {
+        title: 'กำลังตรวจสถานะ Shopee',
+        description: 'กำลังโหลดสถานะร้านและการเชื่อมต่อ',
+        tone: 'muted' as const,
+      }
+    }
+    if (!apiStatus.enabled || !apiStatus.configured) {
+      return {
+        title: 'ต้องให้แอดมินตั้งค่า',
+        description: apiStatus.blocking_reason || 'ยังไม่พร้อมเชื่อมต่อ Shopee API',
+        tone: 'warning' as const,
+      }
+    }
+    if (apiStatus.token_state === 'refresh_expired') {
+      return {
+        title: 'Token หมดอายุ',
+        description: 'กดเชื่อมต่อร้าน Shopee ใหม่ก่อนดึงออเดอร์',
+        tone: 'warning' as const,
+      }
+    }
+    if (activeConnections.length === 0) {
+      return {
+        title: 'ยังไม่เชื่อมร้าน',
+        description: 'กดเชื่อมต่อร้าน Shopee ก่อนดึงออเดอร์ครั้งแรก',
+        tone: 'warning' as const,
+      }
+    }
+    if (apiCanFetch) {
+      return {
+        title: 'พร้อมใช้งาน',
+        description: selectedShopHint,
+        tone: 'success' as const,
+      }
+    }
+    return {
+      title: 'ยังดึงออเดอร์ไม่ได้',
+      description: apiStatus.blocking_reason || 'เลือกร้านหรือตรวจ token ก่อนดึงออเดอร์',
+      tone: 'warning' as const,
+    }
+  })()
+  const apiSummaryClass = {
+    success: 'border-success/30 bg-success/5 text-success',
+    warning: 'border-warning/35 bg-warning/10 text-warning',
+    muted: 'border-border bg-muted/30 text-muted-foreground',
+  }[apiSummary.tone]
+  const previewIssueCount = preview
+    ? (preview.more ? 1 : 0) +
+      (preview.preflight?.no_sku_orders ?? 0) +
+      (preview.preflight?.amount_mismatch_orders ?? 0) +
+      (preview.warnings?.length ?? 0)
+    : 0
+  const resetPreviewLabel = previewSource === 'api' ? 'กลับไปเลือกช่วงวันที่ใหม่' : 'เลือกไฟล์ใหม่'
+  const resetDoneLabel = previewSource === 'api' ? 'ดึงออเดอร์ใหม่' : 'นำเข้าไฟล์ใหม่'
 
   return (
     <div className="space-y-5">
@@ -856,36 +919,6 @@ export default function ShopeeImport() {
         title="Shopee"
         description={`เลือก Shopee shop แล้วดึง API หรืออัปโหลด Excel เพื่อสร้าง${destination.documentName}สำหรับตรวจและส่งเข้า SML`}
       />
-
-      <div className="grid gap-3 md:grid-cols-3">
-        <StatusTile
-          icon={activeConnections.length > 0 ? CheckCircle2 : Clock3}
-          label="สถานะ API"
-          value={apiReadiness?.title ?? 'กำลังโหลดสถานะ'}
-          description={
-            apiWaitingForLive
-              ? 'รอ Go-Live approve แล้วเปลี่ยนเป็น live key'
-              : activeConnections.length > 0
-                ? `เชื่อมแล้ว ${activeConnections.length} ร้าน · ${selectedShopHint}`
-                : 'ตรวจ key และ redirect ก่อนเชื่อมร้าน'
-          }
-          tone={activeConnections.length > 0 ? 'success' : apiWaitingForLive ? 'warning' : 'muted'}
-        />
-        <StatusTile
-          icon={FileSpreadsheet}
-          label="ใช้งานได้ตอนนี้"
-          value={activeConnections.length > 0 ? 'API + Excel' : 'Excel fallback'}
-          description="Excel ยังใช้เป็นทางสำรองได้เมื่อ API หรือ token มีปัญหา"
-          tone="primary"
-        />
-        <StatusTile
-          icon={ShieldCheck}
-          label="ปลายทาง"
-          value={destination.shortName}
-          description={destination.smlPath}
-          tone="muted"
-        />
-      </div>
 
       <input
         ref={fileRef}
@@ -903,217 +936,27 @@ export default function ShopeeImport() {
       )}
 
       {sourceSelectionVisible && (
-        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)]">
-          {apiStatus && (
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <CardTitle className="flex items-center gap-2 text-sm">
-                    <PlugZap className="h-4 w-4 text-primary" />
-                    Shopee Open API
-                    <Badge variant={activeConnections.length > 0 ? 'default' : 'secondary'}>
-                      {activeConnections.length > 0 ? `เชื่อม ${activeConnections.length} ร้าน` : 'ยังไม่เชื่อมต่อ'}
-                    </Badge>
-                    <Badge variant="outline">{apiStatus.environment || 'sandbox'}</Badge>
-                  </CardTitle>
-                  <Button variant="ghost" size="sm" onClick={handleRefreshAPISection} disabled={apiBusy}>
-                    <RefreshCw className="h-4 w-4" />
-                    รีเฟรช
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4 pt-0">
-                {apiReadiness && (
-                  <div className={cn('rounded-md border px-3 py-2 text-xs', readinessToneClass(apiReadiness.tone))}>
-                    <div className="flex items-start gap-2">
-                      {apiReadiness.tone === 'success' ? (
-                        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-                      ) : (
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium">{apiReadiness.title}</p>
-                        <p className="mt-0.5 text-muted-foreground">{apiReadiness.description}</p>
-                        <div className="mt-2 grid gap-1.5 text-muted-foreground sm:grid-cols-2">
-                          {apiReadiness.steps.map((s) => (
-                            <div key={s.label} className="flex min-w-0 items-start gap-1.5">
-                              {readinessStepIcon(s)}
-                              <span className="min-w-0">
-                                <span>{s.label}</span>
-                                {s.detail && (
-                                  <span className="block truncate text-[11px]" title={s.detail}>
-                                    {s.detail}
-                                  </span>
-                                )}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Store className="h-5 w-5 text-primary" />
+                  ดึงออเดอร์จาก Shopee
+                </CardTitle>
+                <Badge variant="outline">{destination.shortName}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4 pt-0">
+              <div className={cn('rounded-md border px-3 py-2 text-sm', apiSummaryClass)}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-foreground">{apiSummary.title}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{apiSummary.description}</p>
                   </div>
-                )}
-
-                <div className="rounded-md border border-border bg-muted/20 p-3">
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                      <Store className="h-4 w-4 text-primary" />
-                      ร้าน Shopee ที่เชื่อมต่อ
-                    </div>
-                    {activeConnections.length > 0 && (
-                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                        ใช้งานร้าน
-                        <select
-                          value={selectedConnectionID}
-                          onChange={(e) => setSelectedConnectionID(e.target.value)}
-                          className="h-8 min-w-[220px] rounded-md border border-border bg-background px-2 text-xs text-foreground"
-                        >
-                          <option value="">เลือกร้าน</option>
-                          {activeConnections.map((conn) => (
-                            <option key={conn.id} value={conn.id}>
-                              {conn.label || conn.shop_name || 'Shopee shop'} · {conn.shop_id}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                  </div>
-                  {apiConnections.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">
-                      ยังไม่มีร้านที่เชื่อมต่อ กด “เชื่อมต่อ Shopee API” เพื่อ authorize ร้านแรก
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {apiConnections.map((conn) => {
-                        const editing = editingConnectionID === conn.id
-                        const disabled = Boolean(conn.disabled_at)
-                        return (
-                          <div
-                            key={conn.id}
-                            className={cn(
-                              'grid gap-2 rounded-md border border-border bg-background p-2 text-xs md:grid-cols-[minmax(0,1fr)_auto]',
-                              disabled && 'opacity-60',
-                            )}
-                          >
-                            <div className="min-w-0">
-                              {editing ? (
-                                <input
-                                  value={editingLabel}
-                                  onChange={(e) => setEditingLabel(e.target.value)}
-                                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground"
-                                  maxLength={120}
-                                />
-                              ) : (
-                                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                                  <span className="truncate font-medium text-foreground">
-                                    {conn.label || conn.shop_name || 'Shopee shop'}
-                                  </span>
-                                  <Badge variant="outline" className="font-mono text-[10px]">
-                                    {conn.shop_id}
-                                  </Badge>
-                                  {selectedConnectionID === conn.id && !disabled && (
-                                    <Badge className="text-[10px]">กำลังใช้</Badge>
-                                  )}
-                                  {disabled && (
-                                    <Badge variant="secondary" className="text-[10px]">
-                                      ปิดใช้งาน
-                                    </Badge>
-                                  )}
-                                </div>
-                              )}
-                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                                <span>Token: {tokenStateLabel(conn.token_state)}</span>
-                                <span>Last sync: {conn.last_sync_at ? fmtDateTime(conn.last_sync_at) : '—'}</span>
-                                {conn.last_sync_error && (
-                                  <span className="text-destructive" title={conn.last_sync_error}>
-                                    sync error
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex items-center justify-end gap-1">
-                              {editing ? (
-                                <>
-                                  <Button type="button" size="sm" variant="outline" className="h-8 px-2" onClick={() => saveConnectionLabel(conn)} disabled={apiBusy}>
-                                    <Save className="h-3.5 w-3.5" />
-                                    บันทึก
-                                  </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-2" onClick={() => setEditingConnectionID('')} disabled={apiBusy}>
-                                    <X className="h-3.5 w-3.5" />
-                                  </Button>
-                                </>
-                              ) : (
-                                <>
-                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-2" onClick={() => startEditConnection(conn)} disabled={apiBusy}>
-                                    <Pencil className="h-3.5 w-3.5" />
-                                    ชื่อ
-                                  </Button>
-                                  <Button type="button" size="sm" variant={disabled ? 'outline' : 'ghost'} className="h-8 px-2" onClick={() => toggleConnectionDisabled(conn)} disabled={apiBusy}>
-                                    <Power className="h-3.5 w-3.5" />
-                                    {disabled ? 'เปิดใช้' : 'ปิดใช้'}
-                                  </Button>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3 xl:grid-cols-6">
-                  <div className="rounded-md border border-border p-3">
-                    <p className="font-medium text-foreground">Partner</p>
-                    <p className="mt-1 font-mono">{apiStatus.partner_id || 'ยังไม่ได้ตั้งค่า'}</p>
-                  </div>
-                  <div className="rounded-md border border-border p-3">
-                    <p className="font-medium text-foreground">Selected shop</p>
-                    <p className="mt-1 truncate font-mono" title={selectedShopHint}>{selectedConnection?.shop_id || '—'}</p>
-                  </div>
-                  <div className="rounded-md border border-border p-3">
-                    <p className="font-medium text-foreground">Base URL</p>
-                    <p className="mt-1 truncate font-mono" title={apiStatus.base_url || '—'}>
-                      {apiStatus.base_url || '—'}
-                    </p>
-                  </div>
-                  <div className="rounded-md border border-border p-3">
-                    <p className="font-medium text-foreground">Redirect</p>
-                    <p className="mt-1 truncate font-mono" title={apiStatus.redirect_url || '—'}>
-                      {apiStatus.redirect_url || '—'}
-                    </p>
-                  </div>
-                  <div className="rounded-md border border-border p-3">
-                    <p className="font-medium text-foreground">Token</p>
-                    <p className="mt-1">{tokenStateLabel(apiStatus.token_state)}</p>
-                  </div>
-                  <div className="rounded-md border border-border p-3">
-                    <p className="font-medium text-foreground">Last sync</p>
-                    <p className="mt-1">
-                      {apiStatus.last_sync_at ? fmtDateTime(apiStatus.last_sync_at) : '—'}
-                    </p>
-                  </div>
-                </div>
-                {!apiStatus.configured && (
-                  <Alert>
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>ยังไม่ได้ตั้งค่า Shopee Open API บน server</AlertTitle>
-                    <AlertDescription>
-                      ต้องตั้งค่า partner_id และ partner_key ก่อนเชื่อมต่อร้าน
-                    </AlertDescription>
-                  </Alert>
-                )}
-                {apiStatus.blocking_reason && (
-                  <Alert>
-                    <Info className="h-4 w-4" />
-                    <AlertTitle>สิ่งที่ต้องทำต่อ</AlertTitle>
-                    <AlertDescription>{apiStatus.blocking_reason}</AlertDescription>
-                  </Alert>
-                )}
-                <div className="rounded-md border border-border bg-muted/20 p-3">
-                  <div className="flex flex-wrap items-end gap-2">
+                  {apiStatus && (
                     <Button
-                      variant={apiStatus.connected ? 'outline' : 'default'}
+                      variant={activeConnections.length > 0 ? 'outline' : 'default'}
                       size="sm"
                       onClick={handleConnectAPI}
                       disabled={apiConnectDisabled}
@@ -1122,165 +965,354 @@ export default function ShopeeImport() {
                       {apiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
                       {apiConnectLabel}
                     </Button>
-                    <label className="text-xs text-muted-foreground">
-                      จาก
+                  )}
+                </div>
+              </div>
+
+              {apiStatus ? (
+                <>
+                  <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.85fr)_repeat(4,minmax(0,1fr))_auto]">
+                    <label className="text-xs font-medium text-muted-foreground">
+                      ร้านค้า
+                      {activeConnections.length > 1 ? (
+                        <select
+                          value={selectedConnectionID}
+                          onChange={(e) => setSelectedConnectionID(e.target.value)}
+                          className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                        >
+                          <option value="">เลือกร้าน Shopee</option>
+                          {activeConnections.map((conn) => (
+                            <option key={conn.id} value={conn.id}>
+                              {conn.label || conn.shop_name || 'Shopee shop'} · {conn.shop_id}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="mt-1 flex h-10 items-center rounded-md border border-border bg-muted/30 px-3 text-sm text-foreground">
+                          <span className="truncate">{selectedConnection?.label || selectedConnection?.shop_name || 'ยังไม่มีร้านที่เชื่อมต่อ'}</span>
+                        </div>
+                      )}
+                    </label>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      จากวันที่
                       <input
                         type="date"
                         value={apiFrom}
                         onChange={(e) => setAPIFrom(e.target.value)}
-                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                        className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
                       />
                     </label>
-                    <label className="text-xs text-muted-foreground">
-                      ถึง
+                    <label className="text-xs font-medium text-muted-foreground">
+                      ถึงวันที่
                       <input
                         type="date"
                         value={apiTo}
                         onChange={(e) => setAPITo(e.target.value)}
-                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                        className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
                       />
                     </label>
-                    <label className="text-xs text-muted-foreground">
-                      ช่วงเวลา
+                    <label className="text-xs font-medium text-muted-foreground">
+                      ค้นหาจาก
                       <select
                         value={apiTimeRangeField}
                         onChange={(e) => setAPITimeRangeField(e.target.value as 'create_time' | 'update_time')}
-                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                        className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
                       >
                         <option value="create_time">วันที่สร้าง order</option>
                         <option value="update_time">วันที่อัปเดต order</option>
                       </select>
                     </label>
-                    <label className="text-xs text-muted-foreground">
+                    <label className="text-xs font-medium text-muted-foreground">
                       สถานะ
                       <select
                         value={apiOrderStatus}
                         onChange={(e) => setAPIOrderStatus(e.target.value)}
-                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                        className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
                       >
-                        <option value="ready_to_bill">พร้อมออกบิล</option>
-                        <option value="all">ทั้งหมด</option>
-                        <option value="SHIPPED">SHIPPED</option>
-                        <option value="TO_CONFIRM_RECEIVE">TO_CONFIRM_RECEIVE</option>
-                        <option value="COMPLETED">COMPLETED</option>
-                        <option value="READY_TO_SHIP">READY_TO_SHIP</option>
-                        <option value="PROCESSED">PROCESSED</option>
+                        {shopeeOrderStatusOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
                       </select>
                     </label>
                     <Button
-                      size="sm"
+                      className="h-10 self-end"
                       onClick={handleFetchAPI}
                       disabled={apiFetchDisabled}
                       title={apiDateError || (needsShopSelection ? 'เลือกร้าน Shopee ก่อนดึง order' : apiStatus.blocking_reason) || undefined}
                     >
                       {apiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-                      ดึงออเดอร์จาก API
+                      ดึงออเดอร์
                     </Button>
                   </div>
+
                   {(apiDateError || apiLastSyncError || needsShopSelection) && (
-                    <div className="mt-2 space-y-1 text-xs">
+                    <div className="space-y-1 text-xs">
                       {apiDateError && <p className="text-warning">{apiDateError}</p>}
                       {needsShopSelection && <p className="text-warning">เลือกร้าน Shopee ก่อนดึง order เพื่อกัน import ผิดร้าน</p>}
                       {apiLastSyncError && <p className="text-destructive">{apiLastSyncError}</p>}
                     </div>
                   )}
-                </div>
+                  {configReady && !channelReady && (
+                    <Alert>
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>ยังไม่ได้ตั้งค่าช่องทาง Shopee สำหรับบิลขาย</AlertTitle>
+                      <AlertDescription>
+                        ตั้งค่าลูกค้า คลัง ชั้น และ VAT ก่อนยืนยันนำเข้า
+                        <Button asChild variant="link" className="h-auto px-1 py-0 text-xs">
+                          <Link to="/settings/channels">ไปตั้งค่าตอนนี้</Link>
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  <details className="group rounded-md border border-border bg-muted/20 text-sm">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 font-medium text-foreground">
+                      รายละเอียดสำหรับแอดมิน
+                      <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="space-y-3 border-t border-border p-3">
+                      {apiReadiness && (
+                        <div className={cn('rounded-md border px-3 py-2 text-xs', readinessToneClass(apiReadiness.tone))}>
+                          <div className="flex items-start gap-2">
+                            {apiReadiness.tone === 'success' ? (
+                              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                            ) : (
+                              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium">{apiReadiness.title}</p>
+                              <p className="mt-0.5 text-muted-foreground">{apiReadiness.description}</p>
+                              <div className="mt-2 grid gap-1.5 text-muted-foreground sm:grid-cols-2">
+                                {apiReadiness.steps.map((s) => (
+                                  <div key={s.label} className="flex min-w-0 items-start gap-1.5">
+                                    {readinessStepIcon(s)}
+                                    <span className="min-w-0">
+                                      <span>{s.label}</span>
+                                      {s.detail && (
+                                        <span className="block truncate text-[11px]" title={s.detail}>
+                                          {s.detail}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="rounded-md border border-border bg-background p-3">
+                        <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
+                          <Store className="h-4 w-4 text-primary" />
+                          ร้าน Shopee ที่เชื่อมต่อ
+                        </div>
+                        {apiConnections.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">ยังไม่มีร้านที่เชื่อมต่อ</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {apiConnections.map((conn) => {
+                              const editing = editingConnectionID === conn.id
+                              const disabled = Boolean(conn.disabled_at)
+                              return (
+                                <div
+                                  key={conn.id}
+                                  className={cn(
+                                    'grid gap-2 rounded-md border border-border bg-background p-2 text-xs md:grid-cols-[minmax(0,1fr)_auto]',
+                                    disabled && 'opacity-60',
+                                  )}
+                                >
+                                  <div className="min-w-0">
+                                    {editing ? (
+                                      <input
+                                        value={editingLabel}
+                                        onChange={(e) => setEditingLabel(e.target.value)}
+                                        className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                                        maxLength={120}
+                                      />
+                                    ) : (
+                                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                        <span className="truncate font-medium text-foreground">
+                                          {conn.label || conn.shop_name || 'Shopee shop'}
+                                        </span>
+                                        <Badge variant="outline" className="font-mono text-[10px]">
+                                          {conn.shop_id}
+                                        </Badge>
+                                        {selectedConnectionID === conn.id && !disabled && (
+                                          <Badge className="text-[10px]">กำลังใช้</Badge>
+                                        )}
+                                        {disabled && (
+                                          <Badge variant="secondary" className="text-[10px]">
+                                            ปิดใช้งาน
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    )}
+                                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                                      <span>Token: {tokenStateLabel(conn.token_state)}</span>
+                                      <span>Last sync: {conn.last_sync_at ? fmtDateTime(conn.last_sync_at) : '—'}</span>
+                                      {conn.last_sync_error && (
+                                        <span className="text-destructive" title={conn.last_sync_error}>
+                                          sync error
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center justify-end gap-1">
+                                    {editing ? (
+                                      <>
+                                        <Button type="button" size="sm" variant="outline" className="h-8 px-2" onClick={() => saveConnectionLabel(conn)} disabled={apiBusy}>
+                                          <Save className="h-3.5 w-3.5" />
+                                          บันทึก
+                                        </Button>
+                                        <Button type="button" size="sm" variant="ghost" className="h-8 px-2" onClick={() => setEditingConnectionID('')} disabled={apiBusy}>
+                                          <X className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Button type="button" size="sm" variant="ghost" className="h-8 px-2" onClick={() => startEditConnection(conn)} disabled={apiBusy}>
+                                          <Pencil className="h-3.5 w-3.5" />
+                                          ชื่อ
+                                        </Button>
+                                        <Button type="button" size="sm" variant={disabled ? 'outline' : 'ghost'} className="h-8 px-2" onClick={() => toggleConnectionDisabled(conn)} disabled={apiBusy}>
+                                          <Power className="h-3.5 w-3.5" />
+                                          {disabled ? 'เปิดใช้' : 'ปิดใช้'}
+                                        </Button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3 xl:grid-cols-6">
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="font-medium text-foreground">Partner</p>
+                          <p className="mt-1 font-mono">{apiStatus.partner_id || 'ยังไม่ได้ตั้งค่า'}</p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="font-medium text-foreground">Selected shop</p>
+                          <p className="mt-1 truncate font-mono" title={selectedShopHint}>{selectedConnection?.shop_id || '—'}</p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="font-medium text-foreground">Base URL</p>
+                          <p className="mt-1 truncate font-mono" title={apiStatus.base_url || '—'}>
+                            {apiStatus.base_url || '—'}
+                          </p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="font-medium text-foreground">Redirect</p>
+                          <p className="mt-1 truncate font-mono" title={apiStatus.redirect_url || '—'}>
+                            {apiStatus.redirect_url || '—'}
+                          </p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="font-medium text-foreground">Token</p>
+                          <p className="mt-1">{tokenStateLabel(apiStatus.token_state)}</p>
+                        </div>
+                        <div className="rounded-md border border-border bg-background p-3">
+                          <p className="font-medium text-foreground">Last sync</p>
+                          <p className="mt-1">
+                            {apiStatus.last_sync_at ? fmtDateTime(apiStatus.last_sync_at) : '—'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                </>
+              ) : (
+                <Alert>
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>{apiLoadError ? 'ยังโหลดสถานะ Shopee API ไม่ได้' : 'กำลังตรวจสถานะ Shopee API'}</AlertTitle>
+                  <AlertDescription>
+                    {apiLoadError || 'กำลังโหลดสถานะร้านและการเชื่อมต่อ ระหว่างนี้ยังใช้ Excel สำรองได้'}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+
+          <details className="group rounded-lg border border-border bg-card">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-foreground">
+              <span className="flex items-center gap-2">
+                <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
+                นำเข้าจากไฟล์ Excel กรณี API ใช้งานไม่ได้
+              </span>
+              <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="border-t border-border p-4">
+              <div
+                className={cn(
+                  'flex min-h-[112px] flex-col items-center justify-center rounded-md border border-dashed border-border bg-muted/20 p-4 text-center',
+                  step === 'uploading' && !apiBusy && 'opacity-60',
+                )}
+              >
+                {step === 'uploading' && !apiBusy ? (
+                  <p className="text-sm text-muted-foreground">กำลังวิเคราะห์ไฟล์…</p>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium text-foreground">ไฟล์ Excel (.xlsx) จาก Shopee Seller Center</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">ใช้เมื่อ API มีปัญหา หรือยังต้องนำเข้าจากไฟล์เดิม</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() => fileRef.current?.click()}
+                      disabled={!channelReady}
+                      title={!configReady ? 'กำลังเตรียมหน้า import' : !channelReady ? 'ยังไม่ได้ตั้งค่า shopee/sale ในช่องทางรับข้อมูล' : undefined}
+                    >
+                      {configLoading ? 'กำลังโหลด config…' : 'เลือกไฟล์ Shopee'}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          </details>
+
+          {recentRuns.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <Clock3 className="h-4 w-4 text-muted-foreground" />
+                  ประวัติการนำเข้าล่าสุด
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-2 pt-0 md:grid-cols-2">
+                {recentRuns.map((run) => (
+                  <div
+                    key={run.id}
+                    className="grid gap-2 rounded-md border border-border px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-foreground">
+                        {run.filename || 'Shopee Import'}
+                      </div>
+                      <div className="mt-0.5 text-muted-foreground">
+                        {fmtDateTime(run.created_at)}
+                        {run.period_start && run.period_end
+                          ? ` · ${run.period_start} ถึง ${run.period_end}`
+                          : ''}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge variant={run.status === 'confirmed' ? 'default' : 'secondary'}>
+                        {run.status === 'confirmed' ? 'สร้างแล้ว' : 'Preview'}
+                      </Badge>
+                      <Badge variant="outline">ใหม่ {run.new_orders}</Badge>
+                      <Badge variant="outline">ซ้ำ {run.duplicate_orders}</Badge>
+                      <Badge variant="outline">ข้าม {run.skipped_orders}</Badge>
+                    </div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           )}
-
-          <div className="space-y-4">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <FileSpreadsheet className="h-4 w-4 text-primary" />
-                  Excel fallback
-                  <Badge variant="outline">ใช้ได้ตอนนี้</Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div
-                  className={cn(
-                    'flex min-h-[180px] flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/20 p-6 text-center',
-                    step === 'uploading' && !apiBusy && 'opacity-60',
-                  )}
-                >
-                  {step === 'uploading' && !apiBusy ? (
-                    <p className="text-sm text-muted-foreground">กำลังวิเคราะห์ไฟล์…</p>
-                  ) : (
-                    <>
-                      <FileSpreadsheet className="mb-3 h-10 w-10 text-muted-foreground" />
-                      <p className="text-sm font-medium text-foreground">
-                        ไฟล์ Excel (.xlsx) จาก Shopee Seller Center
-                      </p>
-                      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                        ระบบจะ preview และข้าม Order ID ที่มีใน BillFlow แล้ว
-                      </p>
-                      <Button
-                        className="mt-4"
-                        onClick={() => fileRef.current?.click()}
-                        disabled={!channelReady}
-                        title={!configReady ? 'กำลังเตรียมหน้า import' : !channelReady ? 'ยังไม่ได้ตั้งค่า shopee/sale ในช่องทางรับข้อมูล' : undefined}
-                      >
-                        {configLoading ? 'กำลังโหลด config…' : 'เลือกไฟล์ Shopee'}
-                      </Button>
-                    </>
-                  )}
-                </div>
-                {configReady && !channelReady && (
-                  <Alert className="mt-3">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>ยังไม่ได้ตั้งค่า Shopee sale defaults</AlertTitle>
-                    <AlertDescription>
-                      ตั้งค่าช่องทาง Shopee สำหรับบิลขายก่อนนำเข้า เพื่อให้บิลรู้ว่าจะใช้ลูกค้า คลัง ชั้น และ VAT ใด
-                      <Button asChild variant="link" className="h-auto px-1 py-0 text-xs">
-                        <Link to="/settings/channels">ไปตั้งค่าตอนนี้</Link>
-                      </Button>
-                    </AlertDescription>
-                  </Alert>
-                )}
-              </CardContent>
-            </Card>
-
-            {recentRuns.length > 0 && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-sm">
-                    <Clock3 className="h-4 w-4 text-muted-foreground" />
-                    ประวัติการนำเข้าล่าสุด
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 pt-0">
-                  {recentRuns.map((run) => (
-                    <div
-                      key={run.id}
-                      className="grid gap-2 rounded-md border border-border px-3 py-2 text-xs"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium text-foreground">
-                          {run.filename || 'Shopee Import'}
-                        </div>
-                        <div className="mt-0.5 text-muted-foreground">
-                          {fmtDateTime(run.created_at)}
-                          {run.period_start && run.period_end
-                            ? ` · ${run.period_start} ถึง ${run.period_end}`
-                            : ''}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Badge variant={run.status === 'confirmed' ? 'default' : 'secondary'}>
-                          {run.status === 'confirmed' ? 'สร้างแล้ว' : 'Preview'}
-                        </Badge>
-                        <Badge variant="outline">ใหม่ {run.new_orders}</Badge>
-                        <Badge variant="outline">ซ้ำ {run.duplicate_orders}</Badge>
-                        <Badge variant="outline">ข้าม {run.skipped_orders}</Badge>
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
-          </div>
         </div>
       )}
 
@@ -1288,12 +1320,12 @@ export default function ShopeeImport() {
         <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             <SummaryCard
-              label="Orders ทั้งหมด"
+              label="ทั้งหมด"
               value={preview.total_orders}
               variant="primary"
             />
             <SummaryCard
-              label="Order ใหม่"
+              label="ใหม่"
               value={preview.preflight?.new_orders ?? preview.new_count}
               variant="success"
             />
@@ -1303,9 +1335,9 @@ export default function ShopeeImport() {
               variant="success"
             />
             <SummaryCard
-              label="ซ้ำ (ข้ามไป)"
-              value={preview.duplicate_count}
-              variant="muted"
+              label="มีปัญหาต้องตรวจ"
+              value={previewIssueCount}
+              variant={previewIssueCount > 0 ? 'danger' : 'muted'}
             />
           </div>
 
@@ -1371,9 +1403,9 @@ export default function ShopeeImport() {
             </Button>
             <Button
               size="sm"
-              disabled={selectedIDs.size === 0 || !!preview.more}
+              disabled={confirmDisabled}
               onClick={handleConfirm}
-              title={preview.more ? 'ลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า' : undefined}
+              title={confirmTitle}
             >
               {destination.action} {selectedIDs.size} รายการ
             </Button>
@@ -1385,7 +1417,7 @@ export default function ShopeeImport() {
                 setPreview(null)
               }}
             >
-              เลือกไฟล์ใหม่
+              {resetPreviewLabel}
             </Button>
           </div>
 
@@ -1410,7 +1442,7 @@ export default function ShopeeImport() {
                   <TableHead>สินค้า</TableHead>
                   <TableHead className="text-right">Qty รวม</TableHead>
                   <TableHead className="text-right">ยอดชำระ</TableHead>
-                  <TableHead>Preflight</TableHead>
+                  <TableHead>ตรวจเบื้องต้น</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1675,7 +1707,7 @@ export default function ShopeeImport() {
                 setResults(null)
               }}
             >
-              นำเข้าไฟล์ใหม่
+              {resetDoneLabel}
             </Button>
           </div>
 

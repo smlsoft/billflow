@@ -37,7 +37,7 @@ http_check() {
   body="$(printf '%s' "$body" | sed '$d')"
   [ "$status" = "200" ] || fail "$label: HTTP $status from $url"
   if [ -n "$expect" ]; then
-    printf '%s' "$body" | grep -Fq "$expect" || fail "$label: response missing '$expect'"
+    grep -Fq "$expect" <<<"$body" || fail "$label: response missing '$expect'"
   fi
   ok "$label"
 }
@@ -58,7 +58,7 @@ http_check_tenant() {
   body="$(printf '%s' "$body" | sed '$d')"
   [ "$status" = "200" ] || fail "$label: HTTP $status from $url"
   if [ -n "$expect" ]; then
-    printf '%s' "$body" | grep -Fq "$expect" || fail "$label: response missing '$expect'"
+    grep -Fq "$expect" <<<"$body" || fail "$label: response missing '$expect'"
   fi
   ok "$label"
 }

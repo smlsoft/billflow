@@ -7,8 +7,8 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"html"
 	"math"
 	"net/http"
 	"net/url"
@@ -267,6 +267,11 @@ func (h *ShopeeImportHandler) CreateAPIAuthURL(c *gin.Context) {
 		respondShopeeAPIError(c, http.StatusBadRequest, fmt.Errorf("redirect URL is required"), "PUBLIC_BASE_URL หรือ SHOPEE_OPEN_API_REDIRECT_URL ยังไม่พร้อม")
 		return
 	}
+	if err := h.expirePendingShopeeOAuthStates(c.Request.Context(), userID, status.Environment, redirectURL); err != nil {
+		h.logger.Warn("shopee_api: expire pending oauth states failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "เตรียม OAuth state ไม่ได้"})
+		return
+	}
 	stateHash := hashState(state)
 	_, err = h.billRepo.DB().ExecContext(
 		c.Request.Context(),
@@ -301,8 +306,8 @@ func (h *ShopeeImportHandler) APICallback(c *gin.Context) {
 	var createdState *shopeeOAuthState
 	var err error
 	if state == "" {
-		h.logger.Warn("shopee_api: oauth callback missing state; trying sole pending-state fallback", zap.Int64("shop_id", shopID))
-		createdState, err = h.consumeSolePendingShopeeOAuthState(c.Request.Context())
+		h.logger.Warn("shopee_api: oauth callback missing state; trying latest pending-state fallback", zap.Int64("shop_id", shopID))
+		createdState, err = h.consumeLatestPendingShopeeOAuthState(c.Request.Context())
 	} else {
 		createdState, err = h.consumeShopeeOAuthState(c.Request.Context(), state)
 	}
@@ -310,7 +315,7 @@ func (h *ShopeeImportHandler) APICallback(c *gin.Context) {
 		h.logger.Warn("shopee_api: oauth state invalid", zap.Error(err))
 		message := "OAuth state หมดอายุหรือถูกใช้ไปแล้ว"
 		if state == "" {
-			message = "Shopee ไม่ส่ง state กลับมา และไม่พบ session เชื่อมต่อที่ปลอดภัย กรุณากดเชื่อมต่อ Shopee API ใหม่อีกครั้ง"
+			message = "Shopee ไม่ส่ง state กลับมา และไม่พบ session เชื่อมต่อที่ยังใช้ได้ กรุณากลับไป BillFlow แล้วกดเชื่อมต่อ Shopee API ใหม่อีกครั้ง"
 		}
 		h.renderShopeeCallback(c, http.StatusBadRequest, "เชื่อมต่อ Shopee ไม่สำเร็จ", message)
 		return
@@ -761,7 +766,21 @@ func (h *ShopeeImportHandler) consumeShopeeOAuthState(ctx context.Context, state
 	return &out, nil
 }
 
-func (h *ShopeeImportHandler) consumeSolePendingShopeeOAuthState(ctx context.Context) (*shopeeOAuthState, error) {
+func (h *ShopeeImportHandler) expirePendingShopeeOAuthStates(ctx context.Context, userID, env, redirectURL string) error {
+	_, err := h.billRepo.DB().ExecContext(ctx,
+		`UPDATE shopee_api_oauth_states
+		    SET consumed_at = NOW()
+		  WHERE user_id = $1::uuid
+		    AND environment = $2
+		    AND redirect_url = $3
+		    AND consumed_at IS NULL
+		    AND expires_at > NOW()`,
+		userID, defaultShopeeAPIEnv(env), redirectURL,
+	)
+	return err
+}
+
+func (h *ShopeeImportHandler) consumeLatestPendingShopeeOAuthState(ctx context.Context) (*shopeeOAuthState, error) {
 	env := defaultShopeeAPIEnv(h.cfg.ShopeeOpenAPIEnv)
 	redirectURL := h.shopeeAPIRedirectURL()
 	if redirectURL == "" {
@@ -770,20 +789,15 @@ func (h *ShopeeImportHandler) consumeSolePendingShopeeOAuthState(ctx context.Con
 
 	var out shopeeOAuthState
 	err := h.billRepo.DB().QueryRowContext(ctx,
-		`WITH candidates AS (
-		    SELECT state_hash, COUNT(*) OVER() AS candidate_count
+		`WITH picked AS (
+		    SELECT state_hash
 		      FROM shopee_api_oauth_states
 		     WHERE consumed_at IS NULL
 		       AND expires_at > NOW()
 		       AND environment = $1
 		       AND redirect_url = $2
 		     ORDER BY created_at DESC
-		     LIMIT 2
-		  ),
-		  picked AS (
-		    SELECT state_hash
-		      FROM candidates
-		     WHERE candidate_count = 1
+		     LIMIT 1
 		  )
 		  UPDATE shopee_api_oauth_states AS s
 		     SET consumed_at = NOW()
@@ -1441,16 +1455,58 @@ func defaultShopeeAPIEnv(v string) string {
 }
 
 func (h *ShopeeImportHandler) renderShopeeCallback(c *gin.Context, status int, title, message string) {
-	body, _ := json.Marshal(message)
+	backURL := "/import/shopee"
+	if base := strings.TrimRight(strings.TrimSpace(h.cfg.PublicBaseURL), "/"); base != "" {
+		backURL = base + "/import/shopee"
+	}
+	statusLabel := "ยังไม่สำเร็จ"
+	statusDetail := "ร้าน Shopee ยังไม่ได้ถูกเชื่อมต่อกับ BillFlow"
+	tone := "#dc2626"
+	bg := "#fef2f2"
+	border := "#fecaca"
+	if status >= 200 && status < 300 {
+		statusLabel = "สำเร็จ"
+		statusDetail = "เชื่อมร้าน Shopee กับ BillFlow เรียบร้อยแล้ว"
+		tone = "#047857"
+		bg = "#ecfdf5"
+		border = "#a7f3d0"
+	}
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(status, `<!doctype html>
 <html lang="th">
-<head><meta charset="utf-8"><title>BillFlow Shopee</title></head>
-<body style="font-family: system-ui, sans-serif; padding: 32px; line-height: 1.5">
-<h1>%s</h1>
-<p id="msg"></p>
-<p>คุณสามารถปิดหน้านี้ แล้วกลับไปที่ BillFlow ได้</p>
-<script>document.getElementById('msg').textContent = %s;</script>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BillFlow Shopee</title>
+</head>
+<body style="margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;color:#0f172a;line-height:1.5">
+  <main style="min-height:100vh;display:grid;place-items:center;padding:24px">
+    <section style="width:min(560px,100%%);border:1px solid %s;border-radius:14px;background:#fff;box-shadow:0 18px 48px rgba(15,23,42,.12);overflow:hidden">
+      <div style="background:%s;border-bottom:1px solid %s;padding:18px 22px">
+        <p style="margin:0 0 6px;color:%s;font-weight:700;font-size:13px">สถานะ: %s</p>
+        <h1 style="margin:0;font-size:24px;line-height:1.25">%s</h1>
+      </div>
+      <div style="padding:22px">
+        <p style="margin:0 0 10px;font-size:16px">%s</p>
+        <p style="margin:0 0 18px;color:#64748b">%s</p>
+        <div style="display:flex;flex-wrap:wrap;gap:10px">
+          <a href="%s" style="display:inline-flex;align-items:center;justify-content:center;border-radius:10px;background:#0f7584;color:#fff;text-decoration:none;padding:10px 14px;font-weight:700">กลับไปหน้า Shopee ใน BillFlow</a>
+          <button onclick="window.close()" style="border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;padding:10px 14px;font-weight:700;cursor:pointer">ปิดหน้าต่างนี้</button>
+        </div>
+        <p style="margin:16px 0 0;color:#94a3b8;font-size:12px">ถ้าหน้านี้ไม่ปิดเอง ให้กลับไปที่ BillFlow แล้วกดรีเฟรชสถานะ Shopee API</p>
+      </div>
+    </section>
+  </main>
 </body>
-</html>`, title, string(body))
+</html>`,
+		border,
+		bg,
+		border,
+		tone,
+		html.EscapeString(statusLabel),
+		html.EscapeString(title),
+		html.EscapeString(message),
+		html.EscapeString(statusDetail),
+		html.EscapeString(backURL),
+	)
 }

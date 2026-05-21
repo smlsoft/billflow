@@ -194,7 +194,7 @@ func TestShopeeAPIConnectionDisplayLabelPrefersShopNameOverDefaultLabel(t *testi
 	}
 }
 
-func TestConsumeSolePendingShopeeOAuthStateConsumesOnlyUnambiguousState(t *testing.T) {
+func TestConsumeLatestPendingShopeeOAuthStateConsumesNewestState(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -211,14 +211,14 @@ func TestConsumeSolePendingShopeeOAuthStateConsumesOnlyUnambiguousState(t *testi
 		logger: zap.NewNop(),
 	}
 
-	mock.ExpectQuery("WITH candidates AS").
+	mock.ExpectQuery("WITH picked AS").
 		WithArgs("live", redirectURL).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "environment", "redirect_url"}).
 			AddRow("8bdb5d26-86fc-4a58-a6a9-0376a48180a1", "live", redirectURL))
 
-	got, err := handler.consumeSolePendingShopeeOAuthState(context.Background())
+	got, err := handler.consumeLatestPendingShopeeOAuthState(context.Background())
 	if err != nil {
-		t.Fatalf("consumeSolePendingShopeeOAuthState: %v", err)
+		t.Fatalf("consumeLatestPendingShopeeOAuthState: %v", err)
 	}
 	if got.UserID != "8bdb5d26-86fc-4a58-a6a9-0376a48180a1" || got.Environment != "live" || got.RedirectURL != redirectURL {
 		t.Fatalf("state = %+v", got)
@@ -228,7 +228,7 @@ func TestConsumeSolePendingShopeeOAuthStateConsumesOnlyUnambiguousState(t *testi
 	}
 }
 
-func TestConsumeSolePendingShopeeOAuthStateRejectsMissingOrAmbiguousState(t *testing.T) {
+func TestConsumeLatestPendingShopeeOAuthStateRejectsMissingState(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -245,12 +245,12 @@ func TestConsumeSolePendingShopeeOAuthStateRejectsMissingOrAmbiguousState(t *tes
 		logger: zap.NewNop(),
 	}
 
-	mock.ExpectQuery("WITH candidates AS").
+	mock.ExpectQuery("WITH picked AS").
 		WithArgs("live", redirectURL).
 		WillReturnError(sql.ErrNoRows)
 
-	if _, err := handler.consumeSolePendingShopeeOAuthState(context.Background()); err == nil {
-		t.Fatal("expected missing/ambiguous pending state error")
+	if _, err := handler.consumeLatestPendingShopeeOAuthState(context.Background()); err == nil {
+		t.Fatal("expected missing pending state error")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
