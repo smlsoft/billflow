@@ -490,7 +490,7 @@ export default function ShopeeImport() {
   // confusing "config missing" error.
   const [configLoading, setConfigLoading] = useState(true)
   const configReady = !configLoading
-  const channelReady = configReady && Boolean(config?.cust_code?.trim())
+  const smlCustomerReady = configReady && Boolean(config?.cust_code?.trim())
   const destination = shopeeDestination(config)
 
   const fallbackConfig: ShopeeConfig = {
@@ -835,11 +835,11 @@ export default function ShopeeImport() {
   const apiCanFetch = (apiStatus?.can_fetch ?? false) && Boolean(selectedConnection?.can_fetch)
   const apiConnectDisabled = apiBusy || !apiCanConnect
   const apiFetchDisabled = apiBusy || !apiCanFetch || !!apiDateError || needsShopSelection
-  const confirmDisabled = selectedIDs.size === 0 || !!preview?.more || !channelReady
-  const confirmTitle = !channelReady
-    ? 'ยังไม่ได้ตั้งค่า shopee/sale ในช่องทางรับข้อมูล'
-    : preview?.more
-      ? 'ลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า'
+  const confirmDisabled = selectedIDs.size === 0 || !!preview?.more
+  const confirmTitle = preview?.more
+    ? 'ลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า'
+    : selectedIDs.size === 0
+      ? 'เลือกรายการที่ต้องการสร้างเอกสาร'
       : undefined
   const apiConnectLabel = apiWaitingForLive
     ? 'รอ Shopee approve'
@@ -1060,12 +1060,12 @@ export default function ShopeeImport() {
                       {apiLastSyncError && <p className="text-destructive">{apiLastSyncError}</p>}
                     </div>
                   )}
-                  {configReady && !channelReady && (
+                  {configReady && !smlCustomerReady && (
                     <Alert>
                       <AlertTriangle className="h-4 w-4" />
-                      <AlertTitle>ยังไม่ได้ตั้งค่าช่องทาง Shopee สำหรับบิลขาย</AlertTitle>
+                      <AlertTitle>ยังไม่ได้ตั้งค่าลูกค้า Shopee สำหรับส่ง SML</AlertTitle>
                       <AlertDescription>
-                        ตั้งค่าลูกค้า คลัง ชั้น และ VAT ก่อนยืนยันนำเข้า
+                        ยังสร้างเอกสารไว้ตรวจใน BillFlow ได้ แต่ก่อนกดส่งเข้า SML ต้องตั้งค่าลูกค้า คลัง ชั้น และ VAT ให้ครบ
                         <Button asChild variant="link" className="h-auto px-1 py-0 text-xs">
                           <Link to="/settings/channels">ไปตั้งค่าตอนนี้</Link>
                         </Button>
@@ -1270,8 +1270,8 @@ export default function ShopeeImport() {
                       size="sm"
                       className="mt-3"
                       onClick={() => fileRef.current?.click()}
-                      disabled={!channelReady}
-                      title={!configReady ? 'กำลังเตรียมหน้า import' : !channelReady ? 'ยังไม่ได้ตั้งค่า shopee/sale ในช่องทางรับข้อมูล' : undefined}
+                      disabled={!configReady}
+                      title={!configReady ? 'กำลังเตรียมหน้า import' : undefined}
                     >
                       {configLoading ? 'กำลังโหลด config…' : 'เลือกไฟล์ Shopee'}
                     </Button>
@@ -1363,6 +1363,20 @@ export default function ShopeeImport() {
                 {preview.orders.find((o) => o.shopee_shop_label)?.shopee_shop_label || selectedConnection?.label || 'Shopee shop'}
                 {' · '}
                 {preview.orders.find((o) => o.shopee_shop_id)?.shopee_shop_id || selectedConnection?.shop_id}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {configReady && !smlCustomerReady && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>สร้างเอกสารเพื่อตรวจได้ แต่ยังส่ง SML ไม่ได้</AlertTitle>
+              <AlertDescription>
+                ยังไม่ได้ตั้งค่าลูกค้า Shopee สำหรับปลายทาง SML ระบบจะสร้างเอกสารใน BillFlow ให้ตรวจสินค้าและ SKU ก่อน
+                แล้วค่อยตั้งค่าลูกค้าในเมนูช่องทางรับข้อมูลก่อนกดส่ง SML
+                <Button asChild variant="link" className="h-auto px-1 py-0 text-xs">
+                  <Link to="/settings/channels">ไปตั้งค่าตอนนี้</Link>
+                </Button>
               </AlertDescription>
             </Alert>
           )}
