@@ -954,11 +954,19 @@ func (h *ShopeeImportHandler) fetchShopeeShopName(ctx context.Context, accessTok
 	lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	info, err := h.shopeeAPIClient().GetShopInfo(lookupCtx, accessToken, shopID)
-	if err != nil {
+	if err == nil {
+		if shopName := strings.TrimSpace(info.Response.ShopName); shopName != "" {
+			return shopName
+		}
+	} else {
 		h.logger.Warn("shopee_api: get shop info failed", zap.Int64("shop_id", shopID), zap.Error(err))
+	}
+	profile, err := h.shopeeAPIClient().GetShopProfile(lookupCtx, accessToken, shopID)
+	if err != nil {
+		h.logger.Warn("shopee_api: get shop profile failed", zap.Int64("shop_id", shopID), zap.Error(err))
 		return ""
 	}
-	return strings.TrimSpace(info.Response.ShopName)
+	return strings.TrimSpace(profile.Response.ShopName)
 }
 
 func (h *ShopeeImportHandler) backfillMissingShopeeShopNames(ctx context.Context, conns []ShopeeAPIConnection) {

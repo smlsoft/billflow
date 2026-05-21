@@ -21,6 +21,7 @@ const (
 	PathTokenGet          = "/api/v2/auth/token/get"
 	PathAccessTokenGet    = "/api/v2/auth/access_token/get"
 	PathShopInfo          = "/api/v2/shop/get_shop_info"
+	PathShopProfile       = "/api/v2/shop/get_profile"
 	PathOrderList         = "/api/v2/order/get_order_list"
 	PathOrderDetail       = "/api/v2/order/get_order_detail"
 	DefaultSandboxBaseURL = "https://openplatform.sandbox.test-stable.shopee.sg"
@@ -148,6 +149,17 @@ type ShopInfoResponse struct {
 	} `json:"response"`
 }
 
+type ShopProfileResponse struct {
+	Error     string `json:"error"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+	Response  struct {
+		ShopName    string `json:"shop_name"`
+		Description string `json:"description"`
+		ShopLogo    string `json:"shop_logo"`
+	} `json:"response"`
+}
+
 func (c *Client) GetShopInfo(ctx context.Context, accessToken string, shopID int64) (*ShopInfoResponse, error) {
 	var out ShopInfoResponse
 	if err := c.getShop(ctx, PathShopInfo, accessToken, shopID, url.Values{}, &out); err != nil {
@@ -155,6 +167,17 @@ func (c *Client) GetShopInfo(ctx context.Context, accessToken string, shopID int
 	}
 	if out.Error != "" {
 		return nil, fmt.Errorf("shopee get_shop_info: %s %s", out.Error, out.Message)
+	}
+	return &out, nil
+}
+
+func (c *Client) GetShopProfile(ctx context.Context, accessToken string, shopID int64) (*ShopProfileResponse, error) {
+	var out ShopProfileResponse
+	if err := c.getShop(ctx, PathShopProfile, accessToken, shopID, url.Values{}, &out); err != nil {
+		return nil, err
+	}
+	if out.Error != "" {
+		return nil, fmt.Errorf("shopee get_profile: %s %s", out.Error, out.Message)
 	}
 	return &out, nil
 }

@@ -144,6 +144,40 @@ func TestGetShopInfoUsesShopSignatureAndDecodesName(t *testing.T) {
 	}
 }
 
+func TestGetShopProfileUsesShopSignatureAndDecodesName(t *testing.T) {
+	var gotPath string
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"response": map[string]interface{}{
+				"shop_name":   "Henna.milkford",
+				"description": "hello",
+				"shop_logo":   "https://example.com/logo.jpg",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := New(Config{BaseURL: server.URL, PartnerID: 1233790, PartnerKey: "secret"})
+	out, err := client.GetShopProfile(t.Context(), "access-token", 987654)
+	if err != nil {
+		t.Fatalf("GetShopProfile() error = %v", err)
+	}
+	if gotPath != PathShopProfile {
+		t.Fatalf("path = %q, want %q", gotPath, PathShopProfile)
+	}
+	base := "1233790" + PathShopProfile + gotQuery.Get("timestamp") + "access-token" + "987654"
+	if gotQuery.Get("sign") != testShopeeSign("secret", base) {
+		t.Fatalf("sign = %q", gotQuery.Get("sign"))
+	}
+	if out.Response.ShopName != "Henna.milkford" {
+		t.Fatalf("shop_name = %q", out.Response.ShopName)
+	}
+}
+
 func TestGetOrderListReturnsShopeeBusinessError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
