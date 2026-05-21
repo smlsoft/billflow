@@ -1,16 +1,17 @@
 # Shopee Open API Live Cutover
 
-> Updated: 2026-05-20
-> Goal: make BillFlow ready to connect a real Shopee shop immediately after Shopee approves Go-Live.
+> Updated: 2026-05-21
+> Goal: operate BillFlow Shopee Open API in live mode while keeping Excel/email import as rollback.
 
 ## Current State
 
 - App ID: `231867`
-- Current Shopee status: `Application to go live is under review`
+- Current Shopee status: `Online`
 - Current server public URL: `https://animal-galvanize-tameness.ngrok-free.dev`
-- BillFlow has Shopee Open API code, OAuth callback, token tables, preview-only import, readiness status, and user-facing error UX ready to deploy.
-- Sandbox test account creation returned `Create failed`, so sandbox OAuth is blocked by Shopee console state.
-- Until Shopee approves Go-Live, the Open API card intentionally blocks live connection/fetch and keeps Excel import as the fallback path.
+- BillFlow is cut over to live Shopee Open API on the main server with Partner ID `2034838`.
+- BillFlow has OAuth callback, token tables, preview-only import, readiness status, and user-facing error UX deployed.
+- Current state after shop authorization: `environment=live`, `connected=true`, `shop_id=1029622928`, `token_state=access_valid`, `can_fetch=true`.
+- Shopee live OAuth has been observed returning `code` and `shop_id` without `state`. BillFlow now allows a guarded fallback only when exactly one unconsumed, unexpired OAuth state exists for the current live environment and redirect URL.
 
 ## Readiness Gate
 
@@ -32,7 +33,7 @@ The UI derives two separate gates:
 - `can_connect`: admin can start Shopee OAuth.
 - `can_fetch`: admin can fetch order preview from Shopee API.
 
-This keeps the system safe during review: configuration can be checked now, but real API fetch waits for Shopee approval and shop authorization.
+This keeps the system safe after cutover: admins can connect a real shop, but API fetch stays blocked until a shop authorization token exists.
 
 ## Error UX Contract
 
@@ -50,21 +51,24 @@ Known mapped cases include token expiry, rate limit, duplicate/in-flight request
 
 ## Preconditions Before Live Cutover
 
-1. Shopee Go-Live is approved.
+1. Shopee Go-Live is approved. Completed 2026-05-21.
 2. Console shows Live Partner ID and Live Partner Key.
 3. Shopee Console `Live Redirect URL Domain` matches the current public BillFlow URL.
 4. If ngrok/cloudflare quick tunnel changed URL, update both Shopee Console and BillFlow `.env` before connecting.
 5. Keep Shopee Excel/email import enabled as rollback path.
 
-## Already Verified With Mock Tests
+## Verified
 
 - Backend readiness blocks misconfigured live base URL.
 - Backend allows `refresh_required` token state when refresh token is still valid.
 - Shopee API error mapper returns friendly rate-limit messaging.
+- OAuth callback accepts normal `state` flow and has a tested no-state fallback that rejects missing/ambiguous sessions.
 - Shopee client signs shop API requests correctly.
 - Shopee client handles business errors and malformed token response.
 - Shopee client rejects order detail requests over Shopee's 50-order limit before making HTTP calls.
-- Frontend build and browser smoke test confirm the readiness checklist renders and blocks live actions while review is pending.
+- Frontend build and browser smoke test confirm the readiness checklist renders live mode and keeps fetch blocked until shop authorization exists.
+- Server live cutover health check passed after writing a timestamped `.env` backup.
+- Browser OAuth retry after deploy succeeded even though Shopee omitted `state`; API preview smoke for `2026-05-20` to `2026-05-21` returned HTTP 200 with zero orders.
 
 ## Server Cutover
 
@@ -86,6 +90,8 @@ SHOPEE_OPEN_API_PARTNER_ID=<live partner id>
 SHOPEE_OPEN_API_PARTNER_KEY=<live partner key>
 SHOPEE_OPEN_API_REDIRECT_URL=<PUBLIC_BASE_URL>/api/shopee-api/callback
 ```
+
+Latest live cutover backup on main: `/home/bosscatdog/billflow/.env.bak.20260521-101021`.
 
 ## Validation
 

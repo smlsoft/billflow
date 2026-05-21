@@ -162,14 +162,26 @@ func (h *ShopeeImportHandler) APICallback(c *gin.Context) {
 	code := strings.TrimSpace(c.Query("code"))
 	state := strings.TrimSpace(c.Query("state"))
 	shopID, _ := strconv.ParseInt(strings.TrimSpace(c.Query("shop_id")), 10, 64)
-	if code == "" || state == "" || shopID <= 0 {
-		h.renderShopeeCallback(c, http.StatusBadRequest, "เชื่อมต่อ Shopee ไม่สำเร็จ", "Shopee callback ไม่มี code/state/shop_id ครบ")
+	if code == "" || shopID <= 0 {
+		h.renderShopeeCallback(c, http.StatusBadRequest, "เชื่อมต่อ Shopee ไม่สำเร็จ", "Shopee callback ไม่มี code/shop_id ครบ")
 		return
 	}
-	createdState, err := h.consumeShopeeOAuthState(c.Request.Context(), state)
+
+	var createdState *shopeeOAuthState
+	var err error
+	if state == "" {
+		h.logger.Warn("shopee_api: oauth callback missing state; trying sole pending-state fallback", zap.Int64("shop_id", shopID))
+		createdState, err = h.consumeSolePendingShopeeOAuthState(c.Request.Context())
+	} else {
+		createdState, err = h.consumeShopeeOAuthState(c.Request.Context(), state)
+	}
 	if err != nil {
 		h.logger.Warn("shopee_api: oauth state invalid", zap.Error(err))
-		h.renderShopeeCallback(c, http.StatusBadRequest, "เชื่อมต่อ Shopee ไม่สำเร็จ", "OAuth state หมดอายุหรือถูกใช้ไปแล้ว")
+		message := "OAuth state หมดอายุหรือถูกใช้ไปแล้ว"
+		if state == "" {
+			message = "Shopee ไม่ส่ง state กลับมา และไม่พบ session เชื่อมต่อที่ปลอดภัย กรุณากดเชื่อมต่อ Shopee API ใหม่อีกครั้ง"
+		}
+		h.renderShopeeCallback(c, http.StatusBadRequest, "เชื่อมต่อ Shopee ไม่สำเร็จ", message)
 		return
 	}
 	tok, err := h.shopeeAPIClient().GetToken(c.Request.Context(), code, shopID)
@@ -530,6 +542,44 @@ func (h *ShopeeImportHandler) consumeShopeeOAuthState(ctx context.Context, state
 		    AND expires_at > NOW()
 		  RETURNING user_id::text, environment, redirect_url`,
 		hashState(state),
+	).Scan(&out.UserID, &out.Environment, &out.RedirectURL)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (h *ShopeeImportHandler) consumeSolePendingShopeeOAuthState(ctx context.Context) (*shopeeOAuthState, error) {
+	env := defaultShopeeAPIEnv(h.cfg.ShopeeOpenAPIEnv)
+	redirectURL := h.shopeeAPIRedirectURL()
+	if redirectURL == "" {
+		return nil, fmt.Errorf("redirect URL is required")
+	}
+
+	var out shopeeOAuthState
+	err := h.billRepo.DB().QueryRowContext(ctx,
+		`WITH candidates AS (
+		    SELECT state_hash, COUNT(*) OVER() AS candidate_count
+		      FROM shopee_api_oauth_states
+		     WHERE consumed_at IS NULL
+		       AND expires_at > NOW()
+		       AND environment = $1
+		       AND redirect_url = $2
+		     ORDER BY created_at DESC
+		     LIMIT 2
+		  ),
+		  picked AS (
+		    SELECT state_hash
+		      FROM candidates
+		     WHERE candidate_count = 1
+		  )
+		  UPDATE shopee_api_oauth_states AS s
+		     SET consumed_at = NOW()
+		    FROM picked
+		   WHERE s.state_hash = picked.state_hash
+		     AND s.consumed_at IS NULL
+		   RETURNING s.user_id::text, s.environment, s.redirect_url`,
+		env, redirectURL,
 	).Scan(&out.UserID, &out.Environment, &out.RedirectURL)
 	if err != nil {
 		return nil, err

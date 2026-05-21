@@ -1,9 +1,17 @@
 package handlers
 
 import (
+	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"go.uber.org/zap"
+
+	"billflow/internal/config"
+	"billflow/internal/repository"
 )
 
 func TestParseShopeeAPIRangeRejectsInvalidDate(t *testing.T) {
@@ -80,5 +88,68 @@ func TestShopeeAPIErrorMessageMapsRateLimit(t *testing.T) {
 	got := shopeeAPIErrorMessage(nil, "shopee http 429: too many requests")
 	if got.Code != "rate_limited" || !got.Retryable {
 		t.Fatalf("error view = %+v", got)
+	}
+}
+
+func TestConsumeSolePendingShopeeOAuthStateConsumesOnlyUnambiguousState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	redirectURL := "https://example.com/api/shopee-api/callback"
+	handler := &ShopeeImportHandler{
+		billRepo: repository.NewBillRepo(db),
+		cfg: &config.Config{
+			ShopeeOpenAPIEnv:      "live",
+			ShopeeOpenAPIRedirect: redirectURL,
+		},
+		logger: zap.NewNop(),
+	}
+
+	mock.ExpectQuery("WITH candidates AS").
+		WithArgs("live", redirectURL).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "environment", "redirect_url"}).
+			AddRow("8bdb5d26-86fc-4a58-a6a9-0376a48180a1", "live", redirectURL))
+
+	got, err := handler.consumeSolePendingShopeeOAuthState(context.Background())
+	if err != nil {
+		t.Fatalf("consumeSolePendingShopeeOAuthState: %v", err)
+	}
+	if got.UserID != "8bdb5d26-86fc-4a58-a6a9-0376a48180a1" || got.Environment != "live" || got.RedirectURL != redirectURL {
+		t.Fatalf("state = %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestConsumeSolePendingShopeeOAuthStateRejectsMissingOrAmbiguousState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	redirectURL := "https://example.com/api/shopee-api/callback"
+	handler := &ShopeeImportHandler{
+		billRepo: repository.NewBillRepo(db),
+		cfg: &config.Config{
+			ShopeeOpenAPIEnv:      "live",
+			ShopeeOpenAPIRedirect: redirectURL,
+		},
+		logger: zap.NewNop(),
+	}
+
+	mock.ExpectQuery("WITH candidates AS").
+		WithArgs("live", redirectURL).
+		WillReturnError(sql.ErrNoRows)
+
+	if _, err := handler.consumeSolePendingShopeeOAuthState(context.Background()); err == nil {
+		t.Fatal("expected missing/ambiguous pending state error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
 	}
 }
