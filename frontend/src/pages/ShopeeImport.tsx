@@ -475,6 +475,7 @@ type Step = 'idle' | 'uploading' | 'preview' | 'confirming' | 'done'
 
 export default function ShopeeImport() {
   const fileRef = useRef<HTMLInputElement>(null)
+  const apiAuthPollRef = useRef<number | null>(null)
   const [step, setStep] = useState<Step>('idle')
   const [config, setConfig] = useState<ShopeeConfig | null>(null)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
@@ -571,6 +572,14 @@ export default function ShopeeImport() {
   }, [])
 
   useEffect(() => {
+    return () => {
+      if (apiAuthPollRef.current !== null) {
+        window.clearInterval(apiAuthPollRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (step !== 'confirming') {
       setConfirmElapsed(0)
       return
@@ -653,11 +662,41 @@ export default function ShopeeImport() {
 
   const handleConnectAPI = async () => {
     setError('')
+    if (apiAuthPollRef.current !== null) {
+      window.clearInterval(apiAuthPollRef.current)
+      apiAuthPollRef.current = null
+    }
+
+    const authWindow = window.open('', '_blank', 'popup=yes,width=1120,height=820')
+    if (!authWindow) {
+      setError('Browser บล็อกหน้าต่าง Shopee ให้เปิด pop-up สำหรับ BillFlow แล้วลองกดเชื่อมต่ออีกครั้ง')
+      return
+    }
+
+    authWindow.document.title = 'กำลังเปิด Shopee Open API'
+    authWindow.document.body.style.cssText =
+      'margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f8fafc;color:#0f172a;display:grid;place-items:center;min-height:100vh;'
+    authWindow.document.body.textContent = 'กำลังเปิดหน้า Shopee เพื่อเชื่อมต่อร้าน...'
+
     setAPIBusy(true)
     try {
       const res = await client.post<{ auth_url: string }>('/api/shopee-api/auth-url')
-      window.location.href = res.data.auth_url
+      authWindow.opener = null
+      authWindow.location.href = res.data.auth_url
+      let pollCount = 0
+      apiAuthPollRef.current = window.setInterval(() => {
+        pollCount += 1
+        void Promise.all([refreshAPIStatus(), refreshAPIConnections()])
+        if (authWindow.closed || pollCount >= 60) {
+          if (apiAuthPollRef.current !== null) {
+            window.clearInterval(apiAuthPollRef.current)
+            apiAuthPollRef.current = null
+          }
+          void Promise.all([refreshAPIStatus(), refreshAPIConnections()])
+        }
+      }, 2000)
     } catch (err: unknown) {
+      authWindow.close()
       setError(apiErrorMessage(err, 'สร้างลิงก์เชื่อมต่อ Shopee API ไม่ได้'))
     } finally {
       setAPIBusy(false)
