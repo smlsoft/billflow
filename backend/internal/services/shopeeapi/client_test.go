@@ -107,6 +107,43 @@ func TestGetOrderListUsesShopSignatureAndDecodesResponse(t *testing.T) {
 	}
 }
 
+func TestGetShopInfoUsesShopSignatureAndDecodesName(t *testing.T) {
+	var gotPath string
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"response": map[string]interface{}{
+				"shop_name": "semicolon.con",
+				"region":    "TH",
+				"status":    "NORMAL",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := New(Config{BaseURL: server.URL, PartnerID: 1233790, PartnerKey: "secret"})
+	out, err := client.GetShopInfo(t.Context(), "access-token", 987654)
+	if err != nil {
+		t.Fatalf("GetShopInfo() error = %v", err)
+	}
+	if gotPath != PathShopInfo {
+		t.Fatalf("path = %q, want %q", gotPath, PathShopInfo)
+	}
+	if gotQuery.Get("partner_id") != "1233790" || gotQuery.Get("access_token") != "access-token" || gotQuery.Get("shop_id") != "987654" {
+		t.Fatalf("missing auth query values: %v", gotQuery)
+	}
+	base := "1233790" + PathShopInfo + gotQuery.Get("timestamp") + "access-token" + "987654"
+	if gotQuery.Get("sign") != testShopeeSign("secret", base) {
+		t.Fatalf("sign = %q", gotQuery.Get("sign"))
+	}
+	if out.Response.ShopName != "semicolon.con" || out.Response.Region != "TH" || out.Response.Status != "NORMAL" {
+		t.Fatalf("decoded response = %+v", out.Response)
+	}
+}
+
 func TestGetOrderListReturnsShopeeBusinessError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

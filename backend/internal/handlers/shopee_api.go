@@ -321,7 +321,8 @@ func (h *ShopeeImportHandler) APICallback(c *gin.Context) {
 		accessExpires = time.Now().Add(4 * time.Hour)
 	}
 	refreshExpires := time.Now().Add(shopeeAPIRefreshTokenTTL)
-	if err := h.upsertShopeeAPIConnection(c.Request.Context(), shopID, tok.MerchantID, tok.AccessToken, tok.RefreshToken, accessExpires, refreshExpires, createdState.UserID, createdState.Environment); err != nil {
+	shopName := h.fetchShopeeShopName(c.Request.Context(), tok.AccessToken, shopID)
+	if err := h.upsertShopeeAPIConnection(c.Request.Context(), shopID, tok.MerchantID, shopName, tok.AccessToken, tok.RefreshToken, accessExpires, refreshExpires, createdState.UserID, createdState.Environment); err != nil {
 		h.logger.Warn("shopee_api: upsert connection failed", zap.Int64("shop_id", shopID), zap.Error(err))
 		h.renderShopeeCallback(c, http.StatusInternalServerError, "เชื่อมต่อ Shopee ไม่สำเร็จ", "บันทึก token ไม่สำเร็จ")
 		return
@@ -422,16 +423,27 @@ func (c *ShopeeAPIConnection) DisplayLabel() string {
 	if c == nil {
 		return ""
 	}
-	if strings.TrimSpace(c.Label) != "" {
+	if label := strings.TrimSpace(c.Label); label != "" && !isDefaultShopeeShopLabel(label, c.ShopID) {
 		return strings.TrimSpace(c.Label)
 	}
 	if strings.TrimSpace(c.ShopName) != "" {
 		return strings.TrimSpace(c.ShopName)
 	}
+	if strings.TrimSpace(c.Label) != "" {
+		return strings.TrimSpace(c.Label)
+	}
 	if c.ShopID > 0 {
-		return fmt.Sprintf("Shop %d", c.ShopID)
+		return defaultShopeeShopLabel(c.ShopID)
 	}
 	return "Shopee shop"
+}
+
+func defaultShopeeShopLabel(shopID int64) string {
+	return fmt.Sprintf("Shop %d", shopID)
+}
+
+func isDefaultShopeeShopLabel(label string, shopID int64) bool {
+	return strings.EqualFold(strings.TrimSpace(label), defaultShopeeShopLabel(shopID))
 }
 
 func shopeeAPIConnectionView(conn *ShopeeAPIConnection, now time.Time) ShopeeAPIConnectionView {
@@ -860,7 +872,11 @@ func (h *ShopeeImportHandler) listShopeeAPIConnections(ctx context.Context, incl
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	h.backfillMissingShopeeShopNames(ctx, out)
+	return out, nil
 }
 
 func (h *ShopeeImportHandler) patchShopeeAPIConnection(ctx context.Context, id, label string, labelSet bool, disabled bool, disabledSet bool) (*ShopeeAPIConnection, error) {
@@ -893,14 +909,26 @@ func (h *ShopeeImportHandler) patchShopeeAPIConnection(ctx context.Context, id, 
 	return &c, nil
 }
 
-func (h *ShopeeImportHandler) upsertShopeeAPIConnection(ctx context.Context, shopID, merchantID int64, accessToken, refreshToken string, accessExpires, refreshExpires time.Time, userID, env string) error {
+func (h *ShopeeImportHandler) upsertShopeeAPIConnection(ctx context.Context, shopID, merchantID int64, shopName, accessToken, refreshToken string, accessExpires, refreshExpires time.Time, userID, env string) error {
+	shopName = strings.TrimSpace(shopName)
+	defaultLabel := defaultShopeeShopLabel(shopID)
+	label := defaultLabel
+	if shopName != "" {
+		label = shopName
+	}
 	_, err := h.billRepo.DB().ExecContext(ctx,
 		`INSERT INTO shopee_api_connections
-		  (shop_id, merchant_id, label, access_token, refresh_token, access_expires_at, refresh_expires_at, environment, connected_by)
-		 VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7, $8, NULLIF($9, '')::uuid)
+		  (shop_id, merchant_id, shop_name, label, access_token, refresh_token, access_expires_at, refresh_expires_at, environment, connected_by)
+		 VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid)
 		 ON CONFLICT (shop_id) DO UPDATE
 		    SET merchant_id = COALESCE(EXCLUDED.merchant_id, shopee_api_connections.merchant_id),
-		        label = COALESCE(NULLIF(shopee_api_connections.label, ''), EXCLUDED.label),
+		        shop_name = COALESCE(NULLIF(EXCLUDED.shop_name, ''), shopee_api_connections.shop_name),
+		        label = CASE
+		          WHEN shopee_api_connections.label = ''
+		            OR shopee_api_connections.label = $11
+		          THEN COALESCE(NULLIF(EXCLUDED.shop_name, ''), EXCLUDED.label)
+		          ELSE shopee_api_connections.label
+		        END,
 		        access_token = EXCLUDED.access_token,
 		        refresh_token = EXCLUDED.refresh_token,
 		        access_expires_at = EXCLUDED.access_expires_at,
@@ -913,8 +941,71 @@ func (h *ShopeeImportHandler) upsertShopeeAPIConnection(ctx context.Context, sho
 		        last_sync_status = '',
 		        last_sync_error = '',
 		        last_error_code = ''`,
-		shopID, merchantID, fmt.Sprintf("Shop %d", shopID), accessToken, refreshToken, accessExpires, refreshExpires,
-		defaultShopeeAPIEnv(env), userID,
+		shopID, merchantID, shopName, label, accessToken, refreshToken, accessExpires, refreshExpires,
+		defaultShopeeAPIEnv(env), userID, defaultLabel,
+	)
+	return err
+}
+
+func (h *ShopeeImportHandler) fetchShopeeShopName(ctx context.Context, accessToken string, shopID int64) string {
+	if strings.TrimSpace(accessToken) == "" || shopID <= 0 {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	info, err := h.shopeeAPIClient().GetShopInfo(lookupCtx, accessToken, shopID)
+	if err != nil {
+		h.logger.Warn("shopee_api: get shop info failed", zap.Int64("shop_id", shopID), zap.Error(err))
+		return ""
+	}
+	return strings.TrimSpace(info.Response.ShopName)
+}
+
+func (h *ShopeeImportHandler) backfillMissingShopeeShopNames(ctx context.Context, conns []ShopeeAPIConnection) {
+	if len(conns) == 0 {
+		return
+	}
+	for i := range conns {
+		conn := &conns[i]
+		if conn.DisabledAt.Valid || conn.ShopID <= 0 || strings.TrimSpace(conn.AccessToken) == "" {
+			continue
+		}
+		if strings.TrimSpace(conn.ShopName) != "" && !isDefaultShopeeShopLabel(conn.Label, conn.ShopID) {
+			continue
+		}
+		if !time.Now().Before(conn.AccessExpiresAt.Add(-shopeeAPIAccessTokenSkew)) {
+			continue
+		}
+		shopName := h.fetchShopeeShopName(ctx, conn.AccessToken, conn.ShopID)
+		if shopName == "" {
+			continue
+		}
+		if err := h.updateShopeeAPIShopName(ctx, conn.ShopID, shopName); err != nil {
+			h.logger.Warn("shopee_api: update shop name failed", zap.Int64("shop_id", conn.ShopID), zap.Error(err))
+			continue
+		}
+		conn.ShopName = shopName
+		if isDefaultShopeeShopLabel(conn.Label, conn.ShopID) || strings.TrimSpace(conn.Label) == "" {
+			conn.Label = shopName
+		}
+	}
+}
+
+func (h *ShopeeImportHandler) updateShopeeAPIShopName(ctx context.Context, shopID int64, shopName string) error {
+	shopName = strings.TrimSpace(shopName)
+	if shopName == "" || shopID <= 0 {
+		return nil
+	}
+	_, err := h.billRepo.DB().ExecContext(ctx,
+		`UPDATE shopee_api_connections
+		    SET shop_name = $2,
+		        label = CASE
+		          WHEN label = '' OR label = $3 THEN $2
+		          ELSE label
+		        END,
+		        updated_at = NOW()
+		  WHERE shop_id = $1`,
+		shopID, shopName, defaultShopeeShopLabel(shopID),
 	)
 	return err
 }

@@ -91,6 +91,22 @@ func TestShopeeAPIErrorMessageMapsRateLimit(t *testing.T) {
 	}
 }
 
+func TestShopeeAPIConnectionDisplayLabelPrefersShopNameOverDefaultLabel(t *testing.T) {
+	conn := &ShopeeAPIConnection{
+		ShopID:   264993963,
+		ShopName: "ร้านใหม่",
+		Label:    "Shop 264993963",
+	}
+	if got := conn.DisplayLabel(); got != "ร้านใหม่" {
+		t.Fatalf("DisplayLabel() = %q", got)
+	}
+
+	conn.Label = "ชื่อที่ตั้งเอง"
+	if got := conn.DisplayLabel(); got != "ชื่อที่ตั้งเอง" {
+		t.Fatalf("custom DisplayLabel() = %q", got)
+	}
+}
+
 func TestConsumeSolePendingShopeeOAuthStateConsumesOnlyUnambiguousState(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
