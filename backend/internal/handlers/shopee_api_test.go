@@ -58,21 +58,32 @@ func TestValidateShopeeAPITimeFieldRejectsPayTime(t *testing.T) {
 	}
 }
 
-func TestShopeeAPIOrderStatusFiltersReadyGroup(t *testing.T) {
-	got, err := shopeeAPIOrderStatusFilters("ready_to_bill")
+func TestShopeeAPIOrderStatusPlanReadyGroupFiltersLocally(t *testing.T) {
+	got, err := shopeeAPIOrderStatusPlan("ready_to_bill")
 	if err != nil {
 		t.Fatalf("ready_to_bill error = %v", err)
 	}
-	want := strings.Join(shopeeAPIReadyToBillStatuses, ",")
-	if strings.Join(got, ",") != want {
-		t.Fatalf("ready statuses = %v, want %v", got, shopeeAPIReadyToBillStatuses)
+	for _, status := range shopeeAPIReadyToBillStatuses {
+		if !got.LocalStatuses[status] {
+			t.Fatalf("ready local statuses = %v, missing %s", got.LocalStatuses, status)
+		}
 	}
-	all, err := shopeeAPIOrderStatusFilters("all")
+	if len(got.RequestStatuses) != 0 {
+		t.Fatalf("ready request statuses = %v, want fetch-all + local filter", got.RequestStatuses)
+	}
+	all, err := shopeeAPIOrderStatusPlan("all")
 	if err != nil {
 		t.Fatalf("all error = %v", err)
 	}
-	if all != nil {
-		t.Fatalf("all statuses = %v, want nil", all)
+	if len(all.RequestStatuses) != 0 || len(all.LocalStatuses) != 0 {
+		t.Fatalf("all plan = %+v, want no request/local filter", all)
+	}
+	shipped, err := shopeeAPIOrderStatusPlan("SHIPPED")
+	if err != nil {
+		t.Fatalf("SHIPPED error = %v", err)
+	}
+	if strings.Join(shipped.RequestStatuses, ",") != "SHIPPED" || len(shipped.LocalStatuses) != 0 {
+		t.Fatalf("SHIPPED plan = %+v, want request filter only", shipped)
 	}
 }
 

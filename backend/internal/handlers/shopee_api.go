@@ -33,6 +33,12 @@ const (
 )
 
 var shopeeAPIReadyToBillStatuses = []string{"SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED"}
+var shopeeAPILocalOnlyStatusFilters = map[string]bool{
+	// Shopee live order detail returns TO_CONFIRM_RECEIVE, but get_order_list
+	// rejects it as an order_status filter. Fetch without status and filter
+	// locally from detail to avoid dropping ready-to-bill orders.
+	"TO_CONFIRM_RECEIVE": true,
+}
 
 type ShopeeAPIReadinessCheck struct {
 	Key    string `json:"key"`
@@ -366,12 +372,12 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	statusFilters, err := shopeeAPIOrderStatusFilters(req.OrderStatus)
+	statusPlan, err := shopeeAPIOrderStatusPlan(req.OrderStatus)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.Cursor) != "" && len(statusFilters) > 1 {
+	if strings.TrimSpace(req.Cursor) != "" && len(statusPlan.RequestStatuses) > 1 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "cursor ใช้ได้เฉพาะเมื่อเลือกสถานะเดียวหรือทุกสถานะ"})
 		return
 	}
@@ -389,7 +395,7 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 			PageSize:       pageSize,
 			Cursor:         req.Cursor,
 		},
-		statusFilters,
+		statusPlan.RequestStatuses,
 	)
 	if err != nil {
 		msg := shopeeAPIErrorMessage(err, "ดึงรายการ order จาก Shopee ไม่สำเร็จ").Message
@@ -404,7 +410,8 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		respondShopeeAPIError(c, http.StatusBadGateway, err, "ดึงรายละเอียด order จาก Shopee ไม่สำเร็จ")
 		return
 	}
-	orders, warnings := h.shopeeAPIOrdersToPreview(detail.Response.OrderList)
+	details := filterShopeeOrderDetailsByStatus(detail.Response.OrderList, statusPlan.LocalStatuses)
+	orders, warnings := h.shopeeAPIOrdersToPreview(details)
 	if more {
 		warnings = append([]string{"Shopee ยังมี order หน้าเพิ่มเติมในช่วงวันที่นี้ กรุณาลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า"}, warnings...)
 	}
@@ -1293,6 +1300,19 @@ func firstShopeePackageTracking(packages []shopeeapi.OrderPackage) string {
 	return ""
 }
 
+func filterShopeeOrderDetailsByStatus(details []shopeeapi.OrderDetail, allowed map[string]bool) []shopeeapi.OrderDetail {
+	if len(allowed) == 0 {
+		return details
+	}
+	out := make([]shopeeapi.OrderDetail, 0, len(details))
+	for _, d := range details {
+		if allowed[strings.ToUpper(strings.TrimSpace(d.OrderStatus))] {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func parseShopeeAPIRange(fromRaw, toRaw string) (time.Time, time.Time, error) {
 	now := time.Now()
 	to := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
@@ -1375,17 +1395,41 @@ func validateShopeeAPITimeField(v string) (string, error) {
 	}
 }
 
-func shopeeAPIOrderStatusFilters(v string) ([]string, error) {
+type shopeeAPIOrderStatusSelection struct {
+	RequestStatuses []string
+	LocalStatuses   map[string]bool
+}
+
+func shopeeAPIOrderStatusPlanForStatuses(statuses []string) shopeeAPIOrderStatusSelection {
+	allowed := map[string]bool{}
+	request := []string{}
+	for _, raw := range statuses {
+		status := strings.ToUpper(strings.TrimSpace(raw))
+		if status == "" {
+			continue
+		}
+		allowed[status] = true
+		if !shopeeAPILocalOnlyStatusFilters[status] {
+			request = append(request, status)
+		}
+	}
+	if len(request) == len(allowed) {
+		return shopeeAPIOrderStatusSelection{RequestStatuses: request}
+	}
+	return shopeeAPIOrderStatusSelection{LocalStatuses: allowed}
+}
+
+func shopeeAPIOrderStatusPlan(v string) (shopeeAPIOrderStatusSelection, error) {
 	status := strings.ToUpper(strings.TrimSpace(v))
 	switch status {
 	case "", "READY_TO_BILL":
-		return append([]string(nil), shopeeAPIReadyToBillStatuses...), nil
+		return shopeeAPIOrderStatusPlanForStatuses(shopeeAPIReadyToBillStatuses), nil
 	case "ALL":
-		return nil, nil
+		return shopeeAPIOrderStatusSelection{}, nil
 	case "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED", "READY_TO_SHIP", "PROCESSED":
-		return []string{status}, nil
+		return shopeeAPIOrderStatusPlanForStatuses([]string{status}), nil
 	default:
-		return nil, fmt.Errorf("order_status ไม่รองรับ: %s", strings.TrimSpace(v))
+		return shopeeAPIOrderStatusSelection{}, fmt.Errorf("order_status ไม่รองรับ: %s", strings.TrimSpace(v))
 	}
 }
 

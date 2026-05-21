@@ -88,6 +88,7 @@ Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-
 | `page_size` | default 50 และไม่เกิน 50 ตาม detail batch limit |
 
 เมื่อ Shopee ตอบ `more=true` หรือผลรวมหลาย status เกิน 50 รายการ UI จะเตือนและ block confirm เพื่อกัน import ตกหล่น ให้ลดช่วงวันที่หรือเลือกสถานะแยกก่อนนำเข้า.
+หมายเหตุ live API: Shopee `get_order_list` ไม่รับ `TO_CONFIRM_RECEIVE` เป็น filter โดยตรง แม้ order detail มีสถานะนี้จริง ดังนั้น BillFlow จะ fetch รายการกว้างแล้วกรองสถานะจาก order detail สำหรับกลุ่มพร้อมออกบิลและสถานะนี้.
 
 API preview mapping เพิ่มเติม:
 
