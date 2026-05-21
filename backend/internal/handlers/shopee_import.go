@@ -187,6 +187,9 @@ type ShopeeOrder struct {
 	PaymentChannel     string            `json:"payment_channel,omitempty"`
 	BuyerUsername      string            `json:"buyer_username,omitempty"`
 	TrackingNo         string            `json:"tracking_no,omitempty"`
+	PackageNumber      string            `json:"package_number,omitempty"`
+	ShippingCarrier    string            `json:"shipping_carrier,omitempty"`
+	COD                bool              `json:"cod,omitempty"`
 	Status             string            `json:"status"`
 	Items              []ShopeeExcelItem `json:"items"`
 	ItemCount          int               `json:"item_count"`
@@ -725,6 +728,9 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			"customer_name":      order.BuyerUsername,
 			"buyer_username":     order.BuyerUsername,
 			"tracking_no":        order.TrackingNo,
+			"package_number":     order.PackageNumber,
+			"shipping_carrier":   order.ShippingCarrier,
+			"cod":                order.COD,
 			"status":             order.Status,
 			"item_count":         order.ItemCount,
 			"total_qty":          order.TotalQty,

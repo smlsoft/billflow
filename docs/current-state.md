@@ -1,7 +1,7 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-21 10:32 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test/history page, frontend routes, container health, Shopee API readiness status, Shopee console live status, and PostgreSQL schema for BillFlow main.
+> Updated: 2026-05-21 14:29 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test/history page, frontend routes, container health, Shopee API readiness/status, Shopee console live status, real Shopee API preview discovery, and PostgreSQL schema for BillFlow main.
 
 ## Latest Handoff For New Chat
 
@@ -9,14 +9,14 @@
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - BillFlow main latest code checkpoint, 2026-05-21:
-  - Latest functional change: Shopee live OAuth callback fallback for Shopee callbacks that return `code` + `shop_id` without `state`.
-  - Latest validation before this docs update: `go test ./...`, backend-only main deploy, `scripts/preflight-main.sh`, browser OAuth callback smoke, Shopee API status check, and preview-only API fetch smoke passed.
+  - Latest functional change: Shopee API import hardening for live multi-shop preview, including Henna.milkford real-order validation, status/time filters, shipping/package/COD mapping, no-SKU review-first handling, and page-more guard before confirm.
+  - Latest validation before this docs update: `go test ./...`, `npm run build`, `git diff --check`, and real-data Shopee API discovery for Henna.milkford passed locally; deploy/preflight/smoke should be rerun after any follow-up patch.
 - BillFlow main latest deploy/runtime checkpoint, 2026-05-21:
   - Shopee Open API readiness is deployed on `/import/shopee`: status checklist, OAuth URL generation, callback/token tables, preview-only API import, structured error UX, and live-cutover script/docs.
   - Shopee console status is `Online`; BillFlow main is cut over to live Partner ID `2034838` with public redirect `https://animal-galvanize-tameness.ngrok-free.dev/api/shopee-api/callback`.
-  - BillFlow readiness status reports Shopee environment `live`, `connected=true`, `shop_id=1029622928`, `token_state=access_valid`, `can_connect=true`, and `can_fetch=true`.
-  - First live OAuth attempt reached BillFlow callback with `code` and `shop_id=1029622928`, but Shopee did not return `state`; backend now supports a guarded no-state fallback only when exactly one pending OAuth state matches current environment + redirect URL.
-  - Browser OAuth retry after deploy succeeded and stored the shop token. API preview smoke for `2026-05-20` to `2026-05-21` returned HTTP 200 with `total_orders=0` and a friendly no-orders warning.
+  - BillFlow has connected live shops including `Henna.milkford` (`shop_id=264993963`) and `Semicolon Constructions` (`shop_id=1029622928`). UI requires an active selected shop for API/Excel import traceability.
+  - Real Shopee API discovery for Henna.milkford over `2026-05-07` to `2026-05-21`: `create_time=28` orders, `update_time=38` orders. Shopee rejects `pay_time` for `get_order_list`; BillFlow now rejects it with a readable error.
+  - API preview defaults to ready-to-bill statuses (`SHIPPED`, `TO_CONFIRM_RECEIVE`, `COMPLETED`), shows shipping/package/carrier/COD, includes shipping in mismatch detection, and blocks confirm when Shopee reports more pages.
   - Shopee Excel/email stays the fallback while the direct API path is tested with real date windows.
   - `/settings/instance` now shows runtime/default/env-aware values, lets admin test draft SML REST URL + tenant before saving, and reminds that product images use the matching `{database}_images` DB.
   - Email polling UX and backend state are hardened with poll summaries/details and indexes for message-id/dedup paths.
@@ -208,7 +208,7 @@
   - Lazada Excel
   - TikTok Excel/CSV
 - Thaisunsport ยังเป็น Phase 1 ฝั่งซื้อเท่านั้น และยังไม่ควรเปิด sales/import channel.
-- Shopee Open Platform API readiness พร้อมบน BillFlow main แล้ว, Shopee Go-Live approved/Online แล้ว, เชื่อมร้านจริงผ่าน OAuth สำเร็จแล้ว (`shop_id=1029622928`), และพร้อมเริ่มทดสอบดึง order แบบ preview-only.
+- Shopee Open Platform API readiness พร้อมบน BillFlow main แล้ว, Shopee Go-Live approved/Online แล้ว, เชื่อมร้านจริงหลายร้านผ่าน OAuth สำเร็จแล้ว (`shop_id=264993963`, `shop_id=1029622928`), และพร้อมทดสอบ confirm แบบเลือก 1-2 orders หลัง preview ตรวจครบ.
 
 แนวทางที่ควรรักษาไว้:
 
@@ -225,7 +225,7 @@
 
 - Shopee Console ต้องเปลี่ยนเป็น live key หลัง approve และ Redirect URL Domain ต้องตรงกับ public URL ปัจจุบัน.
 - ใช้ [shopee-open-api-live-cutover.md](shopee-open-api-live-cutover.md) และ `scripts/shopee-live-cutover.py` เพื่อใส่ live partner id/key โดยไม่พิมพ์ secret ลง chat/log.
-- หลังเชื่อมร้านจริง ให้ดึงช่วงสั้นก่อน, ตรวจ preview count/order detail, แล้วค่อยกด confirm สร้าง local bills. ห้าม auto-send SML รอบแรก.
+- หลังเชื่อมร้านจริง ให้ดึงช่วงสั้นก่อน, ตรวจ preview count/order detail/logistics/no-SKU, แล้วค่อยกด confirm สร้าง local bills 1-2 orders. ห้าม auto-send SML รอบแรก.
 
 ## Latest Deploy Notes
 
@@ -447,6 +447,7 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Admin media reply | Uses signed `/public/media/:mediaID` URLs and requires `PUBLIC_BASE_URL` to be reachable by LINE servers. |
 | Email | Multi-account IMAP configured in DB via `/settings/email`; no `IMAP_*` env singleton. One goroutine runs per enabled account. |
 | Shopee Excel | `/api/import/shopee/preview` parses/dedups and `/api/import/shopee/confirm` creates local bills. SML send happens through bill Retry routing; default sale route is SML 248 `saleorder`, unless channel endpoint explicitly selects `saleinvoice` (`POST /SMLJavaRESTService/saleinvoice/v4`). |
+| Shopee API direct | `/api/import/shopee/api/preview` fetches selected-shop orders with `create_time`/`update_time`, default ready-to-bill statuses, page-more guard, shipping/package/COD preview, and shop-scoped duplicate detection. Confirm still uses the same `/api/import/shopee/confirm` review-first bill creation path; no auto-send to SML. |
 | Lazada Excel | `/api/import/lazada/preview` parses/dedups Lazada export by `orderNumber`, and `/api/import/lazada/confirm` creates local sale bills for the same review/retry flow as Shopee. |
 | TikTok Excel/CSV | Deployed main + Henna: `/api/import/tiktok/preview` parses/dedups TikTok `.csv`/`.xlsx` exports by `Order ID`, keeps `Order Amount` order-level to avoid double-counting multi-row orders, and `/api/import/tiktok/confirm` creates local sale bills for the same review/retry flow. |
 | Shopee SKU handling | Source SKU from Excel is stored separately as `bill_items.source_sku`. It only becomes SML `item_code` when the same code exists in local SML Catalog; otherwise the row remains needs review. |

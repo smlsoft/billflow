@@ -9,7 +9,7 @@
 
 BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
 
-สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow และ marketplace Excel sale flow: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API readiness ถูก deploy บน BillFlow main แล้ว แต่ live connection ยังรอ Shopee approve ก่อน.
+สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow, marketplace Excel sale flow, และ Shopee Open API direct preview แบบ multi-shop: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API live ใช้งานบน BillFlow main แล้ว โดยยังคง confirm แบบ review-first และไม่ auto-send เข้า SML.
 
 ---
 
@@ -150,7 +150,7 @@ billflow/
 | Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
 | Lazada Excel | ✅ local implementation for sale Excel: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
 | TikTok Excel/CSV | ✅ local-ready for sale Excel/CSV: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
-| Shopee API direct | ✅ readiness deployed on BillFlow main; OAuth/API preview waits for Shopee Go-Live approval and live key |
+| Shopee API direct | ✅ live OAuth + multi-shop preview on BillFlow main; default ready-to-bill statuses, shipping/package/COD preview, no-SKU review-first, no auto-send SML |
 
 ## Current Document Menus
 

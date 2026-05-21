@@ -1,7 +1,7 @@
 # Shopee Import — การทำงาน
 
 > อัพเดตล่าสุด: 2026-05-21
-> สถานะ: ✅ Excel deployed / Shopee Open API live OAuth + multi-shop readiness — SML 248 (`192.168.2.248`) configured on server
+> สถานะ: ✅ Excel deployed / Shopee Open API live OAuth + multi-shop API preview hardening — SML 248 (`192.168.2.248`) configured on server
 
 ---
 
@@ -14,7 +14,7 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
 
 Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-api-live-cutover.md`](shopee-open-api-live-cutover.md)
 
-หน้า `/import/shopee` จะแสดง Open API readiness checklist และรายชื่อร้านที่เชื่อมไว้ ถ้ามีหลายร้านต้องเลือกร้านก่อนดึง API/นำเข้า Excel เพื่อให้ BillFlow บันทึก `shopee_shop_id` และกัน duplicate แยกตามร้าน. Excel fallback ยังทำงานต่อได้เสมอเมื่อ API มีปัญหา.
+หน้า `/import/shopee` จะแสดง Open API readiness checklist และรายชื่อร้านที่เชื่อมไว้ ถ้ามีหลายร้านต้องเลือกร้านก่อนดึง API/นำเข้า Excel เพื่อให้ BillFlow บันทึก `shopee_shop_id` และกัน duplicate แยกตามร้าน. API preview ให้เลือกฐานวันที่ `create_time` หรือ `update_time` เท่านั้น, default สถานะเป็นกลุ่มพร้อมออกบิล (`SHIPPED`, `TO_CONFIRM_RECEIVE`, `COMPLETED`), และ Excel fallback ยังทำงานต่อได้เสมอเมื่อ API มีปัญหา.
 
 ---
 
@@ -74,6 +74,29 @@ Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-
             ▼
       แสดง results: created / skipped / failed
 ```
+
+## Shopee Open API Preview
+
+`POST /api/import/shopee/api/preview` เป็น preview-only และยังไม่สร้าง bill:
+
+| Field | Behavior |
+|---|---|
+| `connection_id` | ระบุร้านที่เชื่อม OAuth แล้ว; จำเป็นเมื่อมีหลายร้าน |
+| `time_from` / `time_to` | ช่วงวันที่ไม่เกิน 15 วันตามข้อจำกัด Shopee |
+| `time_range_field` | รองรับเฉพาะ `create_time` และ `update_time`; `pay_time` จะถูก reject ด้วย error อ่านง่าย เพราะ Shopee `get_order_list` ไม่รองรับ |
+| `order_status` | `ready_to_bill` default = `SHIPPED`, `TO_CONFIRM_RECEIVE`, `COMPLETED`; รองรับ `all` และสถานะแยกที่ UI แสดง |
+| `page_size` | default 50 และไม่เกิน 50 ตาม detail batch limit |
+
+เมื่อ Shopee ตอบ `more=true` หรือผลรวมหลาย status เกิน 50 รายการ UI จะเตือนและ block confirm เพื่อกัน import ตกหล่น ให้ลดช่วงวันที่หรือเลือกสถานะแยกก่อนนำเข้า.
+
+API preview mapping เพิ่มเติม:
+
+- `shipping_amount` ใช้ `actual_shipping_fee` และ fallback เป็น `estimated_shipping_fee`.
+- `package_number` อ่านจาก `package_list[0].package_number`; `tracking_no` fallback เป็น tracking ใน package หรือ package number.
+- `shipping_carrier` อ่านจาก `shipping_carrier` และ fallback เป็น `checkout_shipping_carrier`.
+- `cod` แสดงใน expanded row เพื่อให้ admin ตรวจวิธีชำระเงิน.
+- `amount_mismatch` เทียบ `item_gross + shipping_amount - discount_amount` กับยอดชำระ ไม่ false-positive จากค่าส่ง.
+- สินค้าที่ไม่มี SKU จะใช้ชื่อสินค้า + model name เป็น raw matching key และยังเข้า review-first ตาม threshold mapping/catalog เดิม.
 
 ## Shopee Open API Readiness
 

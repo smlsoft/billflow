@@ -12,6 +12,7 @@ import (
 
 	"billflow/internal/config"
 	"billflow/internal/repository"
+	"billflow/internal/services/shopeeapi"
 )
 
 func TestParseShopeeAPIRangeRejectsInvalidDate(t *testing.T) {
@@ -42,6 +43,81 @@ func TestParseShopeeAPIRangeAccepts15DayWindow(t *testing.T) {
 	}
 	if from.Format("2006-01-02") != "2026-05-01" || to.Format("2006-01-02") != "2026-05-15" {
 		t.Fatalf("range = %s..%s", from.Format(time.RFC3339), to.Format(time.RFC3339))
+	}
+}
+
+func TestValidateShopeeAPITimeFieldRejectsPayTime(t *testing.T) {
+	if _, err := validateShopeeAPITimeField("pay_time"); err == nil || !strings.Contains(err.Error(), "pay_time") {
+		t.Fatalf("expected readable pay_time error, got %v", err)
+	}
+	if got, err := validateShopeeAPITimeField(""); err != nil || got != "create_time" {
+		t.Fatalf("default time field = %q, err=%v", got, err)
+	}
+	if got, err := validateShopeeAPITimeField("update_time"); err != nil || got != "update_time" {
+		t.Fatalf("update time field = %q, err=%v", got, err)
+	}
+}
+
+func TestShopeeAPIOrderStatusFiltersReadyGroup(t *testing.T) {
+	got, err := shopeeAPIOrderStatusFilters("ready_to_bill")
+	if err != nil {
+		t.Fatalf("ready_to_bill error = %v", err)
+	}
+	want := strings.Join(shopeeAPIReadyToBillStatuses, ",")
+	if strings.Join(got, ",") != want {
+		t.Fatalf("ready statuses = %v, want %v", got, shopeeAPIReadyToBillStatuses)
+	}
+	all, err := shopeeAPIOrderStatusFilters("all")
+	if err != nil {
+		t.Fatalf("all error = %v", err)
+	}
+	if all != nil {
+		t.Fatalf("all statuses = %v, want nil", all)
+	}
+}
+
+func TestShopeeAPIOrdersToPreviewMapsShippingPackageAndNoFalseMismatch(t *testing.T) {
+	h := &ShopeeImportHandler{}
+	orders, warnings := h.shopeeAPIOrdersToPreview([]shopeeapi.OrderDetail{
+		{
+			OrderSN:              "260520UDVHA1W7",
+			OrderStatus:          "SHIPPED",
+			CreateTime:           time.Date(2026, 5, 20, 9, 17, 9, 0, time.Local).Unix(),
+			TotalAmount:          257,
+			PaymentMethod:        "Cash on Delivery",
+			ActualShippingFee:    38,
+			ShippingCarrier:      "EMS - Thailand Post",
+			COD:                  true,
+			PackageList:          []shopeeapi.OrderPackage{{PackageNumber: "OFG232942632252692"}},
+			TrackingNumber:       "",
+			EstimatedShippingFee: 0,
+			ItemList: []shopeeapi.OrderItem{
+				{
+					ItemID:                 123,
+					ItemName:               "สีเพ้นคิ้วเฮนน่า",
+					ModelName:              "C.น้ำตาลดำ",
+					ModelQuantityPurchased: 1,
+					ModelOriginalPrice:     250,
+					ModelDiscountedPrice:   239,
+				},
+			},
+		},
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v", warnings)
+	}
+	if len(orders) != 1 {
+		t.Fatalf("orders = %d", len(orders))
+	}
+	got := orders[0]
+	if got.ShippingAmount != 38 || got.DiscountAmount != 20 || got.AmountMismatch {
+		t.Fatalf("amounts shipping=%v discount=%v mismatch=%v", got.ShippingAmount, got.DiscountAmount, got.AmountMismatch)
+	}
+	if got.TrackingNo != "OFG232942632252692" || got.PackageNumber != "OFG232942632252692" || got.ShippingCarrier != "EMS - Thailand Post" || !got.COD {
+		t.Fatalf("logistics tracking=%q package=%q carrier=%q cod=%v", got.TrackingNo, got.PackageNumber, got.ShippingCarrier, got.COD)
+	}
+	if !got.HasNoSKU || got.NoSKUItemCount != 1 || got.Items[0].SKU != "" || !strings.Contains(got.Items[0].RawName, " / C.น้ำตาลดำ") {
+		t.Fatalf("no sku mapping = %+v item=%+v", got, got.Items[0])
 	}
 }
 

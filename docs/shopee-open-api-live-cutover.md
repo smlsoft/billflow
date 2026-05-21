@@ -9,8 +9,8 @@
 - Current Shopee status: `Online`
 - Current server public URL: `https://animal-galvanize-tameness.ngrok-free.dev`
 - BillFlow is cut over to live Shopee Open API on the main server with Partner ID `2034838`.
-- BillFlow has OAuth callback, token tables, preview-only import, readiness status, multi-shop connection management, and user-facing error UX deployed.
-- Current state after shop authorization: `environment=live`, `connected=true`, `shop_id=1029622928`, `token_state=access_valid`, `can_fetch=true`.
+- BillFlow has OAuth callback, token tables, preview-only import, readiness status, multi-shop connection management, user-facing error UX, and Shopee API preview hardening deployed.
+- Current connected shops include `Henna.milkford` (`shop_id=264993963`) and `Semicolon Constructions` (`shop_id=1029622928`); token state is usable and `can_fetch=true` when an active shop is selected.
 - Shopee live OAuth has been observed returning `code` and `shop_id` without `state`. BillFlow now allows a guarded fallback only when exactly one unconsumed, unexpired OAuth state exists for the current live environment and redirect URL.
 
 ## Readiness Gate
@@ -71,6 +71,8 @@ Known mapped cases include token expiry, rate limit, duplicate/in-flight request
 - Frontend build and browser smoke test confirm the readiness checklist renders live mode and keeps fetch blocked until shop authorization exists.
 - Server live cutover health check passed after writing a timestamped `.env` backup.
 - Browser OAuth retry after deploy succeeded even though Shopee omitted `state`; API preview smoke for `2026-05-20` to `2026-05-21` returned HTTP 200 with zero orders.
+- Real-data direct API discovery for `Henna.milkford` (`2026-05-07` to `2026-05-21`) found `create_time=28` orders and `update_time=38` orders. Shopee rejects `pay_time` for `get_order_list`, so BillFlow now exposes only `create_time` and `update_time`.
+- Preview defaults to the ready-to-bill status group (`SHIPPED`, `TO_CONFIRM_RECEIVE`, `COMPLETED`), fetches detail batches of 50, maps shipping/package/COD fields, and blocks confirm when Shopee indicates additional pages.
 
 ## Server Cutover
 
@@ -117,9 +119,9 @@ Expected:
 
 3. Click `เชื่อมต่อ Shopee API`, login/authorize the real shop, then return to BillFlow.
 
-4. Fetch a small date range first, preferably 1 day. Confirm that preview shows expected order count.
+4. Fetch a small date range first, preferably 1 day. Use `วันที่สร้าง order` or `วันที่อัปเดต order`; `pay_time` is intentionally not supported for order list search.
 
-5. Create BillFlow bills only after preview looks correct. Do not enable auto-send to SML for the first live run.
+5. Create BillFlow bills only after preview looks correct and Shopee does not report more pages. Do not enable auto-send to SML for the first live run.
 
 ## Rollback
 

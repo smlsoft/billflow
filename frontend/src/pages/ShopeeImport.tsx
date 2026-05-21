@@ -75,6 +75,9 @@ interface ShopeeOrder {
   payment_channel?: string
   buyer_username?: string
   tracking_no?: string
+  package_number?: string
+  shipping_carrier?: string
+  cod?: boolean
   status: string
   items: ShopeeOrderItem[]
   item_count: number
@@ -502,6 +505,8 @@ export default function ShopeeImport() {
     return d.toISOString().slice(0, 10)
   })
   const [apiTo, setAPITo] = useState(() => new Date().toISOString().slice(0, 10))
+  const [apiTimeRangeField, setAPITimeRangeField] = useState<'create_time' | 'update_time'>('create_time')
+  const [apiOrderStatus, setAPIOrderStatus] = useState('ready_to_bill')
 
   // Track config load + ready states separately so preflight UI can render
   // a missing-config banner BEFORE admin uploads a file. Without this, file
@@ -752,8 +757,9 @@ export default function ShopeeImport() {
         connection_id: selectedConnectionID,
         time_from: apiFrom,
         time_to: apiTo,
-        time_range_field: 'create_time',
-        page_size: 20,
+        time_range_field: apiTimeRangeField,
+        order_status: apiOrderStatus,
+        page_size: 50,
       })
       setPreviewSource('api')
       setPreview(res.data)
@@ -1134,6 +1140,33 @@ export default function ShopeeImport() {
                         className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
                       />
                     </label>
+                    <label className="text-xs text-muted-foreground">
+                      ช่วงเวลา
+                      <select
+                        value={apiTimeRangeField}
+                        onChange={(e) => setAPITimeRangeField(e.target.value as 'create_time' | 'update_time')}
+                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                      >
+                        <option value="create_time">วันที่สร้าง order</option>
+                        <option value="update_time">วันที่อัปเดต order</option>
+                      </select>
+                    </label>
+                    <label className="text-xs text-muted-foreground">
+                      สถานะ
+                      <select
+                        value={apiOrderStatus}
+                        onChange={(e) => setAPIOrderStatus(e.target.value)}
+                        className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                      >
+                        <option value="ready_to_bill">พร้อมออกบิล</option>
+                        <option value="all">ทั้งหมด</option>
+                        <option value="SHIPPED">SHIPPED</option>
+                        <option value="TO_CONFIRM_RECEIVE">TO_CONFIRM_RECEIVE</option>
+                        <option value="COMPLETED">COMPLETED</option>
+                        <option value="READY_TO_SHIP">READY_TO_SHIP</option>
+                        <option value="PROCESSED">PROCESSED</option>
+                      </select>
+                    </label>
                     <Button
                       size="sm"
                       onClick={handleFetchAPI}
@@ -1296,6 +1329,16 @@ export default function ShopeeImport() {
             </Alert>
           )}
 
+          {preview.more && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>ยังมี order เพิ่มเติมใน Shopee</AlertTitle>
+              <AlertDescription>
+                ช่วงวันที่นี้มีข้อมูลมากกว่าหนึ่งหน้า ลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า เพื่อไม่ให้ order ตกหล่น
+              </AlertDescription>
+            </Alert>
+          )}
+
           {(preview.preflight?.no_sku_items ?? 0) > 0 && (
             <Alert>
               <AlertTriangle className="h-4 w-4" />
@@ -1328,8 +1371,9 @@ export default function ShopeeImport() {
             </Button>
             <Button
               size="sm"
-              disabled={selectedIDs.size === 0}
+              disabled={selectedIDs.size === 0 || !!preview.more}
               onClick={handleConfirm}
+              title={preview.more ? 'ลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า' : undefined}
             >
               {destination.action} {selectedIDs.size} รายการ
             </Button>
@@ -1429,7 +1473,12 @@ export default function ShopeeImport() {
                           {order.total_qty}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {order.paid_amount != null ? `฿${fmt(order.paid_amount)}` : '—'}
+                          <div>{order.paid_amount != null ? `฿${fmt(order.paid_amount)}` : '—'}</div>
+                          {!!order.shipping_amount && (
+                            <div className="text-[11px] text-muted-foreground">
+                              ส่ง ฿{fmt(order.shipping_amount)}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1">
@@ -1458,6 +1507,24 @@ export default function ShopeeImport() {
                         <TableRow>
                           <TableCell colSpan={9} className="bg-muted/20 p-0">
                             <div className="overflow-hidden border-l-2 border-primary/40">
+                              <div className="grid gap-2 border-b border-border bg-background/60 p-3 text-xs text-muted-foreground sm:grid-cols-4">
+                                <div>
+                                  <span className="font-medium text-foreground">ขนส่ง</span>
+                                  <div>{order.shipping_carrier || '—'}</div>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-foreground">Package</span>
+                                  <div className="font-mono">{order.package_number || order.tracking_no || '—'}</div>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-foreground">ค่าส่ง</span>
+                                  <div>{order.shipping_amount != null ? `฿${fmt(order.shipping_amount)}` : '—'}</div>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-foreground">ชำระเงิน</span>
+                                  <div>{order.cod ? 'COD' : order.payment_channel || '—'}</div>
+                                </div>
+                              </div>
                               <Table>
                                 <TableHeader>
                                   <TableRow className="bg-muted/30">

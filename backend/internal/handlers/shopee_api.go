@@ -28,9 +28,11 @@ const (
 	shopeeAPIAccessTokenSkew    = 10 * time.Minute
 	shopeeAPIRefreshTokenTTL    = 30 * 24 * time.Hour
 	shopeeAPIMaxRange           = 15 * 24 * time.Hour
-	shopeeAPIDefaultPageSize    = 20
+	shopeeAPIDefaultPageSize    = 50
 	shopeeAPIMaxDetailBatchSize = 50
 )
+
+var shopeeAPIReadyToBillStatuses = []string{"SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED"}
 
 type ShopeeAPIReadinessCheck struct {
 	Key    string `json:"key"`
@@ -359,26 +361,41 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		pageSize = shopeeAPIMaxDetailBatchSize
 	}
 
+	timeField, err := validateShopeeAPITimeField(req.TimeRangeField)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	statusFilters, err := shopeeAPIOrderStatusFilters(req.OrderStatus)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.Cursor) != "" && len(statusFilters) > 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cursor ใช้ได้เฉพาะเมื่อเลือกสถานะเดียวหรือทุกสถานะ"})
+		return
+	}
+
 	client := h.shopeeAPIClient()
-	list, err := client.GetOrderList(c.Request.Context(), conn.AccessToken, conn.ShopID, shopeeapi.OrderListRequest{
-		TimeRangeField: defaultShopeeAPITimeField(req.TimeRangeField),
-		TimeFrom:       timeFrom.Unix(),
-		TimeTo:         timeTo.Unix(),
-		PageSize:       pageSize,
-		Cursor:         req.Cursor,
-		OrderStatus:    strings.TrimSpace(req.OrderStatus),
-	})
+	orderSNs, more, nextCursor, err := fetchShopeeAPIOrderSNs(
+		c.Request.Context(),
+		client,
+		conn.AccessToken,
+		conn.ShopID,
+		shopeeapi.OrderListRequest{
+			TimeRangeField: timeField,
+			TimeFrom:       timeFrom.Unix(),
+			TimeTo:         timeTo.Unix(),
+			PageSize:       pageSize,
+			Cursor:         req.Cursor,
+		},
+		statusFilters,
+	)
 	if err != nil {
 		msg := shopeeAPIErrorMessage(err, "ดึงรายการ order จาก Shopee ไม่สำเร็จ").Message
 		h.markShopeeAPISync(c.Request.Context(), &conn.ShopID, "error", msg)
 		respondShopeeAPIError(c, http.StatusBadGateway, err, "ดึงรายการ order จาก Shopee ไม่สำเร็จ")
 		return
-	}
-	orderSNs := make([]string, 0, len(list.Response.OrderList))
-	for _, o := range list.Response.OrderList {
-		if strings.TrimSpace(o.OrderSN) != "" {
-			orderSNs = append(orderSNs, o.OrderSN)
-		}
 	}
 	detail, err := client.GetOrderDetail(c.Request.Context(), conn.AccessToken, conn.ShopID, orderSNs, shopeeAPIOrderDetailFields())
 	if err != nil {
@@ -388,6 +405,9 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		return
 	}
 	orders, warnings := h.shopeeAPIOrdersToPreview(detail.Response.OrderList)
+	if more {
+		warnings = append([]string{"Shopee ยังมี order หน้าเพิ่มเติมในช่วงวันที่นี้ กรุณาลดช่วงวันที่หรือเลือกสถานะแยกก่อนยืนยันนำเข้า"}, warnings...)
+	}
 	shopID := strconv.FormatInt(conn.ShopID, 10)
 	dupCount := 0
 	for i := range orders {
@@ -414,8 +434,8 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		"import_run_id":   importRunID,
 		"preflight":       preflight,
 		"file_token":      "",
-		"more":            list.Response.More,
-		"next_cursor":     list.Response.NextCursor,
+		"more":            more,
+		"next_cursor":     nextCursor,
 	})
 }
 
@@ -1085,6 +1105,62 @@ func (h *ShopeeImportHandler) markShopeeAPISync(ctx context.Context, shopID *int
 	}
 }
 
+func fetchShopeeAPIOrderSNs(ctx context.Context, client *shopeeapi.Client, accessToken string, shopID int64, baseReq shopeeapi.OrderListRequest, statusFilters []string) ([]string, bool, string, error) {
+	if len(statusFilters) == 0 {
+		list, err := client.GetOrderList(ctx, accessToken, shopID, baseReq)
+		if err != nil {
+			return nil, false, "", err
+		}
+		return orderSNsFromShopeeList(list), list.Response.More, list.Response.NextCursor, nil
+	}
+
+	seen := map[string]bool{}
+	out := make([]string, 0, baseReq.PageSize)
+	more := false
+	for _, status := range statusFilters {
+		req := baseReq
+		req.OrderStatus = status
+		req.Cursor = ""
+		list, err := client.GetOrderList(ctx, accessToken, shopID, req)
+		if err != nil {
+			return nil, false, "", err
+		}
+		if list.Response.More {
+			more = true
+		}
+		for _, sn := range orderSNsFromShopeeList(list) {
+			if seen[sn] {
+				continue
+			}
+			seen[sn] = true
+			out = append(out, sn)
+		}
+	}
+
+	limit := baseReq.PageSize
+	if limit <= 0 || limit > shopeeAPIMaxDetailBatchSize {
+		limit = shopeeAPIDefaultPageSize
+	}
+	if len(out) > limit {
+		out = out[:limit]
+		more = true
+	}
+	return out, more, "", nil
+}
+
+func orderSNsFromShopeeList(list *shopeeapi.OrderListResponse) []string {
+	if list == nil {
+		return nil
+	}
+	out := make([]string, 0, len(list.Response.OrderList))
+	for _, o := range list.Response.OrderList {
+		if sn := strings.TrimSpace(o.OrderSN); sn != "" {
+			out = append(out, sn)
+		}
+	}
+	return out
+}
+
 func (h *ShopeeImportHandler) shopeeAPIOrdersToPreview(details []shopeeapi.OrderDetail) ([]ShopeeOrder, []string) {
 	orders := make([]ShopeeOrder, 0, len(details))
 	warnings := []string{}
@@ -1144,6 +1220,28 @@ func (h *ShopeeImportHandler) shopeeAPIOrdersToPreview(details []shopeeapi.Order
 			paymentTime = payTime.Format(time.RFC3339)
 		}
 		paid := d.TotalAmount
+		shippingAmount := d.ActualShippingFee
+		if shippingAmount <= 0 {
+			shippingAmount = d.EstimatedShippingFee
+		}
+		shippingAmount = roundFloat(shippingAmount, 2)
+		discountAmount := 0.0
+		if paid > 0 {
+			discountAmount = roundFloat(gross+shippingAmount-paid, 2)
+		}
+		expectedPaid := roundFloat(gross+shippingAmount-discountAmount, 2)
+		trackingNo := strings.TrimSpace(d.TrackingNumber)
+		packageNumber := firstShopeePackageNumber(d.PackageList)
+		if trackingNo == "" {
+			trackingNo = firstShopeePackageTracking(d.PackageList)
+		}
+		if trackingNo == "" {
+			trackingNo = packageNumber
+		}
+		shippingCarrier := strings.TrimSpace(d.ShippingCarrier)
+		if shippingCarrier == "" {
+			shippingCarrier = strings.TrimSpace(d.CheckoutShippingCarrier)
+		}
 		orders = append(orders, ShopeeOrder{
 			OrderID:          orderSN,
 			DocDate:          docDate,
@@ -1151,7 +1249,10 @@ func (h *ShopeeImportHandler) shopeeAPIOrdersToPreview(details []shopeeapi.Order
 			PaymentTime:      paymentTime,
 			PaymentChannel:   d.PaymentMethod,
 			BuyerUsername:    d.BuyerUsername,
-			TrackingNo:       d.TrackingNumber,
+			TrackingNo:       trackingNo,
+			PackageNumber:    packageNumber,
+			ShippingCarrier:  shippingCarrier,
+			COD:              d.COD,
 			Status:           d.OrderStatus,
 			Items:            items,
 			ItemCount:        len(items),
@@ -1160,16 +1261,36 @@ func (h *ShopeeImportHandler) shopeeAPIOrdersToPreview(details []shopeeapi.Order
 			OrderTotalAmount: paid,
 			ItemGrossAmount:  gross,
 			LinePaidAmount:   paid,
+			ShippingAmount:   shippingAmount,
+			DiscountAmount:   discountAmount,
 			NoSKUItemCount:   noSKUCount,
 			HasNoSKU:         noSKUCount > 0,
 			MultiLine:        len(items) > 1,
-			AmountMismatch:   paid > 0 && math.Abs(gross-paid) > 0.01,
+			AmountMismatch:   paid > 0 && math.Abs(expectedPaid-paid) > 0.01,
 		})
 	}
 	if len(orders) == 0 {
 		warnings = append(warnings, "ไม่พบ order ที่นำเข้าได้จากช่วงวันที่นี้")
 	}
 	return orders, warnings
+}
+
+func firstShopeePackageNumber(packages []shopeeapi.OrderPackage) string {
+	for _, p := range packages {
+		if v := strings.TrimSpace(p.PackageNumber); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstShopeePackageTracking(packages []shopeeapi.OrderPackage) string {
+	for _, p := range packages {
+		if v := strings.TrimSpace(p.TrackingNumber); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func parseShopeeAPIRange(fromRaw, toRaw string) (time.Time, time.Time, error) {
@@ -1231,15 +1352,40 @@ func shopeeAPIOrderDetailFields() []string {
 		"payment_method",
 		"tracking_number",
 		"order_status",
+		"actual_shipping_fee",
+		"estimated_shipping_fee",
+		"reverse_shipping_fee",
+		"shipping_carrier",
+		"checkout_shipping_carrier",
+		"package_list",
+		"cod",
 	}
 }
 
-func defaultShopeeAPITimeField(v string) string {
+func validateShopeeAPITimeField(v string) (string, error) {
 	switch strings.TrimSpace(v) {
-	case "pay_time", "update_time", "create_time":
-		return v
+	case "", "create_time":
+		return "create_time", nil
+	case "update_time":
+		return "update_time", nil
+	case "pay_time":
+		return "", fmt.Errorf("Shopee API ใช้ pay_time ค้นหารายการ order ไม่ได้ กรุณาเลือกวันที่สร้างหรือวันที่อัปเดต")
 	default:
-		return "create_time"
+		return "", fmt.Errorf("time_range_field ต้องเป็น create_time หรือ update_time")
+	}
+}
+
+func shopeeAPIOrderStatusFilters(v string) ([]string, error) {
+	status := strings.ToUpper(strings.TrimSpace(v))
+	switch status {
+	case "", "READY_TO_BILL":
+		return append([]string(nil), shopeeAPIReadyToBillStatuses...), nil
+	case "ALL":
+		return nil, nil
+	case "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED", "READY_TO_SHIP", "PROCESSED":
+		return []string{status}, nil
+	default:
+		return nil, fmt.Errorf("order_status ไม่รองรับ: %s", strings.TrimSpace(v))
 	}
 }
 

@@ -235,22 +235,37 @@ type OrderDetailResponse struct {
 }
 
 type OrderDetail struct {
-	OrderSN          string  `json:"order_sn"`
-	OrderStatus      string  `json:"order_status"`
-	BuyerUsername    string  `json:"buyer_username"`
-	CreateTime       int64   `json:"create_time"`
-	PayTime          int64   `json:"pay_time"`
-	UpdateTime       int64   `json:"update_time"`
-	TotalAmount      float64 `json:"total_amount"`
-	Currency         string  `json:"currency"`
-	PaymentMethod    string  `json:"payment_method"`
-	TrackingNumber   string  `json:"tracking_number"`
-	RecipientAddress struct {
+	OrderSN                 string         `json:"order_sn"`
+	OrderStatus             string         `json:"order_status"`
+	BuyerUsername           string         `json:"buyer_username"`
+	CreateTime              int64          `json:"create_time"`
+	PayTime                 int64          `json:"pay_time"`
+	UpdateTime              int64          `json:"update_time"`
+	TotalAmount             float64        `json:"total_amount"`
+	Currency                string         `json:"currency"`
+	PaymentMethod           string         `json:"payment_method"`
+	TrackingNumber          string         `json:"tracking_number"`
+	ActualShippingFee       float64        `json:"actual_shipping_fee"`
+	EstimatedShippingFee    float64        `json:"estimated_shipping_fee"`
+	ReverseShippingFee      float64        `json:"reverse_shipping_fee"`
+	ShippingCarrier         string         `json:"shipping_carrier"`
+	CheckoutShippingCarrier string         `json:"checkout_shipping_carrier"`
+	COD                     bool           `json:"cod"`
+	PackageList             []OrderPackage `json:"package_list"`
+	RecipientAddress        struct {
 		Name        string `json:"name"`
 		Phone       string `json:"phone"`
 		FullAddress string `json:"full_address"`
 	} `json:"recipient_address"`
 	ItemList []OrderItem `json:"item_list"`
+}
+
+type OrderPackage struct {
+	PackageNumber              string  `json:"package_number"`
+	LogisticsStatus            string  `json:"logistics_status"`
+	ShippingCarrier            string  `json:"shipping_carrier"`
+	TrackingNumber             string  `json:"tracking_number"`
+	ParcelChargeableWeightGram float64 `json:"parcel_chargeable_weight_gram"`
 }
 
 type OrderItem struct {
