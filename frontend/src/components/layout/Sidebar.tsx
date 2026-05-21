@@ -15,6 +15,7 @@ import {
   MessageSquare,
   MessageSquareQuote,
   ScrollText,
+  Send,
   Settings2,
   ShoppingBag,
   Tag,
@@ -134,6 +135,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/setup', label: 'เริ่มต้นใช้งาน', icon: ClipboardCheck, hint: 'ตรวจความพร้อมร้าน' },
       { to: '/dashboard', label: 'ภาพรวม', icon: LayoutDashboard, hint: 'งานวันนี้' },
       { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText, hint: 'Activity Log' },
+      { to: '/bulk-send-jobs', label: 'ประวัติส่ง SML', icon: Send, hint: 'Bulk Send Jobs' },
     ],
   },
   {

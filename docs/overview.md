@@ -170,6 +170,7 @@ billflow/
 - Backend worker ส่งเข้า SML ทีละบิล (`concurrency=1`) เพื่อลดความเสี่ยง duplicate/โหลดกระแทก SML.
 - Dialog poll progress ทุก 1 วินาที แสดง sent/failed/skipped/remaining และสามารถปิดแล้วกลับมาดูต่อได้.
 - ถ้าบางบิล fail ระบบสรุป error ให้ copy ได้ และ retry เฉพาะ failed rows เป็น job ใหม่.
+- หน้า `/bulk-send-jobs` แสดงประวัติ batch ทั้งหมดแบบ read-only พร้อม filter สถานะ/ปลายทาง, progress, ผู้ทำรายการ, รายละเอียดรายบิล, และลิงก์กลับไปบิลต้นทาง.
 - Live smoke ล่าสุดบน BillFlow main สร้าง SML purchaseorder `BF-PO26050001` สำเร็จจาก bulk job หนึ่งบิล.
 
 ---

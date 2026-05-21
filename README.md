@@ -106,6 +106,7 @@ Go Backend (Gin) :8090
   ├── GET  /api/bills/:id
   ├── POST /api/bills/:id/retry             ← 4-way SML send (saleorder/saleinvoice/purchaseorder/sale_reserve)
   ├── POST /api/bills/bulk-send-jobs        ← async SML bulk send job
+  ├── GET  /api/bills/bulk-send-jobs        ← list bulk send job history
   ├── GET  /api/bills/bulk-send-jobs/active ← resume active bulk send job
   ├── GET  /api/bills/bulk-send-jobs/:id    ← poll bulk send progress/results
   ├── POST /api/bills/bulk-send-jobs/:id/retry-failed
@@ -366,6 +367,7 @@ Production data lifecycle:
 | GET | `/api/bills/:id` | JWT | Bill detail with items |
 | POST | `/api/bills/:id/retry` | JWT | Manual confirm/send → SML (4-way route: sale_reserve/saleorder/saleinvoice/purchaseorder) |
 | POST | `/api/bills/bulk-send-jobs` | admin/staff | Create DB-backed async SML bulk send job from ordered bill IDs |
+| GET | `/api/bills/bulk-send-jobs` | admin/staff | List bulk send job history with status/route filters and pagination |
 | GET | `/api/bills/bulk-send-jobs/active` | admin/staff | Resume current active bulk send job for a document route/user |
 | GET | `/api/bills/bulk-send-jobs/:job_id` | admin/staff | Poll bulk send progress, counts, and item results |
 | POST | `/api/bills/bulk-send-jobs/:job_id/retry-failed` | admin/staff | Create a new bulk send job from failed rows only |
@@ -940,6 +942,8 @@ Shopee Open API:
   Go-Live approval and live partner key cutover.
 Async SML bulk send:
   deployed on main; DB-backed jobs with progress/resume/retry-failed.
+  /bulk-send-jobs history page deployed for admin/staff; list/detail API
+  smoke-tested after deploy.
   Live smoke passed: job 128ceffe-5055-4863-8944-c6ce52301d26
   sent bill 20275aed-fe5f-402f-9160-a93a3f5b2ccb to SML PO BF-PO26050001.
 
@@ -1156,4 +1160,4 @@ bash scripts/test.sh all 192.168.2.109:8090
 
 ---
 
-*BillFlow v0.2.0 — Last updated: 2026-04-30 (session 20) | Server: 192.168.2.109 | Ports: backend:8090 / frontend:3010 / postgres:5438*
+*BillFlow v0.2.0 — Last updated: 2026-05-21 | Server: 192.168.2.109 | Ports: backend:8090 / frontend:3010 / postgres:5438*

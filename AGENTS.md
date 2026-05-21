@@ -111,6 +111,7 @@ billflow-postgres  → 5438
 │                                        saleinvoice /        │
 │                                        purchaseorder)       │
 │    POST /api/bills/bulk-send-jobs  ← async bulk SML job    │
+│    GET  /api/bills/bulk-send-jobs  ← bulk job history      │
 │    GET  /api/bills/bulk-send-jobs/active ← resume job      │
 │    GET  /api/bills/bulk-send-jobs/:id ← progress/results   │
 │    POST /api/bills/bulk-send-jobs/:id/retry-failed         │
@@ -255,6 +256,7 @@ billflow-postgres  → 5438
 │                                                             │
 │  /login            ← หน้า login                            │
 │  /dashboard        ← stats + charts + F4 AI Insights       │
+│  /bulk-send-jobs   ← ประวัติส่ง SML แบบกลุ่ม              │
 │  /bills            ← รายการบิล + filter + anomaly badge    │
 │  /bills/:id        ← รายละเอียด + status + retry           │
 │  /messages         ← LINE OA inbox (human chat) ✨session 13│
@@ -621,7 +623,7 @@ CREATE TABLE imap_accounts (
 > - `/api/logs` uses cursor pagination (`limit`, `cursor`, `has_more`, `next_cursor`) and does not run `COUNT(*)` unless `include_total=true`.
 > - `/api/bills` supports cursor pagination plus legacy `page/per_page`, filters `archived`, `date_from`, `date_to`, and defaults to active rows only.
 > - `/api/bills/counts` returns queue counts for bills/sales-orders/sale-invoices in one request.
-> - `/api/bills/bulk-send-jobs` creates async SML jobs capped at 100 bills; worker sends serially, stores progress, supports resume after dialog close, and retries failed rows only.
+> - `/api/bills/bulk-send-jobs` creates async SML jobs capped at 100 bills; worker sends serially, stores progress, supports resume after dialog close, retries failed rows only, and lists job history for `/bulk-send-jobs`.
 > - SML audit rows store compact support fields instead of full `sml_payload` / `sml_response`.
 > - The daily lifecycle job auto-archives `sent/skipped` older than 180 days and rollups/purges detailed audit + AI logs older than 90 days in batch-safe chunks.
 > - `/settings/old-data` shows row count, table size, oldest row, policy, dry-run summary, and never selects purge by default.
@@ -3149,7 +3151,7 @@ Recent commits (session 6):
 
 ---
 
-*Last updated: 2026-04-30 (session 20)*
+*Last updated: 2026-05-21*
 *Server: 192.168.2.109 | Project: billflow | Folder: ~/billflow*
 *Ports: backend:8090 / frontend:3010 / postgres:5438*
 *⚠️ LINE credentials ต้อง reissue ก่อนใช้ทุกครั้ง*

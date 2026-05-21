@@ -12,6 +12,7 @@ import {
   PanelLeftClose,
   ScrollText,
   Search,
+  Send,
   Settings,
   ShoppingBag,
   Sparkles,
@@ -69,6 +70,7 @@ const NAV_ITEMS: Array<{
   { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database },
   { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot },
   { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText },
+  { to: '/bulk-send-jobs', label: 'ประวัติส่ง SML แบบกลุ่ม', icon: Send },
   { to: '/settings', label: 'ตั้งค่า', icon: Settings },
 ]
 

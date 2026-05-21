@@ -116,6 +116,10 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-21 09:25 +07: BillFlow main Bulk Send Job History deployed and verified.
+- Scope: `billflow` only. Added `/bulk-send-jobs` read-only history page for admin/staff, sidebar/command-palette entry, and backend list endpoint `GET /api/bills/bulk-send-jobs`.
+- Verification: backend `/health`, frontend `/login`, `scripts/preflight-main.sh`, API smoke for list/detail/invalid-status, and browser QA on `/bulk-send-jobs` detail dialog passed.
+- Operational status: Shopee Open API still reports sandbox/not connected in BillFlow readiness status; Shopee console check requires logging in again before approval can be visually confirmed.
 - 2026-05-20 20:03 +07: BillFlow main async SML bulk send jobs deployed, verified, committed, and pushed.
 - Scope: `billflow` only. `/bills`, `/sales-orders`, and `/sale-invoices` now create DB-backed bulk jobs for `ส่ง SML ทั้งหมด`; UI shows progress, can resume after close/reload, and can retry failed rows only.
 - Backend: migration `044_sml_bulk_jobs.sql`, `sml_bulk_jobs`, `sml_bulk_job_items`, serial worker, duplicate `client_request_id` guard, active-job conflict guard, startup recovery for interrupted jobs, and audit detail `via=bulk_job`.

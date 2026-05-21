@@ -142,3 +142,16 @@ func TestAppendRetryOfJobKeepsFilterSnapshot(t *testing.T) {
 		t.Fatalf("filter snapshot = %#v", got)
 	}
 }
+
+func TestValidBulkJobStatus(t *testing.T) {
+	for _, status := range []string{"queued", "running", "completed", "completed_with_errors", "failed"} {
+		if !validBulkJobStatus(status) {
+			t.Fatalf("expected %q to be valid", status)
+		}
+	}
+	for _, status := range []string{"", "sent", "pending", "bad"} {
+		if validBulkJobStatus(status) {
+			t.Fatalf("expected %q to be invalid", status)
+		}
+	}
+}

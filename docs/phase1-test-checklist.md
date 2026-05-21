@@ -163,6 +163,7 @@ select * from ic_trans_detail where doc_no = '<DOC_NO>';
 - [ ] ระหว่างส่ง เห็น progress sent/failed/skipped/remaining
 - [ ] ปิด dialog แล้วเปิดใหม่ ยังเห็นสถานะ job เดิมหรือผลล่าสุด
 - [ ] ถ้ามี failed row ให้กด `Retry failed` แล้วระบบส่งเฉพาะ failed bills
+- [ ] เปิด `/bulk-send-jobs` แล้วเห็น job ล่าสุด พร้อมเปิด detail ดูผลรายบิลและลิงก์กลับไปบิลต้นทางได้
 - [ ] `/logs` มี `via=bulk_job` และ actor ของผู้กด
 - [ ] บิลที่สำเร็จไม่ถูกส่งซ้ำตอน retry failed
 

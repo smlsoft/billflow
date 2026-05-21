@@ -1095,6 +1095,43 @@ type retryFailedBulkSendJobRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 }
 
+func (h *BillHandler) ListBulkSendJobs(c *gin.Context) {
+	if h.bulkJobRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bulk send job store not configured"})
+		return
+	}
+	page := positiveIntQuery(c, "page", 1, 1, 1000000)
+	perPage := positiveIntQuery(c, "per_page", 20, 1, 100)
+	status := strings.TrimSpace(c.Query("status"))
+	if status != "" && !validBulkJobStatus(status) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+		return
+	}
+	result, err := h.bulkJobRepo.List(repository.SMLBulkJobListFilter{
+		Status:        status,
+		Source:        c.Query("source"),
+		BillType:      c.Query("bill_type"),
+		DocumentRoute: c.Query("document_route"),
+		Page:          page,
+		PerPage:       perPage,
+	})
+	if err != nil {
+		h.log.Error("list bulk send jobs", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list bulk send jobs failed"})
+		return
+	}
+	if result.Jobs == nil {
+		result.Jobs = []models.SMLBulkJob{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data":     result.Jobs,
+		"total":    result.Total,
+		"page":     result.Page,
+		"per_page": result.PerPage,
+		"has_more": result.Page*result.PerPage < result.Total,
+	})
+}
+
 func (h *BillHandler) CreateBulkSendJob(c *gin.Context) {
 	if h.bulkJobRepo == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bulk send job store not configured"})
@@ -1188,6 +1225,33 @@ func (h *BillHandler) GetActiveBulkSendJob(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, job)
+}
+
+func positiveIntQuery(c *gin.Context, key string, fallback, min, max int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(c.Query(key)))
+	if err != nil {
+		return fallback
+	}
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+func validBulkJobStatus(status string) bool {
+	switch models.SMLBulkJobStatus(status) {
+	case models.SMLBulkJobQueued,
+		models.SMLBulkJobRunning,
+		models.SMLBulkJobCompleted,
+		models.SMLBulkJobCompletedWithErrors,
+		models.SMLBulkJobFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *BillHandler) RetryFailedBulkSendJob(c *gin.Context) {

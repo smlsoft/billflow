@@ -427,6 +427,7 @@ func main() {
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)
 		api.POST("/bills/bulk-send-jobs", middleware.RequireRole("admin", "staff"), billH.CreateBulkSendJob)
+		api.GET("/bills/bulk-send-jobs", middleware.RequireRole("admin", "staff"), billH.ListBulkSendJobs)
 		api.GET("/bills/bulk-send-jobs/active", middleware.RequireRole("admin", "staff"), billH.GetActiveBulkSendJob)
 		api.GET("/bills/bulk-send-jobs/:job_id", middleware.RequireRole("admin", "staff"), billH.GetBulkSendJob)
 		api.POST("/bills/bulk-send-jobs/:job_id/retry-failed", middleware.RequireRole("admin", "staff"), billH.RetryFailedBulkSendJob)

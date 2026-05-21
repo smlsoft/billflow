@@ -386,7 +386,7 @@ flowchart LR
 | `/api/logs` | Cursor pagination with `limit`, `cursor`, `has_more`, `next_cursor`; no total unless `include_total=true` |
 | `/api/bills` | Cursor pagination plus legacy `page/per_page`; supports `archived`, `date_from`, `date_to`; defaults to active rows only |
 | `/api/bills/counts` | Counts review queues in one request for `/bills`, `/sales-orders`, and `/sale-invoices` |
-| `/api/bills/bulk-send-jobs` | DB-backed async SML bulk send jobs; cap 100 bills, progress polling, resume active job, retry failed only |
+| `/api/bills/bulk-send-jobs` | DB-backed async SML bulk send jobs; cap 100 bills, progress polling, history list, resume active job, retry failed only |
 
 ---
 

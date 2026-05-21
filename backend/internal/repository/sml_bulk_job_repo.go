@@ -27,6 +27,22 @@ type CreateSMLBulkJobInput struct {
 	CreatedByEmail  string
 }
 
+type SMLBulkJobListFilter struct {
+	Status        string
+	Source        string
+	BillType      string
+	DocumentRoute string
+	Page          int
+	PerPage       int
+}
+
+type SMLBulkJobListResult struct {
+	Jobs    []models.SMLBulkJob
+	Total   int
+	Page    int
+	PerPage int
+}
+
 type ActiveBulkJobConflictError struct {
 	BillIDs []string
 }
@@ -40,6 +56,78 @@ func (e ActiveBulkJobConflictError) Error() string {
 
 func NewSMLBulkJobRepo(db *sql.DB) *SMLBulkJobRepo {
 	return &SMLBulkJobRepo{db: db}
+}
+
+func (r *SMLBulkJobRepo) List(filter SMLBulkJobListFilter) (SMLBulkJobListResult, error) {
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.PerPage <= 0 {
+		filter.PerPage = 20
+	}
+	if filter.PerPage > 100 {
+		filter.PerPage = 100
+	}
+
+	where := []string{"1=1"}
+	args := []interface{}{}
+	argN := 1
+	if strings.TrimSpace(filter.Status) != "" {
+		where = append(where, fmt.Sprintf("j.status = $%d", argN))
+		args = append(args, strings.TrimSpace(filter.Status))
+		argN++
+	}
+	if strings.TrimSpace(filter.Source) != "" {
+		where = append(where, fmt.Sprintf("j.source = $%d", argN))
+		args = append(args, strings.TrimSpace(filter.Source))
+		argN++
+	}
+	if strings.TrimSpace(filter.BillType) != "" {
+		where = append(where, fmt.Sprintf("j.bill_type = $%d", argN))
+		args = append(args, strings.TrimSpace(filter.BillType))
+		argN++
+	}
+	if strings.TrimSpace(filter.DocumentRoute) != "" {
+		where = append(where, fmt.Sprintf("j.document_route = $%d", argN))
+		args = append(args, strings.TrimSpace(filter.DocumentRoute))
+		argN++
+	}
+
+	whereSQL := strings.Join(where, " AND ")
+	var total int
+	if err := r.db.QueryRow(`SELECT COUNT(*)::int FROM sml_bulk_jobs j WHERE `+whereSQL, args...).Scan(&total); err != nil {
+		return SMLBulkJobListResult{}, fmt.Errorf("count bulk jobs: %w", err)
+	}
+
+	offset := (filter.Page - 1) * filter.PerPage
+	queryArgs := append(append([]interface{}{}, args...), filter.PerPage, offset)
+	rows, err := r.db.Query(
+		smlBulkJobSelect+` WHERE `+whereSQL+fmt.Sprintf(` ORDER BY j.created_at DESC, j.id DESC LIMIT $%d OFFSET $%d`, argN, argN+1),
+		queryArgs...,
+	)
+	if err != nil {
+		return SMLBulkJobListResult{}, fmt.Errorf("list bulk jobs: %w", err)
+	}
+	defer rows.Close()
+
+	jobs := []models.SMLBulkJob{}
+	for rows.Next() {
+		job, err := r.scanJob(rows)
+		if err != nil {
+			return SMLBulkJobListResult{}, err
+		}
+		jobs = append(jobs, *job)
+	}
+	if err := rows.Err(); err != nil {
+		return SMLBulkJobListResult{}, err
+	}
+
+	return SMLBulkJobListResult{
+		Jobs:    jobs,
+		Total:   total,
+		Page:    filter.Page,
+		PerPage: filter.PerPage,
+	}, nil
 }
 
 func (r *SMLBulkJobRepo) FindByClientRequestID(clientRequestID string) (*models.SMLBulkJob, error) {

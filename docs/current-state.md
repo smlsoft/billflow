@@ -1,25 +1,28 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-20 20:03 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test, frontend routes, container health, and PostgreSQL schema for BillFlow main.
+> Updated: 2026-05-21 09:25 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test/history page, frontend routes, container health, Shopee API readiness status, and PostgreSQL schema for BillFlow main.
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
-- BillFlow main latest code checkpoint, 2026-05-20:
-  - Git `main` is pushed to `smlsoft/billflow` at commit `871e8f5 feat: add async SML bulk send jobs`.
-  - Worktree was clean after push.
-  - Latest validation before this docs update: `go test ./...`, `npm --prefix frontend run build`, and `scripts/preflight-main.sh` passed.
-- BillFlow main latest deploy/runtime checkpoint, 2026-05-20:
+- BillFlow main latest code checkpoint, 2026-05-21:
+  - Latest functional change: Bulk Send Job History page and list API.
+  - Latest validation before this docs update: `go test ./...`, `npm --prefix frontend run build`, `scripts/preflight-main.sh`, API smoke, and browser QA passed.
+- BillFlow main latest deploy/runtime checkpoint, 2026-05-21:
   - Shopee Open API readiness is deployed on `/import/shopee`: status checklist, OAuth URL generation, callback/token tables, preview-only API import, structured error UX, and live-cutover script/docs.
-  - Shopee app is still waiting for Go-Live approval. Until approval and live key cutover, the UI blocks real shop connection/API fetch and keeps Shopee Excel/email as fallback.
+  - BillFlow readiness status still reports Shopee environment `sandbox`, `connected=false`, `can_connect=false`, `can_fetch=false`, and blocking reason `รอ Shopee approve แล้วเปลี่ยนเป็น live key ก่อนเชื่อมร้านจริง`.
+  - Shopee console opened to the login page during the latest check; visual approval status needs the user to log in again before it can be confirmed directly in the console.
+  - Until approval and live key cutover, the UI blocks real shop connection/API fetch and keeps Shopee Excel/email as fallback.
   - `/settings/instance` now shows runtime/default/env-aware values, lets admin test draft SML REST URL + tenant before saving, and reminds that product images use the matching `{database}_images` DB.
   - Email polling UX and backend state are hardened with poll summaries/details and indexes for message-id/dedup paths.
   - `/bills`, `/sales-orders`, and `/sale-invoices` now use DB-backed async SML bulk jobs instead of a single long frontend request. The dialog shows progress, can be closed/reopened, and supports retrying only failed rows.
+  - `/bulk-send-jobs` now provides a read-only history page for admin/staff with status/route filters, progress, actor email, per-bill result dialog, and links back to source bills.
   - Bulk send runbook: [sml-bulk-send-jobs.md](sml-bulk-send-jobs.md).
   - Live SML smoke test passed with one Shopee shipped purchase bill: bill `20275aed-fe5f-402f-9160-a93a3f5b2ccb` created SML purchaseorder `BF-PO26050001` through bulk job `128ceffe-5055-4863-8944-c6ce52301d26`; sent `1`, failed `0`, skipped `0`.
+  - Latest API smoke: `/api/bills/bulk-send-jobs?page=1&per_page=20` returns the completed job; invalid `status=bad` returns HTTP 400; detail endpoint returns `item_count=1`.
 - SML product images on BillFlow main are now lazy-loaded through `sml-api-bybos`; BillFlow keeps only image metadata in `sml_catalog`.
   - Active tenant: `SML1_2026`; image DB: `sml1_2026_images`.
   - Index/runbook for moving SML PostgreSQL or changing tenant: [sml-image-db-maintenance.md](sml-image-db-maintenance.md).

@@ -76,12 +76,21 @@ export interface BulkSendJob {
   sent_count: number
   failed_count: number
   skipped_count: number
+  created_by_email?: string
   last_error: string
   created_at: string
   started_at?: string
   finished_at?: string
   updated_at: string
   items?: BulkSendJobItem[]
+}
+
+export interface BulkSendJobListResponse {
+  data: BulkSendJob[]
+  total: number
+  page: number
+  per_page: number
+  has_more: boolean
 }
 
 export function useBills(filter: BillsFilter = {}) {
@@ -158,6 +167,25 @@ export async function createBulkSendJob(body: {
 
 export async function getBulkSendJob(id: string): Promise<BulkSendJob> {
   const res = await client.get<BulkSendJob>(`/api/bills/bulk-send-jobs/${id}`)
+  return res.data
+}
+
+export async function listBulkSendJobs(params: {
+  page?: number
+  per_page?: number
+  status?: string
+  source?: string
+  bill_type?: string
+  document_route?: string
+} = {}): Promise<BulkSendJobListResponse> {
+  const search = new URLSearchParams()
+  if (params.page) search.set('page', String(params.page))
+  if (params.per_page) search.set('per_page', String(params.per_page))
+  if (params.status) search.set('status', params.status)
+  if (params.source) search.set('source', params.source)
+  if (params.bill_type) search.set('bill_type', params.bill_type)
+  if (params.document_route) search.set('document_route', params.document_route)
+  const res = await client.get<BulkSendJobListResponse>(`/api/bills/bulk-send-jobs?${search}`)
   return res.data
 }
 

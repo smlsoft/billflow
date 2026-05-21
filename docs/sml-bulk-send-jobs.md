@@ -1,7 +1,7 @@
 # Async SML Bulk Send Jobs
 
-> Updated: 2026-05-20 20:03 +07
-> Status: deployed on BillFlow main, smoke-tested against real SML purchaseorder.
+> Updated: 2026-05-21 09:25 +07
+> Status: deployed on BillFlow main, smoke-tested against real SML purchaseorder and verified through the history page.
 
 ## Summary
 
@@ -20,6 +20,7 @@ Single-bill send from Bill Detail still uses `POST /api/bills/:id/retry` and sha
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/bills/bulk-send-jobs` | Create an async send job from ordered `bill_ids` and dialog config |
+| `GET` | `/api/bills/bulk-send-jobs` | List historical jobs with filters and pagination for `/bulk-send-jobs` |
 | `GET` | `/api/bills/bulk-send-jobs/active` | Return the current active job for source/bill type/document route/user |
 | `GET` | `/api/bills/bulk-send-jobs/:job_id` | Poll progress and item results |
 | `POST` | `/api/bills/bulk-send-jobs/:job_id/retry-failed` | Create a new job from failed items only |
@@ -30,6 +31,7 @@ Important request behavior:
 - Bills already in an active bulk job are rejected to prevent double submit.
 - Bulk is capped at 100 bills per job.
 - The original dialog payload is saved as `payload_snapshot`; retry failed reuses it.
+- Historical job listing supports `status`, `source`, `bill_type`, `document_route`, `page`, and `per_page` (`max=100`).
 
 ## Database
 
@@ -72,10 +74,16 @@ Startup safety:
 - Result summary shows sent/failed/skipped/remaining counts.
 - Failed rows can be copied as an error summary.
 - `Retry failed` starts a new job for failed bills only.
+- `/bulk-send-jobs` is a read-only history page for admin/staff:
+  - reachable from the sidebar as `ประวัติส่ง SML` and from command palette
+  - filters by route and job status
+  - shows total jobs, page-level sent/failed/skipped counts, progress bars, actor email, and created time
+  - opens a detail dialog with per-bill result rows and links back to the source bill
+  - intentionally does not expose retry actions; retry failed remains in the active bulk dialog to avoid accidental SML sends from an audit/history view.
 
 ## Latest Smoke Test
 
-Date: 2026-05-20
+Date: 2026-05-21
 
 - Job: `128ceffe-5055-4863-8944-c6ce52301d26`
 - Bill: `20275aed-fe5f-402f-9160-a93a3f5b2ccb`
@@ -88,6 +96,9 @@ Date: 2026-05-20
   - Bill status became `sent`.
   - Audit log recorded `sml_sent` with `via=bulk_job`.
   - Active-job endpoint returned 404 after completion, as expected.
+  - History endpoint `GET /api/bills/bulk-send-jobs?page=1&per_page=20` returned the completed job.
+  - Invalid status filter returned HTTP 400 with `invalid status`.
+  - Browser QA on `/bulk-send-jobs` showed the job list and detail dialog with SML doc `BF-PO26050001`.
   - `scripts/preflight-main.sh` passed after the live send.
 
 ## QA Checklist
@@ -108,4 +119,3 @@ Before sending a large batch:
 - If the server restarts mid-job, users should retry failed rows from the completed/failed summary.
 - SML doc numbers are still reserved by backend send logic at actual send time; frontend expected numbers are preview only.
 - Do not manually edit `sml_bulk_job_items` unless doing controlled production recovery.
-

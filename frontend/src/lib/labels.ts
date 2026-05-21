@@ -71,6 +71,7 @@ export const PAGE_TITLE = {
   quickReplies:     'ข้อความสำเร็จรูป',
   chatTags:         'ป้ายลูกค้า',
   logs:             'ประวัติการทำงาน',
+  bulkSendJobs:     'ประวัติส่ง SML แบบกลุ่ม',
   settings:         'ตั้งค่าระบบ',
 }
 

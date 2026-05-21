@@ -97,6 +97,7 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
     crumbs: [{ label: 'ตั้งค่าระบบ' }, { label: 'ผู้ใช้ระบบ' }],
   },
   { pattern: '/logs', crumbs: [{ label: 'ประวัติการทำงาน' }] },
+  { pattern: '/bulk-send-jobs', crumbs: [{ label: 'ประวัติส่ง SML แบบกลุ่ม' }] },
 ]
 
 interface CtxValue {
