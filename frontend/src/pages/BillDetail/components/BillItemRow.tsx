@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Check, Edit, Trash2, X } from 'lucide-react'
+import { AlertCircle, Check, CheckCircle2, Edit, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,6 +20,7 @@ interface Props {
   editable: boolean
   onUpdated: (updated: BillItem) => void
   onDeleted: (itemId: string) => void
+  onRefresh: () => Promise<unknown>
   // When true, briefly flash this row (1.5s) so the admin's eye lands on
   // it. Triggered by the BillTotal warning card's "ดู →" link.
   highlighted?: boolean
@@ -64,6 +65,7 @@ export function BillItemRow({
   editable,
   onUpdated,
   onDeleted,
+  onRefresh,
   highlighted,
   rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
 }: Props) {
@@ -85,6 +87,7 @@ export function BillItemRow({
   const issueReason = rowIssueReason(item)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const [showMapModal, setShowMapModal] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [pickedMatch, setPickedMatch] = useState<CatalogMatch | null>(null)
@@ -151,12 +154,35 @@ export function BillItemRow({
     }
   }
 
+  const handleQuickConfirm = async () => {
+    if (!item.item_code) return
+    setConfirming(true)
+    try {
+      await api.put(`/api/bills/${billId}/items/${item.id}`, {
+        item_code: item.item_code,
+        unit_code: item.unit_code ?? undefined,
+        qty: item.qty,
+        price: item.price ?? undefined,
+      })
+      await onRefresh()
+      toast.success('ยืนยันการจับคู่สินค้าแล้ว', {
+        description: 'ระบบจะจดจำและเปิดให้ส่ง SML เมื่อทุกรายการยืนยันครบ',
+      })
+    } catch (err) {
+      console.error('confirm item match failed', err)
+      toast.error('ยืนยันสินค้าไม่สำเร็จ')
+    } finally {
+      setConfirming(false)
+    }
+  }
+
   const handleDelete = async () => {
     await api.delete(`/api/bills/${billId}/items/${item.id}`)
     onDeleted(item.id)
   }
 
   const matchInfo = useMatchInfo(item)
+  const needsConfirm = Boolean(item.item_code && item.mapped !== true)
   const editMatchInfo =
     pickedMatch && pickedMatch.item_code === draft.item_code
       ? {
@@ -196,7 +222,14 @@ export function BillItemRow({
           </TableCell>
           <TableCell>
             {item.item_code ? (
-              <code className="font-mono text-xs text-foreground">{item.item_code}</code>
+              <div className="space-y-1">
+                <code className="font-mono text-xs text-foreground">{item.item_code}</code>
+                {needsConfirm && (
+                  <div className="inline-flex rounded-md border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
+                    ต้องยืนยัน
+                  </div>
+                )}
+              </div>
             ) : (
               <span className="text-muted-foreground">—</span>
             )}
@@ -227,6 +260,20 @@ export function BillItemRow({
           </TableCell>
           {editable && (
             <TableCell className="text-center whitespace-nowrap">
+              {needsConfirm && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-success"
+                  onClick={handleQuickConfirm}
+                  disabled={confirming || !item.unit_code}
+                  title={item.unit_code ? 'ยืนยันสินค้านี้โดยไม่ต้องเข้าโหมดแก้ไข' : 'ตั้งหน่วยก่อนยืนยันสินค้า'}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {confirming ? 'ยืนยัน...' : 'ยืนยัน'}
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"

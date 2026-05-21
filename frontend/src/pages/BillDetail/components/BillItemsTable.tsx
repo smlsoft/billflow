@@ -16,6 +16,7 @@ interface Props {
   onItemUpdated: (updated: BillItem) => void
   onItemDeleted: (itemId: string) => void
   onItemAdded: (item: BillItem) => void
+  onRefresh: () => Promise<unknown>
   // BillTotal's "ดู →" link sets this to the offending item id; the matching
   // row briefly flashes (1.5s) so admin's eye is drawn to the right place
   // even when the items list is long.
@@ -28,6 +29,7 @@ export function BillItemsTable({
   onItemUpdated,
   onItemDeleted,
   onItemAdded,
+  onRefresh,
   highlightItemId,
 }: Props) {
   const items = bill.items ?? []
@@ -35,6 +37,7 @@ export function BillItemsTable({
   const issueCount = items.filter((item) => {
     return (
       !item.item_code ||
+      item.mapped !== true ||
       !item.unit_code ||
       !item.qty ||
       item.qty <= 0 ||
@@ -89,6 +92,7 @@ export function BillItemsTable({
                   editable={canEdit}
                   onUpdated={onItemUpdated}
                   onDeleted={onItemDeleted}
+                  onRefresh={onRefresh}
                   highlighted={item.id === highlightItemId}
                   rawNameLabel={rawNameLabel}
                 />

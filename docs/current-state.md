@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-21 14:29 +07
+> Updated: 2026-05-21 15:20 +07
 > Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test/history page, frontend routes, container health, Shopee API readiness/status, Shopee console live status, real Shopee API preview discovery, and PostgreSQL schema for BillFlow main.
 
 ## Latest Handoff For New Chat
@@ -9,7 +9,7 @@
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - BillFlow main latest code checkpoint, 2026-05-21:
-  - Latest functional change: Shopee API import hardening for live multi-shop preview, including Henna.milkford real-order validation, status/time filters, shipping/package/COD mapping, no-SKU review-first handling, and page-more guard before confirm.
+  - Latest functional change: Bill Detail now treats low-confidence suggested matches as unconfirmed until `mapped=true`; Send SML and Bulk Send block these rows, and each row has a quick confirm button that reuses the existing F1 learning/update path.
   - Latest validation before this docs update: `go test ./...`, `npm run build`, `git diff --check`, and real-data Shopee API discovery for Henna.milkford passed locally; deploy/preflight/smoke should be rerun after any follow-up patch.
 - BillFlow main latest deploy/runtime checkpoint, 2026-05-21:
   - Shopee Open API readiness is deployed on `/import/shopee`: status checklist, OAuth URL generation, callback/token tables, preview-only API import, structured error UX, and live-cutover script/docs.
@@ -457,7 +457,7 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 | Mapping dashboard | `/mappings` shows the saved mapping table plus a sidebar hotspot panel for raw product names still appearing in `needs_review` bills, so admins can fix repeated names before they cause more manual review. |
 | หน้าเริ่มต้นใช้งาน | `/setup` checks required setup steps, shows shop/system counters, and provides an admin-only test-data reset dialog that preserves settings/catalog/mappings/AI usage by default. |
 | Sidebar navigation | Sidebar groups document work by purchase/sale: `งานฝั่งซื้อ` and `งานฝั่งขาย`. Badges are per-document-route queue counts, not global pending count. |
-| Bill detail | Shows route preview, blocks send when item validation fails, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML request/response before raw JSON. |
+| Bill detail | Shows route preview, blocks send when item validation fails, treats `item_code + mapped=false` as “ต้องยืนยัน” instead of send-ready, supports quick confirm per row, supports artifacts preview/download, stores optional `bills.remark`, and summarizes the latest SML request/response before raw JSON. |
 | Logs | `/logs` shows action-specific summaries. Expanding a row shows key facts first (bill, doc_no, route, trace, error) and keeps raw JSON as a secondary technical view. |
 | UX guardrails | Empty queues guide users to import/email setup, channel API details are collapsed, email sender mismatch is surfaced in Thai, and logs classify common SML failures into user-fixable vs support-needed actions. |
 | Catalog | SML 248 catalog sync, product create, per-row refresh/delete, embeddings, in-memory cosine index, and SML product image thumbnails/gallery. |

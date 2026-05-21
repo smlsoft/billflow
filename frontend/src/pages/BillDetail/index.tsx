@@ -24,7 +24,7 @@ export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const { bill, loading, retrying, retryError, handleRetry, handleRetryWithOverride, setBill } =
+  const { bill, loading, retrying, retryError, reloadBill, handleRetry, handleRetryWithOverride, setBill } =
     useBillData(id)
 
   // ⚠ All hooks must be declared BEFORE any early return. React tracks hooks
@@ -174,6 +174,7 @@ export default function BillDetail() {
         onItemUpdated={handleItemUpdated}
         onItemDeleted={handleItemDeleted}
         onItemAdded={handleItemAdded}
+        onRefresh={reloadBill}
         highlightItemId={highlightItemId}
       />
 

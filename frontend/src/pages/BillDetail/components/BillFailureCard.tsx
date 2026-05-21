@@ -58,7 +58,7 @@ export function BillFailureCard({ errorMsg, retryError }: Props) {
   const detail = errorMsg ? parseFailure(errorMsg) : null
   // Raw error string the admin will copy. Prefer parsed.error for clean
   // payload; fall back to whatever string we have otherwise.
-  const rawError = detail?.error ?? errorMsg ?? ''
+  const rawError = detail?.error ?? errorMsg ?? retryError ?? ''
   const route = detail?.route ?? ''
   const docNoAttempted = detail?.doc_no_attempted ?? ''
   const occurredAt = detail?.occurred_at

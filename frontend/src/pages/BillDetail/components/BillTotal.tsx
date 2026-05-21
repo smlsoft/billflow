@@ -138,7 +138,7 @@ export function BillTotal({
                       already explains itself ("กำลังส่ง..."). */}
                   {!validation.canSend && (
                     <TooltipContent side="left" className="max-w-xs">
-                      ยังส่งไม่ได้ — พบ {validation.issues.length} ปัญหา · ตรวจรหัสสินค้า หน่วย จำนวน และราคา
+                      ยังส่งไม่ได้ — พบ {validation.issues.length} ปัญหา · ตรวจรหัสสินค้า การยืนยัน หน่วย จำนวน และราคา
                     </TooltipContent>
                   )}
                 </Tooltip>

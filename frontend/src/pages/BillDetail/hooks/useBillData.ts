@@ -9,6 +9,7 @@ export interface UseBillDataReturn {
   loading: boolean
   retrying: boolean
   retryError: string | null
+  reloadBill: () => Promise<Bill | null>
   handleRetry: () => Promise<void>
   handleRetryWithOverride: (body: RetryBillPayload) => Promise<void>
   setBill: React.Dispatch<React.SetStateAction<Bill | null>>
@@ -20,14 +21,20 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState<string | null>(null)
 
+  const reloadBill = useCallback(async () => {
+    if (!id) return null
+    const updated = await getBill(id)
+    setBill(updated)
+    return updated
+  }, [id])
+
   useEffect(() => {
     if (!id) return
     setLoading(true)
-    getBill(id)
-      .then(setBill)
+    reloadBill()
       .catch(() => setBill(null))
       .finally(() => setLoading(false))
-  }, [id])
+  }, [id, reloadBill])
 
   const doRetry = useCallback(
     async (body?: RetryBillPayload) => {
@@ -36,19 +43,21 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
       setRetryError(null)
       try {
         await retryBill(id, body)
-        const updated = await getBill(id)
-        setBill(updated)
+        const updated = await reloadBill()
         toast.success('ส่ง SML สำเร็จ', {
           description: updated?.sml_doc_no ? `Doc: ${updated.sml_doc_no}` : undefined,
         })
-      } catch {
+      } catch (err) {
         try {
-          const updated = await getBill(id)
-          setBill(updated)
+          await reloadBill()
         } catch {
           // Keep the existing bill in view if the follow-up refresh also fails.
         }
-        setRetryError('Retry ล้มเหลว — กรุณาลองใหม่อีกครั้ง')
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : 'Retry ล้มเหลว — กรุณาลองใหม่อีกครั้ง'
+        setRetryError(message)
         toast.error('ส่ง SML ไม่สำเร็จ', {
           description: 'ดูรายละเอียดในการ์ด Error ด้านบน',
         })
@@ -56,7 +65,7 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
         setRetrying(false)
       }
     },
-    [id],
+    [id, reloadBill],
   )
 
   const handleRetry = useCallback(() => doRetry(), [doRetry])
@@ -66,5 +75,5 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
     [doRetry],
   )
 
-  return { bill, loading, retrying, retryError, handleRetry, handleRetryWithOverride, setBill }
+  return { bill, loading, retrying, retryError, reloadBill, handleRetry, handleRetryWithOverride, setBill }
 }

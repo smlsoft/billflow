@@ -144,7 +144,7 @@ export async function retryBill(
   body?: RetryBillPayload,
 ): Promise<void> {
   const res = await client.post<{ message?: string; error?: string }>(`/api/bills/${id}/retry`, body ?? {}, {
-    validateStatus: (status) => status >= 200 && status < 300,
+    validateStatus: () => true,
   })
   if (res.status !== 200) {
     throw new Error(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`)
