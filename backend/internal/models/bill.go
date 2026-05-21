@@ -116,6 +116,7 @@ type BillListFilter struct {
 	DocumentRoute  string `form:"document_route"`
 	EmailAccountID string `form:"email_account_id"`
 	ShopeeStatus   string `form:"shopee_status"`
+	ShopeeShopID   string `form:"shopee_shop_id"`
 	Search         string `form:"search"`
 	Archived       string `form:"archived"` // ""/"active" | "include" | "only"
 	DateFrom       string `form:"date_from"`

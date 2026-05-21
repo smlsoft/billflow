@@ -116,6 +116,7 @@ function bulkJobStorageKey(filters: Props['filters']) {
     filters.source || '',
     filters.bill_type || '',
     filters.document_route || '',
+    filters.shopee_shop_id || '',
   ].join(':')
 }
 
@@ -163,6 +164,7 @@ interface Props {
     document_route?: string
     email_account_id?: string
     shopee_status?: string
+    shopee_shop_id?: string
     search?: string
   }
   onDone?: () => void
@@ -192,7 +194,7 @@ export function BulkSendDialog({
   const [totalPending, setTotalPending] = useState(0)
   const [job, setJob] = useState<BulkSendJob | null>(null)
   const [jobError, setJobError] = useState('')
-  const storageKey = useMemo(() => bulkJobStorageKey(filters), [filters.source, filters.bill_type, filters.document_route])
+  const storageKey = useMemo(() => bulkJobStorageKey(filters), [filters.source, filters.bill_type, filters.document_route, filters.shopee_shop_id])
 
   const readyCount = candidates.filter((c) => c.ready).length
   const skippedCount = candidates.length - readyCount
@@ -380,6 +382,7 @@ export function BulkSendDialog({
           source: filters.source,
           bill_type: filters.bill_type,
           document_route: filters.document_route,
+          shopee_shop_id: filters.shopee_shop_id,
         })
         if (!alive) return
         if (active) {
@@ -398,6 +401,7 @@ export function BulkSendDialog({
         if (filters.document_route) params.set('document_route', filters.document_route)
         if (filters.email_account_id) params.set('email_account_id', filters.email_account_id)
         if (filters.shopee_status) params.set('shopee_status', filters.shopee_status)
+        if (filters.shopee_shop_id) params.set('shopee_shop_id', filters.shopee_shop_id)
         if (filters.search) params.set('search', filters.search)
         const res = await client.get<{ data: Bill[]; total: number }>(`/api/bills?${params}`)
         const list = res.data.data ?? []
@@ -441,6 +445,7 @@ export function BulkSendDialog({
     filters.document_route,
     filters.email_account_id,
     filters.shopee_status,
+    filters.shopee_shop_id,
     filters.search,
     billType,
     job,

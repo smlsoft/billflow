@@ -153,3 +153,89 @@ func TestConsumeSolePendingShopeeOAuthStateRejectsMissingOrAmbiguousState(t *tes
 		t.Fatalf("unmet mock expectations: %v", err)
 	}
 }
+
+func TestResolveShopeeAPIConnectionRequiresSelectionWhenMultipleActive(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	handler := &ShopeeImportHandler{
+		billRepo: repository.NewBillRepo(db),
+		cfg:      &config.Config{ShopeeOpenAPIEnv: "live"},
+		logger:   zap.NewNop(),
+	}
+
+	now := time.Date(2026, 5, 21, 9, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("FROM shopee_api_connections").
+		WithArgs("live").
+		WillReturnRows(newShopeeConnectionRows().
+			AddRow("11111111-1111-1111-1111-111111111111", int64(1001), nil, "Shop A", "Shop A", "access-a", "refresh-a", now.Add(time.Hour), now.Add(24*time.Hour), "live", nil, nil, "", "", "", now, now).
+			AddRow("22222222-2222-2222-2222-222222222222", int64(1002), nil, "Shop B", "Shop B", "access-b", "refresh-b", now.Add(time.Hour), now.Add(24*time.Hour), "live", nil, nil, "", "", "", now, now))
+
+	_, err = handler.resolveShopeeAPIConnection(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "เลือกร้าน") {
+		t.Fatalf("expected explicit shop selection error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestResolveShopeeAPIConnectionByIDReturnsSelectedShop(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	handler := &ShopeeImportHandler{
+		billRepo: repository.NewBillRepo(db),
+		cfg:      &config.Config{ShopeeOpenAPIEnv: "live"},
+		logger:   zap.NewNop(),
+	}
+
+	now := time.Date(2026, 5, 21, 9, 0, 0, 0, time.UTC)
+	connectionID := "33333333-3333-3333-3333-333333333333"
+	mock.ExpectQuery("WHERE id = \\$1::uuid").
+		WithArgs(connectionID, "live").
+		WillReturnRows(newShopeeConnectionRows().
+			AddRow(connectionID, int64(1029622928), int64(555), "semicolon.con", "Semicolon Main", "access", "refresh", now.Add(time.Hour), now.Add(24*time.Hour), "live", nil, now, "ok", "", "", now, now))
+
+	got, err := handler.resolveShopeeAPIConnection(context.Background(), connectionID)
+	if err != nil {
+		t.Fatalf("resolveShopeeAPIConnection: %v", err)
+	}
+	if got.ShopID != 1029622928 || got.Label != "Semicolon Main" {
+		t.Fatalf("connection = %+v", got)
+	}
+	if !got.MerchantID.Valid || got.MerchantID.Int64 != 555 {
+		t.Fatalf("merchant_id = %+v", got.MerchantID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func newShopeeConnectionRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"id",
+		"shop_id",
+		"merchant_id",
+		"shop_name",
+		"label",
+		"access_token",
+		"refresh_token",
+		"access_expires_at",
+		"refresh_expires_at",
+		"environment",
+		"disabled_at",
+		"last_sync_at",
+		"last_sync_status",
+		"last_sync_error",
+		"last_error_code",
+		"connected_at",
+		"updated_at",
+	})
+}

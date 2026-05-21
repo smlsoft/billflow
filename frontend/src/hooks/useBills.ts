@@ -13,6 +13,7 @@ interface BillsFilter {
   document_route?: string
   email_account_id?: string
   search?: string
+  shopee_shop_id?: string
   archived?: 'include' | 'only' | ''
   date_from?: string
   date_to?: string
@@ -112,6 +113,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.document_route) params.set('document_route', filter.document_route)
       if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
       if (filter.search) params.set('search', filter.search)
+      if (filter.shopee_shop_id) params.set('shopee_shop_id', filter.shopee_shop_id)
       if (filter.archived) params.set('archived', filter.archived)
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)
@@ -193,11 +195,13 @@ export async function getActiveBulkSendJob(params: {
   source: string
   bill_type: string
   document_route?: string
+  shopee_shop_id?: string
 }): Promise<BulkSendJob | null> {
   const search = new URLSearchParams()
   if (params.source) search.set('source', params.source)
   if (params.bill_type) search.set('bill_type', params.bill_type)
   if (params.document_route) search.set('document_route', params.document_route)
+  if (params.shopee_shop_id) search.set('shopee_shop_id', params.shopee_shop_id)
   try {
     const res = await client.get<BulkSendJob>(`/api/bills/bulk-send-jobs/active?${search}`)
     return res.data

@@ -1,7 +1,7 @@
 # Shopee Import — การทำงาน
 
-> อัพเดตล่าสุด: 2026-05-20
-> สถานะ: ✅ Excel deployed / Shopee Open API ready for approval cutover — SML 248 (`192.168.2.248`) configured on server
+> อัพเดตล่าสุด: 2026-05-21
+> สถานะ: ✅ Excel deployed / Shopee Open API live OAuth + multi-shop readiness — SML 248 (`192.168.2.248`) configured on server
 
 ---
 
@@ -14,7 +14,7 @@ default sale route ปัจจุบันคือ `saleorder`; `saleinvoice` 
 
 Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-api-live-cutover.md`](shopee-open-api-live-cutover.md)
 
-ระหว่างรอ Shopee approve, หน้า `/import/shopee` จะแสดง Open API readiness checklist และ block ปุ่ม live OAuth/API fetch ตามเหตุผลจริง เช่น ยังไม่ approve, redirect URL ไม่ตรง, ยังไม่เชื่อมร้าน, token หมดอายุ หรือ last sync error. Excel fallback ยังทำงานต่อเป็นทางหลักจนกว่าจะเชื่อมร้านจริงได้สำเร็จ.
+หน้า `/import/shopee` จะแสดง Open API readiness checklist และรายชื่อร้านที่เชื่อมไว้ ถ้ามีหลายร้านต้องเลือกร้านก่อนดึง API/นำเข้า Excel เพื่อให้ BillFlow บันทึก `shopee_shop_id` และกัน duplicate แยกตามร้าน. Excel fallback ยังทำงานต่อได้เสมอเมื่อ API มีปัญหา.
 
 ---
 
@@ -35,7 +35,8 @@ Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-
   ├── 2. Preflight config
   │   - ต้องมี channel_defaults สำหรับ Shopee sale ก่อน
   │   - UI block file picker ถ้า config ยังไม่พร้อม
-  │   - Open API card แสดง readiness/error state แต่ยังไม่แทน Excel จนกว่าจะ approve + OAuth
+  │   - Open API card แสดง readiness/error state + connected shops
+  │   - ถ้ามีหลายร้าน active ต้องเลือกร้านก่อน preview/import
   │
   ├── 3. เลือกไฟล์ .xlsx จาก Shopee Seller Center
   │
@@ -45,7 +46,8 @@ Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-
   │   Backend:
   │   - parse Excel (column names ภาษาไทย hardcoded)
   │   - exclude สถานะ: "ที่ต้องจัดส่ง", "ยกเลิกแล้ว"
-  │   - dedup check: SELECT FROM bills WHERE source='shopee' AND order_id=?
+  │   - dedup check: SELECT FROM bills WHERE source='shopee' AND shop_id + order_id ตรงกัน
+  │   - stamp preview rows with shopee_shop_id / shopee_connection_id / shopee_shop_label เมื่อเลือก connection
   │   - ไม่ write DB ใน preview
   │         │
   │         ▼
@@ -64,6 +66,7 @@ Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-
         → flat response: start_sale_unit/wh/shelf
         → data=null ถ้าไม่พบ SKU → ใช้ config defaults
       - บันทึก bill + items ลง DB พร้อม candidates/artifacts
+      - raw_data เก็บ order_id + shopee_shop_id + shopee_connection_id + shopee_shop_label
       - ยังไม่ส่ง SML ทันที
       - admin เปิด bill → route preview → Retry
       - Retry default: POST /SMLJavaRESTService/v3/api/saleorder
@@ -78,6 +81,7 @@ Shopee Open API live cutover checklist อยู่ที่ [`docs/shopee-open-
 
 ```
 GET /api/settings/shopee-api/status
+GET /api/shopee-api/connections
 ```
 
 ค่าที่ UI ใช้ตัดสินใจ:
@@ -89,6 +93,18 @@ GET /api/settings/shopee-api/status
 | `blocking_reason` | ข้อความหลักในกล่อง “สิ่งที่ต้องทำต่อ” |
 | `checks[]` | checklist แยกข้อ: config, redirect, environment, approval, OAuth, token, last sync |
 | `token_state` | แสดง token `valid`, `refresh_required`, `expired`, `missing` |
+
+`/api/shopee-api/connections` คืนรายชื่อร้านแบบไม่ส่ง token กลับ frontend:
+
+| Field | ใช้ทำอะไร |
+|---|---|
+| `id` | connection id ที่ frontend ส่งกลับใน preview/confirm |
+| `shop_id` / `merchant_id` | ตัวตนร้านจาก Shopee |
+| `label` | ชื่อที่ admin ตั้งเองเพื่อแยกร้าน |
+| `disabled_at` | soft-disable ร้านที่ยังไม่ต้องใช้ |
+| `token_state` / `can_fetch` | บอกว่าร้านนั้นดึง order ได้หรือควร reconnect |
+
+Admin สามารถเปลี่ยน label หรือ soft-disable ร้านผ่าน `PATCH /api/shopee-api/connections/:id` ได้. Token, Partner Key, Access Token และ Refresh Token ห้ามส่งออก UI หรือ log.
 
 Error จาก Shopee API ส่งกลับแบบ structured:
 
@@ -133,15 +149,18 @@ orders ที่มีสถานะเหล่านี้จะถูกข�
 
 ## Dedup Logic
 
-ก่อน confirm แต่ละ order ระบบตรวจสอบ:
+ก่อน preview/confirm แต่ละ order ระบบตรวจสอบซ้ำใน scope ร้านเดียวกัน:
 
 ```sql
 SELECT COUNT(*) FROM bills
 WHERE source = 'shopee'
-AND raw_data->>'order_id' = $1
+AND COALESCE(NULLIF(raw_data->>'shopee_shop_id', ''), 'legacy') = $1
+AND raw_data->>'order_id' = $2
 ```
 
 ถ้า > 0 → แสดง badge สีเหลือง "ซ้ำ" ใน preview table และ uncheck อัตโนมัติ
+
+Migration `045_shopee_multi_shop.sql` เปลี่ยน unique index จาก `order_id` อย่างเดียวเป็น `(shop_id, order_id)` เพื่อรองรับหลายร้านที่อาจมีเลขคำสั่งซื้อชนกันในอนาคต. Records เก่าที่ไม่มี `shopee_shop_id` จะอยู่ใน bucket `legacy`.
 
 ---
 

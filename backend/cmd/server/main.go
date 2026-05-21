@@ -479,6 +479,8 @@ func main() {
 		// Shopee import — saleinvoice REST API (SML 224)
 		api.GET("/settings/shopee-config", shopeeH.GetConfig)
 		api.GET("/settings/shopee-api/status", middleware.RequireRole("admin", "staff"), shopeeH.GetAPIStatus)
+		api.GET("/shopee-api/connections", middleware.RequireRole("admin", "staff"), shopeeH.ListAPIConnections)
+		api.PATCH("/shopee-api/connections/:id", middleware.RequireRole("admin"), shopeeH.UpdateAPIConnection)
 		api.POST("/shopee-api/auth-url", middleware.RequireRole("admin"), shopeeH.CreateAPIAuthURL)
 		api.GET("/import/shopee/runs", middleware.RequireRole("admin", "staff"), shopeeH.ListRuns)
 		api.POST("/import/shopee/preview", middleware.RequireRole("admin", "staff"), shopeeH.Preview)

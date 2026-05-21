@@ -1224,7 +1224,32 @@ func (h *BillHandler) GetActiveBulkSendJob(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "active bulk send job not found"})
 		return
 	}
+	if !bulkJobMatchesSnapshotFilter(job.FilterSnapshot, "shopee_shop_id", c.Query("shopee_shop_id")) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "active bulk send job not found"})
+		return
+	}
 	c.JSON(http.StatusOK, job)
+}
+
+func bulkJobMatchesSnapshotFilter(snapshot json.RawMessage, key, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return true
+	}
+	var filter map[string]interface{}
+	if err := json.Unmarshal(snapshot, &filter); err != nil {
+		return false
+	}
+	got, ok := filter[key]
+	if !ok {
+		return false
+	}
+	switch v := got.(type) {
+	case string:
+		return strings.TrimSpace(v) == expected
+	default:
+		return strings.TrimSpace(fmt.Sprint(v)) == expected
+	}
 }
 
 func positiveIntQuery(c *gin.Context, key string, fallback, min, max int) int {

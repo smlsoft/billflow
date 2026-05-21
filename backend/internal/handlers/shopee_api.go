@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"billflow/internal/models"
 	"billflow/internal/services/shopeeapi"
 )
 
@@ -63,18 +64,50 @@ type ShopeeAPIStatus struct {
 type ShopeeAPIConnection struct {
 	ID               string
 	ShopID           int64
+	MerchantID       sql.NullInt64
 	ShopName         string
+	Label            string
 	AccessToken      string
 	RefreshToken     string
 	AccessExpiresAt  time.Time
 	RefreshExpiresAt time.Time
 	Environment      string
+	DisabledAt       sql.NullTime
 	LastSyncAt       sql.NullTime
 	LastSyncStatus   string
 	LastSyncError    string
+	LastErrorCode    string
+	ConnectedAt      time.Time
+	UpdatedAt        time.Time
+}
+
+type ShopeeAPIConnectionView struct {
+	ID               string `json:"id"`
+	ShopID           int64  `json:"shop_id"`
+	MerchantID       *int64 `json:"merchant_id,omitempty"`
+	ShopName         string `json:"shop_name,omitempty"`
+	Label            string `json:"label"`
+	Environment      string `json:"environment"`
+	AccessExpiresAt  string `json:"access_expires_at"`
+	RefreshExpiresAt string `json:"refresh_expires_at"`
+	DisabledAt       string `json:"disabled_at,omitempty"`
+	LastSyncAt       string `json:"last_sync_at,omitempty"`
+	LastSyncStatus   string `json:"last_sync_status,omitempty"`
+	LastSyncError    string `json:"last_sync_error,omitempty"`
+	LastErrorCode    string `json:"last_error_code,omitempty"`
+	TokenState       string `json:"token_state"`
+	CanFetch         bool   `json:"can_fetch"`
+	ConnectedAt      string `json:"connected_at,omitempty"`
+	UpdatedAt        string `json:"updated_at,omitempty"`
+}
+
+type ShopeeAPIConnectionPatchRequest struct {
+	Label    *string `json:"label"`
+	Disabled *bool   `json:"disabled"`
 }
 
 type ShopeeAPIPreviewRequest struct {
+	ConnectionID   string `json:"connection_id"`
 	TimeFrom       string `json:"time_from"`
 	TimeTo         string `json:"time_to"`
 	TimeRangeField string `json:"time_range_field"`
@@ -92,16 +125,17 @@ type shopeeOAuthState struct {
 // GetAPIStatus returns Shopee Open API readiness and the active shop connection.
 func (h *ShopeeImportHandler) GetAPIStatus(c *gin.Context) {
 	status := h.shopeeAPIStatus()
-	conn, err := h.getShopeeAPIConnection(c.Request.Context())
-	if err != nil && err != sql.ErrNoRows {
+	conns, err := h.listShopeeAPIConnections(c.Request.Context(), false)
+	if err != nil {
 		h.logger.Warn("shopee_api: status connection lookup failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดสถานะ Shopee API ไม่ได้"})
 		return
 	}
-	if conn != nil {
+	if len(conns) > 0 {
+		conn := &conns[0]
 		status.Connected = true
 		status.ShopID = conn.ShopID
-		status.ShopName = conn.ShopName
+		status.ShopName = conn.DisplayLabel()
 		status.AccessExpiresAt = conn.AccessExpiresAt.Format(time.RFC3339)
 		status.RefreshExpiresAt = conn.RefreshExpiresAt.Format(time.RFC3339)
 		status.LastSyncStatus = conn.LastSyncStatus
@@ -112,6 +146,95 @@ func (h *ShopeeImportHandler) GetAPIStatus(c *gin.Context) {
 	}
 	status.finalizeReadiness(time.Now())
 	c.JSON(http.StatusOK, status)
+}
+
+// ListAPIConnections returns all Shopee shops connected for the current
+// environment. Tokens are never returned to the client.
+func (h *ShopeeImportHandler) ListAPIConnections(c *gin.Context) {
+	conns, err := h.listShopeeAPIConnections(c.Request.Context(), true)
+	if err != nil {
+		h.logger.Warn("shopee_api: list connections failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดรายการร้าน Shopee ไม่ได้"})
+		return
+	}
+	out := make([]ShopeeAPIConnectionView, 0, len(conns))
+	now := time.Now()
+	for i := range conns {
+		out = append(out, shopeeAPIConnectionView(&conns[i], now))
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+// UpdateAPIConnection lets admins label or disable a shop connection without
+// deleting token history. Reconnect OAuth can re-enable the same shop later.
+func (h *ShopeeImportHandler) UpdateAPIConnection(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing connection id"})
+		return
+	}
+	var req ShopeeAPIConnectionPatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "request ไม่ถูกต้อง: " + err.Error()})
+		return
+	}
+	labelSet := req.Label != nil
+	label := ""
+	if labelSet {
+		label = strings.TrimSpace(*req.Label)
+		if label == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ชื่อร้านต้องไม่ว่าง"})
+			return
+		}
+		if len(label) > 120 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ชื่อร้านยาวเกินไป"})
+			return
+		}
+	}
+	disabledSet := req.Disabled != nil
+	disabled := false
+	if disabledSet {
+		disabled = *req.Disabled
+	}
+	if !labelSet && !disabledSet {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ไม่มีข้อมูลให้แก้ไข"})
+		return
+	}
+
+	conn, err := h.patchShopeeAPIConnection(c.Request.Context(), id, label, labelSet, disabled, disabledSet)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "ไม่พบร้าน Shopee ที่ต้องการแก้ไข"})
+			return
+		}
+		h.logger.Warn("shopee_api: patch connection failed", zap.String("connection_id", id), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "แก้ไขร้าน Shopee ไม่สำเร็จ"})
+		return
+	}
+
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		targetID := conn.ID
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "shopee_api_connection_updated",
+			TargetID: &targetID,
+			UserID:   userID,
+			Source:   "shopee_api",
+			Level:    "info",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"shop_id":       conn.ShopID,
+				"label":         conn.Label,
+				"disabled":      conn.DisabledAt.Valid,
+				"label_changed": labelSet,
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, shopeeAPIConnectionView(conn, time.Now()))
 }
 
 // CreateAPIAuthURL creates a short-lived state and returns the Shopee authorize URL.
@@ -198,7 +321,7 @@ func (h *ShopeeImportHandler) APICallback(c *gin.Context) {
 		accessExpires = time.Now().Add(4 * time.Hour)
 	}
 	refreshExpires := time.Now().Add(shopeeAPIRefreshTokenTTL)
-	if err := h.upsertShopeeAPIConnection(c.Request.Context(), shopID, tok.AccessToken, tok.RefreshToken, accessExpires, refreshExpires, createdState.UserID, createdState.Environment); err != nil {
+	if err := h.upsertShopeeAPIConnection(c.Request.Context(), shopID, tok.MerchantID, tok.AccessToken, tok.RefreshToken, accessExpires, refreshExpires, createdState.UserID, createdState.Environment); err != nil {
 		h.logger.Warn("shopee_api: upsert connection failed", zap.Int64("shop_id", shopID), zap.Error(err))
 		h.renderShopeeCallback(c, http.StatusInternalServerError, "เชื่อมต่อ Shopee ไม่สำเร็จ", "บันทึก token ไม่สำเร็จ")
 		return
@@ -219,7 +342,7 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	conn, err := h.ensureShopeeAPIAccessToken(c.Request.Context())
+	conn, err := h.ensureShopeeAPIAccessToken(c.Request.Context(), req.ConnectionID)
 	if err != nil {
 		msg := shopeeAPIErrorMessage(err, err.Error()).Message
 		h.markShopeeAPISync(c.Request.Context(), nil, "error", msg)
@@ -264,9 +387,13 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		return
 	}
 	orders, warnings := h.shopeeAPIOrdersToPreview(detail.Response.OrderList)
+	shopID := strconv.FormatInt(conn.ShopID, 10)
 	dupCount := 0
 	for i := range orders {
-		if billID, exists, _ := h.findShopeeOrderBillID(orders[i].OrderID); exists {
+		orders[i].ShopeeShopID = shopID
+		orders[i].ShopeeConnectionID = conn.ID
+		orders[i].ShopeeShopLabel = conn.DisplayLabel()
+		if billID, exists, _ := h.findShopeeOrderBillIDForShop(orders[i].OrderID, shopID); exists {
 			orders[i].Duplicate = true
 			orders[i].ExistingBillID = billID
 			dupCount++
@@ -289,6 +416,52 @@ func (h *ShopeeImportHandler) PreviewFromAPI(c *gin.Context) {
 		"more":            list.Response.More,
 		"next_cursor":     list.Response.NextCursor,
 	})
+}
+
+func (c *ShopeeAPIConnection) DisplayLabel() string {
+	if c == nil {
+		return ""
+	}
+	if strings.TrimSpace(c.Label) != "" {
+		return strings.TrimSpace(c.Label)
+	}
+	if strings.TrimSpace(c.ShopName) != "" {
+		return strings.TrimSpace(c.ShopName)
+	}
+	if c.ShopID > 0 {
+		return fmt.Sprintf("Shop %d", c.ShopID)
+	}
+	return "Shopee shop"
+}
+
+func shopeeAPIConnectionView(conn *ShopeeAPIConnection, now time.Time) ShopeeAPIConnectionView {
+	view := ShopeeAPIConnectionView{
+		ID:               conn.ID,
+		ShopID:           conn.ShopID,
+		ShopName:         conn.ShopName,
+		Label:            conn.DisplayLabel(),
+		Environment:      conn.Environment,
+		AccessExpiresAt:  conn.AccessExpiresAt.Format(time.RFC3339),
+		RefreshExpiresAt: conn.RefreshExpiresAt.Format(time.RFC3339),
+		LastSyncStatus:   conn.LastSyncStatus,
+		LastSyncError:    conn.LastSyncError,
+		LastErrorCode:    conn.LastErrorCode,
+		TokenState:       shopeeTokenState(conn.AccessExpiresAt.Format(time.RFC3339), conn.RefreshExpiresAt.Format(time.RFC3339), now),
+		ConnectedAt:      conn.ConnectedAt.Format(time.RFC3339),
+		UpdatedAt:        conn.UpdatedAt.Format(time.RFC3339),
+	}
+	if conn.MerchantID.Valid {
+		v := conn.MerchantID.Int64
+		view.MerchantID = &v
+	}
+	if conn.DisabledAt.Valid {
+		view.DisabledAt = conn.DisabledAt.Time.Format(time.RFC3339)
+	}
+	if conn.LastSyncAt.Valid {
+		view.LastSyncAt = conn.LastSyncAt.Time.Format(time.RFC3339)
+	}
+	view.CanFetch = !conn.DisabledAt.Valid && view.TokenState != "refresh_expired"
+	return view
 }
 
 func (h *ShopeeImportHandler) shopeeAPIStatus() ShopeeAPIStatus {
@@ -588,20 +761,131 @@ func (h *ShopeeImportHandler) consumeSolePendingShopeeOAuthState(ctx context.Con
 }
 
 func (h *ShopeeImportHandler) getShopeeAPIConnection(ctx context.Context) (*ShopeeAPIConnection, error) {
+	return h.resolveShopeeAPIConnection(ctx, "")
+}
+
+func (h *ShopeeImportHandler) resolveShopeeAPIConnection(ctx context.Context, connectionID string) (*ShopeeAPIConnection, error) {
+	connectionID = strings.TrimSpace(connectionID)
+	var c ShopeeAPIConnection
+	baseSelect := `SELECT id::text, shop_id, merchant_id, shop_name, label, access_token, refresh_token,
+		        access_expires_at, refresh_expires_at, environment, disabled_at,
+		        last_sync_at, last_sync_status, last_sync_error, last_error_code,
+		        connected_at, updated_at
+		   FROM shopee_api_connections`
+	var err error
+	if connectionID != "" {
+		err = h.billRepo.DB().QueryRowContext(ctx,
+			baseSelect+`
+			  WHERE id = $1::uuid
+			    AND environment = $2`,
+			connectionID, defaultShopeeAPIEnv(h.cfg.ShopeeOpenAPIEnv),
+		).Scan(
+			&c.ID, &c.ShopID, &c.MerchantID, &c.ShopName, &c.Label, &c.AccessToken, &c.RefreshToken,
+			&c.AccessExpiresAt, &c.RefreshExpiresAt, &c.Environment, &c.DisabledAt,
+			&c.LastSyncAt, &c.LastSyncStatus, &c.LastSyncError, &c.LastErrorCode,
+			&c.ConnectedAt, &c.UpdatedAt,
+		)
+	} else {
+		rows, queryErr := h.billRepo.DB().QueryContext(ctx,
+			baseSelect+`
+			  WHERE environment = $1
+			    AND disabled_at IS NULL
+			  ORDER BY updated_at DESC
+			  LIMIT 2`,
+			defaultShopeeAPIEnv(h.cfg.ShopeeOpenAPIEnv),
+		)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		defer rows.Close()
+		var conns []ShopeeAPIConnection
+		for rows.Next() {
+			var row ShopeeAPIConnection
+			if scanErr := rows.Scan(
+				&row.ID, &row.ShopID, &row.MerchantID, &row.ShopName, &row.Label, &row.AccessToken, &row.RefreshToken,
+				&row.AccessExpiresAt, &row.RefreshExpiresAt, &row.Environment, &row.DisabledAt,
+				&row.LastSyncAt, &row.LastSyncStatus, &row.LastSyncError, &row.LastErrorCode,
+				&row.ConnectedAt, &row.UpdatedAt,
+			); scanErr != nil {
+				return nil, scanErr
+			}
+			conns = append(conns, row)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if len(conns) == 0 {
+			return nil, sql.ErrNoRows
+		}
+		if len(conns) > 1 {
+			return nil, fmt.Errorf("พบร้าน Shopee ที่เชื่อมไว้มากกว่า 1 ร้าน กรุณาเลือกร้านก่อนดึง order")
+		}
+		c = conns[0]
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (h *ShopeeImportHandler) listShopeeAPIConnections(ctx context.Context, includeDisabled bool) ([]ShopeeAPIConnection, error) {
+	whereDisabled := "AND disabled_at IS NULL"
+	if includeDisabled {
+		whereDisabled = ""
+	}
+	rows, err := h.billRepo.DB().QueryContext(ctx,
+		`SELECT id::text, shop_id, merchant_id, shop_name, label, access_token, refresh_token,
+		        access_expires_at, refresh_expires_at, environment, disabled_at,
+		        last_sync_at, last_sync_status, last_sync_error, last_error_code,
+		        connected_at, updated_at
+		   FROM shopee_api_connections
+		  WHERE environment = $1 `+whereDisabled+`
+		  ORDER BY disabled_at NULLS FIRST, updated_at DESC`,
+		defaultShopeeAPIEnv(h.cfg.ShopeeOpenAPIEnv),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ShopeeAPIConnection{}
+	for rows.Next() {
+		var c ShopeeAPIConnection
+		if err := rows.Scan(
+			&c.ID, &c.ShopID, &c.MerchantID, &c.ShopName, &c.Label, &c.AccessToken, &c.RefreshToken,
+			&c.AccessExpiresAt, &c.RefreshExpiresAt, &c.Environment, &c.DisabledAt,
+			&c.LastSyncAt, &c.LastSyncStatus, &c.LastSyncError, &c.LastErrorCode,
+			&c.ConnectedAt, &c.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (h *ShopeeImportHandler) patchShopeeAPIConnection(ctx context.Context, id, label string, labelSet bool, disabled bool, disabledSet bool) (*ShopeeAPIConnection, error) {
 	var c ShopeeAPIConnection
 	err := h.billRepo.DB().QueryRowContext(ctx,
-		`SELECT id::text, shop_id, shop_name, access_token, refresh_token,
-		        access_expires_at, refresh_expires_at, environment,
-		        last_sync_at, last_sync_status, last_sync_error
-		   FROM shopee_api_connections
-		  WHERE environment = $1
-		  ORDER BY updated_at DESC
-		  LIMIT 1`,
-		defaultShopeeAPIEnv(h.cfg.ShopeeOpenAPIEnv),
+		`UPDATE shopee_api_connections
+		    SET label = CASE WHEN $2 THEN $3 ELSE label END,
+		        disabled_at = CASE
+		          WHEN $4 AND $5 THEN NOW()
+		          WHEN $4 AND NOT $5 THEN NULL
+		          ELSE disabled_at
+		        END,
+		        updated_at = NOW()
+		  WHERE id = $1::uuid
+		    AND environment = $6
+		  RETURNING id::text, shop_id, merchant_id, shop_name, label, access_token, refresh_token,
+		        access_expires_at, refresh_expires_at, environment, disabled_at,
+		        last_sync_at, last_sync_status, last_sync_error, last_error_code,
+		        connected_at, updated_at`,
+		id, labelSet, label, disabledSet, disabled, defaultShopeeAPIEnv(h.cfg.ShopeeOpenAPIEnv),
 	).Scan(
-		&c.ID, &c.ShopID, &c.ShopName, &c.AccessToken, &c.RefreshToken,
-		&c.AccessExpiresAt, &c.RefreshExpiresAt, &c.Environment,
-		&c.LastSyncAt, &c.LastSyncStatus, &c.LastSyncError,
+		&c.ID, &c.ShopID, &c.MerchantID, &c.ShopName, &c.Label, &c.AccessToken, &c.RefreshToken,
+		&c.AccessExpiresAt, &c.RefreshExpiresAt, &c.Environment, &c.DisabledAt,
+		&c.LastSyncAt, &c.LastSyncStatus, &c.LastSyncError, &c.LastErrorCode,
+		&c.ConnectedAt, &c.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -609,39 +893,46 @@ func (h *ShopeeImportHandler) getShopeeAPIConnection(ctx context.Context) (*Shop
 	return &c, nil
 }
 
-func (h *ShopeeImportHandler) upsertShopeeAPIConnection(ctx context.Context, shopID int64, accessToken, refreshToken string, accessExpires, refreshExpires time.Time, userID, env string) error {
+func (h *ShopeeImportHandler) upsertShopeeAPIConnection(ctx context.Context, shopID, merchantID int64, accessToken, refreshToken string, accessExpires, refreshExpires time.Time, userID, env string) error {
 	_, err := h.billRepo.DB().ExecContext(ctx,
 		`INSERT INTO shopee_api_connections
-		  (shop_id, access_token, refresh_token, access_expires_at, refresh_expires_at, environment, connected_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid)
+		  (shop_id, merchant_id, label, access_token, refresh_token, access_expires_at, refresh_expires_at, environment, connected_by)
+		 VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, $7, $8, NULLIF($9, '')::uuid)
 		 ON CONFLICT (shop_id) DO UPDATE
-		    SET access_token = EXCLUDED.access_token,
+		    SET merchant_id = COALESCE(EXCLUDED.merchant_id, shopee_api_connections.merchant_id),
+		        label = COALESCE(NULLIF(shopee_api_connections.label, ''), EXCLUDED.label),
+		        access_token = EXCLUDED.access_token,
 		        refresh_token = EXCLUDED.refresh_token,
 		        access_expires_at = EXCLUDED.access_expires_at,
 		        refresh_expires_at = EXCLUDED.refresh_expires_at,
 		        environment = EXCLUDED.environment,
 		        connected_by = EXCLUDED.connected_by,
 		        connected_at = NOW(),
+		        disabled_at = NULL,
 		        updated_at = NOW(),
 		        last_sync_status = '',
-		        last_sync_error = ''`,
-		shopID, accessToken, refreshToken, accessExpires, refreshExpires,
+		        last_sync_error = '',
+		        last_error_code = ''`,
+		shopID, merchantID, fmt.Sprintf("Shop %d", shopID), accessToken, refreshToken, accessExpires, refreshExpires,
 		defaultShopeeAPIEnv(env), userID,
 	)
 	return err
 }
 
-func (h *ShopeeImportHandler) ensureShopeeAPIAccessToken(ctx context.Context) (*ShopeeAPIConnection, error) {
+func (h *ShopeeImportHandler) ensureShopeeAPIAccessToken(ctx context.Context, connectionID string) (*ShopeeAPIConnection, error) {
 	status := h.shopeeAPIStatus()
 	if !status.Enabled || !status.Configured {
 		return nil, fmt.Errorf("Shopee Open API ยังไม่ได้เปิดใช้งานหรือตั้งค่า partner_id/key")
 	}
-	conn, err := h.getShopeeAPIConnection(ctx)
+	conn, err := h.resolveShopeeAPIConnection(ctx, connectionID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("ยังไม่ได้เชื่อมต่อร้าน Shopee API")
 		}
 		return nil, err
+	}
+	if conn.DisabledAt.Valid {
+		return nil, fmt.Errorf("ร้าน Shopee นี้ถูกปิดใช้งาน กรุณาเลือกหรือเชื่อมร้านอื่น")
 	}
 	if time.Now().Before(conn.AccessExpiresAt.Add(-shopeeAPIAccessTokenSkew)) {
 		return conn, nil

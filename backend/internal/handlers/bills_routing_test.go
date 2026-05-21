@@ -143,6 +143,22 @@ func TestAppendRetryOfJobKeepsFilterSnapshot(t *testing.T) {
 	}
 }
 
+func TestBulkJobMatchesSnapshotFilterScopesShopeeShop(t *testing.T) {
+	snapshot := json.RawMessage(`{"source":"shopee","shopee_shop_id":"1029622928"}`)
+	if !bulkJobMatchesSnapshotFilter(snapshot, "shopee_shop_id", "1029622928") {
+		t.Fatal("expected matching shopee_shop_id to resume active job")
+	}
+	if bulkJobMatchesSnapshotFilter(snapshot, "shopee_shop_id", "999") {
+		t.Fatal("different shopee_shop_id should not resume another shop's active job")
+	}
+	if !bulkJobMatchesSnapshotFilter(snapshot, "shopee_shop_id", "") {
+		t.Fatal("empty filter should keep legacy active-job behavior")
+	}
+	if bulkJobMatchesSnapshotFilter(json.RawMessage(`{"source":"shopee"}`), "shopee_shop_id", "1029622928") {
+		t.Fatal("missing shopee_shop_id should not match a shop-specific filter")
+	}
+}
+
 func TestValidBulkJobStatus(t *testing.T) {
 	for _, status := range []string{"queued", "running", "completed", "completed_with_errors", "failed"} {
 		if !validBulkJobStatus(status) {

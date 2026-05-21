@@ -35,6 +35,8 @@ export function BillHeader({ bill }: Props) {
   const buyerName = rawString(rawData, 'customer_name') || rawString(rawData, 'buyer_username')
   const paymentChannel = rawString(rawData, 'payment_channel')
   const trackingNo = rawString(rawData, 'tracking_no')
+  const shopeeShopID = rawString(rawData, 'shopee_shop_id')
+  const shopeeShopLabel = rawString(rawData, 'shopee_shop_label')
   const docDate = (rawData?.doc_date as string) || ''
   const rawItemCount = rawNumber(rawData, 'item_count')
   const itemCount = bill.items?.length ?? 0
@@ -101,6 +103,12 @@ export function BillHeader({ bill }: Props) {
               label="ช่องทาง"
               value={SOURCE_LABELS[bill.source] ?? bill.source}
             />
+            {isShopeeSale && shopeeShopID && (
+              <InfoRow
+                label="ร้าน Shopee"
+                value={`${shopeeShopLabel || 'Shopee shop'} · ${shopeeShopID}`}
+              />
+            )}
             {isPurchase && orderID && (
               <InfoRow
                 label="เลขคำสั่งซื้อ"

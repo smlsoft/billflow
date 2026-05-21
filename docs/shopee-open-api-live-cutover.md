@@ -9,7 +9,7 @@
 - Current Shopee status: `Online`
 - Current server public URL: `https://animal-galvanize-tameness.ngrok-free.dev`
 - BillFlow is cut over to live Shopee Open API on the main server with Partner ID `2034838`.
-- BillFlow has OAuth callback, token tables, preview-only import, readiness status, and user-facing error UX deployed.
+- BillFlow has OAuth callback, token tables, preview-only import, readiness status, multi-shop connection management, and user-facing error UX deployed.
 - Current state after shop authorization: `environment=live`, `connected=true`, `shop_id=1029622928`, `token_state=access_valid`, `can_fetch=true`.
 - Shopee live OAuth has been observed returning `code` and `shop_id` without `state`. BillFlow now allows a guarded fallback only when exactly one unconsumed, unexpired OAuth state exists for the current live environment and redirect URL.
 
@@ -63,6 +63,8 @@ Known mapped cases include token expiry, rate limit, duplicate/in-flight request
 - Backend allows `refresh_required` token state when refresh token is still valid.
 - Shopee API error mapper returns friendly rate-limit messaging.
 - OAuth callback accepts normal `state` flow and has a tested no-state fallback that rejects missing/ambiguous sessions.
+- `/import/shopee` lists connected shops, supports label edit + soft-disable, and requires a selected shop when more than one active connection exists.
+- Imported Shopee bills keep `shopee_shop_id`, `shopee_connection_id`, and `shopee_shop_label`; duplicate protection is scoped to `(shop_id, order_id)`.
 - Shopee client signs shop API requests correctly.
 - Shopee client handles business errors and malformed token response.
 - Shopee client rejects order detail requests over Shopee's 50-order limit before making HTTP calls.
@@ -143,3 +145,4 @@ Then restart backend. Shopee Excel/email flows are independent and should keep w
 - OAuth tokens are stored in `shopee_api_connections`; treat the DB backup as sensitive.
 - The first live import is preview-only by design. Bill creation still requires explicit confirmation.
 - If public URL changes, old OAuth links and Shopee redirect validation will fail until Console and `.env` match again.
+- SML routing is still shared in v1. Multi-shop support currently affects OAuth connection selection, source traceability, filters, and duplicate prevention; per-shop SML defaults can be added later if operations need it.

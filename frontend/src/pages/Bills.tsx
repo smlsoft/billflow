@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Info, Mail, Search, Send, Settings, UploadCloud } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Info, Mail, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,14 @@ interface InboxOption {
   id: string
   name: string
   username: string
+}
+
+interface ShopeeShopOption {
+  id: string
+  shop_id: number
+  label: string
+  shop_name?: string
+  disabled_at?: string
 }
 
 // Filter options pull labels from lib/labels.ts so Bills, Dashboard, and
@@ -189,8 +197,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [shopeeStatus, setShopeeStatus] = useState<string>(() =>
     readURLFilter(searchParams, 'shopee_status', VALID_SHOPEE_STATUSES),
   )
+  const [shopeeShopId, setShopeeShopId] = useState(() => searchParams.get('shopee_shop_id') || ALL)
   const [emailAccountId, setEmailAccountId] = useState(() => searchParams.get('email_account_id') || ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
+  const [shopeeShops, setShopeeShops] = useState<ShopeeShopOption[]>([])
   const [search, setSearch] = useState(() => searchParams.get('search') ?? '')
   const [archiveMode, setArchiveMode] = useState<ArchiveMode>(() => readURLArchive(searchParams))
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -199,6 +209,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     bill: Bill
   } | null>(null)
   const showShopeeStatusFilter = mode === 'purchase-order'
+  const showShopeeShopFilter = mode !== 'purchase-order'
   const canManageBills = user?.role === 'admin' || user?.role === 'staff'
   const canPermanentDelete = user?.role === 'admin'
 
@@ -212,6 +223,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     bill_type: config.billType,
     document_route: config.documentRoute,
     email_account_id: emailAccountId === ALL ? '' : emailAccountId,
+    shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
     search,
     archived: archiveMode === 'active' ? '' : archiveMode,
   })
@@ -273,6 +285,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     if (emailAccountId !== ALL) params.set('email_account_id', emailAccountId)
     if (archiveMode !== 'active') params.set('archived', archiveMode)
     if (showShopeeStatusFilter && shopeeStatus !== ALL) params.set('shopee_status', shopeeStatus)
+    if (showShopeeShopFilter && shopeeShopId !== ALL) params.set('shopee_shop_id', shopeeShopId)
     if (search) params.set('search', search)
     const res = await client.get<typeof counts>(`/api/bills/counts?${params}`)
     setCounts(res.data)
@@ -309,6 +322,13 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       .catch(() => {
         if (alive) setInboxes([])
       })
+    client.get<{ data: ShopeeShopOption[] }>('/api/shopee-api/connections')
+      .then((res) => {
+        if (alive) setShopeeShops((res.data.data ?? []).filter((shop) => !shop.disabled_at))
+      })
+      .catch(() => {
+        if (alive) setShopeeShops([])
+      })
     return () => { alive = false }
   }, [])
 
@@ -317,7 +337,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       setCounts({ needs_review: 0, pending: 0, sent: 0, failed: 0, skipped: 0, total: 0 })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.source, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, search])
+  }, [config.source, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, shopeeShopId, search])
 
   useEffect(() => {
     if (!loading && data && page > totalPages) {
@@ -335,6 +355,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.set('status', status)
     if (showShopeeStatusFilter && shopeeStatus !== ALL) next.set('shopee_status', shopeeStatus)
     else next.delete('shopee_status')
+    if (showShopeeShopFilter && shopeeShopId !== ALL) next.set('shopee_shop_id', shopeeShopId)
+    else next.delete('shopee_shop_id')
     if (archiveMode === 'active') next.delete('archived')
     else next.set('archived', archiveMode)
     if (emailAccountId === ALL) next.delete('email_account_id')
@@ -358,6 +380,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     page,
     perPage,
     showShopeeStatusFilter,
+    showShopeeShopFilter,
+    shopeeShopId,
     searchParams,
     setSearchParams,
   ])
@@ -455,6 +479,24 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
                 </option>
               ))}
             </select>
+          )}
+          {showShopeeShopFilter && shopeeShops.length > 0 && (
+            <label className="flex w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground sm:w-auto">
+              <Store className="h-3.5 w-3.5 text-primary" />
+              <select
+                value={shopeeShopId}
+                onChange={(e) => resetPage(() => setShopeeShopId(e.target.value))}
+                className="h-9 min-w-0 bg-transparent text-xs text-foreground outline-none"
+                aria-label="กรองตามร้าน Shopee"
+              >
+                <option value={ALL}>ทุกร้าน Shopee</option>
+                {shopeeShops.map((shop) => (
+                  <option key={shop.id} value={String(shop.shop_id)}>
+                    {shop.label || shop.shop_name || 'Shopee shop'} · {shop.shop_id}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
           {inboxes.length > 0 && config.routeTo === '/settings/email' && (
             <select
@@ -616,6 +658,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           document_route: config.documentRoute,
           email_account_id: emailAccountId === ALL ? '' : emailAccountId,
           shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
+          shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
           search,
         }}
         onDone={() => {

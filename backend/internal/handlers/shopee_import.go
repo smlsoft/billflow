@@ -180,28 +180,31 @@ type ShopeeExcelItem struct {
 
 // ShopeeOrder is one parsed Shopee order (returned in preview).
 type ShopeeOrder struct {
-	OrderID          string            `json:"order_id"`
-	DocDate          string            `json:"doc_date"`
-	OrderDateTime    string            `json:"order_datetime,omitempty"`
-	PaymentTime      string            `json:"payment_time,omitempty"`
-	PaymentChannel   string            `json:"payment_channel,omitempty"`
-	BuyerUsername    string            `json:"buyer_username,omitempty"`
-	TrackingNo       string            `json:"tracking_no,omitempty"`
-	Status           string            `json:"status"`
-	Items            []ShopeeExcelItem `json:"items"`
-	ItemCount        int               `json:"item_count"`
-	TotalQty         float64           `json:"total_qty"`
-	PaidAmount       float64           `json:"paid_amount,omitempty"`
-	OrderTotalAmount float64           `json:"order_total_amount,omitempty"`
-	ItemGrossAmount  float64           `json:"item_gross_amount,omitempty"`
-	LinePaidAmount   float64           `json:"line_paid_amount,omitempty"`
-	ShippingAmount   float64           `json:"shipping_amount,omitempty"`
-	DiscountAmount   float64           `json:"discount_amount,omitempty"`
-	NoSKUItemCount   int               `json:"no_sku_item_count,omitempty"`
-	HasNoSKU         bool              `json:"has_no_sku,omitempty"`
-	MultiLine        bool              `json:"multi_line,omitempty"`
-	AmountMismatch   bool              `json:"amount_mismatch,omitempty"`
-	ExistingBillID   string            `json:"existing_bill_id,omitempty"`
+	OrderID            string            `json:"order_id"`
+	DocDate            string            `json:"doc_date"`
+	OrderDateTime      string            `json:"order_datetime,omitempty"`
+	PaymentTime        string            `json:"payment_time,omitempty"`
+	PaymentChannel     string            `json:"payment_channel,omitempty"`
+	BuyerUsername      string            `json:"buyer_username,omitempty"`
+	TrackingNo         string            `json:"tracking_no,omitempty"`
+	Status             string            `json:"status"`
+	Items              []ShopeeExcelItem `json:"items"`
+	ItemCount          int               `json:"item_count"`
+	TotalQty           float64           `json:"total_qty"`
+	PaidAmount         float64           `json:"paid_amount,omitempty"`
+	OrderTotalAmount   float64           `json:"order_total_amount,omitempty"`
+	ItemGrossAmount    float64           `json:"item_gross_amount,omitempty"`
+	LinePaidAmount     float64           `json:"line_paid_amount,omitempty"`
+	ShippingAmount     float64           `json:"shipping_amount,omitempty"`
+	DiscountAmount     float64           `json:"discount_amount,omitempty"`
+	NoSKUItemCount     int               `json:"no_sku_item_count,omitempty"`
+	HasNoSKU           bool              `json:"has_no_sku,omitempty"`
+	MultiLine          bool              `json:"multi_line,omitempty"`
+	AmountMismatch     bool              `json:"amount_mismatch,omitempty"`
+	ExistingBillID     string            `json:"existing_bill_id,omitempty"`
+	ShopeeShopID       string            `json:"shopee_shop_id,omitempty"`
+	ShopeeConnectionID string            `json:"shopee_connection_id,omitempty"`
+	ShopeeShopLabel    string            `json:"shopee_shop_label,omitempty"`
 	// preview-only
 	Duplicate bool `json:"duplicate"`
 }
@@ -234,12 +237,13 @@ type PreviewResponse struct {
 
 // ConfirmRequest is sent by the frontend for POST /api/import/shopee/confirm
 type ConfirmRequest struct {
-	Config      ShopeeConfigRequest `json:"config"`
-	OrderIDs    []string            `json:"order_ids"`            // only these order IDs will be processed
-	Orders      []ShopeeOrder       `json:"orders"`               // full parsed order data
-	FileToken   string              `json:"file_token,omitempty"` // returned by Preview, used for artifact archiving
-	ImportRunID string              `json:"import_run_id,omitempty"`
-	SourceFlow  string              `json:"source_flow,omitempty"` // shopee_excel (default) or shopee_api
+	Config       ShopeeConfigRequest `json:"config"`
+	OrderIDs     []string            `json:"order_ids"`            // only these order IDs will be processed
+	Orders       []ShopeeOrder       `json:"orders"`               // full parsed order data
+	FileToken    string              `json:"file_token,omitempty"` // returned by Preview, used for artifact archiving
+	ImportRunID  string              `json:"import_run_id,omitempty"`
+	SourceFlow   string              `json:"source_flow,omitempty"` // shopee_excel (default) or shopee_api
+	ConnectionID string              `json:"connection_id,omitempty"`
 }
 
 // ConfirmResult is one processed order result.
@@ -420,6 +424,22 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	var selectedConn *ShopeeAPIConnection
+	if connID := strings.TrimSpace(c.PostForm("connection_id")); connID != "" {
+		selectedConn, err = h.resolveShopeeAPIConnection(c.Request.Context(), connID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "ไม่พบร้าน Shopee ที่เลือก"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดร้าน Shopee ที่เลือกไม่สำเร็จ"})
+			return
+		}
+		if selectedConn.DisabledAt.Valid {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ร้าน Shopee ที่เลือกถูกปิดใช้งาน"})
+			return
+		}
+	}
 
 	// Compute file token + stash for Confirm. Skip when no artifact service
 	// is wired (early dev mode or tests).
@@ -436,8 +456,17 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 
 	// Mark duplicates (orders already in DB)
 	dupCount := 0
+	shopID := ""
+	if selectedConn != nil {
+		shopID = strconv.FormatInt(selectedConn.ShopID, 10)
+	}
 	for i := range orders {
-		if billID, exists, _ := h.findShopeeOrderBillID(orders[i].OrderID); exists {
+		if selectedConn != nil {
+			orders[i].ShopeeShopID = shopID
+			orders[i].ShopeeConnectionID = selectedConn.ID
+			orders[i].ShopeeShopLabel = selectedConn.DisplayLabel()
+		}
+		if billID, exists, _ := h.findShopeeOrderBillIDForShop(orders[i].OrderID, shopID); exists {
 			orders[i].Duplicate = true
 			orders[i].ExistingBillID = billID
 			dupCount++
@@ -464,6 +493,7 @@ func (h *ShopeeImportHandler) Preview(c *gin.Context) {
 				"duplicate_count": dupCount,
 				"skipped_count":   skippedCount,
 				"import_run_id":   importRunID,
+				"shopee_shop_id":  shopID,
 			},
 		})
 	}
@@ -501,6 +531,23 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 	sourceFlow := strings.TrimSpace(req.SourceFlow)
 	if sourceFlow == "" {
 		sourceFlow = "shopee_excel"
+	}
+	var selectedConn *ShopeeAPIConnection
+	if strings.TrimSpace(req.ConnectionID) != "" {
+		var err error
+		selectedConn, err = h.resolveShopeeAPIConnection(c.Request.Context(), req.ConnectionID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "ไม่พบร้าน Shopee ที่เลือก"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดร้าน Shopee ที่เลือกไม่สำเร็จ"})
+			return
+		}
+		if selectedConn.DisabledAt.Valid {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ร้าน Shopee ที่เลือกถูกปิดใช้งาน"})
+			return
+		}
 	}
 
 	// Default unit code from the request config; used as a fallback when
@@ -545,7 +592,15 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		if !selectedSet[order.OrderID] {
 			continue
 		}
-		if billID, exists, _ := h.findShopeeOrderBillID(order.OrderID); exists {
+		shopID := strings.TrimSpace(order.ShopeeShopID)
+		shopLabel := strings.TrimSpace(order.ShopeeShopLabel)
+		connectionID := strings.TrimSpace(order.ShopeeConnectionID)
+		if selectedConn != nil {
+			shopID = strconv.FormatInt(selectedConn.ShopID, 10)
+			shopLabel = selectedConn.DisplayLabel()
+			connectionID = selectedConn.ID
+		}
+		if billID, exists, _ := h.findShopeeOrderBillIDForShop(order.OrderID, shopID); exists {
 			results = append(results, ConfirmResult{
 				OrderID: order.OrderID,
 				Success: false,
@@ -659,7 +714,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		}
 
 		aiConf := 1.0
-		rawData, _ := json.Marshal(map[string]interface{}{
+		raw := map[string]interface{}{
 			"flow":               sourceFlow,
 			"shopee_order_id":    order.OrderID,
 			"order_id":           order.OrderID,
@@ -686,7 +741,17 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 			"import_run_id":      req.ImportRunID,
 			"document_route":     documentRoute,
 			"sml_destination":    destinationName,
-		})
+		}
+		if shopID != "" {
+			raw["shopee_shop_id"] = shopID
+		}
+		if connectionID != "" {
+			raw["shopee_connection_id"] = connectionID
+		}
+		if shopLabel != "" {
+			raw["shopee_shop_label"] = shopLabel
+		}
+		rawData, _ := json.Marshal(raw)
 		bill := &models.Bill{
 			BillType:      "sale",
 			Source:        "shopee",
@@ -702,7 +767,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		if err := h.billRepo.Create(bill); err != nil {
 			h.logger.Error("create bill", zap.String("order_id", order.OrderID), zap.Error(err))
 			if isDuplicateShopeeBillError(err) {
-				billID, _, _ := h.findShopeeOrderBillID(order.OrderID)
+				billID, _, _ := h.findShopeeOrderBillIDForShop(order.OrderID, shopID)
 				results = append(results, ConfirmResult{
 					OrderID: order.OrderID,
 					Success: false,
@@ -767,10 +832,11 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 				TraceID:    traceID,
 				DurationMs: &durMs,
 				Detail: map[string]interface{}{
-					"order_id":      order.OrderID,
-					"items_count":   len(enriched),
-					"all_high_conf": allHigh,
-					"status":        status,
+					"order_id":       order.OrderID,
+					"shopee_shop_id": shopID,
+					"items_count":    len(enriched),
+					"all_high_conf":  allHigh,
+					"status":         status,
 				},
 			})
 		}
@@ -783,6 +849,7 @@ func (h *ShopeeImportHandler) Confirm(c *gin.Context) {
 		})
 		h.logger.Info("shopee_excel: bill created",
 			zap.String("order_id", order.OrderID),
+			zap.String("shopee_shop_id", shopID),
 			zap.String("bill_id", bill.ID),
 			zap.String("status", status),
 		)
@@ -1012,19 +1079,43 @@ func (h *ShopeeImportHandler) existsShopeeOrder(orderID string) (bool, error) {
 }
 
 func (h *ShopeeImportHandler) findShopeeOrderBillID(orderID string) (string, bool, error) {
+	return h.findShopeeOrderBillIDForShop(orderID, "")
+}
+
+func (h *ShopeeImportHandler) findShopeeOrderBillIDForShop(orderID, shopID string) (string, bool, error) {
 	if strings.TrimSpace(orderID) == "" {
 		return "", false, nil
 	}
 	var id string
-	err := h.billRepo.DB().QueryRow(
-		`SELECT id::text
-		   FROM bills
-		  WHERE source = 'shopee'
-		    AND (raw_data->>'order_id' = $1 OR sml_order_id = $1)
-		  ORDER BY created_at DESC
-		  LIMIT 1`,
-		orderID,
-	).Scan(&id)
+	orderID = strings.TrimSpace(orderID)
+	shopID = strings.TrimSpace(shopID)
+	var err error
+	if shopID != "" {
+		err = h.billRepo.DB().QueryRow(
+			`SELECT id::text
+			   FROM bills
+			  WHERE source = 'shopee'
+			    AND (raw_data->>'order_id' = $1 OR sml_order_id = $1)
+			    AND (
+			      raw_data->>'shopee_shop_id' = $2
+			      OR COALESCE(raw_data->>'shopee_shop_id', '') = ''
+			    )
+			  ORDER BY created_at DESC
+			  LIMIT 1`,
+			orderID, shopID,
+		).Scan(&id)
+	} else {
+		err = h.billRepo.DB().QueryRow(
+			`SELECT id::text
+			   FROM bills
+			  WHERE source = 'shopee'
+			    AND (raw_data->>'order_id' = $1 OR sml_order_id = $1)
+			    AND COALESCE(raw_data->>'shopee_shop_id', '') = ''
+			  ORDER BY created_at DESC
+			  LIMIT 1`,
+			orderID,
+		).Scan(&id)
+	}
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", false, nil

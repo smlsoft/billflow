@@ -308,6 +308,11 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 		args = append(args, f.ShopeeStatus)
 		argN++
 	}
+	if f.ShopeeShopID != "" {
+		where += fmt.Sprintf(" AND b.raw_data->>'shopee_shop_id' = $%d", argN)
+		args = append(args, f.ShopeeShopID)
+		argN++
+	}
 	if f.DateFrom != "" {
 		where += fmt.Sprintf(" AND b.created_at >= $%d::date", argN)
 		args = append(args, f.DateFrom)
@@ -325,13 +330,15 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 			 OR b.raw_data->>'customer_name' ILIKE $%d
 			 OR b.raw_data->>'order_id' ILIKE $%d
 			 OR b.raw_data->>'shopee_order_id' ILIKE $%d
+			 OR b.raw_data->>'shopee_shop_id' ILIKE $%d
+			 OR b.raw_data->>'shopee_shop_label' ILIKE $%d
 			 OR b.raw_data->>'seller_name' ILIKE $%d
 			 OR b.raw_data->>'email_message_id' ILIKE $%d
 			 OR b.raw_data->>'message_id' ILIKE $%d
 			 OR b.raw_data->>'subject' ILIKE $%d
 			 OR b.raw_data->>'from' ILIKE $%d
 			)`,
-			argN, argN, argN, argN, argN, argN, argN, argN, argN,
+			argN, argN, argN, argN, argN, argN, argN, argN, argN, argN, argN,
 		)
 		args = append(args, "%"+f.Search+"%")
 		argN++
