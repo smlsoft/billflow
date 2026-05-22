@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import dayjs from 'dayjs'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import client from '@/api/client'
 import { cn } from '@/lib/utils'
+import type { ShopeeOrderEvent } from '@/types'
 import {
   ACTION_META,
   TONE_DOT,
@@ -14,6 +15,7 @@ import {
 
 interface Props {
   billId: string
+  shopeeEvents?: ShopeeOrderEvent[]
 }
 
 // BillTimeline renders an activity feed of every audit_log row tied to one
@@ -27,7 +29,7 @@ interface Props {
 //
 // Reuses ACTION_META + summarize() so the timeline visuals match /logs
 // exactly — no double-maintenance when new actions are added.
-export function BillTimeline({ billId }: Props) {
+export function BillTimeline({ billId, shopeeEvents = [] }: Props) {
   const [events, setEvents] = useState<AuditLog[] | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -49,14 +51,22 @@ export function BillTimeline({ billId }: Props) {
     }
   }, [billId])
 
+  const auditEvents = events ?? []
+  const sourceEvents = [...shopeeEvents].sort((a, b) => {
+    const aTime = dayjs(a.email_date || a.created_at).valueOf()
+    const bTime = dayjs(b.email_date || b.created_at).valueOf()
+    return bTime - aTime
+  })
+  const visibleCount = sourceEvents.length + auditEvents.length
+
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-semibold">
           ประวัติของบิลนี้
-          {events && events.length > 0 && (
+          {!loading && visibleCount > 0 && (
             <span className="ml-2 text-xs font-normal text-muted-foreground">
-              ({events.length} เหตุการณ์)
+              ({visibleCount} เหตุการณ์)
             </span>
           )}
         </CardTitle>
@@ -68,11 +78,22 @@ export function BillTimeline({ billId }: Props) {
             <Skeleton className="h-8 w-3/4" />
             <Skeleton className="h-8 w-2/3" />
           </div>
-        ) : events && events.length > 0 ? (
-          <Timeline events={events} />
+        ) : visibleCount > 0 ? (
+          <div className="space-y-5">
+            {sourceEvents.length > 0 && (
+              <TimelineSection title="สถานะจาก Shopee">
+                <ShopeeTimeline events={sourceEvents} />
+              </TimelineSection>
+            )}
+            {auditEvents.length > 0 && (
+              <TimelineSection title="ประวัติระบบ">
+                <AuditTimeline events={auditEvents} />
+              </TimelineSection>
+            )}
+          </div>
         ) : (
           <p className="text-xs text-muted-foreground">
-            ยังไม่มี audit log ของบิลนี้
+            ยังไม่มีประวัติของบิลนี้
           </p>
         )}
       </CardContent>
@@ -80,7 +101,22 @@ export function BillTimeline({ billId }: Props) {
   )
 }
 
-function Timeline({ events }: { events: AuditLog[] }) {
+function TimelineSection({
+  title,
+  children,
+}: {
+  title: string
+  children: ReactNode
+}) {
+  return (
+    <section>
+      <div className="mb-2 text-xs font-medium text-foreground">{title}</div>
+      {children}
+    </section>
+  )
+}
+
+function AuditTimeline({ events }: { events: AuditLog[] }) {
   return (
     <ol className="relative space-y-3">
       {/* Vertical rail behind every dot — the events position dots on top */}
@@ -93,6 +129,60 @@ function Timeline({ events }: { events: AuditLog[] }) {
       ))}
     </ol>
   )
+}
+
+function ShopeeTimeline({ events }: { events: ShopeeOrderEvent[] }) {
+  return (
+    <ol className="relative space-y-3">
+      <span
+        aria-hidden
+        className="absolute left-[5px] top-1.5 h-[calc(100%-12px)] w-px bg-border"
+      />
+      {events.map((ev) => (
+        <ShopeeEvent key={ev.id} event={ev} />
+      ))}
+    </ol>
+  )
+}
+
+function ShopeeEvent({ event }: { event: ShopeeOrderEvent }) {
+  const time = dayjs(event.email_date || event.created_at)
+  const subject = event.subject?.trim()
+  const from = event.from_addr?.trim()
+  const summary = [subject, from ? `จาก ${from}` : ''].filter(Boolean).join(' · ')
+
+  return (
+    <li className="relative flex gap-3 pl-0">
+      <span className="relative z-10 mt-1.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-info ring-[3px] ring-card" />
+      <div className="min-w-0 flex-1 pb-0.5">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="text-sm font-medium text-foreground">
+            {shopeeEventLabel(event)}
+          </span>
+          <span
+            className="ml-auto text-[11px] tabular-nums text-muted-foreground"
+            title={time.format('YYYY-MM-DD HH:mm:ss')}
+          >
+            {time.format('DD/MM/YY HH:mm')}
+          </span>
+        </div>
+        {summary && (
+          <p
+            className="mt-0.5 truncate text-xs text-muted-foreground"
+            title={summary}
+          >
+            {summary}
+          </p>
+        )}
+      </div>
+    </li>
+  )
+}
+
+export function shopeeEventLabel(event: ShopeeOrderEvent): string {
+  if (event.event_type === 'payment_confirmed') return 'ยืนยันการชำระเงินแล้ว'
+  if (event.event_type === 'shipped') return 'ถูกจัดส่งแล้ว'
+  return event.status_label || event.event_type || 'สถานะ Shopee'
 }
 
 function Event({ event, isLast }: { event: AuditLog; isLast: boolean }) {

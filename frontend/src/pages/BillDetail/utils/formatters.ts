@@ -56,13 +56,13 @@ export const KIND_META: Record<
   },
   email_html: {
     icon: '📧',
-    label: 'Email HTML body',
-    desc: 'เนื้ออีเมลฉบับเต็ม (HTML) เปิดในเบราว์เซอร์แล้วเห็นรูปสินค้า/ราคา/หมายเลขคำสั่งซื้อแบบที่ต้นทางส่งมา',
+    label: 'อีเมลต้นฉบับ',
+    desc: 'เนื้ออีเมลฉบับเต็ม เปิดดูหรือพิมพ์เพื่อย้อนตรวจหลักฐานจากต้นทาง',
   },
   email_text: {
     icon: '📧',
-    label: 'Email body',
-    desc: 'เนื้ออีเมลต้นฉบับ',
+    label: 'อีเมลต้นฉบับ',
+    desc: 'เนื้ออีเมลต้นฉบับแบบข้อความ',
   },
   email_envelope: {
     icon: '📨',
@@ -94,6 +94,19 @@ export const KIND_META: Record<
     label: 'LINE chat',
     desc: 'ประวัติแชท LINE ที่นำมาสร้างบิลนี้',
   },
+}
+
+const HIDDEN_USER_ARTIFACT_KINDS = new Set([
+  'email_envelope',
+  'email_raw',
+  'email_debug',
+  'debug_json',
+  'api_payload',
+  'sml_payload',
+])
+
+export function isUserVisibleArtifact(kind: string): boolean {
+  return !HIDDEN_USER_ARTIFACT_KINDS.has(kind)
 }
 
 export function fmtSize(n: number): string {

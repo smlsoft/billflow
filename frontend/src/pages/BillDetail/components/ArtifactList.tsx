@@ -6,7 +6,8 @@ import dayjs from 'dayjs'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useArtifacts, openArtifact, printArtifact, recordArtifactPrint } from '../hooks/useArtifacts'
-import { KIND_META, fmtSize } from '../utils/formatters'
+import type { BillArtifact } from '../hooks/useArtifacts'
+import { KIND_META, fmtSize, isUserVisibleArtifact } from '../utils/formatters'
 import api from '@/api/client'
 import type { BillEmailGroup, BillEmailRelatedBill, EmailPrintEvent } from '@/types'
 
@@ -22,6 +23,7 @@ function EmailPreviewModal({
   billId,
   artId,
   filename,
+  displayName,
   emailGroup,
   onPrinted,
   onClose,
@@ -29,6 +31,7 @@ function EmailPreviewModal({
   billId: string
   artId: string
   filename: string
+  displayName: string
   emailGroup?: BillEmailGroup | null
   onPrinted: (artId: string, filename: string) => Promise<void>
   onClose: () => void
@@ -82,7 +85,8 @@ function EmailPreviewModal({
       >
         <div className="flex items-center justify-between border-b px-4 py-2">
           <div className="min-w-0">
-            <span className="block truncate text-sm font-medium text-foreground">{filename}</span>
+            <span className="block truncate text-sm font-medium text-foreground">{displayName}</span>
+            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{filename}</span>
             {duplicateNote && (
               <span className="mt-0.5 block truncate text-xs text-warning">{duplicateNote}</span>
             )}
@@ -131,7 +135,7 @@ function EmailPreviewModal({
 
 export function ArtifactList({ billId, emailGroup }: Props) {
   const { items, loading } = useArtifacts(billId)
-  const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string } | null>(null)
+  const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string; displayName: string } | null>(null)
   const [printEvents, setPrintEvents] = useState<EmailPrintEvent[]>(emailGroup?.print_events ?? [])
 
   useEffect(() => {
@@ -157,7 +161,27 @@ export function ArtifactList({ billId, emailGroup }: Props) {
     }
   }
 
-  if (loading || items.length === 0) return null
+  if (loading) return null
+
+  const visibleItems = items.filter((a) => isUserVisibleArtifact(a.kind))
+
+  if (visibleItems.length === 0) {
+    return (
+      <Card className="rounded-2xl border-border/70 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Paperclip className="h-4 w-4 text-muted-foreground" />
+            หลักฐานต้นฉบับ (0)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p className="text-xs text-muted-foreground">
+            ไม่มีไฟล์หลักฐานสำหรับแสดง
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
 
   const duplicateNote = emailDuplicateNote(emailGroup)
 
@@ -168,7 +192,7 @@ export function ArtifactList({ billId, emailGroup }: Props) {
           <div>
             <CardTitle className="flex items-center gap-2 text-sm font-semibold">
               <Paperclip className="h-4 w-4 text-muted-foreground" />
-              หลักฐานต้นฉบับ ({items.length})
+              หลักฐานต้นฉบับ ({visibleItems.length})
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
               เปิดดูเฉพาะเมื่อต้องย้อนตรวจหลักฐานต้นฉบับ
@@ -183,8 +207,9 @@ export function ArtifactList({ billId, emailGroup }: Props) {
           />
 
           <div className="space-y-1">
-            {items.map((a) => {
+            {visibleItems.map((a) => {
               const meta = KIND_META[a.kind] ?? { icon: '', label: a.kind, desc: '' }
+              const display = artifactDisplay(a, meta)
               const ct = a.content_type ?? ''
               const isHtml = ct.startsWith('text/html') || a.kind === 'email_html' || a.kind === 'email_text'
               const isPrintableEmail = a.kind === 'email_html' || a.kind === 'email_text'
@@ -196,7 +221,7 @@ export function ArtifactList({ billId, emailGroup }: Props) {
 
               const handlePreview = () => {
                 if (isHtml) {
-                  setPreviewArt({ id: a.id, filename: a.filename, contentType: ct })
+                  setPreviewArt({ id: a.id, filename: a.filename, contentType: ct, displayName: display.label })
                 } else {
                   openArtifact(billId, a.id, a.filename, 'preview')
                 }
@@ -211,8 +236,8 @@ export function ArtifactList({ billId, emailGroup }: Props) {
                     <Paperclip className="h-4 w-4" />
                   </span>
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm break-words">{meta.label}</div>
-                    {meta.desc && <div className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">{meta.desc}</div>}
+                    <div className="font-medium text-sm break-words">{display.label}</div>
+                    {display.desc && <div className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">{display.desc}</div>}
                     {isPrintableEmail && duplicateNote && (
                       <div className="mt-1 rounded-md bg-warning/10 px-2 py-1 text-xs leading-snug text-warning">
                         {duplicateNote}
@@ -274,6 +299,7 @@ export function ArtifactList({ billId, emailGroup }: Props) {
           billId={billId}
           artId={previewArt.id}
           filename={previewArt.filename}
+          displayName={previewArt.displayName}
           emailGroup={emailGroup}
           onPrinted={handlePrintArtifact}
           onClose={() => setPreviewArt(null)}
@@ -281,6 +307,37 @@ export function ArtifactList({ billId, emailGroup }: Props) {
       )}
     </>
   )
+}
+
+function artifactDisplay(
+  artifact: BillArtifact,
+  meta: { icon: string; label: string; desc: string },
+): { label: string; desc: string } {
+  if (artifact.kind !== 'email_html' && artifact.kind !== 'email_text') {
+    return { label: meta.label, desc: meta.desc }
+  }
+
+  const subject = metaString(artifact.source_meta?.subject)
+  const eventType = metaString(artifact.source_meta?.event_type)
+
+  return {
+    label: emailEvidenceLabel(subject, eventType),
+    desc: subject || meta.desc,
+  }
+}
+
+function emailEvidenceLabel(subject: string, eventType: string): string {
+  if (eventType === 'payment_confirmed' || subject.includes('ยืนยันการชำระเงิน')) {
+    return 'อีเมลยืนยันการชำระเงิน'
+  }
+  if (eventType === 'shipped' || subject.includes('ถูกจัดส่งแล้ว')) {
+    return 'อีเมลแจ้งจัดส่ง'
+  }
+  return 'อีเมลต้นฉบับ'
+}
+
+function metaString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 function EmailGroupContext({
