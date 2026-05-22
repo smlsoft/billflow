@@ -10,6 +10,7 @@ import (
 
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
+	"billflow/internal/services/artifact"
 	emailservice "billflow/internal/services/email"
 )
 
@@ -69,10 +70,15 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	}
 	defer db.Close()
 
-	h := &EmailHandler{billRepo: repository.NewBillRepo(db), logger: zap.NewNop()}
+	h := &EmailHandler{
+		billRepo:    repository.NewBillRepo(db),
+		artifactSvc: artifact.New(t.TempDir(), 10<<20, repository.NewBillArtifactRepo(db), zap.NewNop()),
+		logger:      zap.NewNop(),
+	}
 	messageID := "shipped-message@example.test"
 	orderID := "#2604294EP99PKT"
 	existingBillID := "768a0068-cad3-4b6e-b229-a5d2ce2ede73"
+	htmlBody := "<html></html>"
 
 	mock.ExpectQuery("SELECT").
 		WithArgs(messageID, orderID).
@@ -83,6 +89,12 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	mock.ExpectExec("INSERT INTO shopee_order_events").
 		WithArgs(existingBillID, "2604294EP99PKT", shopeeEventShipped, "ถูกจัดส่งแล้ว", "คำสั่งซื้อ #2604294EP99PKT ถูกจัดส่งแล้ว", "info@mail.shopee.co.th", messageID, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("INSERT INTO bill_artifacts").
+		WithArgs(existingBillID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8", int64(len(htmlBody)), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", time.Now()))
+	mock.ExpectQuery("INSERT INTO bill_artifacts").
+		WithArgs(existingBillID, "email_envelope", "envelope.json", "application/json", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", time.Now()))
 	mock.ExpectExec("INSERT INTO processed_email_keys").
 		WithArgs("shopee_shipped", messageID, orderID).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -92,7 +104,7 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 		"คำสั่งซื้อ #2604294EP99PKT ถูกจัดส่งแล้ว",
 		"info@mail.shopee.co.th",
 		"body",
-		"<html></html>",
+		htmlBody,
 		messageID,
 		nil,
 		nil,

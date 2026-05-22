@@ -176,6 +176,7 @@ func (h *EmailHandler) processOneShippedOrder(
 		return false, fmt.Errorf("lookup existing shopee_shipped order: %w", err)
 	} else if exists {
 		h.recordShopeeOrderEvent(existingBillID, subject, from, messageID, source, orderID)
+		h.saveShopeeShippedEmailArtifacts(existingBillID, subject, from, bodyText, bodyHTML, messageID)
 		if messageID != "" {
 			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
 		}
@@ -286,13 +287,7 @@ func (h *EmailHandler) processOneShippedOrder(
 	// storing N copies of the same email. Prefer HTML body (renders nicely in
 	// the bill detail viewer) and fall back to plain text when HTML is absent.
 	if count == 0 {
-		if bodyHTML != "" {
-			h.saveEmailArtifacts(bill.ID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8",
-				[]byte(bodyHTML), subject, from, messageID)
-		} else {
-			h.saveEmailArtifacts(bill.ID, "email_text", "shopee-shipped.txt", "text/plain; charset=utf-8",
-				[]byte(bodyText), subject, from, messageID)
-		}
+		h.saveShopeeShippedEmailArtifacts(bill.ID, subject, from, bodyText, bodyHTML, messageID)
 	}
 
 	for _, iwc := range itemsWithCandidates {
@@ -337,6 +332,16 @@ func (h *EmailHandler) processOneShippedOrder(
 	)
 
 	return true, nil
+}
+
+func (h *EmailHandler) saveShopeeShippedEmailArtifacts(billID, subject, from, bodyText, bodyHTML, messageID string) {
+	if bodyHTML != "" {
+		h.saveEmailArtifacts(billID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8",
+			[]byte(bodyHTML), subject, from, messageID)
+		return
+	}
+	h.saveEmailArtifacts(billID, "email_text", "shopee-shipped.txt", "text/plain; charset=utf-8",
+		[]byte(bodyText), subject, from, messageID)
 }
 
 func (h *EmailHandler) findExistingShopeeShippedBillID(orderID string) (string, bool, error) {

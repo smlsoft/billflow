@@ -213,9 +213,9 @@ func (r *BillRepo) RecordEmailPrintEvent(billID, artifactID, userID, userEmail s
 
 	var messageID, subject, fromAddr, kind string
 	err := r.db.QueryRow(`
-		SELECT COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) AS message_id,
-		       COALESCE(b.raw_data->>'subject', '') AS subject,
-		       COALESCE(NULLIF(b.raw_data->>'from', ''), NULLIF(b.raw_data->>'from_addr', ''), '') AS from_addr,
+		SELECT COALESCE(NULLIF(ba.source_meta->>'message_id', ''), NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) AS message_id,
+		       COALESCE(NULLIF(ba.source_meta->>'subject', ''), b.raw_data->>'subject', '') AS subject,
+		       COALESCE(NULLIF(ba.source_meta->>'from', ''), NULLIF(b.raw_data->>'from', ''), NULLIF(b.raw_data->>'from_addr', ''), '') AS from_addr,
 		       ba.kind
 		  FROM bills b
 		  JOIN bill_artifacts ba ON ba.bill_id = b.id
