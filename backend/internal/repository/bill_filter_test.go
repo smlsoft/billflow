@@ -43,8 +43,34 @@ func TestBillWhereDateAndShopeeStatusFilters(t *testing.T) {
 	}
 }
 
-func TestBillWhereSearchIncludesEmailMetadata(t *testing.T) {
+func TestBillWhereOrderLikeSearchUsesExactOrderPredicate(t *testing.T) {
 	where, args, _ := billWhere(models.BillListFilter{Search: "260518Q4C1HSMB"})
+	for _, want := range []string{
+		"b.id IN",
+		"TRIM(LEADING '#' FROM COALESCE(sml_order_id",
+		"TRIM(LEADING '#' FROM COALESCE(raw_data->>'order_id'",
+		"shopee_order_events",
+		"UPPER(order_id)",
+	} {
+		if !strings.Contains(where, want) {
+			t.Fatalf("where = %q, missing %q", where, want)
+		}
+	}
+	for _, want := range []string{
+		"b.raw_data->>'subject' ILIKE",
+		"b.raw_data->>'email_message_id' ILIKE",
+	} {
+		if strings.Contains(where, want) {
+			t.Fatalf("where = %q, should not use broad email metadata search for exact order id", where)
+		}
+	}
+	if len(args) != 1 || args[0] != "260518Q4C1HSMB" {
+		t.Fatalf("args = %#v, want normalized exact order id", args)
+	}
+}
+
+func TestBillWhereFreeTextSearchIncludesEmailMetadata(t *testing.T) {
+	where, args, _ := billWhere(models.BillListFilter{Search: "info@mail.shopee.co.th"})
 	for _, want := range []string{
 		"b.raw_data->>'email_message_id' ILIKE",
 		"b.raw_data->>'message_id' ILIKE",
@@ -55,7 +81,7 @@ func TestBillWhereSearchIncludesEmailMetadata(t *testing.T) {
 			t.Fatalf("where = %q, missing %q", where, want)
 		}
 	}
-	if len(args) != 1 || args[0] != "%260518Q4C1HSMB%" {
+	if len(args) != 1 || args[0] != "%info@mail.shopee.co.th%" {
 		t.Fatalf("args = %#v, want one fuzzy search arg", args)
 	}
 }

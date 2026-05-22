@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -171,6 +172,20 @@ func (h *EmailHandler) processOneShippedOrder(
 		)
 		return false, nil
 	}
+	if existingBillID, exists, err := h.findExistingShopeeShippedBillID(orderID); err != nil {
+		return false, fmt.Errorf("lookup existing shopee_shipped order: %w", err)
+	} else if exists {
+		h.recordShopeeOrderEvent(existingBillID, subject, from, messageID, source, orderID)
+		if messageID != "" {
+			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
+		}
+		h.logger.Info("shopee_shipped: recorded status event on existing bill",
+			zap.String("message_id", messageID),
+			zap.String("order_id", orderID),
+			zap.String("bill_id", existingBillID),
+		)
+		return false, nil
+	}
 
 	const topK = 5
 	const highConfThreshold = 0.85
@@ -322,4 +337,47 @@ func (h *EmailHandler) processOneShippedOrder(
 	)
 
 	return true, nil
+}
+
+func (h *EmailHandler) findExistingShopeeShippedBillID(orderID string) (string, bool, error) {
+	if h == nil || h.billRepo == nil {
+		return "", false, nil
+	}
+	normalized := normalizeShopeeOrderID(orderID)
+	if normalized == "" {
+		return "", false, nil
+	}
+	var id string
+	err := h.billRepo.DB().QueryRow(
+		`SELECT b.id::text
+		   FROM bills b
+		   JOIN (
+		     SELECT id FROM bills
+		      WHERE archived_at IS NULL
+		        AND UPPER(TRIM(LEADING '#' FROM COALESCE(sml_order_id, ''))) = $1
+		     UNION
+		     SELECT id FROM bills
+		      WHERE archived_at IS NULL
+		        AND UPPER(TRIM(LEADING '#' FROM COALESCE(raw_data->>'order_id', ''))) = $1
+		     UNION
+		     SELECT id FROM bills
+		      WHERE archived_at IS NULL
+		        AND UPPER(TRIM(LEADING '#' FROM COALESCE(raw_data->>'shopee_order_id', ''))) = $1
+		     UNION
+		     SELECT bill_id FROM shopee_order_events
+		      WHERE UPPER(order_id) = $1
+		   ) existing ON existing.id = b.id
+		  WHERE b.source = 'shopee_shipped'
+		    AND b.archived_at IS NULL
+		  ORDER BY b.created_at ASC, b.id ASC
+		  LIMIT 1`,
+		strings.ToUpper(normalized),
+	).Scan(&id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return id, true, nil
 }

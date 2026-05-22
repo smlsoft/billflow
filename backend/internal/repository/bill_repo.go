@@ -324,26 +324,66 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 		argN++
 	}
 	if f.Search != "" {
-		where += fmt.Sprintf(
-			` AND (
-			 b.sml_doc_no ILIKE $%d
-			 OR b.raw_data->>'customer_name' ILIKE $%d
-			 OR b.raw_data->>'order_id' ILIKE $%d
-			 OR b.raw_data->>'shopee_order_id' ILIKE $%d
-			 OR b.raw_data->>'shopee_shop_id' ILIKE $%d
-			 OR b.raw_data->>'shopee_shop_label' ILIKE $%d
-			 OR b.raw_data->>'seller_name' ILIKE $%d
-			 OR b.raw_data->>'email_message_id' ILIKE $%d
-			 OR b.raw_data->>'message_id' ILIKE $%d
-			 OR b.raw_data->>'subject' ILIKE $%d
-			 OR b.raw_data->>'from' ILIKE $%d
-			)`,
-			argN, argN, argN, argN, argN, argN, argN, argN, argN, argN, argN,
-		)
-		args = append(args, "%"+f.Search+"%")
+		if orderID, ok := normalizedOrderSearch(f.Search); ok {
+			where += fmt.Sprintf(
+				` AND b.id IN (
+				 SELECT id FROM bills
+				  WHERE archived_at IS NULL
+				    AND UPPER(TRIM(LEADING '#' FROM COALESCE(sml_order_id, ''))) = $%d
+				 UNION
+				 SELECT id FROM bills
+				  WHERE archived_at IS NULL
+				    AND UPPER(TRIM(LEADING '#' FROM COALESCE(raw_data->>'order_id', ''))) = $%d
+				 UNION
+				 SELECT id FROM bills
+				  WHERE archived_at IS NULL
+				    AND UPPER(TRIM(LEADING '#' FROM COALESCE(raw_data->>'shopee_order_id', ''))) = $%d
+				 UNION
+				 SELECT bill_id FROM shopee_order_events
+				  WHERE UPPER(order_id) = $%d
+				)`,
+				argN, argN, argN, argN,
+			)
+			args = append(args, orderID)
+		} else {
+			where += fmt.Sprintf(
+				` AND (
+				 b.sml_doc_no ILIKE $%d
+				 OR b.raw_data->>'customer_name' ILIKE $%d
+				 OR b.raw_data->>'order_id' ILIKE $%d
+				 OR b.raw_data->>'shopee_order_id' ILIKE $%d
+				 OR b.raw_data->>'shopee_shop_id' ILIKE $%d
+				 OR b.raw_data->>'shopee_shop_label' ILIKE $%d
+				 OR b.raw_data->>'seller_name' ILIKE $%d
+				 OR b.raw_data->>'email_message_id' ILIKE $%d
+				 OR b.raw_data->>'message_id' ILIKE $%d
+				 OR b.raw_data->>'subject' ILIKE $%d
+				 OR b.raw_data->>'from' ILIKE $%d
+				)`,
+				argN, argN, argN, argN, argN, argN, argN, argN, argN, argN, argN,
+			)
+			args = append(args, "%"+f.Search+"%")
+		}
 		argN++
 	}
 	return where, args, argN
+}
+
+func normalizedOrderSearch(v string) (string, bool) {
+	v = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "#"))
+	if len(v) < 8 {
+		return "", false
+	}
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		default:
+			return "", false
+		}
+	}
+	return strings.ToUpper(v), true
 }
 
 func (r *BillRepo) QueueCounts(f models.BillListFilter) (BillQueueCounts, error) {

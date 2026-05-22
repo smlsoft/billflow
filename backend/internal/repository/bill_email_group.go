@@ -34,17 +34,23 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 
 	stats := make(map[string]emailGroupStats, len(messageIDs))
 	rows, err := r.db.Query(`
+		WITH matched_bills AS (
+		  SELECT id, raw_data->>'email_message_id' AS message_id
+		    FROM bills
+		   WHERE raw_data ? 'email_message_id'
+		     AND raw_data->>'email_message_id' = ANY($1)
+		  UNION
+		  SELECT id, raw_data->>'message_id' AS message_id
+		    FROM bills
+		   WHERE raw_data ? 'message_id'
+		     AND COALESCE(raw_data->>'email_message_id', '') = ''
+		     AND raw_data->>'message_id' = ANY($1)
+		)
 		SELECT message_id,
-		       COUNT(DISTINCT id)::int AS order_count,
+		       COUNT(DISTINCT mb.id)::int AS order_count,
 		       COALESCE(BOOL_OR(kind IN ('email_html', 'email_text')), FALSE) AS has_printable_email
-		  FROM (
-		    SELECT b.id,
-		           COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) AS message_id,
-		           ba.kind
-		      FROM bills b
-		      LEFT JOIN bill_artifacts ba ON ba.bill_id = b.id
-		     WHERE COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) = ANY($1)
-		  ) grouped
+		  FROM matched_bills mb
+		  LEFT JOIN bill_artifacts ba ON ba.bill_id = mb.id
 		 WHERE message_id IS NOT NULL AND message_id <> ''
 		 GROUP BY message_id`,
 		pq.Array(messageIDs),
