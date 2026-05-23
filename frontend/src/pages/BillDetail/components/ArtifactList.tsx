@@ -39,7 +39,8 @@ function EmailPreviewModal({
   const [src, setSrc] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Fetch once on mount — blob URL lives until modal closes.
+  // Fetch once on mount — inject CSS to strip body margin and force all links
+  // to open in a new tab (Shopee emails embed <a> without target="_blank").
   useEffect(() => {
     let alive = true
     let objectURL = ''
@@ -48,9 +49,17 @@ function EmailPreviewModal({
       .then((res) => {
         if (!alive) return
         const ct = (res.headers['content-type'] ?? '').toString() || 'text/html; charset=utf-8'
-        const blob = new Blob([res.data as Blob], { type: ct })
-        objectURL = URL.createObjectURL(blob)
-        setSrc(objectURL)
+        return res.data.text().then((html: string) => {
+          // Reset body margin so the email starts at the top of the iframe,
+          // and patch every <a> to open in a new tab.
+          const resetCss = `<style>*{box-sizing:border-box}html,body{margin:0!important;padding:0!important;padding-top:0!important;margin-top:0!important}table{margin:0!important}</style>`
+          const patched = html
+            .replace(/<head([^>]*)>/i, `<head$1>${resetCss}`)
+            .replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ')
+          const blob = new Blob([patched], { type: ct })
+          objectURL = URL.createObjectURL(blob)
+          if (alive) setSrc(objectURL)
+        })
       })
       .catch(() => {
         if (alive) toast.error('เปิดตัวอย่างอีเมลไม่สำเร็จ')
@@ -112,7 +121,8 @@ function EmailPreviewModal({
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-hidden">
+        {/* eslint-disable-next-line react/forbid-dom-props */}
+        <div className="flex-1 overflow-hidden" style={{ marginTop: 0 }}>
           {loading && (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               กำลังโหลด...
@@ -123,7 +133,7 @@ function EmailPreviewModal({
               src={src}
               title={filename}
               className="h-full w-full border-0"
-              sandbox="allow-same-origin allow-popups"
+              sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
               referrerPolicy="no-referrer"
             />
           )}
