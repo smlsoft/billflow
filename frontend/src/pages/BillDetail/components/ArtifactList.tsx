@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Download, ExternalLink, Eye, History, Paperclip, Printer, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -83,7 +84,7 @@ function EmailPreviewModal({
 
   const duplicateNote = emailDuplicateNote(emailGroup)
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={handleClose}
@@ -121,8 +122,7 @@ function EmailPreviewModal({
             </button>
           </div>
         </div>
-        {/* eslint-disable-next-line react/forbid-dom-props */}
-        <div className="flex-1 overflow-hidden" style={{ marginTop: 0 }}>
+        <div className="flex-1 overflow-hidden">
           {loading && (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               กำลังโหลด...
@@ -139,7 +139,8 @@ function EmailPreviewModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
