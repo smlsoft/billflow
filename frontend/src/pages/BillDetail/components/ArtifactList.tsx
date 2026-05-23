@@ -53,7 +53,7 @@ function EmailPreviewModal({
         return res.data.text().then((html: string) => {
           // Reset body margin so the email starts at the top of the iframe,
           // and patch every <a> to open in a new tab.
-          const resetCss = `<style>*{box-sizing:border-box}html,body{margin:0!important;padding:0!important;padding-top:0!important;margin-top:0!important}table{margin:0!important}</style>`
+          const resetCss = `<style>*{box-sizing:border-box}html,body{margin:0!important;padding:0!important}img{display:block;max-width:100%}table{margin:0!important}</style>`
           const patched = html
             .replace(/<head([^>]*)>/i, `<head$1>${resetCss}`)
             .replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ')
