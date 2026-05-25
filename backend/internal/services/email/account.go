@@ -411,7 +411,7 @@ func (p *imapPollJobProgress) applyPartial(base imapPollJobProgressBase, res Pol
 	}
 	p.ScannedCount = base.ScannedCount + res.Summary.Scanned
 	p.CreatedCount = base.CreatedCount + res.Summary.Created
-	p.SkippedCount = base.SkippedCount + res.Summary.AlreadyProcessed + res.Summary.SkippedUser
+	p.SkippedCount = base.SkippedCount + pollJobSkippedCount(res.Summary)
 	p.FailedCount = base.FailedCount + res.Summary.Failed
 	p.BacklogCount = res.Backlog
 	p.ReasonCounts = mergeReasonCounts(base.ReasonCounts, res.Details)
@@ -425,6 +425,14 @@ func (p *imapPollJobProgress) applyPartial(base imapPollJobProgressBase, res Pol
 
 func (p *imapPollJobProgress) applyFinal(base imapPollJobProgressBase, res PollResult) {
 	p.applyPartial(base, res)
+}
+
+func pollJobSkippedCount(summary models.IMAPPollSummary) int {
+	skipped := summary.Scanned - summary.Created - summary.Failed
+	if skipped < 0 {
+		return 0
+	}
+	return skipped
 }
 
 func (p imapPollJobProgress) toRepoInput() repository.UpdateIMAPPollJobProgressInput {

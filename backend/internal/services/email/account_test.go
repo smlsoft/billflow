@@ -93,8 +93,8 @@ func TestIMAPPollJobProgressAggregatesAcrossCycles(t *testing.T) {
 	if progress.CreatedCount != 5 {
 		t.Fatalf("CreatedCount = %d, want 5", progress.CreatedCount)
 	}
-	if progress.SkippedCount != 5 {
-		t.Fatalf("SkippedCount = %d, want 5", progress.SkippedCount)
+	if progress.SkippedCount != 4 {
+		t.Fatalf("SkippedCount = %d, want 4", progress.SkippedCount)
 	}
 	if progress.FailedCount != 1 {
 		t.Fatalf("FailedCount = %d, want 1", progress.FailedCount)
@@ -107,5 +107,19 @@ func TestIMAPPollJobProgressAggregatesAcrossCycles(t *testing.T) {
 	}
 	if progress.ReasonCounts["fetch_body_failed"] != 1 {
 		t.Fatalf("fetch_body_failed reason count = %d, want 1", progress.ReasonCounts["fetch_body_failed"])
+	}
+}
+
+func TestPollJobSkippedCountDoesNotDoubleCountDuplicates(t *testing.T) {
+	summary := models.IMAPPollSummary{
+		Scanned:          50,
+		Created:          3,
+		AlreadyProcessed: 47,
+		SkippedUser:      47,
+		Failed:           0,
+	}
+
+	if got := pollJobSkippedCount(summary); got != 47 {
+		t.Fatalf("pollJobSkippedCount() = %d, want 47", got)
 	}
 }
