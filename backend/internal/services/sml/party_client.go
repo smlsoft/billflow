@@ -1,12 +1,15 @@
 package sml
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -181,6 +184,16 @@ type partyDetailResponse struct {
 	Data    Party `json:"data"`
 }
 
+type createPartyResponse struct {
+	Success bool  `json:"success"`
+	Data    Party `json:"data"`
+	Error   *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+	Message string `json:"message"`
+}
+
 // GetCustomer fetches a single customer by code. Returns nil (no error) when
 // SML responds with 404 / data:null.
 func (c *PartyClient) GetCustomer(ctx context.Context, code string) (*Party, error) {
@@ -190,6 +203,62 @@ func (c *PartyClient) GetCustomer(ctx context.Context, code string) (*Party, err
 // GetSupplier fetches a single supplier by code.
 func (c *PartyClient) GetSupplier(ctx context.Context, code string) (*Party, error) {
 	return c.getOne(ctx, "supplier", code)
+}
+
+func (c *PartyClient) CreateCustomer(ctx context.Context, code, name string) (int, *Party, error) {
+	return c.createOne(ctx, "customer", code, name)
+}
+
+func (c *PartyClient) CreateSupplier(ctx context.Context, code, name string) (int, *Party, error) {
+	return c.createOne(ctx, "supplier", code, name)
+}
+
+func (c *PartyClient) createOne(ctx context.Context, endpoint, code, name string) (int, *Party, error) {
+	body, err := json.Marshal(map[string]string{
+		"code":   strings.TrimSpace(code),
+		"name_1": strings.TrimSpace(name),
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	u := fmt.Sprintf("%s/api/v1/%s", c.cfg.BaseURL, partyPath(endpoint))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	for k, v := range c.headers() {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("X-Api-Key", c.cfg.GUID)
+	req.Header.Set("X-Tenant", c.cfg.Database)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("sml %s create: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var pr createPartyResponse
+	if err := json.Unmarshal(respBody, &pr); err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("sml %s create HTTP %d decode failed: %w", endpoint, resp.StatusCode, err)
+	}
+	if resp.StatusCode != http.StatusCreated || !pr.Success {
+		msg := pr.Message
+		if pr.Error != nil && pr.Error.Message != "" {
+			msg = pr.Error.Message
+		}
+		if msg == "" {
+			msg = string(respBody)
+		}
+		return resp.StatusCode, nil, errors.New(msg)
+	}
+	normalizeParty(&pr.Data)
+	if pr.Data.Code == "" {
+		return resp.StatusCode, nil, fmt.Errorf("sml %s create returned empty code", endpoint)
+	}
+	return resp.StatusCode, &pr.Data, nil
 }
 
 func (c *PartyClient) getOne(ctx context.Context, endpoint, code string) (*Party, error) {

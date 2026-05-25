@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertCircle, Check, Copy } from 'lucide-react'
+import { AlertCircle, Check, Copy, RefreshCw } from 'lucide-react'
 import dayjs from 'dayjs'
 import { toast } from 'sonner'
 
@@ -25,6 +25,8 @@ interface Props {
   // persisted failure (most often identical, but they can diverge if the
   // backend stamped a different message than the HTTP body the client saw).
   retryError?: string | null
+  regeneratingDocNo?: boolean
+  onRegenerateDocNo?: () => Promise<string | null> | string | null | void
 }
 
 function parseFailure(msg: string): FailureDetail | null {
@@ -50,7 +52,23 @@ const ROUTE_LABEL: Record<string, string> = {
 // (a) understand at a glance and (b) copy verbatim to send to a developer.
 // Replaces the previous inline red text under BillHeader which buried
 // route + attempted doc_no inside a single string.
-export function BillFailureCard({ errorMsg, retryError }: Props) {
+function isDuplicateDocNoFailure(text: string) {
+  const lower = text.toLowerCase()
+  return (
+    lower.includes('duplicate_doc_no') ||
+    lower.includes('duplicate key') ||
+    lower.includes('already exists') ||
+    (lower.includes('doc_no') && lower.includes('exists')) ||
+    text.includes('มีอยู่')
+  )
+}
+
+export function BillFailureCard({
+  errorMsg,
+  retryError,
+  regeneratingDocNo = false,
+  onRegenerateDocNo,
+}: Props) {
   const [copied, setCopied] = useState(false)
 
   if (!errorMsg && !retryError) return null
@@ -62,6 +80,7 @@ export function BillFailureCard({ errorMsg, retryError }: Props) {
   const route = detail?.route ?? ''
   const docNoAttempted = detail?.doc_no_attempted ?? ''
   const occurredAt = detail?.occurred_at
+  const canRegenerateDocNo = Boolean(onRegenerateDocNo && isDuplicateDocNoFailure(rawError))
 
   const handleCopy = async () => {
     // Build a multi-line block that's useful for dev triage out-of-context:
@@ -135,6 +154,19 @@ export function BillFailureCard({ errorMsg, retryError }: Props) {
             )}
             {copied ? 'คัดลอกแล้ว' : 'คัดลอก'}
           </Button>
+          {canRegenerateDocNo && (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => onRegenerateDocNo?.()}
+              disabled={regeneratingDocNo}
+              className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+              title="ดึงเลข running ล่าสุดจาก SML แล้วออก doc_no ใหม่ให้บิลนี้"
+            >
+              <RefreshCw className={cn('h-3 w-3', regeneratingDocNo && 'animate-spin')} />
+              ออกเลขใหม่
+            </Button>
+          )}
         </div>
 
         {/* Error body — terminal-style, monospace, word-wrap on long lines */}
@@ -157,8 +189,14 @@ export function BillFailureCard({ errorMsg, retryError }: Props) {
 
         {/* Footer hint — sets expectations: copy → fix → retry */}
         <p className="text-[11px] text-muted-foreground">
-          ส่ง error นี้ให้ทีมดูแลระบบเพื่อแก้ไข แล้วกด{' '}
-          <span className="font-medium text-foreground">Retry</span> อีกครั้งเมื่อแก้แล้ว
+          {canRegenerateDocNo
+            ? 'เลขเอกสารนี้ซ้ำใน SML กดออกเลขใหม่ แล้วส่ง SML อีกครั้ง'
+            : (
+              <>
+                ส่ง error นี้ให้ทีมดูแลระบบเพื่อแก้ไข แล้วกด{' '}
+                <span className="font-medium text-foreground">Retry</span> อีกครั้งเมื่อแก้แล้ว
+              </>
+            )}
         </p>
       </CardContent>
     </Card>

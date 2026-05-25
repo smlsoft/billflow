@@ -197,6 +197,34 @@ func (pc *PartyCache) Counts() (int, int) {
 	return len(pc.customers), len(pc.suppliers)
 }
 
+func (pc *PartyCache) Upsert(billType string, party Party) {
+	normalizeParty(&party)
+	if strings.TrimSpace(party.Code) == "" {
+		return
+	}
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	if billType == "purchase" {
+		pc.suppliers = upsertParty(pc.suppliers, party)
+		return
+	}
+	pc.customers = upsertParty(pc.customers, party)
+}
+
+func upsertParty(list []Party, party Party) []Party {
+	for i := range list {
+		if list[i].Code == party.Code {
+			list[i] = party
+			return list
+		}
+	}
+	list = append(list, party)
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].Code < list[j].Code
+	})
+	return list
+}
+
 func (pc *PartyCache) listForBillType(billType string) []Party {
 	if billType == "purchase" {
 		return pc.suppliers

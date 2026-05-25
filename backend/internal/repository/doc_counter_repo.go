@@ -38,6 +38,30 @@ func (r *DocCounterRepo) NextSeq(prefix, period string) (int, error) {
 	return seq, nil
 }
 
+// NextSeqAtLeast atomically reserves a sequence that is at least minSeq.
+// If another BillFlow worker already reserved minSeq, this returns the next
+// local sequence instead. This lets us sync from SML's authoritative latest
+// running while still preventing concurrent BillFlow sends from colliding.
+func (r *DocCounterRepo) NextSeqAtLeast(prefix, period string, minSeq int) (int, error) {
+	if minSeq < 1 {
+		minSeq = 1
+	}
+	var seq int
+	err := r.db.QueryRow(
+		`INSERT INTO doc_counters (prefix, period, last_used_seq, updated_at)
+		 VALUES ($1, $2, $3, NOW())
+		 ON CONFLICT (prefix, period) DO UPDATE SET
+		   last_used_seq = GREATEST(doc_counters.last_used_seq + 1, EXCLUDED.last_used_seq),
+		   updated_at    = NOW()
+		 RETURNING last_used_seq`,
+		prefix, period, minSeq,
+	).Scan(&seq)
+	if err != nil {
+		return 0, fmt.Errorf("doc counter sync increment: %w", err)
+	}
+	return seq, nil
+}
+
 // GenerateDocNo renders prefix + format with date tokens substituted and the
 // sequence counter atomically incremented.
 //
@@ -62,6 +86,21 @@ func (r *DocCounterRepo) GenerateDocNo(prefix, format string, now time.Time) (st
 	return r.renderDocNo(prefix, format, now, true, 0)
 }
 
+func (r *DocCounterRepo) GenerateDocNoAtLeast(prefix, format string, now time.Time, minSeq int) (string, error) {
+	if prefix == "" {
+		prefix = "BF"
+	}
+	if format == "" {
+		format = "YYMM####"
+	}
+	period := docCounterPeriod(format, now)
+	seq, err := r.NextSeqAtLeast(prefix, period, minSeq)
+	if err != nil {
+		return "", err
+	}
+	return renderDocNoFromSeq(prefix, format, now, seq), nil
+}
+
 // PeekDocNo renders the next doc_no without incrementing/reserving the
 // sequence. It is for UI preview only; GenerateDocNo remains the source of
 // truth when sending.
@@ -84,22 +123,7 @@ func (r *DocCounterRepo) renderDocNo(prefix, format string, now time.Time, incre
 		format = "YYMM####"
 	}
 
-	yyyy := fmt.Sprintf("%04d", now.Year())
-	yy := fmt.Sprintf("%02d", now.Year()%100)
-	mm := fmt.Sprintf("%02d", int(now.Month()))
-	dd := fmt.Sprintf("%02d", now.Day())
-
-	var period string
-	switch {
-	case strings.Contains(format, "DD"):
-		period = yyyy + mm + dd
-	case strings.Contains(format, "MM"):
-		period = yyyy + mm
-	case strings.Contains(format, "YYYY") || strings.Contains(format, "YY"):
-		period = yyyy
-	default:
-		period = "_"
-	}
+	period := docCounterPeriod(format, now)
 
 	seq := 1
 	if increment {
@@ -120,22 +144,41 @@ func (r *DocCounterRepo) renderDocNo(prefix, format string, now time.Time, incre
 		seq = lastUsed + 1 + offset
 	}
 
-	// Count contiguous # block to determine pad width. Default to 4 if absent.
+	return renderDocNoFromSeq(prefix, format, now, seq), nil
+}
+
+func docCounterPeriod(format string, now time.Time) string {
+	yyyy := fmt.Sprintf("%04d", now.Year())
+	mm := fmt.Sprintf("%02d", int(now.Month()))
+	dd := fmt.Sprintf("%02d", now.Day())
+	switch {
+	case strings.Contains(format, "DD"):
+		return yyyy + mm + dd
+	case strings.Contains(format, "MM"):
+		return yyyy + mm
+	case strings.Contains(format, "YYYY") || strings.Contains(format, "YY"):
+		return yyyy
+	default:
+		return "_"
+	}
+}
+
+func renderDocNoFromSeq(prefix, format string, now time.Time, seq int) string {
+	yyyy := fmt.Sprintf("%04d", now.Year())
+	yy := fmt.Sprintf("%02d", now.Year()%100)
+	mm := fmt.Sprintf("%02d", int(now.Month()))
+	dd := fmt.Sprintf("%02d", now.Day())
 	width := 4
 	if hashRe.MatchString(format) {
 		width = len(hashRe.FindString(format))
 	}
-	seqStr := fmt.Sprintf("%0*d", width, seq)
-
 	out := format
-	// YYYY before YY so the longer match consumes the substring first.
 	out = strings.ReplaceAll(out, "YYYY", yyyy)
 	out = strings.ReplaceAll(out, "YY", yy)
 	out = strings.ReplaceAll(out, "MM", mm)
 	out = strings.ReplaceAll(out, "DD", dd)
-	out = hashRe.ReplaceAllString(out, seqStr)
-
-	return prefix + out, nil
+	out = hashRe.ReplaceAllString(out, fmt.Sprintf("%0*d", width, seq))
+	return prefix + out
 }
 
 var hashRe = regexp.MustCompile(`#+`)

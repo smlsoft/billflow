@@ -153,6 +153,14 @@ export async function retryBill(
   notifyWorkQueueChanged()
 }
 
+export async function regenerateBillDocNo(
+  id: string,
+): Promise<{ doc_no: string; route: string }> {
+  const res = await client.post<{ doc_no: string; route: string }>(`/api/bills/${id}/regenerate-doc-no`)
+  notifyWorkQueueChanged()
+  return res.data
+}
+
 export async function createBulkSendJob(body: {
   client_request_id: string
   bill_ids: string[]

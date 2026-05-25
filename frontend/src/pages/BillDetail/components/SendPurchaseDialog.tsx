@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Send } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -102,6 +102,8 @@ interface Props {
   bill: Bill
   onConfirm: (body: RetryBillPayload) => void
   onCancel: () => void
+  onRegenerateDocNo?: () => Promise<string | null> | string | null | void
+  regeneratingDocNo?: boolean
 }
 
 export function SendPurchaseDialog({
@@ -109,6 +111,8 @@ export function SendPurchaseDialog({
   bill,
   onConfirm,
   onCancel,
+  onRegenerateDocNo,
+  regeneratingDocNo = false,
 }: Props) {
   const billType = bill.bill_type === 'sale' ? 'sale' : 'purchase'
   const isSale = billType === 'sale'
@@ -201,6 +205,14 @@ export function SendPurchaseDialog({
     })
   }
 
+  const handleRegenerateDocNo = async () => {
+    if (!onRegenerateDocNo) return
+    const nextDocNo = await onRegenerateDocNo()
+    if (typeof nextDocNo === 'string' && nextDocNo.trim()) {
+      setDocNo(nextDocNo.trim())
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel() }}>
       <DialogContent className="grid max-h-[90vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
@@ -236,7 +248,21 @@ export function SendPurchaseDialog({
 
           <div className="grid gap-2.5 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label className="text-xs">เลขเอกสาร SML (doc_no)</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs">เลขเอกสาร SML (doc_no)</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 gap-1 px-1.5 text-[11px]"
+                  onClick={handleRegenerateDocNo}
+                  disabled={!onRegenerateDocNo || regeneratingDocNo}
+                  title="ดึงเลข running ล่าสุดจาก SML แล้วออกเลขใหม่ให้บิลนี้"
+                >
+                  <RefreshCw className={`h-3 w-3 ${regeneratingDocNo ? 'animate-spin' : ''}`} />
+                  ดึงเลขล่าสุด
+                </Button>
+              </div>
               <Input
                 value={docNo}
                 onChange={(e) => setDocNo(e.target.value.trim().toUpperCase())}
@@ -244,7 +270,7 @@ export function SendPurchaseDialog({
                 className="font-mono"
               />
               <p className="text-[10px] text-muted-foreground">
-                ถ้าส่งไม่สำเร็จเพราะเลขซ้ำ ให้แก้เลขนี้แล้วส่งใหม่
+                ระบบถามเลขล่าสุดจาก SML ตอนออกเลขใหม่ และยังจองเลขจริงอีกครั้งตอนกดส่ง
               </p>
             </div>
             <div className="space-y-1">
@@ -376,7 +402,7 @@ export function SendPurchaseDialog({
               </div>
             </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
-              เลขเอกสารจะใช้ค่าที่แสดงอยู่ใน dialog นี้ ถ้า SML แจ้งเลขซ้ำ ให้แก้ doc_no แล้วลองส่งใหม่
+              เลขเอกสารจะใช้ค่าที่แสดงอยู่ใน dialog นี้ ถ้า SML แจ้งเลขซ้ำ ให้กดดึงเลขล่าสุดแล้วส่งใหม่
             </div>
           </div>
 

@@ -198,6 +198,11 @@ func main() {
 	}, logger)
 	partyCache := sml.NewPartyCache(partyClient, logger)
 	partyCache.Start(context.Background())
+	docNoClient := sml.NewDocNoClient(sml.PartyConfig{
+		BaseURL:  cfg.ShopeeSMLURL,
+		GUID:     cfg.ShopeeSMLGUID,
+		Database: cfg.ShopeeSMLDatabase,
+	}, logger)
 
 	// SML warehouse cache — powers the Bill Detail send dialog warehouse/shelf
 	// pickers. If the SML v4 warehouse service is not deployed yet, startup
@@ -330,7 +335,7 @@ func main() {
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, logger)
 	billH.RecoverInterruptedBulkSendJobs()
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
@@ -389,7 +394,7 @@ func main() {
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
-	smlPartyH := handlers.NewSMLPartyHandler(partyCache, logger)
+	smlPartyH := handlers.NewSMLPartyHandler(partyCache, partyClient, auditLogRepo, logger)
 	smlPartyH.SetSMLConfig(cfg.ShopeeSMLURL, cfg.ShopeeSMLGUID, cfg.ShopeeSMLDatabase)
 	smlWarehouseH := handlers.NewSMLWarehouseHandler(warehouseCache, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
@@ -446,6 +451,7 @@ func main() {
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
 		api.POST("/bills/:id/retry", billH.Retry)
+		api.POST("/bills/:id/regenerate-doc-no", middleware.RequireRole("admin", "staff"), billH.RegenerateDocNo)
 		api.POST("/bills/:id/archive", middleware.RequireRole("admin", "staff"), billH.Archive)
 		api.POST("/bills/:id/restore", middleware.RequireRole("admin", "staff"), billH.Restore)
 		api.DELETE("/bills/:id", middleware.RequireRole("admin"), billH.Delete)
@@ -525,7 +531,9 @@ func main() {
 
 		// SML party master proxy — search customers/suppliers from cache
 		api.GET("/sml/customers", middleware.RequireRole("admin", "staff"), smlPartyH.SearchCustomers)
+		api.POST("/sml/customers", middleware.RequireRole("admin", "staff"), smlPartyH.CreateCustomer)
 		api.GET("/sml/suppliers", middleware.RequireRole("admin", "staff"), smlPartyH.SearchSuppliers)
+		api.POST("/sml/suppliers", middleware.RequireRole("admin", "staff"), smlPartyH.CreateSupplier)
 		api.POST("/sml/refresh-parties", middleware.RequireRole("admin"), smlPartyH.Refresh)
 		api.GET("/sml/parties/last-sync", middleware.RequireRole("admin", "staff"), smlPartyH.LastSync)
 		api.GET("/sml/doc-formats", middleware.RequireRole("admin", "staff"), smlPartyH.DocFormats)

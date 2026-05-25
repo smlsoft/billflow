@@ -24,7 +24,18 @@ export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const { bill, loading, retrying, retryError, reloadBill, handleRetry, handleRetryWithOverride, setBill } =
+  const {
+    bill,
+    loading,
+    retrying,
+    regeneratingDocNo,
+    retryError,
+    reloadBill,
+    handleRetry,
+    handleRetryWithOverride,
+    handleRegenerateDocNo,
+    setBill,
+  } =
     useBillData(id)
 
   // ⚠ All hooks must be declared BEFORE any early return. React tracks hooks
@@ -153,7 +164,12 @@ export default function BillDetail() {
       <BillHeader bill={bill} />
 
       {(bill.error_msg || retryError) && (
-        <BillFailureCard errorMsg={bill.error_msg} retryError={retryError} />
+        <BillFailureCard
+          errorMsg={bill.error_msg}
+          retryError={retryError}
+          regeneratingDocNo={regeneratingDocNo}
+          onRegenerateDocNo={handleRegenerateDocNo}
+        />
       )}
 
       <BillTotal
@@ -218,6 +234,8 @@ export default function BillDetail() {
           bill={bill}
           onConfirm={handlePurchaseConfirm}
           onCancel={() => setSendDialogOpen(false)}
+          onRegenerateDocNo={handleRegenerateDocNo}
+          regeneratingDocNo={regeneratingDocNo}
         />
       )}
     </div>

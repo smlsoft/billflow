@@ -798,7 +798,7 @@ export function BulkSendDialog({
               </div>
             </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
-              เลือกคลังจาก SML หรือพิมพ์รหัสเองได้ เลข doc_no ด้านล่างเป็นเลขคาดการณ์ตามลำดับส่งจริงและจะถูกจองเมื่อกดส่ง
+              เลือกคลังจาก SML หรือพิมพ์รหัสเองได้ เลข doc_no ด้านล่างเป็นเลขคาดการณ์จาก SML ล่าสุดและจะจองเลขจริงอีกครั้งเมื่อกดส่ง
             </div>
           </div>
 
@@ -826,7 +826,7 @@ export function BulkSendDialog({
               <div>
                 <div className="font-medium text-foreground">ตรวจรายการพร้อมส่งและเลขเอกสาร</div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  doc_no เป็นเลขคาดการณ์ตามลำดับส่ง ถ้า SML แจ้งเลขซ้ำให้แก้ที่หน้า detail ของบิลนั้น
+                  doc_no เป็นเลขคาดการณ์จาก SML ล่าสุด ถ้า SML แจ้งเลขซ้ำให้กดออกเลขใหม่ที่หน้า detail ของบิลนั้น
                 </div>
               </div>
               <div className="flex flex-wrap justify-end gap-2 text-muted-foreground">

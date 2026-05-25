@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,7 @@ type BillHandler struct {
 	invoiceClient   *sml.InvoiceClient       // SML 248 saleinvoice REST (legacy)
 	saleOrderClient *sml.SaleOrderClient     // SML 248 saleorder REST (default)
 	poClient        *sml.PurchaseOrderClient // SML 248 purchaseorder REST
+	docNoClient     *sml.DocNoClient         // SML authoritative doc_no running
 	cfg             *config.Config
 	lineSvc         *lineservice.Service
 	auditRepo       *repository.AuditLogRepo
@@ -44,6 +46,7 @@ func NewBillHandler(
 	invoiceClient *sml.InvoiceClient,
 	saleOrderClient *sml.SaleOrderClient,
 	poClient *sml.PurchaseOrderClient,
+	docNoClient *sml.DocNoClient,
 	cfg *config.Config,
 	lineSvc *lineservice.Service,
 	auditRepo *repository.AuditLogRepo,
@@ -61,6 +64,7 @@ func NewBillHandler(
 		invoiceClient:   invoiceClient,
 		saleOrderClient: saleOrderClient,
 		poClient:        poClient,
+		docNoClient:     docNoClient,
 		cfg:             cfg,
 		lineSvc:         lineSvc,
 		auditRepo:       auditRepo,
@@ -81,7 +85,7 @@ func NewBillHandler(
 //
 // fallbackPrefix is used when def has no prefix configured — typically the
 // endpoint-flavored default ("BF-SO" for saleorder, "BF-PO" for PO, etc.)
-func (h *BillHandler) resolveDocNo(bill *models.Bill, def *models.ChannelDefault, fallbackPrefix string) (string, error) {
+func (h *BillHandler) resolveDocNo(bill *models.Bill, def *models.ChannelDefault, fallbackPrefix, route string) (string, error) {
 	if bill.SMLDocNo != nil && *bill.SMLDocNo != "" {
 		if bill.Status == "failed" && isDuplicateDocNoError(bill.ErrorMsg) {
 			// The saved number already failed because SML says it exists.
@@ -90,9 +94,38 @@ func (h *BillHandler) resolveDocNo(bill *models.Bill, def *models.ChannelDefault
 			return *bill.SMLDocNo, nil
 		}
 	}
+	return h.allocateFreshDocNo(bill, def, fallbackPrefix, route)
+}
+
+func (h *BillHandler) allocateFreshDocNo(bill *models.Bill, def *models.ChannelDefault, fallbackPrefix, route string) (string, error) {
 	prefix, format := resolveDocCounterPattern(def, fallbackPrefix)
+	if h.docCounters == nil {
+		return "", fmt.Errorf("local doc_no counter not configured")
+	}
+	if h.docNoClient == nil || !h.docNoClient.IsConfigured() {
+		return "", fmt.Errorf("ดึงเลข running ล่าสุดจาก SML ไม่ได้: SML doc_no API ยังไม่ได้ตั้งค่า")
+	}
+	docDate := docDateFromBill(bill)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	next, err := h.docNoClient.Next(ctx, sml.NextDocNoRequest{
+		Route:   route,
+		Prefix:  prefix,
+		Format:  format,
+		DocDate: docDate,
+	})
+	if err != nil {
+		return "", fmt.Errorf("ดึงเลข running ล่าสุดจาก SML ไม่สำเร็จ: %w", err)
+	}
+	docNoDate, err := time.Parse("2006-01-02", next.DocDate)
+	if err != nil {
+		docNoDate, _ = time.Parse("2006-01-02", docDate)
+	}
+	if docNoDate.IsZero() {
+		docNoDate = time.Now()
+	}
 	for i := 0; i < 100; i++ {
-		docNo, err := h.docCounters.GenerateDocNo(prefix, format, time.Now())
+		docNo, err := h.docCounters.GenerateDocNoAtLeast(prefix, format, docNoDate, next.NextSeq)
 		if err != nil {
 			return "", err
 		}
@@ -154,11 +187,25 @@ func (h *BillHandler) localDocNoExists(docNo, currentBillID string) (bool, error
 	return n > 0, nil
 }
 
-func (h *BillHandler) peekDocNo(def *models.ChannelDefault, fallbackPrefix string) (string, error) {
+func (h *BillHandler) peekDocNo(def *models.ChannelDefault, fallbackPrefix, route string) (string, error) {
+	prefix, format := resolveDocCounterPattern(def, fallbackPrefix)
+	if h.docNoClient != nil && h.docNoClient.IsConfigured() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		next, err := h.docNoClient.Next(ctx, sml.NextDocNoRequest{
+			Route:   route,
+			Prefix:  prefix,
+			Format:  format,
+			DocDate: time.Now().Format("2006-01-02"),
+		})
+		if err != nil {
+			return "", err
+		}
+		return next.NextDocNo, nil
+	}
 	if h.docCounters == nil {
 		return "", nil
 	}
-	prefix, format := resolveDocCounterPattern(def, fallbackPrefix)
 	for i := 0; i < 100; i++ {
 		docNo, err := h.docCounters.PeekDocNoWithOffset(prefix, format, time.Now(), i)
 		if err != nil {
@@ -272,14 +319,14 @@ func (h *BillHandler) validateResolvedSendFields(whCode, shelfCode, docTime stri
 	return nil
 }
 
-func (h *BillHandler) resolveRetryDocNo(req RetryRequest, bill *models.Bill, def *models.ChannelDefault, fallbackPrefix string) (string, error) {
+func (h *BillHandler) resolveRetryDocNo(req RetryRequest, bill *models.Bill, def *models.ChannelDefault, fallbackPrefix, route string) (string, error) {
 	if docNo := strings.TrimSpace(req.DocNo); docNo != "" {
 		if clean := cleanSMLDocNo(docNo); clean != docNo {
 			return "", fmt.Errorf("doc_no contains hidden or invalid Thai mark characters; use %q", clean)
 		}
 		return docNo, nil
 	}
-	docNo, err := h.resolveDocNo(bill, def, fallbackPrefix)
+	docNo, err := h.resolveDocNo(bill, def, fallbackPrefix, route)
 	if err != nil {
 		return "", err
 	}
@@ -487,7 +534,7 @@ func (h *BillHandler) Get(c *gin.Context) {
 			}
 			if bill.SMLDocNo != nil && *bill.SMLDocNo != "" {
 				preview["doc_no"] = *bill.SMLDocNo
-			} else if docNo, err := h.peekDocNo(def, fallbackDocPrefix(route)); err == nil && docNo != "" {
+			} else if docNo, err := h.peekDocNo(def, fallbackDocPrefix(route), route); err == nil && docNo != "" {
 				preview["doc_no"] = docNo
 			}
 			if def.DocPrefix != "" || def.DocRunningFormat != "" {
@@ -720,6 +767,53 @@ func (h *BillHandler) Retry(c *gin.Context) {
 	c.JSON(result.HTTPStatus, gin.H{"error": result.Error})
 }
 
+func (h *BillHandler) RegenerateDocNo(c *gin.Context) {
+	id := c.Param("id")
+	bill, err := h.billRepo.FindByID(id)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if bill.Status == "sent" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "บิลที่ส่งเข้า SML แล้วไม่ควรออกเลขเอกสารใหม่"})
+		return
+	}
+	var def *models.ChannelDefault
+	if h.channelDefaults != nil {
+		def, _ = h.channelDefaults.Get(bill.Source, bill.BillType)
+	}
+	kind, _ := resolveEndpoint(def, bill.Source, bill.BillType)
+	docNo, err := h.allocateFreshDocNo(bill, def, fallbackDocPrefix(kind), kind)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "ออกเลขเอกสารใหม่ไม่สำเร็จ: " + err.Error()})
+		return
+	}
+	if err := h.billRepo.UpdateStatus(bill.ID, bill.Status, &docNo, nil, nil); err != nil {
+		h.log.Error("regenerate doc_no update bill", zap.String("bill_id", bill.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "บันทึกเลขเอกสารใหม่ไม่สำเร็จ"})
+		return
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "bill_doc_no_regenerated",
+			TargetID: &bill.ID,
+			UserID:   userID,
+			Source:   "ui",
+			Level:    "info",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"doc_no": docNo,
+				"route":  kind,
+			},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"doc_no": docNo, "route": kind})
+}
+
 func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts retrySendOptions) retrySendResult {
 	if bill == nil {
 		return retrySendResult{HTTPStatus: http.StatusNotFound, Error: "bill not found"}
@@ -841,7 +935,7 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 	if docRef != "" {
 		docRefDate = docDate
 	}
-	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-SO")
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-SO", "saleorder")
 	if err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
 	}
@@ -934,7 +1028,7 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 	if docRef != "" {
 		docRefDate = docDate
 	}
-	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-INV")
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-INV", "saleinvoice")
 	if err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
 	}
@@ -1036,7 +1130,7 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	} else if docRef != "" {
 		docRefDate = docDate
 	}
-	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO")
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO", "purchaseorder")
 	if err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
 	}
@@ -1630,7 +1724,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req Retr
 	if docRef != "" {
 		docRefDate = docDate
 	}
-	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-SO")
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-SO", "saleorder")
 	if err != nil {
 		h.writeDocNoError(c, err)
 		return
@@ -1724,7 +1818,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req Re
 	if docRef != "" {
 		docRefDate = docDate
 	}
-	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-INV")
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-INV", "saleinvoice")
 	if err != nil {
 		h.writeDocNoError(c, err)
 		return
@@ -1821,7 +1915,7 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 	} else if docRef != "" {
 		docRefDate = docDate
 	}
-	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO")
+	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO", "purchaseorder")
 	if err != nil {
 		h.writeDocNoError(c, err)
 		return

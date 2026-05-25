@@ -13,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"billflow/internal/models"
+	"billflow/internal/repository"
 	"billflow/internal/services/sml"
 )
 
@@ -20,14 +22,16 @@ import (
 // Admin-only — used by /settings/channels picker and any future supplier UI.
 type SMLPartyHandler struct {
 	cache      *sml.PartyCache
+	client     *sml.PartyClient
+	auditRepo  *repository.AuditLogRepo
 	smlBaseURL string // sml-api-bybos base URL (e.g. http://192.168.2.109:8200)
 	smlGUID    string // API key for sml-api-bybos (used as guid header)
 	smlTenant  string // database/tenant name for sml-api-bybos (X-Tenant header)
 	logger     *zap.Logger
 }
 
-func NewSMLPartyHandler(cache *sml.PartyCache, logger *zap.Logger) *SMLPartyHandler {
-	return &SMLPartyHandler{cache: cache, logger: logger}
+func NewSMLPartyHandler(cache *sml.PartyCache, client *sml.PartyClient, auditRepo *repository.AuditLogRepo, logger *zap.Logger) *SMLPartyHandler {
+	return &SMLPartyHandler{cache: cache, client: client, auditRepo: auditRepo, logger: logger}
 }
 
 // SetSMLConfig injects the sml-api-bybos connection details needed for
@@ -46,6 +50,11 @@ func (h *SMLPartyHandler) SearchCustomers(c *gin.Context) {
 // GET /api/sml/suppliers?search=&limit=20
 func (h *SMLPartyHandler) SearchSuppliers(c *gin.Context) {
 	h.search(c, "purchase")
+}
+
+type createPartyRequest struct {
+	Code  string `json:"code" binding:"required"`
+	Name1 string `json:"name_1" binding:"required"`
 }
 
 func (h *SMLPartyHandler) search(c *gin.Context, billType string) {
@@ -74,6 +83,86 @@ func (h *SMLPartyHandler) search(c *gin.Context, billType string) {
 		"status":       status.Status,
 		"error":        status.Error,
 	})
+}
+
+func (h *SMLPartyHandler) CreateCustomer(c *gin.Context) {
+	h.create(c, "sale")
+}
+
+func (h *SMLPartyHandler) CreateSupplier(c *gin.Context) {
+	h.create(c, "purchase")
+}
+
+func (h *SMLPartyHandler) create(c *gin.Context, billType string) {
+	if h.client == nil || !h.client.IsConfigured() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML party client not configured"})
+		return
+	}
+	var req createPartyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.Code = strings.TrimSpace(req.Code)
+	req.Name1 = strings.TrimSpace(req.Name1)
+	if req.Code == "" || req.Name1 == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "code and name_1 are required"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	var party *sml.Party
+	var statusCode int
+	var err error
+	if billType == "purchase" {
+		statusCode, party, err = h.client.CreateSupplier(ctx, req.Code, req.Name1)
+	} else {
+		statusCode, party, err = h.client.CreateCustomer(ctx, req.Code, req.Name1)
+	}
+	if err != nil {
+		if statusCode == http.StatusConflict {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": req.Code})
+			return
+		}
+		h.logger.Warn("sml_party_create_failed",
+			zap.String("bill_type", billType),
+			zap.String("code", req.Code),
+			zap.Int("status_code", statusCode),
+			zap.Error(err),
+		)
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if party == nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "SML returned empty party"})
+		return
+	}
+	if h.cache != nil {
+		h.cache.Upsert(billType, *party)
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		action := "sml_customer_created"
+		if billType == "purchase" {
+			action = "sml_supplier_created"
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  action,
+			UserID:  userID,
+			Source:  "ui",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"code": party.Code,
+				"name": party.Name,
+			},
+		})
+	}
+	c.JSON(http.StatusCreated, gin.H{"party": party})
 }
 
 // POST /api/sml/refresh-parties — re-fetch both lists from SML.
