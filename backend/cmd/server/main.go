@@ -105,6 +105,16 @@ func main() {
 	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
 		logger.Warn("apply DB instance settings", zap.Error(err))
 	}
+	if n, err := billRepo.BackfillShopeePurchaseDiscounts(); err != nil {
+		logger.Warn("startup shopee purchase discount backfill failed", zap.Error(err))
+	} else if n > 0 {
+		logger.Info("startup shopee purchase discount backfilled", zap.Int("bills", n))
+	}
+	if n, err := billRepo.BackfillShopeePurchasePaymentSummaries(); err != nil {
+		logger.Warn("startup shopee purchase payment summary backfill failed", zap.Error(err))
+	} else if n > 0 {
+		logger.Info("startup shopee purchase payment summary backfilled", zap.Int("bills", n))
+	}
 	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, auditLogRepo, logger)
 
 	// Services
@@ -353,6 +363,7 @@ func main() {
 	sseH := handlers.NewSSEHandler(eventBroker, mediaSigner)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
+	emailH.SetChannelDefaults(channelDefaultRepo)
 	emailH.SetArtifactService(artifactSvc)
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, cfg, cfg.AutoConfirmThreshold, logger)
 	go func() {
@@ -379,6 +390,7 @@ func main() {
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
 	smlPartyH := handlers.NewSMLPartyHandler(partyCache, logger)
+	smlPartyH.SetSMLConfig(cfg.ShopeeSMLURL, cfg.ShopeeSMLGUID, cfg.ShopeeSMLDatabase)
 	smlWarehouseH := handlers.NewSMLWarehouseHandler(warehouseCache, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)
 	aiUsageH := handlers.NewAIUsageHandler(aiUsageRepo, logger)
@@ -516,6 +528,7 @@ func main() {
 		api.GET("/sml/suppliers", middleware.RequireRole("admin", "staff"), smlPartyH.SearchSuppliers)
 		api.POST("/sml/refresh-parties", middleware.RequireRole("admin"), smlPartyH.Refresh)
 		api.GET("/sml/parties/last-sync", middleware.RequireRole("admin", "staff"), smlPartyH.LastSync)
+		api.GET("/sml/doc-formats", middleware.RequireRole("admin", "staff"), smlPartyH.DocFormats)
 		api.GET("/sml/units", middleware.RequireRole("admin", "staff"), catalogH.GetUnits)
 		api.GET("/sml/warehouses", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchWarehouses)
 		api.GET("/sml/warehouses/:code/shelves", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchShelves)

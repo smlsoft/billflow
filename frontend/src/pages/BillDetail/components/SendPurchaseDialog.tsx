@@ -59,6 +59,44 @@ function routeDestination(route?: string, isSale = false) {
   return { label: 'ซื้อ -> ใบสั่งซื้อ', code: 'PO' }
 }
 
+const PURCHASE_INQUIRY_TYPE_OPTIONS = [
+  { value: '0', label: '0 — ซื้อสินค้าเงินเชื่อ' },
+  { value: '1', label: '1 — ซื้อสินค้าเงินสด' },
+  { value: '3', label: '3 — ซื้อสินค้าเงินสด (สินค้าบริการ)' },
+  { value: '4', label: '4 — ซื้อสินค้าเงินเชื่อ (สินค้าบริการ)' },
+]
+
+function rawString(payload: Record<string, unknown> | null | undefined, key: string) {
+  const value = payload?.[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function rawNumber(payload: Record<string, unknown> | null | undefined, key: string) {
+  const value = payload?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function rawBool(payload: Record<string, unknown> | null | undefined, key: string) {
+  const value = payload?.[key]
+  return typeof value === 'boolean' ? value : false
+}
+
+function rawObject(payload: Record<string, unknown> | null | undefined, key: string) {
+  const value = payload?.[key]
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function formatBaht(value: number | null) {
+  if (value == null) return ''
+  return `฿${value.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function orderIDFromRaw(raw: Record<string, unknown> | null | undefined) {
+  return rawString(raw, 'order_id') || rawString(raw, 'shopee_order_id') || rawString(raw, 'order_no')
+}
+
 interface Props {
   open: boolean
   bill: Bill
@@ -74,6 +112,8 @@ export function SendPurchaseDialog({
 }: Props) {
   const billType = bill.bill_type === 'sale' ? 'sale' : 'purchase'
   const isSale = billType === 'sale'
+  const isPurchaseOrder = !isSale
+  const isShopeePurchaseEmail = bill.source === 'shopee_shipped' && bill.bill_type === 'purchase'
   const destination = routeDestination(bill.preview?.route, isSale)
   const documentName = bill.preview?.route === 'saleinvoice'
     ? 'ขายสินค้าและบริการ'
@@ -92,25 +132,33 @@ export function SendPurchaseDialog({
   const [manualWarehouse, setManualWarehouse] = useState(false)
   const [vatTypeStr, setVatTypeStr] = useState('')
   const [vatRateStr, setVatRateStr] = useState('7')
+  const [inquiryTypeStr, setInquiryTypeStr] = useState('')
 
   const effectivePartyCode = party?.code ?? ''
-  const vatRateNum = Number(vatRateStr)
+  const parsedVatRate = Number(vatRateStr)
+  const vatRateNum = Number.isFinite(parsedVatRate) ? parsedVatRate : 7
+  const paymentSummary = rawObject(bill.raw_data, 'payment_summary')
+  const paymentMethod = rawString(paymentSummary, 'payment_method')
+  const paymentPaidAmount = rawNumber(paymentSummary, 'payment_paid_amount')
+  const paymentDocRefAmount = rawString(paymentSummary, 'doc_ref_amount')
+  const paymentIsCard = rawBool(paymentSummary, 'is_credit_debit_card')
+  const sellerFromEmail = rawString(bill.raw_data, 'seller_name')
+  const orderID = orderIDFromRaw(bill.raw_data)
   const canConfirm =
     !!effectivePartyCode &&
     whCode.trim() !== '' &&
     shelfCode.trim() !== '' &&
     vatTypeStr !== '' &&
-    vatRateStr.trim() !== '' &&
-    Number.isFinite(vatRateNum) &&
+    (!isPurchaseOrder || inquiryTypeStr !== '') &&
     docTime.trim() !== ''
   const missingFields = useMemo(() => [
     !effectivePartyCode ? (isSale ? 'ลูกค้า' : 'ผู้ขาย') : '',
     whCode.trim() === '' ? 'คลัง' : '',
     shelfCode.trim() === '' ? 'พื้นที่เก็บ' : '',
     vatTypeStr === '' ? 'ประเภทภาษี' : '',
-    vatRateStr.trim() === '' || !Number.isFinite(vatRateNum) ? 'อัตราภาษี' : '',
+    isPurchaseOrder && inquiryTypeStr === '' ? 'ประเภทรายการ' : '',
     docTime.trim() === '' ? 'เวลาเอกสาร' : '',
-  ].filter(Boolean), [docTime, effectivePartyCode, isSale, shelfCode, vatRateNum, vatRateStr, vatTypeStr, whCode])
+  ].filter(Boolean), [docTime, effectivePartyCode, inquiryTypeStr, isPurchaseOrder, isSale, shelfCode, vatTypeStr, whCode])
 
   useEffect(() => {
     if (!open) return
@@ -129,8 +177,10 @@ export function SendPurchaseDialog({
     setManualWarehouse(false)
     const vatType = payloadNumber(payload, 'vat_type')
     const vatRate = payloadNumber(payload, 'vat_rate')
+    const inquiryType = payloadNumber(payload, 'inquiry_type')
     setVatTypeStr(vatType != null ? String(vatType) : '')
     setVatRateStr(vatRate != null ? String(vatRate) : '7')
+    setInquiryTypeStr(inquiryType != null ? String(inquiryType) : '')
   }, [open, bill.id, bill.remark, bill.sml_doc_no, bill.sml_payload, defaults])
 
   const handleConfirm = () => {
@@ -139,7 +189,7 @@ export function SendPurchaseDialog({
       party_code: effectivePartyCode,
       party_name: party?.name,
       doc_no: docNo.trim() || undefined,
-      remark: remark.trim() || undefined,
+      remark: isShopeePurchaseEmail ? undefined : remark.trim() || undefined,
       branch_code: branchCode.trim() || undefined,
       sale_code: saleCode.trim() || undefined,
       doc_time: docTime.trim() || undefined,
@@ -147,6 +197,7 @@ export function SendPurchaseDialog({
       shelf_code: shelfCode.trim(),
       vat_type: Number(vatTypeStr),
       vat_rate: vatRateNum,
+      inquiry_type: isPurchaseOrder ? Number(inquiryTypeStr) : undefined,
     })
   }
 
@@ -279,16 +330,25 @@ export function SendPurchaseDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">อัตราภาษี (%) <span className="text-destructive">*</span></Label>
-              <Input
-                type="number"
-                step="0.001"
-                value={vatRateStr}
-                onChange={(e) => setVatRateStr(e.target.value)}
-                placeholder="7"
-                className="font-mono"
-              />
+            {isPurchaseOrder && (
+              <div className="space-y-1">
+                <Label className="text-xs">ประเภทรายการ <span className="text-destructive">*</span></Label>
+                <Select value={inquiryTypeStr} onValueChange={setInquiryTypeStr}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue placeholder="เลือกประเภทรายการ" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PURCHASE_INQUIRY_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
+              อัตราภาษีใช้ {Number.isFinite(vatRateNum) ? `${vatRateNum}%` : '7%'} จากค่าเริ่มต้นของระบบเพื่อกัน user กรอกผิด
             </div>
             <details className="space-y-2 rounded-md border border-border bg-background px-3 py-2 sm:col-span-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
@@ -320,17 +380,54 @@ export function SendPurchaseDialog({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="remark">หมายเหตุ</Label>
-            <textarea
-              id="remark"
-              value={remark}
-              onChange={(e) => setRemark(e.target.value)}
-              placeholder="หมายเหตุสำหรับ SML (ถ้ามี)"
-              rows={3}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
-            />
-          </div>
+          {isShopeePurchaseEmail && (
+            <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2.5 text-xs">
+              <div className="font-medium text-foreground">ข้อมูลที่จะส่งไปหัวเอกสาร SML จากอีเมล Shopee</div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <div className="text-muted-foreground">ผู้ขาย → remark</div>
+                  <div className="font-medium text-foreground">{sellerFromEmail || 'ไม่พบผู้ขายในอีเมล'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">หมายเลขคำสั่งซื้อ → remark_5</div>
+                  <div className="font-mono font-medium text-foreground">{orderID || 'ไม่พบหมายเลขคำสั่งซื้อ'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">วิธีชำระเงิน</div>
+                  <div className="font-medium text-foreground">{paymentMethod || 'ไม่พบรายละเอียดการชำระเงินในอีเมล'}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">doc_ref</div>
+                  <div className="font-medium text-foreground">
+                    {paymentIsCard
+                      ? paymentDocRefAmount
+                        ? `${paymentDocRefAmount} (${formatBaht(paymentPaidAmount)})`
+                        : 'เป็นบัตรเครดิต/เดบิต แต่ไม่พบจำนวนเงินที่จ่าย'
+                      : paymentMethod
+                        ? 'ไม่ใช่บัตรเครดิต/เดบิต จึงไม่ส่ง doc_ref'
+                        : 'ไม่พบรายละเอียดการชำระเงินในอีเมล'}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2 text-[11px] text-muted-foreground">
+                หมายเหตุ SML ของบิล Shopee ซื้อจะใช้ผู้ขายจากอีเมลอัตโนมัติ เพื่อไม่ให้ชนกับ requirement หัวเอกสาร
+              </div>
+            </div>
+          )}
+
+          {!isShopeePurchaseEmail && (
+            <div className="space-y-1.5">
+              <Label htmlFor="remark">หมายเหตุ</Label>
+              <textarea
+                id="remark"
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+                placeholder="หมายเหตุสำหรับ SML (ถ้ามี)"
+                rows={3}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+              />
+            </div>
+          )}
           {missingFields.length > 0 && (
             <div className="flex items-start gap-2 rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

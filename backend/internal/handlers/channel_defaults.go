@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -52,28 +53,44 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 		})
 		return
 	}
+	in.ShippingItemCode = strings.TrimSpace(in.ShippingItemCode)
+	in.ShippingItemUnitCode = strings.TrimSpace(in.ShippingItemUnitCode)
+	if in.Channel != "shopee_shipped" || in.BillType != "purchase" {
+		in.ShippingItemEnabled = false
+		in.ShippingItemCode = ""
+		in.ShippingItemUnitCode = ""
+	}
+	if in.ShippingItemEnabled && in.ShippingItemCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "กรุณาเลือกสินค้า SML สำหรับค่าขนส่ง Shopee ก่อนเปิดใช้งาน",
+		})
+		return
+	}
 
 	userID := c.GetString("user_id")
 	d := &models.ChannelDefault{
-		Channel:          in.Channel,
-		BillType:         in.BillType,
-		PartyCode:        in.PartyCode,
-		PartyName:        in.PartyName,
-		PartyPhone:       in.PartyPhone,
-		PartyAddress:     in.PartyAddress,
-		PartyTaxID:       in.PartyTaxID,
-		DocFormatCode:    in.DocFormatCode,
-		Endpoint:         in.Endpoint,
-		DocPrefix:        in.DocPrefix,
-		DocRunningFormat: in.DocRunningFormat,
-		BranchCode:       in.BranchCode,
-		SaleCode:         in.SaleCode,
-		UnitCode:         in.UnitCode,
-		DocTime:          in.DocTime,
-		WHCode:           in.WHCode,
-		ShelfCode:        in.ShelfCode,
-		VATType:          in.VATType,
-		VATRate:          in.VATRate,
+		Channel:              in.Channel,
+		BillType:             in.BillType,
+		PartyCode:            in.PartyCode,
+		PartyName:            in.PartyName,
+		PartyPhone:           in.PartyPhone,
+		PartyAddress:         in.PartyAddress,
+		PartyTaxID:           in.PartyTaxID,
+		DocFormatCode:        in.DocFormatCode,
+		Endpoint:             in.Endpoint,
+		DocPrefix:            in.DocPrefix,
+		DocRunningFormat:     in.DocRunningFormat,
+		BranchCode:           in.BranchCode,
+		SaleCode:             in.SaleCode,
+		UnitCode:             in.UnitCode,
+		DocTime:              in.DocTime,
+		ShippingItemEnabled:  in.ShippingItemEnabled,
+		ShippingItemCode:     in.ShippingItemCode,
+		ShippingItemUnitCode: in.ShippingItemUnitCode,
+		WHCode:               in.WHCode,
+		ShelfCode:            in.ShelfCode,
+		VATType:              in.VATType,
+		VATRate:              in.VATRate,
 	}
 	if err := h.repo.Upsert(d, userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -81,12 +98,14 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 	}
 
 	h.audit(c, "channel_default_updated", map[string]interface{}{
-		"channel":            in.Channel,
-		"bill_type":          in.BillType,
-		"endpoint":           in.Endpoint,
-		"doc_format_code":    in.DocFormatCode,
-		"doc_prefix":         in.DocPrefix,
-		"doc_running_format": in.DocRunningFormat,
+		"channel":               in.Channel,
+		"bill_type":             in.BillType,
+		"endpoint":              in.Endpoint,
+		"doc_format_code":       in.DocFormatCode,
+		"doc_prefix":            in.DocPrefix,
+		"doc_running_format":    in.DocRunningFormat,
+		"shipping_item_enabled": in.ShippingItemEnabled,
+		"shipping_item_code":    in.ShippingItemCode,
 	})
 	c.JSON(http.StatusOK, d)
 }

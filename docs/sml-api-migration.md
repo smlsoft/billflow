@@ -1,4 +1,4 @@
-# SML API Migration — billflow main
+# SML API Migration — billflow main + henna
 
 ## เป้าหมาย
 เปลี่ยนจากเรียก SML REST API (192.168.2.248:8080) โดยตรง  
@@ -9,7 +9,7 @@ Swagger docs: http://192.168.2.109:8200/docs
 
 ---
 
-## สถานะ (2026-05-20) — ✅ พร้อมใช้งานบน BillFlow main
+## สถานะ (2026-05-22) — ✅ พร้อมใช้งานบน BillFlow main และ BillFlow Henna
 
 ### การเปลี่ยนแปลงที่ทำแล้ว
 
@@ -22,8 +22,9 @@ Swagger docs: http://192.168.2.109:8200/docs
 | `services/sml/party_client.go` | path: customer/supplier → `/api/v1/ar/customers`, `/api/v1/ap/suppliers` |
 | `services/sml/warehouse_client.go` | path: `/SMLJavaRESTService/warehouse/v4` → `/api/v1/ic/warehouses` |
 | `services/catalog/service.go` | path: `/product/v4` → `/api/v1/ic/products` |
-| `config/config.go` | default `ShopeeSMLURL` ยังเป็น 192.168.2.248 แต่ .env บน server override แล้ว |
-| **server `.env`** | `SHOPEE_SML_URL=http://172.24.0.1:8200` ✅ |
+| `config/config.go` | default `ShopeeSMLURL` ยังเป็น 192.168.2.248 (fallback) |
+| **runtime app settings** | `sml.rest_base_url=http://172.24.0.1:8200` บน main + henna ✅ |
+| **server `.env`** | ยังอาจมีค่าประวัติเดิมได้ แต่ runtime ใช้ค่าใน `app_settings` ก่อน |
 
 ### Auth headers — ไม่ต้องเปลี่ยน
 
@@ -78,14 +79,15 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
 
 ---
 
-## สิ่งที่ยังไม่แตะ
+## สถานะแต่ละ instance ล่าสุด
 
 | Project | URL | สถานะ |
 |---|---|---|
-| billflow-henna | :3030 | ยังใช้ 192.168.2.248:8080 โดยตรง — **ห้ามแตะ** |
-| billflow-thaisunsport | - | ยังใช้ 192.168.2.248:8080 โดยตรง — **ห้ามแตะ** |
+| billflow (main) | :3010 | ใช้ `sml-api-bybos` ผ่าน `sml.rest_base_url=http://172.24.0.1:8200` |
+| billflow-henna | :3030 | ใช้ `sml-api-bybos` ผ่าน `sml.rest_base_url=http://172.24.0.1:8200` |
+| billflow-thaisunsport | :3020 | ยังไม่ migrate รอบนี้ (คงสถานะเดิม Phase 1) |
 
-จะ migrate henna/thaisunsport หลังจาก billflow main ทดสอบผ่านแล้ว
+หมายเหตุ: Thaisunsport จะ migrate เมื่อเปิด scope Phase 1+ ฝั่งขายและมี UAT ตามแผน
 
 ---
 
@@ -117,6 +119,40 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
 - The active product tenant `SML1_2026` uses image DB `sml1_2026_images`.
 - Apply and verify the image lookup index with [../scripts/apply-sml-image-index.sh](../scripts/apply-sml-image-index.sh) before switching `/settings/instance` to a new SML tenant or a restored SML PostgreSQL server.
 - The operational runbook is [sml-image-db-maintenance.md](sml-image-db-maintenance.md).
+
+## doc_format_code — dynamic from /settings/channels (2026-05-22)
+
+ก่อนหน้านี้ `doc_format_code` ถูก hardcode ใน `.env` (`SHOPEE_SML_DOC_FORMAT=INV` เป็นต้น)
+ตอนนี้ดึงจาก `channel_defaults.doc_format_code` ซึ่ง admin เลือกได้จาก `/settings/channels`
+
+**Flow:**
+
+```text
+admin เปิด /settings/channels → แก้ไขแถว → dropdown "รูปแบบเอกสาร"
+→ fetch GET /api/sml/doc-formats?screen_code=PO|SI|SR  (proxy ไป sml-api-bybos)
+→ แสดง code + name_1 จาก erp_doc_format ใน SML DB
+→ เลือก → prefix = code (เช่น POL), running format = format ตัด @ นำหน้าออก (เช่น YYMM####)
+→ บันทึก → channel_defaults.doc_format_code = "POL"
+
+ตอน retry บิล:
+bills.go → อ่าน def.DocFormatCode → cfg.DocFormat = "POL"
+→ purchaseorder_client / saleorder_client ส่ง doc_format_code: "POL" ใน payload
+→ sml-api-bybos insert ลง ic_trans_header.doc_format_code = "POL"
+```
+
+**Endpoints ใหม่ที่เพิ่ม:**
+
+| Service | Endpoint | หน้าที่ |
+| --- | --- | --- |
+| sml-api-bybos | `GET /api/v1/ic/doc-formats?screen_code=PO/SI/SR` | query `erp_doc_format` table ใน SML DB |
+| billflow backend | `GET /api/sml/doc-formats?screen_code=` | proxy → sml-api-bybos + ใช้ SML config ที่มีอยู่ |
+
+**SML format field:** `@YYMM####` — `@` หมายถึง "ใช้ code เป็น prefix" ซึ่ง BillFlow ทำอยู่แล้วผ่าน `doc_prefix`
+ดังนั้น frontend ตัด `@` ออกก่อน set `doc_running_format`
+
+**calc_flag:** สม-api-bybos คำนวณจาก `route.transType` อัตโนมัติ (ขาย → -1, ซื้อ → 1) ไม่ hardcode
+
+---
 
 ## Async bulk SML send — 2026-05-20
 

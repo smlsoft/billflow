@@ -28,6 +28,9 @@ export interface ChannelDefaultRow {
   sale_code: string
   unit_code: string
   doc_time: string
+  shipping_item_enabled?: boolean
+  shipping_item_code?: string
+  shipping_item_unit_code?: string
   // Inventory + VAT overrides (sentinel: '' / -1 = "use server default")
   wh_code: string
   shelf_code: string

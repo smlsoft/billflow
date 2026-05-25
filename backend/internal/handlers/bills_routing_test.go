@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"billflow/internal/models"
@@ -54,6 +55,22 @@ func TestResolveEndpointUsesExplicitEndpointKeyword(t *testing.T) {
 				t.Fatalf("resolveEndpoint() = (%q, %q), want (%q, %q)", gotKind, gotOverride, tt.wantKind, tt.wantOverride)
 			}
 		})
+	}
+}
+
+type testSMLMessageResponse struct {
+	message string
+}
+
+func (r testSMLMessageResponse) GetMessage() string {
+	return r.message
+}
+
+func TestSMLSendErrorMessageExplainsEmpty404(t *testing.T) {
+	got := smlSendErrorMessage(http.StatusNotFound, testSMLMessageResponse{}, nil)
+	want := "HTTP 404 — ไม่พบ endpoint SML ที่ตั้งไว้ กรุณาตรวจ SML REST URL ใน /settings/instance และปลายทางใน /settings/channels"
+	if got != want {
+		t.Fatalf("message = %q, want %q", got, want)
 	}
 }
 

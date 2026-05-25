@@ -111,7 +111,7 @@ export default function BillDetail() {
   }
 
   const total = (bill.items ?? []).reduce(
-    (s, i) => s + (i.qty ?? 0) * (i.price ?? 0),
+    (s, i) => s + Math.max((i.qty ?? 0) * (i.price ?? 0) - (i.discount_amount ?? 0), 0),
     0,
   )
   const canSend =

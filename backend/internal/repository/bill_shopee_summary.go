@@ -2,6 +2,7 @@ package repository
 
 import (
 	"encoding/json"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -44,6 +45,12 @@ func enrichShopeeBillRawData(b *models.Bill, itemCount int, stripBody bool) {
 	setMoneyIfMissing(raw, "goods_total_amount", "ยอดรวมค่าสินค้า", block)
 	setMoneyIfMissing(raw, "shipping_amount", "ค่าจัดส่งสินค้า", block)
 	setMoneyIfMissing(raw, "paid_total_amount", "ยอดที่ต้องชำระทั้งหมด", block)
+	if summary := extractShopeeDiscountSummaryFromBlock(block); summary.HasAny() {
+		raw["discount_summary"] = summary
+	}
+	if summary := extractShopeePaymentSummaryFromBlock(block); summary.HasAny() {
+		raw["payment_summary"] = summary
+	}
 	if itemCount > 0 {
 		raw["item_count"] = itemCount
 	}
@@ -56,6 +63,239 @@ func enrichShopeeBillRawData(b *models.Bill, itemCount int, stripBody bool) {
 	if out, err := json.Marshal(raw); err == nil {
 		b.RawData = out
 	}
+}
+
+// ExtractShopeeShippingAmount returns the "ค่าจัดส่งสินค้า" amount for one
+// Shopee purchase order email block. It shares the same parsing path as list
+// enrichment so persisted shipping-line behavior matches what users see.
+func ExtractShopeeShippingAmount(bodyText, bodyHTML, orderID string) (float64, bool) {
+	body := bodyText
+	if body == "" {
+		body = htmlToSummaryText(bodyHTML)
+	}
+	block := shopeeOrderBlock(body, strings.TrimSpace(orderID))
+	if block == "" {
+		block = body
+	}
+	return extractMoneyLabel("ค่าจัดส่งสินค้า", block)
+}
+
+// ShopeeDiscountSummary is persisted in bills.raw_data.discount_summary. The
+// amounts are tolerant: missing labels stay zero, and coupon-code text is kept
+// separate from money amounts.
+type ShopeeDiscountSummary struct {
+	ShopeeDiscountAmount float64  `json:"shopee_discount_amount"`
+	ShopDiscountAmount   float64  `json:"shop_discount_amount"`
+	TotalDiscountAmount  float64  `json:"total_discount_amount"`
+	ShopeeDiscountCodes  []string `json:"shopee_discount_codes,omitempty"`
+	ShopDiscountCodes    []string `json:"shop_discount_codes,omitempty"`
+	AllocationMethod     string   `json:"allocation_method,omitempty"`
+}
+
+func (s ShopeeDiscountSummary) HasAny() bool {
+	return s.TotalDiscountAmount > 0 || len(s.ShopeeDiscountCodes) > 0 || len(s.ShopDiscountCodes) > 0
+}
+
+// ExtractShopeeDiscountSummary returns Shopee/shop coupon amounts and codes for
+// a single order block. It never treats coupon-code text as money because money
+// extraction requires the Thai baht symbol.
+func ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID string) ShopeeDiscountSummary {
+	body := bodyText
+	if body == "" {
+		body = htmlToSummaryText(bodyHTML)
+	}
+	block := shopeeOrderBlock(body, strings.TrimSpace(orderID))
+	if block == "" {
+		block = body
+	}
+	return extractShopeeDiscountSummaryFromBlock(block)
+}
+
+// ShopeePaymentSummary is persisted in bills.raw_data.payment_summary. It is
+// intentionally tolerant because some Shopee emails omit payment details or use
+// small whitespace variants around the payment method.
+type ShopeePaymentSummary struct {
+	PaymentMethod     string  `json:"payment_method,omitempty"`
+	PaymentPaidAt     string  `json:"payment_paid_at,omitempty"`
+	PaymentPaidAmount float64 `json:"payment_paid_amount,omitempty"`
+	IsCreditDebitCard bool    `json:"is_credit_debit_card"`
+	DocRefAmount      string  `json:"doc_ref_amount,omitempty"`
+}
+
+func (s ShopeePaymentSummary) HasAny() bool {
+	return s.PaymentMethod != "" || s.PaymentPaidAt != "" || s.PaymentPaidAmount > 0
+}
+
+// ExtractShopeePaymentSummary returns payment details for a single Shopee order
+// block. A missing or malformed block returns zero values and must not block
+// bill creation.
+func ExtractShopeePaymentSummary(bodyText, bodyHTML, orderID string) ShopeePaymentSummary {
+	body := bodyText
+	if body == "" {
+		body = htmlToSummaryText(bodyHTML)
+	}
+	block := shopeeOrderBlock(body, strings.TrimSpace(orderID))
+	if block == "" {
+		block = body
+	}
+	return extractShopeePaymentSummaryFromBlock(block)
+}
+
+func extractShopeeDiscountSummaryFromBlock(block string) ShopeeDiscountSummary {
+	var summary ShopeeDiscountSummary
+	summary.ShopeeDiscountAmount, summary.ShopeeDiscountCodes = extractShopeeDiscountParts(block, "โค้ดส่วนลดของ Shopee")
+	summary.ShopDiscountAmount, summary.ShopDiscountCodes = extractShopeeDiscountParts(block, "โค้ดส่วนลดร้านค้า")
+	summary.ShopeeDiscountAmount = roundMoney(summary.ShopeeDiscountAmount)
+	summary.ShopDiscountAmount = roundMoney(summary.ShopDiscountAmount)
+	summary.TotalDiscountAmount = roundMoney(summary.ShopeeDiscountAmount + summary.ShopDiscountAmount)
+	if summary.HasAny() {
+		summary.AllocationMethod = "equal_by_item_line_excluding_shipping"
+	}
+	return summary
+}
+
+var bahtAmountPattern = regexp.MustCompile(`฿\s*([\d,]+(?:\.\d+)?)`)
+
+func extractShopeePaymentSummaryFromBlock(block string) ShopeePaymentSummary {
+	var summary ShopeePaymentSummary
+	summary.PaymentMethod = extractShopeeTextLabel("วิธีการชำระเงิน", block)
+	summary.PaymentPaidAt = extractShopeeTextLabel("วันที่ชำระเงิน", block)
+	if amount, ok := extractMoneyLabel("จำนวนเงินที่จ่าย", block); ok {
+		summary.PaymentPaidAmount = roundMoney(amount)
+	}
+	summary.IsCreditDebitCard = isShopeeCreditDebitMethod(summary.PaymentMethod)
+	if summary.IsCreditDebitCard && summary.PaymentPaidAmount > 0 {
+		summary.DocRefAmount = formatShopeePaidAmount(summary.PaymentPaidAmount)
+	}
+	return summary
+}
+
+func extractShopeeTextLabel(label, block string) string {
+	if block == "" {
+		return ""
+	}
+	linePattern := regexp.MustCompile(regexp.QuoteMeta(label) + `[ \t]*[:：]?[ \t]*([^\r\n<]*)`)
+	match := linePattern.FindStringSubmatch(block)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func isShopeeCreditDebitMethod(method string) bool {
+	normalized := strings.TrimSpace(method)
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	normalized = strings.ReplaceAll(normalized, "\t", "")
+	return strings.Contains(normalized, "บัตรเครดิต") && strings.Contains(normalized, "บัตรเดบิต")
+}
+
+func formatShopeePaidAmount(amount float64) string {
+	amount = roundMoney(amount)
+	if amount == math.Trunc(amount) {
+		return strconv.FormatInt(int64(amount), 10)
+	}
+	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(amount, 'f', 2, 64), "0"), ".")
+}
+
+func extractShopeeDiscountParts(block, label string) (float64, []string) {
+	if block == "" {
+		return 0, nil
+	}
+	linePattern := regexp.MustCompile(regexp.QuoteMeta(label) + `[ \t]*[:：]?[ \t]*([^\r\n<]*)`)
+	matches := linePattern.FindAllStringSubmatch(block, -1)
+	var total float64
+	codes := []string{}
+	seenCodes := map[string]bool{}
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		value := strings.TrimSpace(m[1])
+		if value == "" {
+			continue
+		}
+		if money := bahtAmountPattern.FindStringSubmatch(value); len(money) >= 2 {
+			clean := strings.ReplaceAll(money[1], ",", "")
+			if v, err := strconv.ParseFloat(clean, 64); err == nil {
+				total += v
+			}
+			continue
+		}
+		code := strings.Trim(value, " \t:-：")
+		if code != "" && !seenCodes[code] {
+			codes = append(codes, code)
+			seenCodes[code] = true
+		}
+	}
+	return total, codes
+}
+
+// AllocateShopeeDiscountsByLine splits total discount equally across item rows,
+// excluding Shopee shipping rows, while capping each line at its gross amount.
+func AllocateShopeeDiscountsByLine(items []models.BillItem, totalDiscount float64) []float64 {
+	out := make([]float64, len(items))
+	remaining := roundMoney(totalDiscount)
+	if remaining <= 0 {
+		return out
+	}
+	active := discountableItemIndexes(items, out)
+	for len(active) > 0 && remaining > 0 {
+		before := remaining
+		share := remaining / float64(len(active))
+		distributed := 0.0
+		for i, idx := range active {
+			portion := roundMoney(share)
+			if i == len(active)-1 {
+				portion = roundMoney(remaining - distributed)
+			}
+			capacity := roundMoney(itemGross(items[idx]) - out[idx])
+			if portion > capacity {
+				portion = capacity
+			}
+			if portion < 0 {
+				portion = 0
+			}
+			out[idx] = roundMoney(out[idx] + portion)
+			distributed = roundMoney(distributed + portion)
+		}
+		remaining = roundMoney(remaining - distributed)
+		if remaining == before {
+			break
+		}
+		active = discountableItemIndexes(items, out)
+	}
+	return out
+}
+
+func ApplyShopeeDiscountsToItems(items []models.BillItem, totalDiscount float64) {
+	discounts := AllocateShopeeDiscountsByLine(items, totalDiscount)
+	for i := range items {
+		items[i].DiscountAmount = discounts[i]
+	}
+}
+
+func discountableItemIndexes(items []models.BillItem, allocated []float64) []int {
+	out := []int{}
+	for i, item := range items {
+		if item.SourceSKU == models.ShopeeShippingSourceSKU {
+			continue
+		}
+		if roundMoney(itemGross(item)-allocated[i]) > 0 {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func itemGross(item models.BillItem) float64 {
+	if item.Price == nil || item.Qty <= 0 {
+		return 0
+	}
+	return roundMoney(item.Qty * *item.Price)
+}
+
+func roundMoney(v float64) float64 {
+	return math.Round(v*100) / 100
 }
 
 func shopeeOrderBlock(body, orderID string) string {
@@ -124,15 +364,22 @@ func setMoneyIfMissing(raw map[string]interface{}, key, label, text string) {
 	if _, ok := raw[key]; ok {
 		return
 	}
+	if v, ok := extractMoneyLabel(label, text); ok {
+		raw[key] = v
+	}
+}
+
+func extractMoneyLabel(label, text string) (float64, bool) {
 	re := regexp.MustCompile(regexp.QuoteMeta(label) + `\s*[:：]\s*฿\s*([\d,]+(?:\.\d+)?)`)
 	m := re.FindStringSubmatch(text)
 	if len(m) < 2 {
-		return
+		return 0, false
 	}
 	clean := strings.ReplaceAll(m[1], ",", "")
 	if v, err := strconv.ParseFloat(clean, 64); err == nil {
-		raw[key] = v
+		return v, true
 	}
+	return 0, false
 }
 
 func htmlToSummaryText(s string) string {

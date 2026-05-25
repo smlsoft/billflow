@@ -25,6 +25,8 @@ interface Props {
   // it. Triggered by the BillTotal warning card's "ดู →" link.
   highlighted?: boolean
   rawNameLabel?: string
+  showDiscountColumn?: boolean
+  tableColumnCount?: number
 }
 
 function MatchBadge({ score }: { score: number | null }) {
@@ -68,6 +70,8 @@ export function BillItemRow({
   onRefresh,
   highlighted,
   rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
+  showDiscountColumn = false,
+  tableColumnCount = 9,
 }: Props) {
   // When the parent flips `highlighted` true (admin clicked "ดู →" in the
   // BillTotal warning card) we scroll this row into view + add a brief tint
@@ -183,6 +187,7 @@ export function BillItemRow({
 
   const matchInfo = useMatchInfo(item)
   const needsConfirm = Boolean(item.item_code && item.mapped !== true)
+  const isShopeeShippingLine = item.source_sku === '__shopee_shipping__'
   const editMatchInfo =
     pickedMatch && pickedMatch.item_code === draft.item_code
       ? {
@@ -192,6 +197,9 @@ export function BillItemRow({
         }
       : matchInfo
   const billPrice = item.price ?? 0
+  const discountAmount = item.discount_amount ?? 0
+  const grossAmount = (item.qty ?? 0) * billPrice
+  const netAmount = Math.max(grossAmount - discountAmount, 0)
   const catalogPrice = matchInfo.catalogPrice ?? 0
   const priceMismatch =
     billPrice > 0 &&
@@ -209,10 +217,15 @@ export function BillItemRow({
           )}
         >
           <TableCell className="max-w-[360px] align-top">
-            <div className="break-words text-sm leading-6 text-foreground">
-              {item.raw_name}
+            <div className="flex flex-wrap items-center gap-2 break-words text-sm leading-6 text-foreground">
+              <span>{item.raw_name}</span>
+              {isShopeeShippingLine && (
+                <span className="inline-flex rounded-md border border-info/30 bg-info/10 px-2 py-0.5 text-[11px] font-medium text-info">
+                  ค่าส่งจาก Shopee
+                </span>
+              )}
             </div>
-            {item.source_sku && (
+            {item.source_sku && !isShopeeShippingLine && (
               <div className="mt-1 text-[11px] text-muted-foreground">
                 SKU ต้นทาง: <code className="font-mono">{item.source_sku}</code>
                 {!item.item_code && <span className="text-warning"> · ยังไม่พบในสินค้า SML</span>}
@@ -255,8 +268,17 @@ export function BillItemRow({
               </div>
             )}
           </TableCell>
+          {showDiscountColumn && (
+            <TableCell className="text-right tabular-nums">
+              {discountAmount > 0 ? (
+                <span className="font-medium text-success">-฿{discountAmount.toLocaleString()}</span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </TableCell>
+          )}
           <TableCell className="text-right tabular-nums font-medium">
-            ฿{((item.qty ?? 0) * (item.price ?? 0)).toLocaleString()}
+            ฿{netAmount.toLocaleString()}
           </TableCell>
           {editable && (
             <TableCell className="text-center whitespace-nowrap">
@@ -334,7 +356,7 @@ export function BillItemRow({
         />
       )}
       <TableRow className="bg-muted/20 hover:bg-muted/20">
-        <TableCell colSpan={9} className="p-3">
+        <TableCell colSpan={tableColumnCount} className="p-3">
           <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
             <div className="grid gap-4 xl:grid-cols-[minmax(260px,1fr)_minmax(360px,1.15fr)_420px]">
               <div className="space-y-2">
@@ -377,7 +399,7 @@ export function BillItemRow({
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className={cn('grid gap-3', showDiscountColumn ? 'grid-cols-4' : 'grid-cols-3')}>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">จำนวน</span>
                   <Input
@@ -408,13 +430,21 @@ export function BillItemRow({
                     className="h-10 text-right"
                   />
                 </label>
-                <div className="col-span-3 flex items-center justify-between rounded-md bg-muted/50 px-3 py-2">
+                {showDiscountColumn && (
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">ส่วนลด</span>
+                    <div className="flex h-10 items-center justify-end rounded-md border border-border bg-muted/40 px-3 text-sm tabular-nums text-muted-foreground">
+                      {discountAmount > 0 ? `-฿${discountAmount.toLocaleString()}` : '—'}
+                    </div>
+                  </div>
+                )}
+                <div className={cn('flex items-center justify-between rounded-md bg-muted/50 px-3 py-2', showDiscountColumn ? 'col-span-4' : 'col-span-3')}>
                   <span className="text-xs font-medium text-muted-foreground">รวมรายการนี้</span>
                   <span className="tabular-nums text-sm font-semibold text-foreground">
-                    ฿{(Number(draft.qty || 0) * Number(draft.price || 0)).toLocaleString()}
+                    ฿{Math.max(Number(draft.qty || 0) * Number(draft.price || 0) - discountAmount, 0).toLocaleString()}
                   </span>
                 </div>
-                <div className="col-span-3 flex justify-end gap-2">
+                <div className={cn('flex justify-end gap-2', showDiscountColumn ? 'col-span-4' : 'col-span-3')}>
                   <Button
                     type="button"
                     variant="ghost"

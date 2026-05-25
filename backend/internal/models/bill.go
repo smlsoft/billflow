@@ -104,10 +104,13 @@ type BillItem struct {
 	Qty            float64         `json:"qty"`
 	UnitCode       *string         `json:"unit_code,omitempty"`
 	Price          *float64        `json:"price,omitempty"`
+	DiscountAmount float64         `json:"discount_amount"`
 	Mapped         bool            `json:"mapped"`
 	MappingID      *string         `json:"mapping_id,omitempty"`
 	Candidates     json.RawMessage `json:"candidates,omitempty"` // top-5 catalog matches
 }
+
+const ShopeeShippingSourceSKU = "__shopee_shipping__"
 
 type BillListFilter struct {
 	Status         string `form:"status"`

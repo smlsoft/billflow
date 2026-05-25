@@ -35,6 +35,7 @@ export interface RetryBillPayload {
   shelf_code?: string
   vat_type?: number
   vat_rate?: number
+  inquiry_type?: number
 }
 
 export type BulkSendJobStatus =

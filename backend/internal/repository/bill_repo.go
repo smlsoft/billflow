@@ -198,7 +198,7 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
 	                 b.anomalies, b.error_msg, b.created_at, b.sent_at,
 	                 b.archived_at, b.archived_by, b.archive_reason,
-	                 COALESCE(SUM(bi.qty * bi.price), 0) AS total_amount,
+	                 COALESCE(SUM(GREATEST(bi.qty * COALESCE(bi.price, 0) - COALESCE(bi.discount_amount, 0), 0)), 0) AS total_amount,
 	                 COUNT(bi.id) AS item_count
 	          FROM bills b
 	          LEFT JOIN bill_items bi ON bi.bill_id = b.id
@@ -568,7 +568,8 @@ func (r *BillRepo) UpdateStatus(id, status string, smlDocNo *string, smlResponse
 
 func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 	rows, err := r.db.Query(
-		`SELECT id, bill_id, raw_name, COALESCE(source_sku, ''), COALESCE(source_image_url, ''), item_code, qty, unit_code, price, mapped, mapping_id,
+		`SELECT id, bill_id, raw_name, COALESCE(source_sku, ''), COALESCE(source_image_url, ''), item_code, qty, unit_code, price,
+		        COALESCE(discount_amount, 0), mapped, mapping_id,
 		        COALESCE(candidates, '[]') as candidates
 		 FROM bill_items WHERE bill_id = $1 ORDER BY id`, billID,
 	)
@@ -583,7 +584,7 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 		var candidatesRaw []byte
 		if err := rows.Scan(
 			&item.ID, &item.BillID, &item.RawName, &item.SourceSKU, &item.SourceImageURL,
-			&item.ItemCode, &item.Qty, &item.UnitCode, &item.Price, &item.Mapped, &item.MappingID,
+			&item.ItemCode, &item.Qty, &item.UnitCode, &item.Price, &item.DiscountAmount, &item.Mapped, &item.MappingID,
 			&candidatesRaw,
 		); err != nil {
 			return nil, err
@@ -598,11 +599,11 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 
 func (r *BillRepo) InsertItem(item *models.BillItem) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, mapped, mapping_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 RETURNING id`,
 		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
-		item.UnitCode, item.Price, item.Mapped, item.MappingID,
+		item.UnitCode, item.Price, item.DiscountAmount, item.Mapped, item.MappingID,
 	).Scan(&item.ID)
 }
 
@@ -777,7 +778,7 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 
 	// Total amount from bill_items
 	var totalAmount float64
-	_ = r.db.QueryRow(`SELECT COALESCE(SUM(qty * price), 0) FROM bill_items WHERE price IS NOT NULL`).Scan(&totalAmount)
+	_ = r.db.QueryRow(`SELECT COALESCE(SUM(GREATEST(qty * COALESCE(price, 0) - COALESCE(discount_amount, 0), 0)), 0) FROM bill_items WHERE price IS NOT NULL`).Scan(&totalAmount)
 	stats["total_amount"] = totalAmount
 
 	// F1: mapped vs unmapped
@@ -979,12 +980,240 @@ func (r *BillRepo) MarkProcessedEmailKey(source, messageID, orderID string) erro
 // InsertItemWithCandidates inserts a bill item including top-5 catalog candidates
 func (r *BillRepo) InsertItemWithCandidates(item *models.BillItem, candidatesJSON []byte) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, mapped, mapping_id, candidates)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id, candidates)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING id`,
 		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
-		item.UnitCode, item.Price, item.Mapped, item.MappingID, candidatesJSON,
+		item.UnitCode, item.Price, item.DiscountAmount, item.Mapped, item.MappingID, candidatesJSON,
 	).Scan(&item.ID)
+}
+
+// BackfillShopeePurchaseDiscounts fills discount_amount for active Shopee
+// purchase-email bills that have not been sent to SML yet. It is idempotent:
+// reruns recompute the same per-line amounts from the original email body.
+func (r *BillRepo) BackfillShopeePurchaseDiscounts() (int, error) {
+	rows, err := r.db.Query(`
+		SELECT id::text, raw_data
+		  FROM bills
+		 WHERE source = 'shopee_shipped'
+		   AND bill_type = 'purchase'
+		   AND status IN ('pending', 'needs_review', 'failed')
+		   AND raw_data IS NOT NULL
+		   AND (raw_data ? 'body_text' OR raw_data ? 'body_html')`)
+	if err != nil {
+		return 0, fmt.Errorf("backfill shopee purchase discounts: %w", err)
+	}
+	defer rows.Close()
+
+	type billRaw struct {
+		id  string
+		raw json.RawMessage
+	}
+	targets := []billRaw{}
+	for rows.Next() {
+		var target billRaw
+		if err := rows.Scan(&target.id, &target.raw); err != nil {
+			return 0, err
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, target := range targets {
+		if ok, err := r.backfillShopeePurchaseDiscount(target.id, target.raw); err != nil {
+			return updated, err
+		} else if ok {
+			updated++
+		}
+	}
+	return updated, nil
+}
+
+// BackfillShopeePurchasePaymentSummaries fills raw_data.payment_summary for
+// active Shopee purchase-email bills that have not been sent to SML yet. It is
+// idempotent and keeps bill creation tolerant when old rows lack this metadata.
+func (r *BillRepo) BackfillShopeePurchasePaymentSummaries() (int, error) {
+	rows, err := r.db.Query(`
+		SELECT id::text, raw_data
+		  FROM bills
+		 WHERE source = 'shopee_shipped'
+		   AND bill_type = 'purchase'
+		   AND status IN ('pending', 'needs_review', 'failed')
+		   AND raw_data IS NOT NULL
+		   AND (raw_data ? 'body_text' OR raw_data ? 'body_html')`)
+	if err != nil {
+		return 0, fmt.Errorf("backfill shopee purchase payment summaries: %w", err)
+	}
+	defer rows.Close()
+
+	type billRaw struct {
+		id  string
+		raw json.RawMessage
+	}
+	targets := []billRaw{}
+	for rows.Next() {
+		var target billRaw
+		if err := rows.Scan(&target.id, &target.raw); err != nil {
+			return 0, err
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, target := range targets {
+		var raw map[string]interface{}
+		if err := json.Unmarshal(target.raw, &raw); err != nil {
+			continue
+		}
+		orderID := strings.TrimSpace(stringField(raw, "order_id"))
+		if orderID == "" {
+			orderID = strings.TrimSpace(stringField(raw, "shopee_order_id"))
+		}
+		if orderID == "" {
+			continue
+		}
+		summary := ExtractShopeePaymentSummary(stringField(raw, "body_text"), stringField(raw, "body_html"), orderID)
+		if ok, err := r.ApplyShopeePurchasePaymentSummaryToBill(target.id, summary); err != nil {
+			return updated, err
+		} else if ok {
+			updated++
+		}
+	}
+	return updated, nil
+}
+
+func (r *BillRepo) ApplyShopeePurchaseDiscountsToBill(billID string, summary ShopeeDiscountSummary) (bool, error) {
+	if !summary.HasAny() {
+		return false, nil
+	}
+
+	var rawData json.RawMessage
+	err := r.db.QueryRow(`
+		SELECT raw_data
+		  FROM bills
+		 WHERE id = $1
+		   AND source = 'shopee_shipped'
+		   AND bill_type = 'purchase'
+		   AND status IN ('pending', 'needs_review', 'failed')`,
+		billID,
+	).Scan(&rawData)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rawData, &raw); err != nil {
+		raw = map[string]interface{}{}
+	}
+	items, err := r.findItems(billID)
+	if err != nil {
+		return false, err
+	}
+	ApplyShopeeDiscountsToItems(items, summary.TotalDiscountAmount)
+	raw["discount_summary"] = summary
+	rawJSON, _ := json.Marshal(raw)
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		UPDATE bills
+		   SET raw_data = $1
+		 WHERE id = $2
+		   AND source = 'shopee_shipped'
+		   AND bill_type = 'purchase'
+		   AND status IN ('pending', 'needs_review', 'failed')`,
+		rawJSON, billID,
+	); err != nil {
+		return false, err
+	}
+	for _, item := range items {
+		if _, err := tx.Exec(
+			`UPDATE bill_items SET discount_amount = $1 WHERE id = $2 AND bill_id = $3`,
+			item.DiscountAmount, item.ID, billID,
+		); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *BillRepo) ApplyShopeePurchasePaymentSummaryToBill(billID string, summary ShopeePaymentSummary) (bool, error) {
+	if !summary.HasAny() {
+		return false, nil
+	}
+
+	var rawData json.RawMessage
+	err := r.db.QueryRow(`
+		SELECT raw_data
+		  FROM bills
+		 WHERE id = $1
+		   AND source = 'shopee_shipped'
+		   AND bill_type = 'purchase'
+		   AND status IN ('pending', 'needs_review', 'failed')`,
+		billID,
+	).Scan(&rawData)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rawData, &raw); err != nil {
+		raw = map[string]interface{}{}
+	}
+	raw["payment_summary"] = summary
+	rawJSON, _ := json.Marshal(raw)
+	res, err := r.db.Exec(`
+		UPDATE bills
+		   SET raw_data = $1
+		 WHERE id = $2
+		   AND source = 'shopee_shipped'
+		   AND bill_type = 'purchase'
+		   AND status IN ('pending', 'needs_review', 'failed')`,
+		rawJSON, billID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *BillRepo) backfillShopeePurchaseDiscount(billID string, rawData json.RawMessage) (bool, error) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rawData, &raw); err != nil {
+		return false, nil
+	}
+	orderID := strings.TrimSpace(stringField(raw, "order_id"))
+	if orderID == "" {
+		orderID = strings.TrimSpace(stringField(raw, "shopee_order_id"))
+	}
+	if orderID == "" {
+		return false, nil
+	}
+	summary := ExtractShopeeDiscountSummary(stringField(raw, "body_text"), stringField(raw, "body_html"), orderID)
+	if !summary.HasAny() {
+		return false, nil
+	}
+	return r.ApplyShopeePurchaseDiscountsToBill(billID, summary)
 }
 
 // ExistsDuplicateToday checks if a bill with the same source, customer name, and item codes

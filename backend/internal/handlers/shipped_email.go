@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"billflow/internal/models"
+	"billflow/internal/repository"
 	"billflow/internal/services/ai"
 	emailservice "billflow/internal/services/email"
 )
@@ -177,6 +178,34 @@ func (h *EmailHandler) processOneShippedOrder(
 	} else if exists {
 		h.recordShopeeOrderEvent(existingBillID, subject, from, messageID, source, orderID)
 		h.saveShopeeShippedEmailArtifacts(existingBillID, subject, from, bodyText, bodyHTML, messageID)
+		discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID)
+		if ok, err := h.billRepo.ApplyShopeePurchaseDiscountsToBill(existingBillID, discountSummary); err != nil {
+			h.logger.Warn("shopee_shipped: existing bill discount update failed",
+				zap.String("message_id", messageID),
+				zap.String("order_id", orderID),
+				zap.String("bill_id", existingBillID),
+				zap.Error(err))
+		} else if ok {
+			h.logger.Info("shopee_shipped: updated existing bill discounts",
+				zap.String("message_id", messageID),
+				zap.String("order_id", orderID),
+				zap.String("bill_id", existingBillID),
+				zap.Float64("discount", discountSummary.TotalDiscountAmount))
+		}
+		paymentSummary := repository.ExtractShopeePaymentSummary(bodyText, bodyHTML, orderID)
+		if ok, err := h.billRepo.ApplyShopeePurchasePaymentSummaryToBill(existingBillID, paymentSummary); err != nil {
+			h.logger.Warn("shopee_shipped: existing bill payment summary update failed",
+				zap.String("message_id", messageID),
+				zap.String("order_id", orderID),
+				zap.String("bill_id", existingBillID),
+				zap.Error(err))
+		} else if ok {
+			h.logger.Info("shopee_shipped: updated existing bill payment summary",
+				zap.String("message_id", messageID),
+				zap.String("order_id", orderID),
+				zap.String("bill_id", existingBillID),
+				zap.String("payment_method", paymentSummary.PaymentMethod))
+		}
 		if messageID != "" {
 			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
 		}
@@ -241,6 +270,27 @@ func (h *EmailHandler) processOneShippedOrder(
 		})
 	}
 
+	shippingAmount, hasShippingAmount := repository.ExtractShopeeShippingAmount(bodyText, bodyHTML, orderID)
+	shippingItem, shippingReady := h.configuredShopeeShippingLine(orderID, shippingAmount, hasShippingAmount)
+	shippingLineAdded := shippingItem != nil
+	if shippingLineAdded {
+		itemsWithCandidates = append(itemsWithCandidates, itemWithCandidates{item: *shippingItem})
+		if !shippingReady {
+			allHighConfidence = false
+		}
+	}
+	discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID)
+	if discountSummary.HasAny() {
+		itemCopies := make([]models.BillItem, len(itemsWithCandidates))
+		for i := range itemsWithCandidates {
+			itemCopies[i] = itemsWithCandidates[i].item
+		}
+		repository.ApplyShopeeDiscountsToItems(itemCopies, discountSummary.TotalDiscountAmount)
+		for i := range itemsWithCandidates {
+			itemsWithCandidates[i].item.DiscountAmount = itemCopies[i].DiscountAmount
+		}
+	}
+
 	// doc_date: prefer AI-extracted date, then regex from body, then empty string
 	// (falls back to today at retry time via docDateFromBill).
 	docDate := order.DocDate
@@ -259,6 +309,15 @@ func (h *EmailHandler) processOneShippedOrder(
 		"doc_date":         docDate,
 		"body_text":        bodyText,
 		"body_html":        bodyHTML,
+	}
+	if hasShippingAmount {
+		rawDataMap["shipping_amount"] = shippingAmount
+	}
+	if discountSummary.HasAny() {
+		rawDataMap["discount_summary"] = discountSummary
+	}
+	if paymentSummary := repository.ExtractShopeePaymentSummary(bodyText, bodyHTML, orderID); paymentSummary.HasAny() {
+		rawDataMap["payment_summary"] = paymentSummary
 	}
 	applyMailSource(rawDataMap, source)
 	rawDataBytes, _ := json.Marshal(rawDataMap)
@@ -308,14 +367,15 @@ func (h *EmailHandler) processOneShippedOrder(
 			TraceID:    traceID,
 			DurationMs: &durMs,
 			Detail: map[string]interface{}{
-				"subject":       subject,
-				"from":          from,
-				"message_id":    messageID,
-				"order_id":      orderID,
-				"seller_name":   order.SellerName,
-				"items_count":   len(itemsWithCandidates),
-				"all_high_conf": allHighConfidence,
-				"status":        status,
+				"subject":             subject,
+				"from":                from,
+				"message_id":          messageID,
+				"order_id":            orderID,
+				"seller_name":         order.SellerName,
+				"items_count":         len(itemsWithCandidates),
+				"all_high_conf":       allHighConfidence,
+				"shipping_line_added": shippingLineAdded,
+				"status":              status,
 			},
 		})
 	}
@@ -342,6 +402,58 @@ func (h *EmailHandler) saveShopeeShippedEmailArtifacts(billID, subject, from, bo
 	}
 	h.saveEmailArtifacts(billID, "email_text", "shopee-shipped.txt", "text/plain; charset=utf-8",
 		[]byte(bodyText), subject, from, messageID)
+}
+
+func (h *EmailHandler) configuredShopeeShippingLine(orderID string, amount float64, hasAmount bool) (*models.BillItem, bool) {
+	if !hasAmount || amount <= 0 || h.channelDefaults == nil {
+		return nil, false
+	}
+	def, err := h.channelDefaults.Get("shopee_shipped", "purchase")
+	if err != nil {
+		h.logger.Warn("shopee_shipped: shipping config lookup failed",
+			zap.String("order_id", orderID), zap.Error(err))
+		return nil, false
+	}
+	if def == nil || !def.ShippingItemEnabled {
+		return nil, false
+	}
+	code := strings.TrimSpace(def.ShippingItemCode)
+	if code == "" {
+		h.logger.Warn("shopee_shipped: shipping config enabled without item code",
+			zap.String("order_id", orderID))
+		return nil, false
+	}
+
+	rawName := "ค่าจัดส่งสินค้า"
+	unit := strings.TrimSpace(def.ShippingItemUnitCode)
+	if h.catalogRepo != nil {
+		if cat, err := h.catalogRepo.GetOne(code); err != nil {
+			h.logger.Warn("shopee_shipped: shipping catalog lookup failed",
+				zap.String("order_id", orderID), zap.String("item_code", code), zap.Error(err))
+		} else if cat != nil {
+			if strings.TrimSpace(cat.ItemName) != "" {
+				rawName = strings.TrimSpace(cat.ItemName)
+			}
+			if unit == "" {
+				unit = strings.TrimSpace(cat.UnitCode)
+			}
+		}
+	}
+
+	itemCode := code
+	price := amount
+	item := &models.BillItem{
+		RawName:   rawName,
+		SourceSKU: models.ShopeeShippingSourceSKU,
+		ItemCode:  &itemCode,
+		Qty:       1,
+		Price:     &price,
+		Mapped:    true,
+	}
+	if unit != "" {
+		item.UnitCode = &unit
+	}
+	return item, unit != ""
 }
 
 func (h *EmailHandler) findExistingShopeeShippedBillID(orderID string) (string, bool, error) {

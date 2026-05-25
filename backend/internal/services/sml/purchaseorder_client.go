@@ -108,6 +108,7 @@ type PurchaseOrderPayload struct {
 	WHFrom         string                `json:"wh_from,omitempty"`
 	LocationFrom   string                `json:"location_from,omitempty"`
 	BuyType        int                   `json:"buy_type"` // 0 (PO equivalent of sale_type)
+	InquiryType    int                   `json:"inquiry_type"`
 	VATType        int                   `json:"vat_type"`
 	VATRate        float64               `json:"vat_rate"`
 	TotalValue     float64               `json:"total_value"`
@@ -124,6 +125,7 @@ type PurchaseOrderPayload struct {
 	Items          []PurchaseOrderDetail `json:"items"`
 	PayDetails     []interface{}         `json:"paydetails"`
 	Remark         string                `json:"remark,omitempty"`
+	Remark5        string                `json:"remark_5,omitempty"`
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────
@@ -255,13 +257,32 @@ func (c *PurchaseOrderClient) CreatePurchaseOrder(payload PurchaseOrderPayload, 
 
 // POItem is one parsed line item from an upstream source (Shopee email, etc.)
 type POItem struct {
-	ItemCode  string // resolved SML code (post-mapping)
-	ItemName  string // human-readable name (for SML display)
-	Qty       float64
-	Price     float64 // per-unit price
-	UnitCode  string  // resolved unit (post-mapping); falls back to cfg.UnitCode if empty
-	WHCode    string  // resolved warehouse; falls back to cfg.WHCode if empty
-	ShelfCode string  // resolved shelf; falls back to cfg.ShelfCode if empty
+	ItemCode       string // resolved SML code (post-mapping)
+	ItemName       string // human-readable name (for SML display)
+	Qty            float64
+	Price          float64 // per-unit price before line discount
+	DiscountAmount float64 // total discount for this line
+	UnitCode       string  // resolved unit (post-mapping); falls back to cfg.UnitCode if empty
+	WHCode         string  // resolved warehouse; falls back to cfg.WHCode if empty
+	ShelfCode      string  // resolved shelf; falls back to cfg.ShelfCode if empty
+}
+
+type PurchaseOrderHeaderOptions struct {
+	Remark      string
+	Remark5     string
+	InquiryType int
+}
+
+func clampLineDiscount(discount, grossAmount float64) float64 {
+	discount = round2(discount)
+	grossAmount = round2(grossAmount)
+	if discount < 0 {
+		return 0
+	}
+	if discount > grossAmount {
+		return grossAmount
+	}
+	return discount
 }
 
 // BuildPurchaseOrderPayload mirrors BuildInvoicePayload structure.
@@ -274,9 +295,20 @@ func BuildPurchaseOrderPayload(
 	items []POItem,
 	cfg PurchaseOrderConfig,
 	remark string,
+	opts ...PurchaseOrderHeaderOptions,
 ) PurchaseOrderPayload {
 	var details []PurchaseOrderDetail
-	var totalValue, totalVAT, totalExc float64
+	var totalValue, totalDiscount, totalNet, totalVAT, totalExc float64
+	header := PurchaseOrderHeaderOptions{
+		Remark:      remark,
+		InquiryType: 0,
+	}
+	if len(opts) > 0 {
+		header = opts[0]
+		if header.Remark == "" {
+			header.Remark = remark
+		}
+	}
 
 	for i, item := range items {
 		unit := item.UnitCode
@@ -292,8 +324,14 @@ func BuildPurchaseOrderPayload(
 			shelf = cfg.ShelfCode
 		}
 
-		v := CalcItemVAT(item.Price, item.Qty, cfg.VATType, cfg.VATRate)
-		totalValue += v.SumAmount
+		grossAmount := round2(item.Price * item.Qty)
+		discountAmount := clampLineDiscount(item.DiscountAmount, grossAmount)
+		netAmount := round2(grossAmount - discountAmount)
+		v := CalcItemVAT(netAmount, 1, cfg.VATType, cfg.VATRate)
+		unitVAT := CalcItemVAT(item.Price, 1, cfg.VATType, cfg.VATRate)
+		totalValue += grossAmount
+		totalDiscount += discountAmount
+		totalNet += v.SumAmount
 		totalVAT += v.VATAmount
 		totalExc += v.SumAmountExclVAT
 
@@ -311,8 +349,8 @@ func BuildPurchaseOrderPayload(
 			ShelfCode2:       wh,
 			Qty:              item.Qty,
 			Price:            round2(item.Price),
-			PriceExcludeVAT:  roundN(v.PriceExcludeVAT, 4),
-			DiscountAmount:   0,
+			PriceExcludeVAT:  roundN(unitVAT.PriceExcludeVAT, 4),
+			DiscountAmount:   discountAmount,
 			SumAmount:        round2(v.SumAmount),
 			VATAmount:        round2(v.VATAmount),
 			TaxType:          0,
@@ -322,6 +360,8 @@ func BuildPurchaseOrderPayload(
 	}
 
 	totalValue = round2(totalValue)
+	totalDiscount = round2(totalDiscount)
+	totalNet = round2(totalNet)
 	totalVAT = round2(totalVAT)
 	totalExc = round2(totalExc)
 
@@ -329,15 +369,15 @@ func BuildPurchaseOrderPayload(
 	switch cfg.VATType {
 	case 1:
 		totalBeforeVAT = totalExc
-		totalAfterVAT = totalValue
-		totalAmount = totalValue
+		totalAfterVAT = totalNet
+		totalAmount = totalNet
 	case 2:
-		totalBeforeVAT = totalValue
-		totalAfterVAT = totalValue
-		totalAmount = totalValue
+		totalBeforeVAT = totalNet
+		totalAfterVAT = totalNet
+		totalAmount = totalNet
 	default:
-		totalBeforeVAT = totalValue
-		totalAfterVAT = round2(totalValue + totalVAT)
+		totalBeforeVAT = totalNet
+		totalAfterVAT = round2(totalNet + totalVAT)
 		totalAmount = totalAfterVAT
 	}
 
@@ -361,10 +401,11 @@ func BuildPurchaseOrderPayload(
 		WHFrom:         cfg.WHCode,
 		LocationFrom:   cfg.ShelfCode,
 		BuyType:        0,
+		InquiryType:    header.InquiryType,
 		VATType:        cfg.VATType,
 		VATRate:        cfg.VATRate,
 		TotalValue:     totalValue,
-		TotalDiscount:  0,
+		TotalDiscount:  totalDiscount,
 		TotalBeforeVAT: totalBeforeVAT,
 		TotalVATValue:  totalVAT,
 		TotalExceptVAT: 0,
@@ -376,6 +417,7 @@ func BuildPurchaseOrderPayload(
 		TransferAmount: 0,
 		Items:          details,
 		PayDetails:     []interface{}{},
-		Remark:         remark,
+		Remark:         header.Remark,
+		Remark5:        header.Remark5,
 	}
 }

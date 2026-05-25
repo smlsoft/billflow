@@ -647,18 +647,19 @@ func (h *BillHandler) Timeline(c *gin.Context) {
 // For purchase bills: party_code overrides channel_defaults.party_code and
 // remark is stored on the bill + forwarded to SML.
 type RetryRequest struct {
-	PartyCode  string   `json:"party_code"`
-	PartyName  string   `json:"party_name"`
-	DocNo      string   `json:"doc_no"`
-	Remark     string   `json:"remark"`
-	BranchCode string   `json:"branch_code"`
-	SaleCode   string   `json:"sale_code"`
-	UnitCode   string   `json:"unit_code"`
-	DocTime    string   `json:"doc_time"`
-	WHCode     string   `json:"wh_code"`
-	ShelfCode  string   `json:"shelf_code"`
-	VATType    *int     `json:"vat_type"`
-	VATRate    *float64 `json:"vat_rate"`
+	PartyCode   string   `json:"party_code"`
+	PartyName   string   `json:"party_name"`
+	DocNo       string   `json:"doc_no"`
+	Remark      string   `json:"remark"`
+	BranchCode  string   `json:"branch_code"`
+	SaleCode    string   `json:"sale_code"`
+	UnitCode    string   `json:"unit_code"`
+	DocTime     string   `json:"doc_time"`
+	WHCode      string   `json:"wh_code"`
+	ShelfCode   string   `json:"shelf_code"`
+	VATType     *int     `json:"vat_type"`
+	VATRate     *float64 `json:"vat_rate"`
+	InquiryType *int     `json:"inquiry_type"`
 }
 
 type retrySendOptions struct {
@@ -769,10 +770,10 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 		}
 	}
 
-	// Persist remark on the bill for all routes (not just purchase).
-	// retryPurchaseOrder also calls UpdateRemark with its own value — that's
-	// fine because req.Remark is the same string both times.
-	if req.Remark != "" {
+	// Persist manual remarks for normal routes. Shopee purchase email maps SML
+	// remark to seller_name, so a typed UI note must not overwrite bill.remark
+	// or leak into ic_trans.remark for that route.
+	if req.Remark != "" && !isShopeePurchaseEmailBill(bill) {
 		if err := h.billRepo.UpdateRemark(bill.ID, req.Remark); err != nil {
 			h.log.Warn("UpdateRemark failed", zap.Error(err))
 		}
@@ -992,11 +993,12 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 			unit = *it.UnitCode
 		}
 		items = append(items, sml.POItem{
-			ItemCode: *it.ItemCode,
-			ItemName: h.resolveItemName(*it.ItemCode, it.RawName),
-			Qty:      it.Qty,
-			Price:    price,
-			UnitCode: unit,
+			ItemCode:       *it.ItemCode,
+			ItemName:       h.resolveItemName(*it.ItemCode, it.RawName),
+			Qty:            it.Qty,
+			Price:          price,
+			DiscountAmount: it.DiscountAmount,
+			UnitCode:       unit,
 		})
 	}
 
@@ -1017,22 +1019,36 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
 	}
+	inquiryType, err := validatePurchaseInquiryType(req.InquiryType)
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
 
 	docDate := docDateFromBill(bill)
 	docRef := docRefFromBill(bill)
 	docRefDate := ""
-	if docRef != "" {
+	remark := req.Remark
+	remark5 := ""
+	if isShopeePurchaseEmailBill(bill) {
+		docRef = shopeePurchaseDocRefFromBill(bill)
+		remark = shopeePurchaseSellerFromBill(bill)
+		remark5 = docRefFromBill(bill)
+	} else if docRef != "" {
 		docRefDate = docDate
 	}
 	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO")
 	if err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
 	}
-	if req.Remark != "" {
+	if req.Remark != "" && !isShopeePurchaseEmailBill(bill) {
 		_ = h.billRepo.UpdateRemark(id, req.Remark)
 	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
+	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, remark, sml.PurchaseOrderHeaderOptions{
+		Remark:      remark,
+		Remark5:     remark5,
+		InquiryType: inquiryType,
+	})
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -1074,7 +1090,14 @@ func smlSendErrorMessage(statusCode int, resp smlMessageResponse, err error) str
 	case err != nil:
 		return err.Error()
 	case resp != nil:
-		return fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
+		msg := strings.TrimSpace(resp.GetMessage())
+		if msg == "" {
+			if statusCode == http.StatusNotFound {
+				return "HTTP 404 — ไม่พบ endpoint SML ที่ตั้งไว้ กรุณาตรวจ SML REST URL ใน /settings/instance และปลายทางใน /settings/channels"
+			}
+			return fmt.Sprintf("HTTP %d", statusCode)
+		}
+		return fmt.Sprintf("HTTP %d — %s", statusCode, msg)
 	default:
 		return fmt.Sprintf("HTTP %d", statusCode)
 	}
@@ -1152,6 +1175,10 @@ func (h *BillHandler) CreateBulkSendJob(c *gin.Context) {
 		return
 	}
 	if err := validateBulkBillIDs(req.BillIDs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateBulkPurchasePayload(req.BillType, req.DocumentRoute, req.Payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -1279,6 +1306,14 @@ func validBulkJobStatus(status string) bool {
 	}
 }
 
+func validateBulkPurchasePayload(billType, documentRoute string, payload RetryRequest) error {
+	if strings.TrimSpace(billType) != "purchase" && strings.TrimSpace(documentRoute) != "purchaseorder" {
+		return nil
+	}
+	_, err := validatePurchaseInquiryType(payload.InquiryType)
+	return err
+}
+
 func (h *BillHandler) RetryFailedBulkSendJob(c *gin.Context) {
 	if h.bulkJobRepo == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bulk send job store not configured"})
@@ -1317,6 +1352,17 @@ func (h *BillHandler) RetryFailedBulkSendJob(c *gin.Context) {
 	}
 	if len(failedBillIDs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ไม่มีรายการที่ไม่สำเร็จให้ retry"})
+		return
+	}
+	var originalPayload RetryRequest
+	if len(original.RequestPayload) > 0 {
+		if err := json.Unmarshal(original.RequestPayload, &originalPayload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bulk job เดิมมี payload ไม่ถูกต้อง กรุณาเปิด dialog ส่งใหม่"})
+			return
+		}
+	}
+	if err := validateBulkPurchasePayload(original.BillType, original.DocumentRoute, originalPayload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bulk job เดิมไม่มีประเภทรายการ กรุณาเปิด dialog ส่งใหม่และเลือกประเภทรายการ"})
 		return
 	}
 	filterJSON := appendRetryOfJob(original.FilterSnapshot, original.ID)
@@ -1386,6 +1432,10 @@ func (h *BillHandler) runBulkSendJob(jobID string) {
 			_ = h.bulkJobRepo.MarkJobFailed(jobID, "invalid bulk job payload: "+err.Error())
 			return
 		}
+	}
+	if err := validateBulkPurchasePayload(job.BillType, job.DocumentRoute, payload); err != nil {
+		_ = h.bulkJobRepo.MarkJobFailed(jobID, err.Error())
+		return
 	}
 	traceID := fmt.Sprintf("bulk-job-%s", job.ID)
 	userID := ""
@@ -1595,15 +1645,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req Retr
 	urlOverride := c.GetString("sml_url_override")
 	statusCode, resp, err := h.saleOrderClient.CreateSaleOrder(payload, urlOverride)
 	if err != nil || resp == nil || !resp.IsSuccess() {
-		errMsg := ""
-		switch {
-		case err != nil:
-			errMsg = err.Error()
-		case resp != nil:
-			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
-		default:
-			errMsg = fmt.Sprintf("HTTP %d", statusCode)
-		}
+		errMsg := smlSendErrorMessage(statusCode, resp, err)
 		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "SaleOrder", reqDocNo)
 		return
 	}
@@ -1695,15 +1737,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req Re
 	urlOverride := c.GetString("sml_url_override")
 	statusCode, resp, err := h.invoiceClient.CreateInvoice(payload, urlOverride)
 	if err != nil || resp == nil || !resp.IsSuccess() {
-		errMsg := ""
-		switch {
-		case err != nil:
-			errMsg = err.Error()
-		case resp != nil:
-			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
-		default:
-			errMsg = fmt.Sprintf("HTTP %d", statusCode)
-		}
+		errMsg := smlSendErrorMessage(statusCode, resp, err)
 		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "SaleInvoice", reqDocNo)
 		return
 	}
@@ -1741,11 +1775,12 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 			unit = *it.UnitCode
 		}
 		items = append(items, sml.POItem{
-			ItemCode: *it.ItemCode,
-			ItemName: h.resolveItemName(*it.ItemCode, it.RawName),
-			Qty:      it.Qty,
-			Price:    price,
-			UnitCode: unit,
+			ItemCode:       *it.ItemCode,
+			ItemName:       h.resolveItemName(*it.ItemCode, it.RawName),
+			Qty:            it.Qty,
+			Price:          price,
+			DiscountAmount: it.DiscountAmount,
+			UnitCode:       unit,
 		})
 	}
 
@@ -1769,10 +1804,21 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	inquiryType, err := validatePurchaseInquiryType(req.InquiryType)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	docDate := docDateFromBill(bill)
 	docRef := docRefFromBill(bill)
 	docRefDate := ""
-	if docRef != "" {
+	remark := req.Remark
+	remark5 := ""
+	if isShopeePurchaseEmailBill(bill) {
+		docRef = shopeePurchaseDocRefFromBill(bill)
+		remark = shopeePurchaseSellerFromBill(bill)
+		remark5 = docRefFromBill(bill)
+	} else if docRef != "" {
 		docRefDate = docDate
 	}
 	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO")
@@ -1781,26 +1827,22 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 		return
 	}
 	// Persist remark before SML call so it's available even on failure
-	if req.Remark != "" {
+	if req.Remark != "" && !isShopeePurchaseEmailBill(bill) {
 		_ = h.billRepo.UpdateRemark(id, req.Remark)
 	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
+	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, remark, sml.PurchaseOrderHeaderOptions{
+		Remark:      remark,
+		Remark5:     remark5,
+		InquiryType: inquiryType,
+	})
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
 	urlOverride := c.GetString("sml_url_override")
 	statusCode, resp, err := h.poClient.CreatePurchaseOrder(payload, urlOverride)
 	if err != nil || resp == nil || !resp.IsSuccess() {
-		errMsg := ""
-		switch {
-		case err != nil:
-			errMsg = err.Error()
-		case resp != nil:
-			errMsg = fmt.Sprintf("HTTP %d — %s", statusCode, resp.GetMessage())
-		default:
-			errMsg = fmt.Sprintf("HTTP %d", statusCode)
-		}
+		errMsg := smlSendErrorMessage(statusCode, resp, err)
 		h.recordFailure(c, id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg), start, "PurchaseOrder", reqDocNo)
 		return
 	}
@@ -1854,6 +1896,72 @@ func docRefFromBill(bill *models.Bill) string {
 		}
 	}
 	return ""
+}
+
+func isShopeePurchaseEmailBill(bill *models.Bill) bool {
+	return bill != nil && bill.Source == "shopee_shipped" && bill.BillType == "purchase"
+}
+
+func validatePurchaseInquiryType(value *int) (int, error) {
+	if value == nil {
+		return 0, fmt.Errorf("กรุณาเลือกประเภทรายการก่อนส่งใบสั่งซื้อเข้า SML")
+	}
+	switch *value {
+	case 0, 1, 3, 4:
+		return *value, nil
+	default:
+		return 0, fmt.Errorf("ประเภทรายการไม่ถูกต้อง (เลือกได้เฉพาะ 0, 1, 3, 4)")
+	}
+}
+
+func shopeePurchaseSellerFromBill(bill *models.Bill) string {
+	rd := rawDataMapFromBill(bill)
+	if rd == nil {
+		return ""
+	}
+	for _, key := range []string{"seller_name", "supplier_name"} {
+		if v, ok := rd[key].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func shopeePurchaseDocRefFromBill(bill *models.Bill) string {
+	rd := rawDataMapFromBill(bill)
+	if rd == nil {
+		return ""
+	}
+	summary, ok := rd["payment_summary"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if isCard, _ := summary["is_credit_debit_card"].(bool); !isCard {
+		return ""
+	}
+	if v, ok := summary["doc_ref_amount"].(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v, ok := summary["payment_paid_amount"].(float64); ok && v > 0 {
+		if v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(v, 'f', 2, 64), "0"), ".")
+	}
+	return ""
+}
+
+func rawDataMapFromBill(bill *models.Bill) map[string]interface{} {
+	if bill == nil || bill.RawData == nil {
+		return nil
+	}
+	var rd map[string]interface{}
+	if err := json.Unmarshal(bill.RawData, &rd); err != nil {
+		return nil
+	}
+	return rd
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

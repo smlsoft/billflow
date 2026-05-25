@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,12 +19,23 @@ import (
 // SMLPartyHandler proxies the SML 248 party master through an in-memory cache.
 // Admin-only — used by /settings/channels picker and any future supplier UI.
 type SMLPartyHandler struct {
-	cache  *sml.PartyCache
-	logger *zap.Logger
+	cache      *sml.PartyCache
+	smlBaseURL string // sml-api-bybos base URL (e.g. http://192.168.2.109:8200)
+	smlGUID    string // API key for sml-api-bybos (used as guid header)
+	smlTenant  string // database/tenant name for sml-api-bybos (X-Tenant header)
+	logger     *zap.Logger
 }
 
 func NewSMLPartyHandler(cache *sml.PartyCache, logger *zap.Logger) *SMLPartyHandler {
 	return &SMLPartyHandler{cache: cache, logger: logger}
+}
+
+// SetSMLConfig injects the sml-api-bybos connection details needed for
+// endpoints that call sml-api-bybos directly (e.g. doc-formats).
+func (h *SMLPartyHandler) SetSMLConfig(baseURL, guid, tenant string) {
+	h.smlBaseURL = strings.TrimRight(baseURL, "/")
+	h.smlGUID = guid
+	h.smlTenant = tenant
 }
 
 // GET /api/sml/customers?search=&limit=20
@@ -119,4 +134,68 @@ func nullableTime(t time.Time) any {
 		return nil
 	}
 	return t
+}
+
+// DocFormatItem mirrors the erp_doc_format row returned by sml-api-bybos.
+type DocFormatItem struct {
+	Code       string `json:"code"`
+	Name1      string `json:"name_1"`
+	Name2      string `json:"name_2"`
+	Format     string `json:"format"`
+	ScreenCode string `json:"screen_code"`
+}
+
+// GET /api/sml/doc-formats?screen_code=PO|SI|SR
+// Proxies to sml-api-bybos GET /api/v1/ic/doc-formats?screen_code=<code>.
+// screen_code: PO=ใบสั่งซื้อ, SI=ขายสินค้าและบริการ, SR=ใบสั่งขาย
+func (h *SMLPartyHandler) DocFormats(c *gin.Context) {
+	if h.smlBaseURL == "" || h.smlGUID == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML REST URL ยังไม่ได้ตั้งค่า"})
+		return
+	}
+	screenCode := strings.ToUpper(strings.TrimSpace(c.Query("screen_code")))
+
+	targetURL := h.smlBaseURL + "/api/v1/ic/doc-formats"
+	if screenCode != "" {
+		targetURL += "?screen_code=" + screenCode
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	req.Header.Set("x-api-key", h.smlGUID)
+	if h.smlTenant != "" {
+		req.Header.Set("x-tenant", h.smlTenant)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("เรียก SML ไม่สำเร็จ: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		Success bool            `json:"success"`
+		Data    []DocFormatItem `json:"data"`
+		Message string          `json:"message"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "parse SML response failed"})
+		return
+	}
+	if !result.Success {
+		c.JSON(http.StatusBadGateway, gin.H{"error": result.Message})
+		return
+	}
+	if result.Data == nil {
+		result.Data = []DocFormatItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result.Data})
 }

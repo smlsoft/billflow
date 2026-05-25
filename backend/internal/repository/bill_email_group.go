@@ -127,7 +127,7 @@ func (r *BillRepo) ListBillsByEmailMessageID(messageID, currentBillID string, li
 		       b.status,
 		       COALESCE(b.sml_doc_no, '') AS sml_doc_no,
 		       b.created_at,
-		       COALESCE(SUM(bi.qty * COALESCE(bi.price, 0)), 0)::float8 AS total_amount,
+		       COALESCE(SUM(GREATEST(bi.qty * COALESCE(bi.price, 0) - COALESCE(bi.discount_amount, 0), 0)), 0)::float8 AS total_amount,
 		       b.id::text = $2 AS is_current
 		  FROM bills b
 		  LEFT JOIN bill_items bi ON bi.bill_id = b.id

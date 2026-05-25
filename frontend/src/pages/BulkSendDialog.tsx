@@ -103,6 +103,13 @@ function vatTypeLabel(value: string) {
   return 'ยังไม่เลือก'
 }
 
+const PURCHASE_INQUIRY_TYPE_OPTIONS = [
+  { value: '0', label: '0 — ซื้อสินค้าเงินเชื่อ' },
+  { value: '1', label: '1 — ซื้อสินค้าเงินสด' },
+  { value: '3', label: '3 — ซื้อสินค้าเงินสด (สินค้าบริการ)' },
+  { value: '4', label: '4 — ซื้อสินค้าเงินเชื่อ (สินค้าบริการ)' },
+]
+
 function billDetailPath(bill: Bill) {
   if (bill.bill_type !== 'sale') return `/bills/${bill.id}`
   const route = bill.document_route || bill.preview?.route
@@ -187,6 +194,7 @@ export function BulkSendDialog({
   const [manualWarehouse, setManualWarehouse] = useState(false)
   const [vatTypeStr, setVatTypeStr] = useState('')
   const [vatRateStr, setVatRateStr] = useState('7')
+  const [inquiryTypeStr, setInquiryTypeStr] = useState('')
   const [branchCode, setBranchCode] = useState('')
   const [saleCode, setSaleCode] = useState('')
   const [remark, setRemark] = useState('')
@@ -258,15 +266,17 @@ export function BulkSendDialog({
     firstDocNo && lastDocNo && firstDocNo !== lastDocNo
       ? `${firstDocNo} - ${lastDocNo}`
       : firstDocNo || ''
-  const vatRateNum = Number(vatRateStr)
+  const parsedVatRate = Number(vatRateStr)
+  const vatRateNum = Number.isFinite(parsedVatRate) ? parsedVatRate : 7
+  const isPurchaseOrder = billType === 'purchase'
+  const isShopeePurchaseBulk = isPurchaseOrder && filters.source === 'shopee_shipped'
   const canSend =
     readyCount > 0 &&
     !!party?.code &&
     whCode.trim() !== '' &&
     shelfCode.trim() !== '' &&
     vatTypeStr !== '' &&
-    vatRateStr.trim() !== '' &&
-    Number.isFinite(vatRateNum) &&
+    (!isPurchaseOrder || inquiryTypeStr !== '') &&
     docTime.trim() !== '' &&
     !controlsLocked &&
     !job
@@ -275,7 +285,7 @@ export function BulkSendDialog({
     whCode.trim() === '' ? 'คลัง' : '',
     shelfCode.trim() === '' ? 'พื้นที่เก็บ' : '',
     vatTypeStr === '' ? 'ประเภทภาษี' : '',
-    vatRateStr.trim() === '' || !Number.isFinite(vatRateNum) ? 'อัตราภาษี' : '',
+    isPurchaseOrder && inquiryTypeStr === '' ? 'ประเภทรายการ' : '',
     docTime.trim() === '' ? 'เวลาเอกสาร' : '',
   ].filter(Boolean)
   const failedRows = displayRows.filter((row) => row.result === 'failed')
@@ -301,6 +311,7 @@ export function BulkSendDialog({
     setManualWarehouse(false)
     setVatTypeStr('')
     setVatRateStr('7')
+    setInquiryTypeStr('')
     setBranchCode('')
     setSaleCode('')
     setRemark('')
@@ -318,6 +329,7 @@ export function BulkSendDialog({
     setManualWarehouse(false)
     setVatTypeStr(typeof p.vat_type === 'number' ? String(p.vat_type) : '')
     setVatRateStr(typeof p.vat_rate === 'number' ? String(p.vat_rate) : '7')
+    setInquiryTypeStr(typeof p.inquiry_type === 'number' ? String(p.inquiry_type) : '')
     setBranchCode(p.branch_code || '')
     setSaleCode(p.sale_code || '')
     setRemark(p.remark || '')
@@ -455,7 +467,7 @@ export function BulkSendDialog({
   const payload = (): RetryBillPayload => ({
     party_code: party?.code,
     party_name: party?.name,
-    remark: remark.trim() || undefined,
+    remark: isShopeePurchaseBulk ? undefined : remark.trim() || undefined,
     branch_code: branchCode.trim() || undefined,
     sale_code: saleCode.trim() || undefined,
     doc_time: docTime.trim(),
@@ -463,6 +475,7 @@ export function BulkSendDialog({
     shelf_code: shelfCode.trim(),
     vat_type: Number(vatTypeStr),
     vat_rate: vatRateNum,
+    inquiry_type: isPurchaseOrder ? Number(inquiryTypeStr) : undefined,
   })
 
   useEffect(() => {
@@ -658,6 +671,13 @@ export function BulkSendDialog({
                 value={`${vatTypeLabel(vatTypeStr)} · ${vatRateStr || '-'}%`}
                 muted={!vatTypeStr || !vatRateStr}
               />
+              {isPurchaseOrder && (
+                <SummaryItem
+                  label="ประเภทรายการ"
+                  value={PURCHASE_INQUIRY_TYPE_OPTIONS.find((option) => option.value === inquiryTypeStr)?.label || 'ยังไม่เลือก'}
+                  muted={!inquiryTypeStr}
+                />
+              )}
               <SummaryItem label="เวลาเอกสาร" value={docTime || 'ยังไม่ระบุ'} mono muted={!docTime} />
             </div>
           </div>
@@ -742,9 +762,25 @@ export function BulkSendDialog({
               </Select>
             </div>
 
-            <div className="space-y-1">
-              <Label className="text-xs">อัตราภาษี (%) <span className="text-destructive">*</span></Label>
-              <Input type="number" step="0.001" value={vatRateStr} onChange={(e) => setVatRateStr(e.target.value)} className="font-mono" disabled={controlsLocked} />
+            {isPurchaseOrder && (
+              <div className="space-y-1">
+                <Label className="text-xs">ประเภทรายการ <span className="text-destructive">*</span></Label>
+                <Select value={inquiryTypeStr} onValueChange={setInquiryTypeStr} disabled={controlsLocked}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue placeholder="เลือกประเภทรายการ" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PURCHASE_INQUIRY_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
+              อัตราภาษีใช้ {vatRateNum}% จากค่าเริ่มต้นของระบบเพื่อกัน user กรอกผิด
             </div>
             <details className="space-y-2 rounded-md border border-border bg-background px-3 py-2 sm:col-span-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
@@ -766,18 +802,24 @@ export function BulkSendDialog({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="bulk-remark">หมายเหตุ</Label>
-            <textarea
-              id="bulk-remark"
-              value={remark}
-              onChange={(e) => setRemark(e.target.value)}
-              rows={3}
-              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              placeholder="หมายเหตุสำหรับ SML (ถ้ามี)"
-              disabled={controlsLocked}
-            />
-          </div>
+          {isShopeePurchaseBulk ? (
+            <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2 text-xs text-muted-foreground">
+              บิลซื้อ Shopee จะส่ง remark เป็นผู้ขายจากอีเมลของแต่ละบิลอัตโนมัติ และส่งเลขคำสั่งซื้อเข้า remark_5
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="bulk-remark">หมายเหตุ</Label>
+              <textarea
+                id="bulk-remark"
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+                rows={3}
+                className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder="หมายเหตุสำหรับ SML (ถ้ามี)"
+                disabled={controlsLocked}
+              />
+            </div>
+          )}
 
           <div className="overflow-hidden rounded-md border border-border">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs">

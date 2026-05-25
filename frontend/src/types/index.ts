@@ -82,6 +82,7 @@ export interface BillItem {
   qty: number
   unit_code?: string | null
   price?: number | null
+  discount_amount?: number
   mapped: boolean
   mapping_id?: string | null
   candidates?: CatalogMatch[] // top-5 catalog matches for needs_review items

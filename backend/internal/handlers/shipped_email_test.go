@@ -8,6 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"go.uber.org/zap"
 
+	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
 	"billflow/internal/services/artifact"
@@ -121,6 +122,87 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
 	}
+}
+
+func TestConfiguredShopeeShippingLineDisabledDoesNothing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &EmailHandler{
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		logger:          zap.NewNop(),
+	}
+	mock.ExpectQuery("FROM channel_defaults").
+		WithArgs("shopee_shipped", "purchase").
+		WillReturnRows(channelDefaultRows().AddRow(
+			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
+			"BF-PO", "YYMM####", "", "", "", "", false, "", "", "", "", -1, -1.0, nil, time.Now(),
+		))
+
+	item, ready := h.configuredShopeeShippingLine("#2601AAA", 38, true)
+	if item != nil || ready {
+		t.Fatalf("item=%+v ready=%v, want disabled nil false", item, ready)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestConfiguredShopeeShippingLineUsesConfiguredItem(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &EmailHandler{
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		logger:          zap.NewNop(),
+	}
+	mock.ExpectQuery("FROM channel_defaults").
+		WithArgs("shopee_shipped", "purchase").
+		WillReturnRows(channelDefaultRows().AddRow(
+			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_TEST", "ครั้ง", "", "", -1, -1.0, nil, time.Now(),
+		))
+
+	item, ready := h.configuredShopeeShippingLine("#2601AAA", 38, true)
+	if item == nil {
+		t.Fatal("expected shipping item")
+	}
+	if !ready {
+		t.Fatal("expected ready shipping item")
+	}
+	if item.SourceSKU != models.ShopeeShippingSourceSKU {
+		t.Fatalf("source_sku = %q, want sentinel", item.SourceSKU)
+	}
+	if item.ItemCode == nil || *item.ItemCode != "SHIP_TEST" {
+		t.Fatalf("item_code = %v, want SHIP_TEST", item.ItemCode)
+	}
+	if item.UnitCode == nil || *item.UnitCode != "ครั้ง" {
+		t.Fatalf("unit_code = %v, want ครั้ง", item.UnitCode)
+	}
+	if item.Price == nil || *item.Price != 38 || item.Qty != 1 || !item.Mapped {
+		t.Fatalf("item = %+v, want qty=1 price=38 mapped=true", item)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func channelDefaultRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"channel", "bill_type", "party_code", "party_name", "party_phone",
+		"party_address", "party_tax_id", "doc_format_code", "endpoint",
+		"doc_prefix", "doc_running_format",
+		"branch_code", "sale_code", "unit_code", "doc_time",
+		"shipping_item_enabled", "shipping_item_code", "shipping_item_unit_code",
+		"wh_code", "shelf_code", "vat_type", "vat_rate",
+		"updated_by", "updated_at",
+	})
 }
 
 func aiExtractedOrderForTest(orderID string) ai.ExtractedOrder {

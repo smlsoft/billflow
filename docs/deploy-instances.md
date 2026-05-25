@@ -2,7 +2,7 @@
 
 Registry สำหรับจำว่าแต่ละร้านใช้ folder, port, container และ Cloudflare tunnel ไหนบน server `192.168.2.109`.
 
-> หมายเหตุ: ตอนนี้ใช้ Cloudflare Quick Tunnel (`trycloudflare.com`) URL จะเปลี่ยนเมื่อ process `cloudflared` ถูก restart หรือเครื่องดับ ให้ดู URL ใหม่จาก log path ของ instance นั้น
+> หมายเหตุ: Main/Thaisunsport ยังใช้ Cloudflare Quick Tunnel (`trycloudflare.com`) และ URL จะเปลี่ยนเมื่อ process `cloudflared` restart. Henna ตอนนี้ใช้ `ngrok` (fixed dev domain) แทน.
 
 ## Summary
 
@@ -10,7 +10,7 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
 | `billflow` | BillFlow ปกติ / demo หลัก | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | ดูจาก log | `/tmp/billflow-tunnel.log` |
 | `billflow-thaisunsport` | Thaisunsport demo Phase 1 ฝั่งซื้อ | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | `https://pets-mini-museums-ships.trycloudflare.com` | `/tmp/billflow-thaisunsport-tunnel.log` |
-| `billflow-henna` | Henna customer trial | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5458` | `https://aurora-enjoyed-backup-lines.trycloudflare.com` | `/tmp/billflow-henna-tunnel.log` |
+| `billflow-henna` | Henna customer trial | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5458` | `https://animal-galvanize-tameness.ngrok-free.dev` | `- (ngrok)` |
 
 ## Deploy Policy
 
@@ -62,7 +62,7 @@ docker ps --format '{{.Names}} {{.Ports}}' | grep billflow
 ```bash
 grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-tunnel.log | tail -1
 grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-thaisunsport-tunnel.log | tail -1
-grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-henna-tunnel.log | tail -1
+# Henna currently uses ngrok domain from its own ngrok setup/config.
 ```
 
 ### Restart a Quick Tunnel
@@ -72,6 +72,51 @@ nohup cloudflared tunnel --url http://127.0.0.1:3010 --no-autoupdate > /tmp/bill
 nohup cloudflared tunnel --url http://127.0.0.1:3020 --no-autoupdate > /tmp/billflow-thaisunsport-tunnel.log 2>&1 &
 nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/billflow-henna-tunnel.log 2>&1 &
 ```
+
+## sml-api-bybos — Shared SML Gateway
+
+**Location on server:** `~/sml-api-bybos/` — single Docker Compose project running at port `8200`.
+
+**Architecture:** 1 process / 3 tenants — แต่ละ BillFlow instance ส่ง request ไปที่ `http://192.168.2.109:8200` (หรือ Docker gateway IP สำหรับ container ที่เรียกจาก backend: `http://172.24.0.1:8200`) และใช้ header `x-tenant` เพื่อระบุว่าจะเชื่อมต่อ DB ของร้านไหน. sml-api-bybos map tenant → DB connection โดยอ่านจาก env vars `SML_DB_HOST_<TENANT>` ตอน boot.
+
+### Tenant Routing Table
+
+| BillFlow Instance | URL ที่ backend เรียก | x-tenant header | DB host |
+| --- | --- | --- | --- |
+| `billflow` (main) | `http://172.24.0.1:8200` | `sml1_2026` | `192.168.2.248` (SML production DB) |
+| `billflow-henna` | `http://172.24.0.1:8200` | `aoy` | `demserver.3bbddns.com` |
+| `billflow-thaisunsport` | `http://192.168.2.109:8200` | `data1_test` | `thaisunsport.thddns.net:9983` |
+
+> หมายเหตุ: `172.24.0.1` คือ Docker bridge gateway — ใช้จากภายใน container เพื่อเรียก service ที่รันบน host. `192.168.2.109` ใช้ได้จาก host โดยตรง.
+
+### เพิ่ม Tenant ใหม่
+
+1. เพิ่ม tenant slug ใน `ALLOWED_TENANTS` ใน `~/sml-api-bybos/.env` (comma-separated):
+
+   ```env
+   ALLOWED_TENANTS=sml1_2026,aoy,data1_test,<new_tenant>
+   ```
+
+2. เพิ่ม DB override สำหรับ tenant ใหม่:
+
+   ```env
+   SML_DB_HOST_<NEW_TENANT_UPPER>=<db_host>
+   SML_DB_PORT_<NEW_TENANT_UPPER>=<port>
+   SML_DB_USER_<NEW_TENANT_UPPER>=<user>
+   SML_DB_PASSWORD_<NEW_TENANT_UPPER>=<password>
+   SML_DB_SSLMODE_<NEW_TENANT_UPPER>=disable
+   ```
+
+   (ชื่อ env var ต้องเป็น uppercase ของ tenant slug เช่น `data1_test` → `DATA1_TEST`)
+
+3. Force-recreate container เพื่อโหลด env ใหม่:
+
+   ```bash
+   cd ~/sml-api-bybos
+   docker compose up -d --force-recreate
+   ```
+
+> ⚠️ **`docker compose restart` ไม่โหลด env_file ใหม่** — ต้องใช้ `--force-recreate` เท่านั้น. ถ้าใช้ restart แล้ว tenant ยังไม่ผ่าน จะได้รับ `{"error":"tenant_not_allowed"}`.
 
 ## Port Allocation Rule
 
@@ -88,14 +133,18 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Henna Notes
 
-- Latest deploy verified: 2026-05-11 16:49 +07.
+- Latest deploy verified: 2026-05-22 15:26 +07.
 - Created from current normal BillFlow version, not Thaisunsport branch/config.
 - Deployed as isolated Docker Compose project in `/home/bosscatdog/billflow-henna`.
 - Database is separate PostgreSQL volume `billflow-henna_billflow_henna_pgdata`.
-- `PUBLIC_BASE_URL` in `/home/bosscatdog/billflow-henna/.env` is set to the latest Henna Quick Tunnel URL.
+- `PUBLIC_BASE_URL` in `/home/bosscatdog/billflow-henna/.env` is set to `https://animal-galvanize-tameness.ngrok-free.dev`.
 - App settings seeded:
   - `instance.name = BillFlow Henna`
   - `instance.slug = billflowhenna`
+- Runtime parity notes (2026-05-22):
+  - Synced from the same local source snapshot as BillFlow main and rebuilt `billflow-henna-backend` + `billflow-henna-frontend`.
+  - Runtime SML base URL in DB: `sml.rest_base_url=http://172.24.0.1:8200`.
+  - Health checks passed: `http://192.168.2.109:8110/health`, `http://192.168.2.109:3030/login`.
 
 ## Thaisunsport Notes
 
@@ -116,6 +165,11 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-22 15:26 +07: Main + Henna parity deploy and verification completed.
+- Scope: deployed local backend/frontend/docs/scripts snapshot to `billflow` then `billflow-henna`; rebuilt and restarted only those two instances.
+- Verification: `go test ./...`, `npm run build`, main preflight (`scripts/preflight-main.sh`), Henna preflight override (`BF_HOST=192.168.2.109 BACKEND_PORT=8110 FRONTEND_PORT=3030 SML_API_PORT=8200 SML_TENANT=aoy`), and API smoke for login/bills/channel-defaults on both passed.
+- Runtime checks: both main and Henna now use `sml.rest_base_url=http://172.24.0.1:8200`; schema columns from migrations `047` and `048` verified on both.
+- Operational note: Thaisunsport remains unchanged in this round (no restart/deploy).
 - 2026-05-21 10:32 +07: BillFlow main Shopee live OAuth callback fallback deployed and verified.
 - Scope: `billflow` only. Backend now handles Shopee live callbacks that return `code` + `shop_id` but omit `state` by consuming exactly one matching unexpired OAuth state for the current environment and redirect URL; missing/ambiguous state still fails safely.
 - Verification: `go test ./...`, backend-only deploy/restart, backend `/health`, `scripts/preflight-main.sh`, browser OAuth retry, `/api/settings/shopee-api/status`, and preview-only fetch smoke passed.

@@ -119,10 +119,11 @@ type EmailHandler struct {
 	threshold  float64
 	logger     *zap.Logger
 	// Catalog-based matching (Shopee email flow)
-	catalogSvc  *catalog.SMLCatalogService
-	embSvc      *catalog.EmbeddingService
-	catalogIdx  *catalog.CatalogIndex
-	catalogRepo *repository.SMLCatalogRepo
+	catalogSvc      *catalog.SMLCatalogService
+	embSvc          *catalog.EmbeddingService
+	catalogIdx      *catalog.CatalogIndex
+	catalogRepo     *repository.SMLCatalogRepo
+	channelDefaults *repository.ChannelDefaultRepo
 	// Source-artifact storage (PDF/HTML/envelope)
 	artifactSvc *artifact.Service
 }
@@ -162,6 +163,11 @@ func (h *EmailHandler) SetCatalogServices(
 	h.embSvc = embSvc
 	h.catalogIdx = catalogIdx
 	h.catalogRepo = catalogRepo
+}
+
+// SetChannelDefaults wires per-channel routing/config used by email flows.
+func (h *EmailHandler) SetChannelDefaults(repo *repository.ChannelDefaultRepo) {
+	h.channelDefaults = repo
 }
 
 // SetArtifactService wires source-artifact storage for evidence/audit trails.
