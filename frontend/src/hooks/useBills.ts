@@ -27,6 +27,7 @@ export interface RetryBillPayload {
   party_name?: string
   doc_no?: string
   remark?: string
+  remark_2?: string
   branch_code?: string
   sale_code?: string
   unit_code?: string

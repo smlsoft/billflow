@@ -108,6 +108,7 @@ type SaleOrderPayload struct {
 	TotalAmount    float64         `json:"total_amount"`
 	Items          []SaleOrderItem `json:"items"`
 	Remark         string          `json:"remark,omitempty"`
+	Remark2        string          `json:"remark_2,omitempty"`
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────
@@ -250,6 +251,10 @@ type SOItem struct {
 	ShelfCode string  // resolved shelf; falls back to cfg.ShelfCode
 }
 
+type SaleOrderHeaderOptions struct {
+	Remark2 string
+}
+
 // BuildSaleOrderPayload mirrors BuildPurchaseOrderPayload (same VAT math via
 // CalcItemVAT, just emitting `items` instead of `details` and sale_type=0).
 func BuildSaleOrderPayload(
@@ -260,9 +265,14 @@ func BuildSaleOrderPayload(
 	items []SOItem,
 	cfg SaleOrderConfig,
 	remark string,
+	opts ...SaleOrderHeaderOptions,
 ) SaleOrderPayload {
 	var lineItems []SaleOrderItem
 	var totalValue, totalVAT, totalExc float64
+	var header SaleOrderHeaderOptions
+	if len(opts) > 0 {
+		header = opts[0]
+	}
 
 	for i, item := range items {
 		unit := item.UnitCode
@@ -346,5 +356,6 @@ func BuildSaleOrderPayload(
 		TotalAmount:    totalAmount,
 		Items:          lineItems,
 		Remark:         remark,
+		Remark2:        header.Remark2,
 	}
 }

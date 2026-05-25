@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select'
 import type { RetryBillPayload } from '@/hooks/useBills'
 import type { Bill } from '@/types'
+import { REMARK2_NONE, SML_REMARK2_OPTIONS, normalizeRemark2, remark2PayloadValue } from '@/lib/smlRemark2'
 import { PartyPicker, type Party } from '@/pages/ChannelDefaults/PartyPicker'
 import { ShelfPicker, WarehousePicker } from './WarehousePicker'
 
@@ -137,6 +138,7 @@ export function SendPurchaseDialog({
   const [vatTypeStr, setVatTypeStr] = useState('')
   const [vatRateStr, setVatRateStr] = useState('7')
   const [inquiryTypeStr, setInquiryTypeStr] = useState('')
+  const [remark2Str, setRemark2Str] = useState(REMARK2_NONE)
 
   const effectivePartyCode = party?.code ?? ''
   const parsedVatRate = Number(vatRateStr)
@@ -182,6 +184,7 @@ export function SendPurchaseDialog({
     const vatType = payloadNumber(payload, 'vat_type')
     const vatRate = payloadNumber(payload, 'vat_rate')
     const inquiryType = payloadNumber(payload, 'inquiry_type')
+    setRemark2Str(normalizeRemark2(payloadString(payload, 'remark_2')))
     setVatTypeStr(vatType != null ? String(vatType) : '')
     setVatRateStr(vatRate != null ? String(vatRate) : '7')
     setInquiryTypeStr(inquiryType != null ? String(inquiryType) : '')
@@ -194,6 +197,7 @@ export function SendPurchaseDialog({
       party_name: party?.name,
       doc_no: docNo.trim() || undefined,
       remark: isShopeePurchaseEmail ? undefined : remark.trim() || undefined,
+      remark_2: remark2PayloadValue(remark2Str),
       branch_code: branchCode.trim() || undefined,
       sale_code: saleCode.trim() || undefined,
       doc_time: docTime.trim() || undefined,
@@ -373,6 +377,22 @@ export function SendPurchaseDialog({
                 </Select>
               </div>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs">สถานะเอกสาร</Label>
+              <Select value={remark2Str} onValueChange={setRemark2Str}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="ไม่ระบุ" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={REMARK2_NONE}>ไม่ระบุ</SelectItem>
+                  {SML_REMARK2_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
               อัตราภาษีใช้ {Number.isFinite(vatRateNum) ? `${vatRateNum}%` : '7%'} จากค่าเริ่มต้นของระบบเพื่อกัน user กรอกผิด
             </div>

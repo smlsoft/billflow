@@ -698,6 +698,7 @@ type RetryRequest struct {
 	PartyName   string   `json:"party_name"`
 	DocNo       string   `json:"doc_no"`
 	Remark      string   `json:"remark"`
+	Remark2     string   `json:"remark_2"`
 	BranchCode  string   `json:"branch_code"`
 	SaleCode    string   `json:"sale_code"`
 	UnitCode    string   `json:"unit_code"`
@@ -831,6 +832,9 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 			Skipped:    true,
 		}
 	}
+	if err := validateRemark2(req.Remark2); err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error()}
+	}
 
 	allMapped := true
 	missingCatalogCode := ""
@@ -940,7 +944,9 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
 	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildSaleOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
+	payload := sml.BuildSaleOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark, sml.SaleOrderHeaderOptions{
+		Remark2: req.Remark2,
+	})
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -1033,7 +1039,9 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
 	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildInvoicePayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, productCache, req.Remark)
+	payload := sml.BuildInvoicePayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, productCache, req.Remark, sml.InvoiceHeaderOptions{
+		Remark2: req.Remark2,
+	})
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -1140,6 +1148,7 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
 	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, remark, sml.PurchaseOrderHeaderOptions{
 		Remark:      remark,
+		Remark2:     req.Remark2,
 		Remark5:     remark5,
 		InquiryType: inquiryType,
 	})
@@ -1272,7 +1281,7 @@ func (h *BillHandler) CreateBulkSendJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := validateBulkPurchasePayload(req.BillType, req.DocumentRoute, req.Payload); err != nil {
+	if err := validateBulkSendPayload(req.BillType, req.DocumentRoute, req.Payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -1400,7 +1409,10 @@ func validBulkJobStatus(status string) bool {
 	}
 }
 
-func validateBulkPurchasePayload(billType, documentRoute string, payload RetryRequest) error {
+func validateBulkSendPayload(billType, documentRoute string, payload RetryRequest) error {
+	if err := validateRemark2(payload.Remark2); err != nil {
+		return err
+	}
 	if strings.TrimSpace(billType) != "purchase" && strings.TrimSpace(documentRoute) != "purchaseorder" {
 		return nil
 	}
@@ -1455,8 +1467,8 @@ func (h *BillHandler) RetryFailedBulkSendJob(c *gin.Context) {
 			return
 		}
 	}
-	if err := validateBulkPurchasePayload(original.BillType, original.DocumentRoute, originalPayload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bulk job เดิมไม่มีประเภทรายการ กรุณาเปิด dialog ส่งใหม่และเลือกประเภทรายการ"})
+	if err := validateBulkSendPayload(original.BillType, original.DocumentRoute, originalPayload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	filterJSON := appendRetryOfJob(original.FilterSnapshot, original.ID)
@@ -1527,7 +1539,7 @@ func (h *BillHandler) runBulkSendJob(jobID string) {
 			return
 		}
 	}
-	if err := validateBulkPurchasePayload(job.BillType, job.DocumentRoute, payload); err != nil {
+	if err := validateBulkSendPayload(job.BillType, job.DocumentRoute, payload); err != nil {
 		_ = h.bulkJobRepo.MarkJobFailed(jobID, err.Error())
 		return
 	}
@@ -1732,7 +1744,9 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req Retr
 	// Stamp doc_no on the bill BEFORE calling SML so a re-retry uses the same
 	// number (no counter inflation, no duplicate docs in SML on transient fail).
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildSaleOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark)
+	payload := sml.BuildSaleOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark, sml.SaleOrderHeaderOptions{
+		Remark2: req.Remark2,
+	})
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -1824,7 +1838,9 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req Re
 		return
 	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
-	payload := sml.BuildInvoicePayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, productCache, req.Remark)
+	payload := sml.BuildInvoicePayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, productCache, req.Remark, sml.InvoiceHeaderOptions{
+		Remark2: req.Remark2,
+	})
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -1927,6 +1943,7 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
 	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, remark, sml.PurchaseOrderHeaderOptions{
 		Remark:      remark,
+		Remark2:     req.Remark2,
 		Remark5:     remark5,
 		InquiryType: inquiryType,
 	})
@@ -2005,6 +2022,15 @@ func validatePurchaseInquiryType(value *int) (int, error) {
 		return *value, nil
 	default:
 		return 0, fmt.Errorf("ประเภทรายการไม่ถูกต้อง (เลือกได้เฉพาะ 0, 1, 3, 4)")
+	}
+}
+
+func validateRemark2(value string) error {
+	switch value {
+	case "", "tax", "notax", "re":
+		return nil
+	default:
+		return fmt.Errorf("สถานะเอกสารไม่ถูกต้อง (เลือกได้เฉพาะ tax, notax, re)")
 	}
 }
 

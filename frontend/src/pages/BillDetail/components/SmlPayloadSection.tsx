@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { JsonViewer } from '@/components/common/JsonViewer'
 import { Badge } from '@/components/ui/badge'
+import { remark2Label } from '@/lib/smlRemark2'
 
 interface Props {
   smlPayload?: Record<string, unknown> | null
@@ -61,6 +62,7 @@ export function SmlPayloadSection({ smlPayload, smlResponse }: Props) {
   const responseLabel = responseStatus === '—' ? 'มี response' : responseStatus
   const whCode = smlPayload?.wh_code ?? firstItem?.wh_code
   const shelfCode = smlPayload?.shelf_code ?? firstItem?.shelf_code
+  const remark2 = typeof smlPayload?.remark_2 === 'string' ? smlPayload.remark_2 : ''
 
   return (
     <Card>
@@ -94,6 +96,7 @@ export function SmlPayloadSection({ smlPayload, smlResponse }: Props) {
                 label="ภาษี"
                 value={`${vatLabel(smlPayload.vat_type)} · ${text(smlPayload.vat_rate)}%`}
               />
+              <SummaryCell label="สถานะเอกสาร" value={remark2Label(remark2)} />
               <SummaryCell label="จำนวนรายการ" value={`${items.length.toLocaleString()} รายการ`} />
               <SummaryCell label="ยอดสุทธิ" value={money(smlPayload.total_amount)} />
             </div>

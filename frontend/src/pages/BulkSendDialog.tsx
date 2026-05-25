@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select'
 import { PartyPicker, type Party } from '@/pages/ChannelDefaults/PartyPicker'
 import { ShelfPicker, WarehousePicker } from '@/pages/BillDetail/components/WarehousePicker'
+import { REMARK2_NONE, SML_REMARK2_OPTIONS, normalizeRemark2, remark2Label, remark2PayloadValue } from '@/lib/smlRemark2'
 import {
   createBulkSendJob,
   getActiveBulkSendJob,
@@ -195,6 +196,7 @@ export function BulkSendDialog({
   const [vatTypeStr, setVatTypeStr] = useState('')
   const [vatRateStr, setVatRateStr] = useState('7')
   const [inquiryTypeStr, setInquiryTypeStr] = useState('')
+  const [remark2Str, setRemark2Str] = useState(REMARK2_NONE)
   const [branchCode, setBranchCode] = useState('')
   const [saleCode, setSaleCode] = useState('')
   const [remark, setRemark] = useState('')
@@ -312,6 +314,7 @@ export function BulkSendDialog({
     setVatTypeStr('')
     setVatRateStr('7')
     setInquiryTypeStr('')
+    setRemark2Str(REMARK2_NONE)
     setBranchCode('')
     setSaleCode('')
     setRemark('')
@@ -330,6 +333,7 @@ export function BulkSendDialog({
     setVatTypeStr(typeof p.vat_type === 'number' ? String(p.vat_type) : '')
     setVatRateStr(typeof p.vat_rate === 'number' ? String(p.vat_rate) : '7')
     setInquiryTypeStr(typeof p.inquiry_type === 'number' ? String(p.inquiry_type) : '')
+    setRemark2Str(normalizeRemark2(p.remark_2))
     setBranchCode(p.branch_code || '')
     setSaleCode(p.sale_code || '')
     setRemark(p.remark || '')
@@ -468,6 +472,7 @@ export function BulkSendDialog({
     party_code: party?.code,
     party_name: party?.name,
     remark: isShopeePurchaseBulk ? undefined : remark.trim() || undefined,
+    remark_2: remark2PayloadValue(remark2Str),
     branch_code: branchCode.trim() || undefined,
     sale_code: saleCode.trim() || undefined,
     doc_time: docTime.trim(),
@@ -678,6 +683,11 @@ export function BulkSendDialog({
                   muted={!inquiryTypeStr}
                 />
               )}
+              <SummaryItem
+                label="สถานะเอกสาร"
+                value={remark2Label(remark2PayloadValue(remark2Str))}
+                muted={remark2Str === REMARK2_NONE}
+              />
               <SummaryItem label="เวลาเอกสาร" value={docTime || 'ยังไม่ระบุ'} mono muted={!docTime} />
             </div>
           </div>
@@ -779,6 +789,22 @@ export function BulkSendDialog({
                 </Select>
               </div>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs">สถานะเอกสาร</Label>
+              <Select value={remark2Str} onValueChange={setRemark2Str} disabled={controlsLocked}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="ไม่ระบุ" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={REMARK2_NONE}>ไม่ระบุ</SelectItem>
+                  {SML_REMARK2_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
               อัตราภาษีใช้ {vatRateNum}% จากค่าเริ่มต้นของระบบเพื่อกัน user กรอกผิด
             </div>

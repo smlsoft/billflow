@@ -188,3 +188,32 @@ func TestValidBulkJobStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRemark2AllowsOnlyDocumentStatusCodes(t *testing.T) {
+	for _, value := range []string{"", "tax", "notax", "re"} {
+		if err := validateRemark2(value); err != nil {
+			t.Fatalf("validateRemark2(%q) rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{"vat", "taxinvoice", " tax "} {
+		if err := validateRemark2(value); err == nil {
+			t.Fatalf("validateRemark2(%q) should reject invalid code", value)
+		}
+	}
+}
+
+func TestValidateBulkSendPayloadChecksRemark2ForSaleAndPurchase(t *testing.T) {
+	if err := validateBulkSendPayload("sale", "saleorder", RetryRequest{Remark2: "vat"}); err == nil {
+		t.Fatal("sale bulk payload with invalid remark_2 should be rejected")
+	}
+	if err := validateBulkSendPayload("purchase", "purchaseorder", RetryRequest{Remark2: "tax"}); err == nil {
+		t.Fatal("purchase bulk still requires inquiry_type")
+	}
+	inquiryType := 1
+	if err := validateBulkSendPayload("purchase", "purchaseorder", RetryRequest{
+		Remark2:     "tax",
+		InquiryType: &inquiryType,
+	}); err != nil {
+		t.Fatalf("valid purchase bulk payload rejected: %v", err)
+	}
+}

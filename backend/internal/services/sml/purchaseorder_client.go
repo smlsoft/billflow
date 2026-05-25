@@ -125,6 +125,7 @@ type PurchaseOrderPayload struct {
 	Items          []PurchaseOrderDetail `json:"items"`
 	PayDetails     []interface{}         `json:"paydetails"`
 	Remark         string                `json:"remark,omitempty"`
+	Remark2        string                `json:"remark_2,omitempty"`
 	Remark5        string                `json:"remark_5,omitempty"`
 }
 
@@ -269,6 +270,7 @@ type POItem struct {
 
 type PurchaseOrderHeaderOptions struct {
 	Remark      string
+	Remark2     string
 	Remark5     string
 	InquiryType int
 }
@@ -418,6 +420,7 @@ func BuildPurchaseOrderPayload(
 		Items:          details,
 		PayDetails:     []interface{}{},
 		Remark:         header.Remark,
+		Remark2:        header.Remark2,
 		Remark5:        header.Remark5,
 	}
 }

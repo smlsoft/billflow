@@ -132,7 +132,7 @@ export function scoreStyle(score: number | null): {
   return { color: 'text-red-700', bg: 'bg-red-100', label: `${pct}%`, icon: '⚠' }
 }
 
-/** Returns raw hex/css color for inline use (items recap in RawDataCard) */
+/** Returns raw hex/css color for inline status accents. */
 export function scoreColor(score: number | null): string {
   if (score == null) return '#94a3b8'
   if (score >= 0.85) return '#15803d'

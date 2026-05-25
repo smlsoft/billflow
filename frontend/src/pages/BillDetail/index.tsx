@@ -12,13 +12,11 @@ import { BillFailureCard } from './components/BillFailureCard'
 import { BillTotal } from './components/BillTotal'
 import { BillItemsTable } from './components/BillItemsTable'
 import { BillTimeline } from './components/BillTimeline'
-import { RawDataCard } from './components/RawDataCard'
 import { ArtifactList } from './components/ArtifactList'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
 import { SendPurchaseDialog } from './components/SendPurchaseDialog'
 import { validateForSML } from './utils/validation'
 import type { RetryBillPayload } from '@/hooks/useBills'
-import { isShopeeSalesBill } from '@/lib/shopeeBill'
 
 export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
@@ -130,8 +128,6 @@ export default function BillDetail() {
     bill.status === 'pending' ||
     bill.status === 'needs_review'
   const canEdit = canSend
-  const isShopeeSale = isShopeeSalesBill(bill)
-  const evidenceSourceLabel = isShopeeSale ? 'ไฟล์ Marketplace Excel' : 'อีเมล'
 
   const handleItemUpdated = (updated: BillItem) => {
     setBill((prev) => {
@@ -199,7 +195,7 @@ export default function BillDetail() {
           <div>
             <h3 className="text-sm font-semibold text-foreground">ข้อมูลประกอบการตรวจสอบ</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              ใช้เมื่อต้องย้อนดูที่มาจาก{evidenceSourceLabel} หลักฐานต้นฉบับ และประวัติของบิลนี้
+              ใช้เมื่อต้องย้อนดูหลักฐานต้นฉบับ ประวัติ และข้อมูลที่ส่งเข้า SML
             </p>
           </div>
           <span className="rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
@@ -207,24 +203,13 @@ export default function BillDetail() {
           </span>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.18fr)_minmax(380px,0.82fr)]">
-          {bill.raw_data && (
-            <div className="min-w-0">
-              <RawDataCard
-                data={bill.raw_data as Record<string, unknown>}
-                items={bill.items}
-              />
-            </div>
-          )}
-
-          <div className="min-w-0 space-y-4">
-            <ArtifactList billId={bill.id} emailGroup={bill.email_group} />
-            <BillTimeline billId={bill.id} shopeeEvents={bill.shopee_events ?? []} />
-            <SmlPayloadSection
-              smlPayload={bill.sml_payload}
-              smlResponse={bill.sml_response}
-            />
-          </div>
+        <div className="min-w-0 space-y-4">
+          <ArtifactList billId={bill.id} emailGroup={bill.email_group} />
+          <BillTimeline billId={bill.id} shopeeEvents={bill.shopee_events ?? []} />
+          <SmlPayloadSection
+            smlPayload={bill.sml_payload}
+            smlResponse={bill.sml_response}
+          />
         </div>
       </section>
 

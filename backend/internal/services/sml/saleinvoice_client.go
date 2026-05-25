@@ -210,6 +210,7 @@ type InvoicePayload struct {
 	Details        []InvoiceDetail `json:"details"`
 	PayDetails     []interface{}   `json:"paydetails"`
 	Remark         string          `json:"remark,omitempty"`
+	Remark2        string          `json:"remark_2,omitempty"`
 }
 
 // InvoiceResponse handles both old restapi format and new v3 format.
@@ -387,6 +388,10 @@ type ShopeeOrderItem struct {
 	Qty         float64 `json:"qty"`
 }
 
+type InvoiceHeaderOptions struct {
+	Remark2 string
+}
+
 // BuildInvoicePayload constructs an InvoicePayload from a Shopee order.
 // productCache maps sku → *ProductInfo (may be nil if not found).
 func BuildInvoicePayload(
@@ -398,9 +403,14 @@ func BuildInvoicePayload(
 	cfg InvoiceConfig,
 	productCache map[string]*ProductInfo,
 	remark string,
+	opts ...InvoiceHeaderOptions,
 ) InvoicePayload {
 	var details []InvoiceDetail
 	var totalValue, totalVAT, totalExc float64
+	var header InvoiceHeaderOptions
+	if len(opts) > 0 {
+		header = opts[0]
+	}
 
 	for i, item := range items {
 		prod := productCache[item.SKU]
@@ -495,5 +505,6 @@ func BuildInvoicePayload(
 		Details:        details,
 		PayDetails:     []interface{}{},
 		Remark:         remark,
+		Remark2:        header.Remark2,
 	}
 }
