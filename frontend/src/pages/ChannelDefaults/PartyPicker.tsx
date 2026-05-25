@@ -182,18 +182,30 @@ export function PartyPicker({ billType, value, onChange, disabled }: PartyPicker
       </PopoverTrigger>
       <PopoverContent className="w-[480px] p-0" align="start">
         {!createMode && (
-          <div className="relative border-b border-border">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="ค้นหาด้วยรหัส / ชื่อ / เลขผู้เสียภาษี…"
-              className="h-10 w-full bg-transparent px-9 text-sm placeholder:text-muted-foreground focus:outline-none"
-            />
-            {loading && (
-              <div className="absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
-            )}
+          <div className="flex items-center gap-2 border-b border-border p-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="ค้นหาด้วยรหัส / ชื่อ / เลขผู้เสียภาษี…"
+                className="h-9 w-full rounded-md border border-input bg-background px-9 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              {loading && (
+                <div className="absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 shrink-0 gap-1.5 px-2.5 text-xs"
+              onClick={startCreate}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              สร้าง{partyLabel}ใหม่
+            </Button>
           </div>
         )}
 
@@ -250,24 +262,10 @@ export function PartyPicker({ billType, value, onChange, disabled }: PartyPicker
               </div>
             </div>
           )}
-          {!createMode && results.length === 0 && !loading && query.trim() && (
-            <div className="border-b border-border px-3 py-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 w-full justify-center gap-1.5 text-xs"
-                onClick={startCreate}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                สร้าง{partyLabel}ใหม่
-              </Button>
-            </div>
-          )}
           {!createMode && results.length === 0 && !loading && (
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">
               {query
-                ? `ไม่พบข้อมูล — สร้าง${partyLabel}ใหม่หรือกดรีเฟรช`
+                ? `ไม่พบข้อมูล — กดสร้าง${partyLabel}ใหม่หรือรีเฟรช`
                 : billType === 'purchase'
                   ? 'ยังไม่มีผู้ขายในแคช — กดรีเฟรช'
                   : 'ยังไม่มีลูกค้าในแคช — กดรีเฟรช'}
