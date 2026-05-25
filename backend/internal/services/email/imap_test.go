@@ -23,6 +23,18 @@ func TestClassifyDispatchWarning(t *testing.T) {
 			wantSkip: true,
 		},
 		{
+			name:     "duplicate or empty is user skipped",
+			warning:  "duplicate_or_empty: ไม่มีบิลใหม่จากเมลนี้ อาจซ้ำหรือไม่มีรายการสินค้าที่ใช้ได้",
+			wantCode: "duplicate_or_empty",
+			wantSkip: true,
+		},
+		{
+			name:     "duplicate or empty thai label is user skipped",
+			warning:  "ไม่มีบิลใหม่จากเมลนี้ อาจซ้ำหรือไม่มีรายการสินค้าที่ใช้ได้",
+			wantCode: "duplicate_or_empty",
+			wantSkip: true,
+		},
+		{
 			name:     "empty items remains warning",
 			warning:  "AI extract shopee email: empty items",
 			wantCode: "empty_items",
@@ -111,6 +123,31 @@ func TestPollResultStatus(t *testing.T) {
 				Summary:       modelsSummary(150, 0, 150, 150, 0),
 			},
 			want: "backlog",
+		},
+		{
+			name: "created bills with backlog stays backlog when skips are user-level",
+			res: PollResult{
+				MessagesFound: 150,
+				Processed:     57,
+				Skipped:       93,
+				Backlog:       520,
+				Limited:       true,
+				Summary:       modelsSummary(150, 57, 2, 91, 0),
+			},
+			want: "backlog",
+		},
+		{
+			name: "created bills with true processing failure still needs attention",
+			res: PollResult{
+				MessagesFound:   150,
+				Processed:       57,
+				Skipped:         93,
+				Backlog:         520,
+				Limited:         true,
+				Summary:         modelsSummary(150, 57, 2, 90, 1),
+				ProcessWarnings: []string{"empty orders"},
+			},
+			want: "warning",
 		},
 	}
 

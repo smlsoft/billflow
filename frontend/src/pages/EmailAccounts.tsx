@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import axios from 'axios'
 import {
   AlertCircle,
@@ -61,6 +62,7 @@ const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 const GMAIL_SECURITY_URL = 'https://myaccount.google.com/security'
 const GMAIL_APP_PASSWORDS_URL = 'https://myaccount.google.com/apppasswords'
 const GMAIL_IMAP_SETTINGS_URL = 'https://mail.google.com/mail/u/0/#settings/fwdandpop'
+const PURCHASE_BILLS_URL = '/bills?status=needs_review&source=shopee_shipped&bill_type=purchase'
 
 interface IMAPAccountFull extends IMAPAccount {
   last_polled_at?: string | null
@@ -242,6 +244,9 @@ function friendlyPollError(error?: string | null): string {
   if (lower.includes('shopee_channel_non_shopee_from')) {
     return 'มีอีเมลเข้ามา แต่ผู้ส่งไม่อยู่ในรายการที่ยอมรับ ให้กดแก้ไขแล้วเพิ่มอีเมลหรือโดเมนผู้ส่ง หรือเว้นว่างถ้าต้องการรับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ'
   }
+  if (lower.includes('duplicate_or_empty') || error.includes('ไม่มีบิลใหม่จากเมลนี้')) {
+    return 'เมลที่อ่านได้ซ้ำหรือไม่มีรายการใหม่ให้สร้างบิล ไม่ใช่ปัญหาการเชื่อมต่อ'
+  }
   if (lower.includes('empty items')) {
     return 'มีอีเมลที่ผ่านคำกรองหัวข้อเข้ามา แต่ไม่ใช่รูปแบบบิลซื้อ Shopee ที่ระบบอ่านได้ แนะนำให้กดแก้ไขกล่องเมล แล้วเหลือคำกรองเฉพาะ "ถูกจัดส่งแล้ว" และ "ยืนยันการชำระเงินคำสั่งซื้อหมายเลข"'
   }
@@ -285,6 +290,7 @@ function pollDetailStatusLabel(status: string): string {
 
 function friendlyReasonLabel(detail: Pick<IMAPPollDetail, 'reason_code' | 'reason_label' | 'status'>): string {
   if (detail.reason_code === 'duplicate') return 'เคยประมวลผลแล้ว'
+  if (detail.reason_code === 'duplicate_or_empty') return 'ซ้ำหรือไม่มีรายการใหม่'
   if (detail.reason_code === 'accepted') return 'ส่งเข้ากระบวนการสร้างบิลแล้ว'
   return detail.reason_label || detail.reason_code || pollDetailStatusLabel(detail.status)
 }
@@ -324,6 +330,22 @@ function pollSummaryFor(account: IMAPAccountFull): Required<IMAPPollSummary> {
 
 function formatPollSummary(summary: Required<IMAPPollSummary>): string {
   return `สแกน ${summary.scanned} / สร้างใหม่ ${summary.created} / เคยประมวลผลแล้ว ${summary.already_processed}`
+}
+
+function withPurchaseBillsAction(id: string | number, enabled = true) {
+  const opts: {
+    id: string | number
+    action?: { label: string; onClick: () => void }
+  } = { id }
+  if (enabled) {
+    opts.action = {
+      label: 'ดูใบสั่งซื้อ',
+      onClick: () => {
+        window.location.href = PURCHASE_BILLS_URL
+      },
+    }
+  }
+  return opts
 }
 
 function accountState(account: IMAPAccountFull): 'ready' | 'backlog' | 'attention' | 'disabled' | 'unknown' {
@@ -376,12 +398,14 @@ function stateTone(state: ReturnType<typeof accountState>): string {
 function pollSummaryText(account: IMAPAccountFull): string {
   const summary = pollSummaryFor(account)
   const backlog = account.last_poll_backlog ?? 0
+  const skippedOther = Math.max(summary.skipped_user - summary.already_processed, 0)
   const parts = [
     `สแกน ${summary.scanned.toLocaleString('th-TH')}`,
     `ใหม่ ${summary.created.toLocaleString('th-TH')}`,
     `เคยอ่าน ${summary.already_processed.toLocaleString('th-TH')}`,
     `ต้องตรวจ ${summary.failed.toLocaleString('th-TH')}`,
   ]
+  if (skippedOther > 0) parts.push(`ข้าม ${skippedOther.toLocaleString('th-TH')}`)
   if (backlog > 0) parts.push(`เหลือ ${backlog.toLocaleString('th-TH')}`)
   return parts.join(' · ')
 }
@@ -403,17 +427,23 @@ function PollSummaryView({
   }
   const summary = pollSummaryFor(account)
   const backlog = account.last_poll_backlog ?? 0
+  const skippedOther = Math.max(summary.skipped_user - summary.already_processed, 0)
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
       <span className="rounded-full border border-border bg-background px-2 py-0.5 tabular-nums text-muted-foreground">
         สแกน {summary.scanned.toLocaleString('th-TH')}
       </span>
       <span className={cn('rounded-full border px-2 py-0.5 tabular-nums', summary.created > 0 ? 'border-success/20 bg-success/10 text-success' : 'border-border bg-muted/40 text-muted-foreground')}>
-        ใหม่ {summary.created.toLocaleString('th-TH')}
+        สร้างบิลใหม่ {summary.created.toLocaleString('th-TH')}
       </span>
       <span className="rounded-full border border-border bg-background px-2 py-0.5 tabular-nums text-muted-foreground">
         เคยอ่าน {summary.already_processed.toLocaleString('th-TH')}
       </span>
+      {skippedOther > 0 && (
+        <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 tabular-nums text-muted-foreground">
+          ข้าม {skippedOther.toLocaleString('th-TH')}
+        </span>
+      )}
       <span className={cn('rounded-full border px-2 py-0.5 tabular-nums', summary.failed > 0 ? 'border-destructive/20 bg-destructive/10 text-destructive' : 'border-border bg-muted/40 text-muted-foreground')}>
         ต้องตรวจ {summary.failed.toLocaleString('th-TH')}
       </span>
@@ -421,6 +451,14 @@ function PollSummaryView({
         <span className="rounded-full border border-warning/20 bg-warning/10 px-2 py-0.5 tabular-nums text-warning">
           เหลือ {backlog.toLocaleString('th-TH')}
         </span>
+      )}
+      {account.channel === 'shopee' && summary.created > 0 && (
+        <Button asChild variant="outline" size="sm" className="h-7 w-fit gap-1.5 px-2 text-[11px]">
+          <Link to={PURCHASE_BILLS_URL}>
+            ดูใบสั่งซื้อ
+            <ExternalLink className="h-3 w-3" />
+          </Link>
+        </Button>
       )}
       <LatestPollDetailsButton account={account} onOpen={onOpenDetails} />
     </div>
@@ -924,6 +962,7 @@ export default function EmailAccounts() {
         last_poll_processed: r.processed,
         last_poll_skipped: r.skipped,
         last_poll_summary: r.summary ?? null,
+        last_poll_backlog: r.backlog ?? 0,
       })
       if (r.status === 'ok' || r.status === 'no_new_mail') {
         const duplicateOnly =
@@ -935,17 +974,24 @@ export default function EmailAccounts() {
           duplicateOnly
             ? `ไม่มีอีเมลใหม่ — เมลที่พบเคยสร้างบิลแล้ว (${summary.already_processed})`
             : `ดึงเสร็จ ${formatPollSummary(summary)}`,
-          { id },
+          withPurchaseBillsAction(id, summary.created > 0),
         )
       } else if (r.status === 'warning') {
-        toast.warning(`ดึงเสร็จแต่มีรายการต้องตรวจ: ${formatPollSummary(summary)}`, { id })
+        toast.warning(
+          summary.created > 0
+            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว แต่มีบางอีเมลต้องตรวจ: ${formatPollSummary(summary)}`
+            : `ดึงเสร็จแต่มีรายการต้องตรวจ: ${formatPollSummary(summary)}`,
+          withPurchaseBillsAction(id, summary.created > 0),
+        )
       } else if (r.status === 'backlog' || r.status === 'partial') {
         const backlog = r.backlog ?? 0
         toast.warning(
-          backlog > 0
-            ? `ดึงได้บางส่วน ${formatPollSummary(summary)} · ยังเหลือประมาณ ${backlog.toLocaleString('th-TH')} เมล`
-            : `ดึงได้บางส่วน ${formatPollSummary(summary)}`,
-          { id },
+          summary.created > 0
+            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ยังเหลือประมาณ ${backlog.toLocaleString('th-TH')} เมลให้ดึงต่อ`
+            : backlog > 0
+              ? `ดึงได้บางส่วน ${formatPollSummary(summary)} · ยังเหลือประมาณ ${backlog.toLocaleString('th-TH')} เมล`
+              : `ดึงได้บางส่วน ${formatPollSummary(summary)}`,
+          withPurchaseBillsAction(id, summary.created > 0),
         )
       } else if (r.status === 'interrupted') {
         toast.warning('รอบดึงอีเมลถูกตัดระหว่างรีสตาร์ท ระบบจะดึงใหม่ในรอบถัดไป', { id })
@@ -954,13 +1000,23 @@ export default function EmailAccounts() {
       }
       fetchAll()
     } catch (e) {
-      if (axios.isAxiosError(e) && e.code === 'ECONNABORTED') {
-        toast.warning(
-          'คำสั่งดึงอีเมลใช้เวลานาน ระบบอาจยังทำงานต่ออยู่ ให้รอสักครู่แล้วรีเฟรชสถานะ',
-          { id },
-        )
-        fetchAll()
-        return
+      if (axios.isAxiosError(e)) {
+        if (e.response?.status === 409) {
+          toast.warning(
+            'กล่องนี้กำลังดึงอีเมลอยู่แล้ว บิลอาจกำลังทยอยเข้า ให้ดูหน้าใบสั่งซื้อหรือรอสถานะอัปเดต',
+            withPurchaseBillsAction(id),
+          )
+          fetchAll()
+          return
+        }
+        if (e.code === 'ECONNABORTED') {
+          toast.warning(
+            'คำสั่งดึงอีเมลใช้เวลานาน ระบบอาจยังทำงานต่ออยู่ บิลจะทยอยเข้าในหน้าใบสั่งซื้อ',
+            withPurchaseBillsAction(id),
+          )
+          fetchAll()
+          return
+        }
       }
       const msg = axios.isAxiosError(e)
         ? e.response?.data?.error || e.message
@@ -1049,19 +1105,44 @@ export default function EmailAccounts() {
         })
         if (r.status === 'backlog' || r.status === 'partial') {
           toast.warning(
-            `เริ่มอ่านใหม่แล้ว ${formatPollSummary(summary)} · ยังเหลือประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`,
-            { id },
+            summary.created > 0
+              ? `เริ่มอ่านใหม่และสร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ยังเหลือประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`
+              : `เริ่มอ่านใหม่แล้ว ${formatPollSummary(summary)} · ยังเหลือประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`,
+            withPurchaseBillsAction(id, summary.created > 0),
           )
         } else if (r.status === 'ok' || r.status === 'no_new_mail') {
-          toast.success(`อ่านใหม่เสร็จ ${formatPollSummary(summary)}`, { id })
+          toast.success(`อ่านใหม่เสร็จ ${formatPollSummary(summary)}`, withPurchaseBillsAction(id, summary.created > 0))
         } else if (r.status === 'warning') {
-          toast.warning(`อ่านใหม่เสร็จแต่มีรายการต้องตรวจ ${formatPollSummary(summary)}`, { id })
+          toast.warning(
+            summary.created > 0
+              ? `อ่านใหม่และสร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว แต่มีบางอีเมลต้องตรวจ`
+              : `อ่านใหม่เสร็จแต่มีรายการต้องตรวจ ${formatPollSummary(summary)}`,
+            withPurchaseBillsAction(id, summary.created > 0),
+          )
         } else {
           toast.error(`อ่านใหม่ไม่สำเร็จ: ${friendlyPollError(r.error || r.status || '')}`, { id })
         }
       }
       fetchAll()
     } catch (e) {
+      if (axios.isAxiosError(e)) {
+        if (e.response?.status === 409) {
+          toast.warning(
+            'กล่องนี้กำลังดึงอีเมลอยู่แล้ว บิลอาจกำลังทยอยเข้า ให้ดูหน้าใบสั่งซื้อหรือรอสถานะอัปเดต',
+            withPurchaseBillsAction(id),
+          )
+          fetchAll()
+          return
+        }
+        if (e.code === 'ECONNABORTED') {
+          toast.warning(
+            'คำสั่งอ่านใหม่ใช้เวลานาน ระบบอาจยังทำงานต่ออยู่ บิลจะทยอยเข้าในหน้าใบสั่งซื้อ',
+            withPurchaseBillsAction(id),
+          )
+          fetchAll()
+          return
+        }
+      }
       const msg = axios.isAxiosError(e)
         ? e.response?.data?.error || e.message
         : ''
@@ -1095,7 +1176,7 @@ export default function EmailAccounts() {
     </Button>
   )
 
-  const warningAccounts = accounts.filter((a) => a.last_poll_status === 'warning' && a.last_poll_error)
+  const warningAccounts = accounts.filter((a) => accountState(a) === 'attention')
   const summaryCounts = accounts.reduce(
     (acc, account) => {
       acc.total += 1

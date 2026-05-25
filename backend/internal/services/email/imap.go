@@ -105,6 +105,9 @@ func (r *PollResult) Status() string {
 		return "interrupted"
 	}
 	if r.Err == nil {
+		if (r.Limited || r.Backlog > 0) && r.Summary.Created > 0 && r.Summary.Failed == 0 {
+			return "backlog"
+		}
 		if len(r.ProcessWarnings) > 0 {
 			return "warning"
 		}
@@ -679,7 +682,7 @@ func dispatch(
 		if isShippedSubject(envelope.Subject) && p.ShopeeShipped != nil {
 			if err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
 				if skip, ok := err.(*MessageSkipError); ok {
-					return false, skip.Error()
+					return false, skipDispatchWarning(skip)
 				}
 				logger.Warn("imap_shopee_shipped_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
@@ -690,7 +693,7 @@ func dispatch(
 		if p.ShopeeOrder != nil {
 			if err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
 				if skip, ok := err.(*MessageSkipError); ok {
-					return false, skip.Error()
+					return false, skipDispatchWarning(skip)
 				}
 				logger.Warn("imap_shopee_order_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
@@ -709,11 +712,28 @@ func dispatch(
 	}
 }
 
+func skipDispatchWarning(skip *MessageSkipError) string {
+	if skip == nil {
+		return ""
+	}
+	label := skip.Error()
+	code := strings.TrimSpace(skip.Code)
+	if code == "" {
+		return label
+	}
+	if label == "" || label == code {
+		return code
+	}
+	return code + ": " + label
+}
+
 func classifyDispatchWarning(warning string) (code, label string, userSkipped bool) {
 	lower := strings.ToLower(strings.TrimSpace(warning))
 	switch {
 	case lower == "":
 		return "not_processed", "ไม่เข้าเงื่อนไขการสร้างบิล", true
+	case strings.Contains(lower, "duplicate_or_empty") || strings.Contains(warning, "ไม่มีบิลใหม่จากเมลนี้"):
+		return "duplicate_or_empty", "เมลนี้ซ้ำหรือไม่มีรายการใหม่ให้สร้างบิล", true
 	case strings.Contains(lower, "duplicate") || strings.Contains(warning, "เคย"):
 		return "duplicate", "เมลนี้เคยประมวลผลหรือเคยสร้างบิลแล้ว", true
 	case strings.Contains(lower, "no supported attachment"):
