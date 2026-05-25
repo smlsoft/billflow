@@ -496,8 +496,8 @@ Docker Compose overrides backend `ENV=production`, so `/health` correctly report
 
 Local migrations currently run through:
 
-- `001_init.sql` through `044_sml_bulk_jobs.sql`
-- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, Shopee Open API tables/events, `bills.document_route`, `bill_items.source_sku`, `bill_items.source_image_url`, `imap_accounts.last_poll_details`, IMAP poll summary fields, SML catalog image metadata, and async SML bulk job tables.
+- `001_init.sql` through `048_bill_item_discount_amount.sql`
+- Important recent additions: `bill_artifacts`, `chat_conversations.status`, CRM phone/notes/tags, cached reply token, per-OA mark-as-read toggle, `bills.remark`, `app_settings`, document route defaults, processed email keys, AI usage logs, Shopee/Lazada/TikTok import runs, Shopee Open API tables/events, `bills.document_route`, `bill_items.source_sku`, `bill_items.source_image_url`, `imap_accounts.last_poll_details`, IMAP poll summary fields, SML catalog image metadata, async SML bulk job tables, Shopee multi-shop metadata, Shopee order search indexes, channel shipping item defaults, and per-line bill item discounts.
 
 Async SML bulk job tables:
 - `sml_bulk_jobs`: job header, status, counts, payload/filter snapshots, `client_request_id`, creator, timestamps.

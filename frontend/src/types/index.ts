@@ -256,6 +256,15 @@ export interface DashboardStats {
   sml_failed: number
   total_amount: number
   today_bills: number
+  pilot_30d_total?: number
+  pilot_30d_needs_review?: number
+  pilot_30d_pending?: number
+  pilot_30d_sent?: number
+  pilot_30d_failed?: number
+  pilot_30d_remaining?: number
+  pilot_30d_success_rate?: number
+  pilot_30d_estimated_minutes_saved?: number
+  pilot_30d_estimated_hours_saved?: number
   purchase_total?: number
   purchase_pending?: number
   purchase_needs_review?: number

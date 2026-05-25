@@ -781,6 +781,20 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 	_ = r.db.QueryRow(`SELECT COALESCE(SUM(GREATEST(qty * COALESCE(price, 0) - COALESCE(discount_amount, 0), 0)), 0) FROM bill_items WHERE price IS NOT NULL`).Scan(&totalAmount)
 	stats["total_amount"] = totalAmount
 
+	var pilotTotal, pilotNeedsReview, pilotPending, pilotSent, pilotFailed int
+	_ = r.db.QueryRow(`
+		SELECT
+		  COUNT(*)::int,
+		  COUNT(*) FILTER (WHERE status = 'needs_review')::int,
+		  COUNT(*) FILTER (WHERE status = 'pending')::int,
+		  COUNT(*) FILTER (WHERE status = 'sent')::int,
+		  COUNT(*) FILTER (WHERE status = 'failed')::int
+		FROM bills
+		WHERE archived_at IS NULL
+		  AND created_at >= NOW() - INTERVAL '30 days'`,
+	).Scan(&pilotTotal, &pilotNeedsReview, &pilotPending, &pilotSent, &pilotFailed)
+	applyPilotDashboardStats(stats, pilotTotal, pilotNeedsReview, pilotPending, pilotSent, pilotFailed)
+
 	// F1: mapped vs unmapped
 	var mappedCount, unmappedCount int
 	_ = r.db.QueryRow(`SELECT COUNT(*) FROM bill_items WHERE mapped = true`).Scan(&mappedCount)
@@ -822,6 +836,26 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 	}
 
 	return stats, nil
+}
+
+func applyPilotDashboardStats(stats map[string]interface{}, total, needsReview, pending, sent, failed int) {
+	stats["pilot_30d_total"] = total
+	stats["pilot_30d_needs_review"] = needsReview
+	stats["pilot_30d_pending"] = pending
+	stats["pilot_30d_sent"] = sent
+	stats["pilot_30d_failed"] = failed
+	stats["pilot_30d_remaining"] = needsReview + pending + failed
+	successRate := 0.0
+	if total > 0 {
+		successRate = float64(sent) / float64(total) * 100
+	}
+	stats["pilot_30d_success_rate"] = successRate
+	// Conservative sales metric for Pilot conversations: each SML-sent bill
+	// represents roughly 4 minutes of manual keying avoided. Keep this as an
+	// estimate, not an accounting guarantee.
+	minutesSaved := sent * 4
+	stats["pilot_30d_estimated_minutes_saved"] = minutesSaved
+	stats["pilot_30d_estimated_hours_saved"] = float64(minutesSaved) / 60.0
 }
 
 // UpdateAnomalies stores anomaly results on a bill

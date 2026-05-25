@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, CheckCircle2, FileText, ListChecks, Mail, Send, ShoppingBag, Sparkles } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CheckCircle2, Clock3, Copy, Download, FileText, ListChecks, Mail, Send, ShoppingBag, Sparkles, TrendingUp } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -137,6 +137,8 @@ export default function Dashboard() {
       )}
 
       <ActionCenter stats={stats} setupStatus={setupStatus} loading={loading} />
+
+      <PilotResultCard stats={stats} loading={loading} />
 
       <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
         <CardContent className="grid gap-0 p-0 lg:grid-cols-[1.15fr_0.85fr]">
@@ -351,6 +353,228 @@ function ActionCenter({
       </CardContent>
     </Card>
   )
+}
+
+function PilotResultCard({
+  stats,
+  loading,
+}: {
+  stats: DashboardStats | null
+  loading: boolean
+}) {
+  const total = stats?.pilot_30d_total ?? 0
+  const sent = stats?.pilot_30d_sent ?? 0
+  const needsReview = stats?.pilot_30d_needs_review ?? 0
+  const pending = stats?.pilot_30d_pending ?? 0
+  const failed = stats?.pilot_30d_failed ?? 0
+  const remaining = stats?.pilot_30d_remaining ?? needsReview + pending + failed
+  const successRate = stats?.pilot_30d_success_rate ?? 0
+  const hoursSaved = stats?.pilot_30d_estimated_hours_saved ?? 0
+  const successPct = Math.max(0, Math.min(100, successRate))
+  const canExport = Boolean(stats) && !loading
+  const summaryMarkdown = buildPilotSummaryMarkdown(stats)
+
+  const handleCopySummary = async () => {
+    if (!canExport) return
+    try {
+      await navigator.clipboard.writeText(summaryMarkdown)
+      toast.success('คัดลอกสรุป Pilot แล้ว')
+    } catch {
+      downloadPilotSummary(summaryMarkdown)
+      toast.success('คัดลอกไม่ได้ จึงดาวน์โหลดไฟล์แทน')
+    }
+  }
+
+  const handleDownloadSummary = () => {
+    if (!canExport) return
+    downloadPilotSummary(summaryMarkdown)
+    toast.success('ดาวน์โหลดสรุป Pilot แล้ว')
+  }
+
+  return (
+    <Card className="overflow-hidden rounded-2xl border-primary/20 bg-card shadow-sm">
+      <CardHeader className="border-b border-border/70 bg-primary/[0.035] pb-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+              <TrendingUp className="h-4 w-4 text-primary" />
+              ผลลัพธ์ Pilot 30 วัน
+            </CardTitle>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              ตัวเลขสำหรับคุยกับลูกค้า: ระบบรับบิลได้กี่ใบ ส่ง SML สำเร็จกี่ใบ และยังเหลืองานที่ต้องช่วยจูนตรงไหน
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button size="sm" variant="outline" className="shrink-0" onClick={handleCopySummary} disabled={!canExport}>
+              <Copy className="h-4 w-4" />
+              คัดลอกสรุป
+            </Button>
+            <Button size="sm" variant="outline" className="shrink-0" onClick={handleDownloadSummary} disabled={!canExport}>
+              <Download className="h-4 w-4" />
+              ดาวน์โหลด .md
+            </Button>
+            <Button asChild size="sm" variant="outline" className="shrink-0">
+              <Link to="/logs">ดูหลักฐานใน logs</Link>
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="grid gap-px bg-border/70 md:grid-cols-4">
+          <PilotMetric
+            label="บิลที่เข้าระบบ"
+            value={total}
+            sub="30 วันล่าสุด"
+            icon={FileText}
+            loading={loading}
+          />
+          <PilotMetric
+            label="ส่ง SML สำเร็จ"
+            value={sent}
+            sub={`${successPct.toFixed(total > 0 ? 1 : 0)}% ของบิลที่เข้า`}
+            icon={CheckCircle2}
+            tone="success"
+            loading={loading}
+          />
+          <PilotMetric
+            label="ยังต้องจัดการ"
+            value={remaining}
+            sub={`ตรวจ ${needsReview} · พร้อมส่ง ${pending} · fail ${failed}`}
+            icon={AlertTriangle}
+            tone={remaining > 0 ? 'warning' : 'success'}
+            loading={loading}
+          />
+          <PilotMetric
+            label="เวลาที่ประหยัดได้"
+            value={formatPilotHours(hoursSaved)}
+            sub="ประมาณ 4 นาทีต่อบิลที่ส่งสำเร็จ"
+            icon={Clock3}
+            tone="primary"
+            loading={loading}
+          />
+        </div>
+        <div className="space-y-2 p-4">
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="font-medium text-foreground">อัตราส่ง SML สำเร็จในช่วง Pilot</span>
+            <span className="tabular-nums text-muted-foreground">
+              {loading ? '—' : `${successPct.toFixed(total > 0 ? 1 : 0)}%`}
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: loading ? '0%' : `${successPct}%` }}
+            />
+          </div>
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              {total > 0
+                ? `ส่งสำเร็จ ${sent.toLocaleString()} จาก ${total.toLocaleString()} บิลที่รับเข้าใน 30 วันล่าสุด`
+                : 'ยังไม่มีบิลในช่วง 30 วันล่าสุด เริ่มจาก import หรือดึง email เพื่อสร้าง baseline'}
+            </span>
+            {remaining > 0 && (
+              <Link to="/mappings" className="inline-flex items-center gap-1 font-medium text-primary">
+                ลดงานค้างด้วย mapping
+                <ArrowRight className="h-3 w-3" />
+              </Link>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function PilotMetric({
+  label,
+  value,
+  sub,
+  icon: Icon,
+  tone = 'primary',
+  loading,
+}: {
+  label: string
+  value: number | string
+  sub: string
+  icon: typeof FileText
+  tone?: 'primary' | 'warning' | 'success'
+  loading: boolean
+}) {
+  const toneCls = {
+    primary: 'bg-primary/10 text-primary',
+    warning: 'bg-warning/10 text-warning',
+    success: 'bg-success/10 text-success',
+  }[tone]
+  return (
+    <div className="bg-card p-4">
+      <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-lg ${toneCls}`}>
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="text-xl font-semibold tabular-nums text-foreground">
+        {loading ? '—' : typeof value === 'number' ? value.toLocaleString() : value}
+      </div>
+      <div className="mt-1 text-xs font-medium text-foreground">{label}</div>
+      <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{loading ? 'กำลังโหลด...' : sub}</div>
+    </div>
+  )
+}
+
+function formatPilotHours(hours: number) {
+  if (!Number.isFinite(hours) || hours <= 0) return '0 ชม.'
+  if (hours < 10) return `${hours.toFixed(1)} ชม.`
+  return `${Math.round(hours).toLocaleString()} ชม.`
+}
+
+function buildPilotSummaryMarkdown(stats: DashboardStats | null) {
+  const total = stats?.pilot_30d_total ?? 0
+  const sent = stats?.pilot_30d_sent ?? 0
+  const needsReview = stats?.pilot_30d_needs_review ?? 0
+  const pending = stats?.pilot_30d_pending ?? 0
+  const failed = stats?.pilot_30d_failed ?? 0
+  const remaining = stats?.pilot_30d_remaining ?? needsReview + pending + failed
+  const successRate = Math.max(0, Math.min(100, stats?.pilot_30d_success_rate ?? 0))
+  const hoursSaved = stats?.pilot_30d_estimated_hours_saved ?? 0
+  const generatedAt = new Date().toLocaleString('th-TH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+  return [
+    '# BillFlow Pilot Summary',
+    '',
+    `วันที่สรุป: ${generatedAt}`,
+    'ช่วงข้อมูล: 30 วันล่าสุด',
+    '',
+    '## ผลลัพธ์',
+    `- บิลที่เข้าระบบ: ${total.toLocaleString()} ใบ`,
+    `- ส่ง SML สำเร็จ: ${sent.toLocaleString()} ใบ (${successRate.toFixed(total > 0 ? 1 : 0)}%)`,
+    `- เวลาที่ประหยัดได้โดยประมาณ: ${formatPilotHours(hoursSaved)}`,
+    `- งานที่ยังต้องจัดการ: ${remaining.toLocaleString()} ใบ`,
+    '',
+    '## งานที่ยังต้องจูนต่อ',
+    `- รอตรวจ mapping / ข้อมูลสินค้า: ${needsReview.toLocaleString()} ใบ`,
+    `- พร้อมส่ง SML แต่ยังไม่ได้ส่ง: ${pending.toLocaleString()} ใบ`,
+    `- ส่ง SML ไม่สำเร็จและต้องแก้ error: ${failed.toLocaleString()} ใบ`,
+    '',
+    '## หมายเหตุ',
+    '- เวลาที่ประหยัดได้คำนวณแบบ conservative ที่ 4 นาทีต่อบิลที่ส่ง SML สำเร็จ',
+    '- หลักฐานเพิ่มเติมดูได้จากหน้า Logs, SML payload และ SML response ในระบบ BillFlow',
+  ].join('\n')
+}
+
+function downloadPilotSummary(markdown: string) {
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `billflow-pilot-summary-${new Date().toISOString().slice(0, 10)}.md`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 function ActionCenterItem({
