@@ -153,6 +153,18 @@ func (c *Coordinator) PollNow(id string) (PollResult, error) {
 	return p.PollNow(c.ctx), nil
 }
 
+// IsPolling reports whether the account currently has a poll cycle or
+// background backlog drain in flight. It is intentionally best-effort for UI.
+func (c *Coordinator) IsPolling(id string) bool {
+	c.mu.Lock()
+	p := c.pollers[id]
+	c.mu.Unlock()
+	if p == nil {
+		return false
+	}
+	return p.IsPolling()
+}
+
 // TestConnection runs a dry connect+auth+select-mailbox against the supplied
 // account values without saving anything. Used by "ทดสอบการเชื่อมต่อ" button.
 func (c *Coordinator) TestConnection(ctx context.Context, a *models.IMAPAccount) error {

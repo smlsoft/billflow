@@ -40,6 +40,11 @@ const alertThrottle = 1 * time.Hour
 // alertThreshold — number of consecutive failed polls before paging admin.
 const alertThreshold = 3
 
+const (
+	backlogDrainDelay     = 2 * time.Second
+	backlogDrainMaxRounds = 20
+)
+
 func NewAccountPoller(
 	accountID string,
 	repo *repository.ImapAccountRepo,
@@ -104,7 +109,8 @@ func (p *AccountPoller) run(ctx context.Context) {
 	if !p.skipInitial {
 		// Always poll once on start so admins see immediate feedback after
 		// adding or editing an account.
-		p.pollCycle(ctx)
+		res := p.pollCycle(ctx)
+		p.drainBacklog(ctx, res)
 		if ctx.Err() != nil {
 			return
 		}
@@ -126,7 +132,8 @@ func (p *AccountPoller) run(ctx context.Context) {
 			return
 		case <-time.After(interval):
 		}
-		p.pollCycle(ctx)
+		res := p.pollCycle(ctx)
+		p.drainBacklog(ctx, res)
 	}
 }
 
@@ -138,8 +145,18 @@ func (p *AccountPoller) PollNow(ctx context.Context) PollResult {
 		p.logger.Info("imap_poll_skipped_busy")
 		return PollResult{Err: err}
 	}
-	defer p.pollMu.Unlock()
-	return p.pollCycleLocked(ctx)
+	res := p.pollCycleLocked(ctx)
+	p.pollMu.Unlock()
+	p.startBacklogDrain(ctx, res)
+	return res
+}
+
+func (p *AccountPoller) IsPolling() bool {
+	if !p.pollMu.TryLock() {
+		return true
+	}
+	p.pollMu.Unlock()
+	return false
 }
 
 func (p *AccountPoller) pollCycle(ctx context.Context) PollResult {
@@ -211,6 +228,52 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 	}
 
 	return res
+}
+
+func (p *AccountPoller) startBacklogDrain(ctx context.Context, previous PollResult) {
+	if !shouldDrainBacklog(previous) {
+		return
+	}
+	go p.drainBacklog(ctx, previous)
+}
+
+func (p *AccountPoller) drainBacklog(ctx context.Context, previous PollResult) {
+	for round := 1; round <= backlogDrainMaxRounds && shouldDrainBacklog(previous); round++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backlogDrainDelay):
+		}
+
+		if !p.pollMu.TryLock() {
+			p.logger.Info("imap_backlog_drain_skipped_busy",
+				zap.String("trace_id", previous.TraceID),
+				zap.Int("backlog", previous.Backlog),
+			)
+			return
+		}
+		p.logger.Info("imap_backlog_drain_continue",
+			zap.String("previous_trace_id", previous.TraceID),
+			zap.Int("round", round),
+			zap.Int("previous_backlog", previous.Backlog),
+		)
+		previous = p.pollCycleLocked(ctx)
+		p.pollMu.Unlock()
+	}
+	if shouldDrainBacklog(previous) {
+		p.logger.Info("imap_backlog_drain_paused",
+			zap.String("trace_id", previous.TraceID),
+			zap.Int("backlog", previous.Backlog),
+			zap.Int("max_rounds", backlogDrainMaxRounds),
+		)
+	}
+}
+
+func shouldDrainBacklog(res PollResult) bool {
+	if res.Err != nil {
+		return false
+	}
+	return res.Limited || res.Backlog > 0
 }
 
 // maybeAlertAdmin pushes a LINE message to the admin if this account has

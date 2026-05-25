@@ -221,14 +221,14 @@ function statusLabel(s?: string | null): string {
 
 function pollProgressHint(account: IMAPAccountFull): string {
   if (account.last_poll_status === 'partial') {
-    return 'รอบล่าสุดอ่านได้บางส่วนและบันทึกความคืบหน้าไว้แล้ว ระบบจะอ่านต่อในรอบถัดไป'
+    return 'รอบล่าสุดอ่านได้บางส่วนและบันทึกความคืบหน้าไว้แล้ว ระบบจะอ่านต่อเองในพื้นหลัง'
   }
   if (account.last_poll_status === 'interrupted') {
     return 'รอบล่าสุดถูกตัดระหว่างรีสตาร์ท ยังไม่ถือเป็นความผิดพลาดของกล่องเมล'
   }
   const backlog = account.last_poll_backlog ?? 0
   if (account.last_poll_status === 'backlog' || account.last_poll_limited || backlog > 0) {
-    return `กล่องนี้มีเมลรออ่านเยอะ ระบบจึงทยอยอ่านเป็นชุดเพื่อไม่ให้ Gmail และ backend หนัก${backlog > 0 ? ` ยังเหลือประมาณ ${backlog.toLocaleString('th-TH')} เมล` : ''}`
+    return `กล่องนี้มีเมลรออ่านเยอะ ระบบจะทยอยอ่านต่อเองเป็นชุดเพื่อไม่ให้ Gmail และ backend หนัก${backlog > 0 ? ` ยังเหลือประมาณ ${backlog.toLocaleString('th-TH')} เมล` : ''}`
   }
   return ''
 }
@@ -578,7 +578,7 @@ function PollDetailsDialog({
             <PollMetric label="สร้างบิลใหม่" value={summary.created} tone={summary.created > 0 ? 'success' : 'muted'} />
             <PollMetric label="เคยประมวลผลแล้ว" value={summary.already_processed} />
             <PollMetric label="ต้องตรวจ" value={summary.failed} tone={summary.failed > 0 ? 'danger' : 'muted'} />
-            <PollMetric label="รอรอบถัดไป" value={backlog} tone={backlog > 0 ? 'neutral' : 'muted'} />
+            <PollMetric label="ค้างอ่านต่อ" value={backlog} tone={backlog > 0 ? 'neutral' : 'muted'} />
           </div>
 
           {account && pollProgressHint(account) && (
@@ -879,7 +879,7 @@ function EmailAccountRow({
             disabled={!account.enabled || polling}
           >
             {polling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />}
-            {polling ? 'กำลังดึง' : state === 'backlog' ? 'ดึงต่อ' : 'ดึงตอนนี้'}
+            {polling ? 'กำลังดึง' : state === 'backlog' ? 'เร่งดึง' : 'ดึงตอนนี้'}
           </Button>
           <Button
             variant="outline"
@@ -1003,9 +1003,10 @@ export default function EmailAccounts() {
           withPurchaseBillsAction(id, summary.created > 0),
         )
       } else if (r.status === 'warning') {
+        const backlog = r.backlog ?? 0
         toast.warning(
           summary.created > 0
-            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว แต่มีบางอีเมลต้องตรวจ: ${formatPollSummary(summary)}`
+            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว แต่มีบางอีเมลต้องตรวจ${backlog > 0 ? ` · ระบบจะดึงต่อเองอีกประมาณ ${backlog.toLocaleString('th-TH')} เมล` : `: ${formatPollSummary(summary)}`}`
             : `ดึงเสร็จแต่มีรายการต้องตรวจ: ${formatPollSummary(summary)}`,
           withPurchaseBillsAction(id, summary.created > 0),
         )
@@ -1013,9 +1014,9 @@ export default function EmailAccounts() {
         const backlog = r.backlog ?? 0
         toast.warning(
           summary.created > 0
-            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ยังเหลือประมาณ ${backlog.toLocaleString('th-TH')} เมลให้ดึงต่อ`
+            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ระบบจะดึงต่อเองอีกประมาณ ${backlog.toLocaleString('th-TH')} เมล`
             : backlog > 0
-              ? `ดึงได้บางส่วน ${formatPollSummary(summary)} · ยังเหลือประมาณ ${backlog.toLocaleString('th-TH')} เมล`
+              ? `ดึงได้บางส่วน ${formatPollSummary(summary)} · ระบบจะดึงต่อเองอีกประมาณ ${backlog.toLocaleString('th-TH')} เมล`
               : `ดึงได้บางส่วน ${formatPollSummary(summary)}`,
           withPurchaseBillsAction(id, summary.created > 0),
         )
@@ -1071,7 +1072,7 @@ export default function EmailAccounts() {
       return
     }
     setPollingBacklogAll(true)
-    const id = toast.loading(`กำลังดึงต่อ ${backlogAccounts.length.toLocaleString('th-TH')} กล่อง…`)
+    const id = toast.loading(`กำลังเร่งดึง ${backlogAccounts.length.toLocaleString('th-TH')} กล่อง…`)
     let ok = 0
     let failed = 0
     try {
@@ -1093,9 +1094,9 @@ export default function EmailAccounts() {
         }
       }
       if (failed > 0) {
-        toast.warning(`ดึงต่อสำเร็จ ${ok} กล่อง / ไม่สำเร็จ ${failed} กล่อง`, { id })
+        toast.warning(`เร่งดึงสำเร็จ ${ok} กล่อง / ไม่สำเร็จ ${failed} กล่อง`, { id })
       } else {
-        toast.success(`ดึงต่อครบ ${ok} กล่องแล้ว`, { id })
+        toast.success(`เร่งดึงครบ ${ok} กล่องแล้ว`, { id })
       }
       fetchAll()
     } finally {
@@ -1145,8 +1146,8 @@ export default function EmailAccounts() {
         if (r.status === 'backlog' || r.status === 'partial') {
           toast.warning(
             summary.created > 0
-              ? `เริ่มอ่านใหม่และสร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ยังเหลือประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`
-              : `เริ่มอ่านใหม่แล้ว ${formatPollSummary(summary)} · ยังเหลือประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`,
+              ? `เริ่มอ่านใหม่และสร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ระบบจะดึงต่อเองอีกประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`
+              : `เริ่มอ่านใหม่แล้ว ${formatPollSummary(summary)} · ระบบจะดึงต่อเองอีกประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`,
             withPurchaseBillsAction(id, summary.created > 0),
           )
         } else if (r.status === 'ok' || r.status === 'no_new_mail') {
@@ -1330,7 +1331,7 @@ export default function EmailAccounts() {
                   disabled={pollingBacklogAll}
                 >
                   {pollingBacklogAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
-                  ดึงต่อทั้งหมด
+                  เร่งดึงทั้งหมด
                 </Button>
               )}
             </div>

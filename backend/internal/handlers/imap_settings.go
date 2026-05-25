@@ -48,6 +48,9 @@ func (h *IMAPSettingsHandler) List(c *gin.Context) {
 	}
 	for _, a := range accounts {
 		a.Password = ""
+		if h.coordinator != nil {
+			a.PollRunning = h.coordinator.IsPolling(a.ID)
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": accounts})
 }
@@ -65,6 +68,9 @@ func (h *IMAPSettingsHandler) Get(c *gin.Context) {
 		return
 	}
 	a.Password = ""
+	if h.coordinator != nil {
+		a.PollRunning = h.coordinator.IsPolling(a.ID)
+	}
 	c.JSON(http.StatusOK, a)
 }
 
