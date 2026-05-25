@@ -18,6 +18,7 @@ import (
 // IMAPSettingsHandler exposes CRUD + test/poll for imap_accounts. Admin only.
 type IMAPSettingsHandler struct {
 	repo        *repository.ImapAccountRepo
+	jobRepo     *repository.IMAPPollJobRepo
 	coordinator *emailservice.Coordinator
 	logger      *zap.Logger
 }
@@ -29,10 +30,11 @@ type resetIMAPProgressRequest struct {
 
 func NewIMAPSettingsHandler(
 	repo *repository.ImapAccountRepo,
+	jobRepo *repository.IMAPPollJobRepo,
 	coordinator *emailservice.Coordinator,
 	logger *zap.Logger,
 ) *IMAPSettingsHandler {
-	return &IMAPSettingsHandler{repo: repo, coordinator: coordinator, logger: logger}
+	return &IMAPSettingsHandler{repo: repo, jobRepo: jobRepo, coordinator: coordinator, logger: logger}
 }
 
 // List returns all accounts. Passwords are scrubbed before sending to the client
@@ -154,6 +156,46 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (h *IMAPSettingsHandler) CreatePollJob(c *gin.Context) {
+	id := c.Param("id")
+	job, err := h.coordinator.StartPollJob(id, c.GetString("user_id"), c.GetString("user_email"))
+	if err != nil {
+		if strings.Contains(err.Error(), "account not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+			return
+		}
+		if strings.Contains(err.Error(), "disabled") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "กล่องเมลนี้ปิดใช้งานอยู่"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"job_id": job.ID, "job": job})
+}
+
+func (h *IMAPSettingsHandler) ListActivePollJobs(c *gin.Context) {
+	jobs, err := h.jobRepo.ListActive()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": jobs})
+}
+
+func (h *IMAPSettingsHandler) GetPollJob(c *gin.Context) {
+	job, err := h.jobRepo.Get(c.Param("job_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "imap poll job not found"})
+		return
+	}
+	c.JSON(http.StatusOK, job)
+}
+
 // ResetProgress clears the resumable IMAP cursor so admins can intentionally
 // re-read a lookback window. It does not delete processed-message history or
 // any bills, so duplicate protection still applies.
@@ -173,20 +215,16 @@ func (h *IMAPSettingsHandler) ResetProgress(c *gin.Context) {
 		return
 	}
 	if in.PollNow {
-		h.coordinator.RemoveAccount(id)
-		res, err := h.coordinator.PollNow(id)
-		if reloadErr := h.coordinator.ReloadAccountIdle(id); reloadErr != nil {
-			h.logger.Warn("imap_reset_progress_reload_failed", zap.String("id", id), zap.Error(reloadErr))
-		}
+		job, err := h.coordinator.StartPollJob(id, c.GetString("user_id"), c.GetString("user_email"))
 		if err != nil {
-			if strings.Contains(err.Error(), "poll already running") {
-				c.JSON(http.StatusConflict, gin.H{"error": "กล่องเมลนี้กำลังดึงอีเมลอยู่แล้ว กรุณารอสักครู่แล้วรีเฟรชสถานะ"})
+			if strings.Contains(err.Error(), "account not found") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, imapPollResponse(res))
+		c.JSON(http.StatusAccepted, gin.H{"job_id": job.ID, "job": job})
 		return
 	}
 	if err := h.coordinator.ReloadAccount(id); err != nil {

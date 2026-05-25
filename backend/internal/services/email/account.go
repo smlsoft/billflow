@@ -20,6 +20,7 @@ import (
 type AccountPoller struct {
 	accountID  string
 	repo       *repository.ImapAccountRepo
+	jobRepo    *repository.IMAPPollJobRepo
 	processors *Processors
 	lineSvc    *lineservice.Service
 	logger     *zap.Logger
@@ -48,6 +49,7 @@ const (
 func NewAccountPoller(
 	accountID string,
 	repo *repository.ImapAccountRepo,
+	jobRepo *repository.IMAPPollJobRepo,
 	processors *Processors,
 	lineSvc *lineservice.Service,
 	logger *zap.Logger,
@@ -55,6 +57,7 @@ func NewAccountPoller(
 	return &AccountPoller{
 		accountID:  accountID,
 		repo:       repo,
+		jobRepo:    jobRepo,
 		processors: processors,
 		lineSvc:    lineSvc,
 		logger:     logger.With(zap.String("account_id", accountID)),
@@ -187,7 +190,12 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 		return PollResult{}
 	}
 
+	return p.pollLoadedAccount(ctx, account, nil)
+}
+
+func (p *AccountPoller) pollLoadedAccount(ctx context.Context, account *models.IMAPAccount, progress func(PollResult)) PollResult {
 	cfg := pollConfigFromAccount(account)
+	cfg.Progress = progress
 	res := PollOnce(ctx, cfg, p.processors, p.logger)
 	canceled := errors.Is(res.Err, context.Canceled)
 	if canceled && res.Processed == 0 && res.Skipped == 0 && res.LastSeenUID <= account.LastSeenUID {
@@ -228,6 +236,88 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 	}
 
 	return res
+}
+
+func (p *AccountPoller) RunPollJob(ctx context.Context, jobID string) {
+	if p.jobRepo == nil {
+		p.logger.Warn("imap_poll_job_repo_missing", zap.String("job_id", jobID))
+		return
+	}
+
+	p.pollMu.Lock()
+	defer p.pollMu.Unlock()
+
+	if err := p.jobRepo.Start(jobID); err != nil {
+		p.logger.Warn("imap_poll_job_start_failed", zap.String("job_id", jobID), zap.Error(err))
+		return
+	}
+
+	var progress imapPollJobProgress
+	var lastErr string
+	status := models.IMAPPollJobCompleted
+
+	for round := 1; round <= backlogDrainMaxRounds+1; round++ {
+		account, err := p.repo.GetByID(p.accountID)
+		if err != nil {
+			lastErr = err.Error()
+			status = models.IMAPPollJobFailed
+			break
+		}
+		if account == nil || !account.Enabled {
+			lastErr = "imap account not found or disabled"
+			status = models.IMAPPollJobFailed
+			break
+		}
+
+		base := progress.snapshotBase()
+		res := p.pollLoadedAccount(ctx, account, func(partial PollResult) {
+			progress.applyPartial(base, partial)
+			if err := p.jobRepo.UpdateProgress(jobID, progress.toRepoInput()); err != nil {
+				p.logger.Warn("imap_poll_job_progress_failed",
+					zap.String("job_id", jobID),
+					zap.String("trace_id", partial.TraceID),
+					zap.Error(err),
+				)
+			}
+		})
+		progress.applyFinal(base, res)
+		lastErr = progress.LastError
+		if err := p.jobRepo.UpdateProgress(jobID, progress.toRepoInput()); err != nil {
+			p.logger.Warn("imap_poll_job_progress_failed", zap.String("job_id", jobID), zap.Error(err))
+		}
+
+		if res.Err != nil {
+			if errors.Is(res.Err, context.Canceled) {
+				status = models.IMAPPollJobFailed
+				lastErr = "server stopped before job completed"
+			} else {
+				status = models.IMAPPollJobFailed
+				lastErr = res.Err.Error()
+			}
+			break
+		}
+		if !shouldDrainBacklog(res) {
+			if progress.FailedCount > 0 {
+				status = models.IMAPPollJobCompletedWithErrors
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			status = models.IMAPPollJobFailed
+			lastErr = "server stopped before job completed"
+			_ = p.jobRepo.UpdateProgress(jobID, progress.toRepoInput())
+			_ = p.jobRepo.Finish(jobID, status, lastErr)
+			return
+		case <-time.After(backlogDrainDelay):
+		}
+	}
+	if status == models.IMAPPollJobCompleted && progress.FailedCount > 0 {
+		status = models.IMAPPollJobCompletedWithErrors
+	}
+	if err := p.jobRepo.Finish(jobID, status, lastErr); err != nil {
+		p.logger.Warn("imap_poll_job_finish_failed", zap.String("job_id", jobID), zap.Error(err))
+	}
 }
 
 func (p *AccountPoller) startBacklogDrain(ctx context.Context, previous PollResult) {
@@ -274,6 +364,112 @@ func shouldDrainBacklog(res PollResult) bool {
 		return false
 	}
 	return res.Limited || res.Backlog > 0
+}
+
+type imapPollJobProgress struct {
+	TotalCount    int
+	ScannedCount  int
+	CreatedCount  int
+	SkippedCount  int
+	FailedCount   int
+	BacklogCount  int
+	ReasonCounts  map[string]int
+	LatestDetails []models.IMAPPollDetail
+	LastError     string
+}
+
+type imapPollJobProgressBase struct {
+	TotalCount    int
+	ScannedCount  int
+	CreatedCount  int
+	SkippedCount  int
+	FailedCount   int
+	ReasonCounts  map[string]int
+	LatestDetails []models.IMAPPollDetail
+}
+
+func (p *imapPollJobProgress) snapshotBase() imapPollJobProgressBase {
+	return imapPollJobProgressBase{
+		TotalCount:    p.TotalCount,
+		ScannedCount:  p.ScannedCount,
+		CreatedCount:  p.CreatedCount,
+		SkippedCount:  p.SkippedCount,
+		FailedCount:   p.FailedCount,
+		ReasonCounts:  copyReasonCounts(p.ReasonCounts),
+		LatestDetails: append([]models.IMAPPollDetail{}, p.LatestDetails...),
+	}
+}
+
+func (p *imapPollJobProgress) applyPartial(base imapPollJobProgressBase, res PollResult) {
+	if p.ReasonCounts == nil {
+		p.ReasonCounts = map[string]int{}
+	}
+	if base.TotalCount > 0 {
+		p.TotalCount = base.TotalCount
+	} else {
+		p.TotalCount = res.MessagesFound
+	}
+	p.ScannedCount = base.ScannedCount + res.Summary.Scanned
+	p.CreatedCount = base.CreatedCount + res.Summary.Created
+	p.SkippedCount = base.SkippedCount + res.Summary.AlreadyProcessed + res.Summary.SkippedUser
+	p.FailedCount = base.FailedCount + res.Summary.Failed
+	p.BacklogCount = res.Backlog
+	p.ReasonCounts = mergeReasonCounts(base.ReasonCounts, res.Details)
+	p.LatestDetails = capPollJobDetails(append(append([]models.IMAPPollDetail{}, base.LatestDetails...), res.Details...))
+	if res.Err != nil {
+		p.LastError = res.Err.Error()
+	} else if len(res.ProcessWarnings) > 0 {
+		p.LastError = strings.Join(compactWarnings(res.ProcessWarnings, 4), "\n")
+	}
+}
+
+func (p *imapPollJobProgress) applyFinal(base imapPollJobProgressBase, res PollResult) {
+	p.applyPartial(base, res)
+}
+
+func (p imapPollJobProgress) toRepoInput() repository.UpdateIMAPPollJobProgressInput {
+	return repository.UpdateIMAPPollJobProgressInput{
+		TotalCount:    p.TotalCount,
+		ScannedCount:  p.ScannedCount,
+		CreatedCount:  p.CreatedCount,
+		SkippedCount:  p.SkippedCount,
+		FailedCount:   p.FailedCount,
+		BacklogCount:  p.BacklogCount,
+		ReasonCounts:  p.ReasonCounts,
+		LatestDetails: p.LatestDetails,
+		LastError:     p.LastError,
+	}
+}
+
+func copyReasonCounts(in map[string]int) map[string]int {
+	out := map[string]int{}
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func mergeReasonCounts(base map[string]int, details []models.IMAPPollDetail) map[string]int {
+	out := copyReasonCounts(base)
+	for _, detail := range details {
+		key := strings.TrimSpace(detail.ReasonCode)
+		if key == "" {
+			key = strings.TrimSpace(detail.Status)
+		}
+		if key == "" {
+			key = "unknown"
+		}
+		out[key]++
+	}
+	return out
+}
+
+func capPollJobDetails(in []models.IMAPPollDetail) []models.IMAPPollDetail {
+	const limit = 100
+	if len(in) <= limit {
+		return in
+	}
+	return append([]models.IMAPPollDetail{}, in[len(in)-limit:]...)
 }
 
 // maybeAlertAdmin pushes a LINE message to the admin if this account has

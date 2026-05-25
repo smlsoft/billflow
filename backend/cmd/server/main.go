@@ -282,12 +282,18 @@ func main() {
 	// at boot, spawns one poller goroutine per enabled row. Admin edits
 	// flow back through ReloadAccount/RemoveAccount via the settings API.
 	imapAccountRepo := repository.NewImapAccountRepo(db)
+	imapPollJobRepo := repository.NewIMAPPollJobRepo(db)
+	if n, err := imapPollJobRepo.RecoverInterrupted(); err != nil {
+		logger.Warn("recover interrupted imap poll jobs failed", zap.Error(err))
+	} else if n > 0 {
+		logger.Warn("recovered interrupted imap poll jobs", zap.Int64("jobs", n))
+	}
 	imapProcessors := &emailservice.Processors{
 		Attachment:    nil, // wired below once emailH is built
 		ShopeeOrder:   nil,
 		ShopeeShipped: nil,
 	}
-	imapCoordinator := emailservice.NewCoordinator(imapAccountRepo, imapProcessors, lineSvc, logger)
+	imapCoordinator := emailservice.NewCoordinator(imapAccountRepo, imapPollJobRepo, imapProcessors, lineSvc, logger)
 
 	// Mistral OCR service (optional — used for PDF extraction)
 	ocrClient := mistral.New(cfg.MistralAPIKey)
@@ -392,7 +398,7 @@ func main() {
 	aliasH := handlers.NewMarketplaceAliasHandler(aliasRepo, catalogRepo, auditLogRepo, logger)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
-	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapCoordinator, logger)
+	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapPollJobRepo, imapCoordinator, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
 	smlPartyH := handlers.NewSMLPartyHandler(partyCache, partyClient, auditLogRepo, logger)
 	smlPartyH.SetSMLConfig(cfg.ShopeeSMLURL, cfg.ShopeeSMLGUID, cfg.ShopeeSMLDatabase)
@@ -552,7 +558,10 @@ func main() {
 		api.PUT("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Update)
 		api.DELETE("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Delete)
 		api.POST("/settings/imap-accounts/:id/poll", middleware.RequireRole("admin"), imapSettingsH.PollNow)
+		api.POST("/settings/imap-accounts/:id/poll-jobs", middleware.RequireRole("admin"), imapSettingsH.CreatePollJob)
 		api.POST("/settings/imap-accounts/:id/reset-progress", middleware.RequireRole("admin"), imapSettingsH.ResetProgress)
+		api.GET("/settings/imap-poll-jobs/active", middleware.RequireRole("admin"), imapSettingsH.ListActivePollJobs)
+		api.GET("/settings/imap-poll-jobs/:job_id", middleware.RequireRole("admin"), imapSettingsH.GetPollJob)
 
 		api.GET("/settings/users", middleware.RequireRole("admin"), userSettingsH.List)
 		api.POST("/settings/users", middleware.RequireRole("admin"), userSettingsH.Create)

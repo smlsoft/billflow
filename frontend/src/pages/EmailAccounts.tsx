@@ -55,6 +55,12 @@ import { EmptyState } from '@/components/common/EmptyState'
 import { PageHeader } from '@/components/common/PageHeader'
 import client from '@/api/client'
 import { cn } from '@/lib/utils'
+import {
+  createIMAPPollJob,
+  isActiveIMAPPollJob,
+  listActiveIMAPPollJobs,
+  type IMAPPollJob,
+} from '@/hooks/useIMAPPollJobs'
 import type { IMAPAccount } from '@/pages/EmailAccounts/AccountDialog'
 import { AccountDialog } from '@/pages/EmailAccounts/AccountDialog'
 
@@ -372,6 +378,16 @@ function accountState(account: IMAPAccountFull): 'ready' | 'backlog' | 'attentio
   }
   if (account.last_poll_status === 'ok' || account.last_poll_status === 'no_new_mail') return 'ready'
   return 'unknown'
+}
+
+function jobDoneCount(job?: IMAPPollJob | null) {
+  if (!job) return 0
+  return Math.min(job.scanned_count || 0, Math.max(job.total_count || job.scanned_count || 0, 0))
+}
+
+function jobPercent(job?: IMAPPollJob | null) {
+  if (!job) return 0
+  return Math.min(100, Math.round((jobDoneCount(job) / Math.max(job.total_count || 0, 1)) * 100))
 }
 
 function stateLabel(state: ReturnType<typeof accountState>): string {
@@ -788,6 +804,7 @@ function SummaryPill({
 
 function EmailAccountRow({
   account,
+  job,
   polling,
   onPoll,
   onReset,
@@ -796,6 +813,7 @@ function EmailAccountRow({
   onOpenDetails,
 }: {
   account: IMAPAccountFull
+  job?: IMAPPollJob
   polling: boolean
   onPoll: (account: IMAPAccountFull) => void
   onReset: (account: IMAPAccountFull) => void
@@ -808,6 +826,7 @@ function EmailAccountRow({
   const meta = CHANNEL_META[account.channel] ?? CHANNEL_META.general
   const hint = pollProgressHint(account)
   const error = friendlyPollError(account.last_poll_error)
+  const activeJob = job && isActiveIMAPPollJob(job) ? job : null
 
   return (
     <div className="rounded-md border border-border bg-card px-4 py-3 shadow-sm">
@@ -854,6 +873,24 @@ function EmailAccountRow({
           {polling && (
             <div className="truncate text-[11px] text-warning" title="ระบบกำลังประมวลผลอยู่ บิลอาจทยอยเข้าในหน้าใบสั่งซื้อ">
               ระบบกำลังประมวลผลอยู่ บิลอาจทยอยเข้าในหน้าใบสั่งซื้อ
+            </div>
+          )}
+          {activeJob && (
+            <div className="space-y-1 rounded-md border border-info/20 bg-info/5 px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                <span className="font-medium text-info">
+                  ทำแล้ว {jobDoneCount(activeJob).toLocaleString('th-TH')} / {activeJob.total_count.toLocaleString('th-TH')}
+                </span>
+                <span className="text-success">สร้างบิล {activeJob.created_count.toLocaleString('th-TH')}</span>
+                <span>ข้าม {activeJob.skipped_count.toLocaleString('th-TH')}</span>
+                <span className={activeJob.failed_count > 0 ? 'text-warning' : ''}>
+                  ต้องตรวจ {activeJob.failed_count.toLocaleString('th-TH')}
+                </span>
+                <span>เหลือ {activeJob.backlog_count.toLocaleString('th-TH')}</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-background">
+                <div className="h-full rounded-full bg-info transition-all" style={{ width: `${jobPercent(activeJob)}%` }} />
+              </div>
             </div>
           )}
           {error && state === 'attention' && (
@@ -917,6 +954,7 @@ export default function EmailAccounts() {
   const [detailAccount, setDetailAccount] = useState<IMAPAccountFull | null>(null)
   const [resetAccount, setResetAccount] = useState<IMAPAccountFull | null>(null)
   const [pollingIds, setPollingIds] = useState<Set<string>>(() => new Set())
+  const [activeJobs, setActiveJobs] = useState<IMAPPollJob[]>([])
   const [busyUntilById, setBusyUntilById] = useState<Record<string, number>>({})
   const [pollingBacklogAll, setPollingBacklogAll] = useState(false)
   const [query, setQuery] = useState('')
@@ -934,10 +972,22 @@ export default function EmailAccounts() {
     }
   }
 
+  const fetchActiveJobs = async () => {
+    try {
+      setActiveJobs(await listActiveIMAPPollJobs())
+    } catch {
+      setActiveJobs([])
+    }
+  }
+
   useEffect(() => {
     fetchAll()
+    fetchActiveJobs()
     // Refresh often enough that long IMAP polls do not look frozen to admins.
-    const t = setInterval(fetchAll, 10_000)
+    const t = setInterval(() => {
+      fetchAll()
+      fetchActiveJobs()
+    }, 4_000)
     return () => clearInterval(t)
   }, [])
 
@@ -958,104 +1008,23 @@ export default function EmailAccounts() {
   const handlePollNow = async (a: IMAPAccountFull) => {
     if (pollingIds.has(a.id)) return
     setPollingIds((prev) => new Set(prev).add(a.id))
-    const id = toast.loading(`กำลังดึงอีเมล ${a.name}…`)
+    const id = toast.loading(`เริ่มดึงอีเมล ${a.name}…`)
     try {
-      const res = await client.post<{
-        status: string
-        messages_found: number
-        processed: number
-        skipped: number
-        summary?: IMAPPollSummary
-        backlog?: number
-        limited?: boolean
-        last_seen_uid?: number
-        duration_ms: number
-        error?: string
-      }>(`/api/settings/imap-accounts/${a.id}/poll`, undefined, {
-        timeout: 180000,
+      const job = await createIMAPPollJob(a.id)
+      setActiveJobs((prev) => {
+        const next = prev.filter((x) => x.id !== job.id && x.account_id !== job.account_id)
+        return [job, ...next]
       })
-      const r = res.data
-      if (isPollRunningError(r.error)) {
-        markBusyHint(a.id)
-        toast.warning(friendlyPollError(r.error), withPurchaseBillsAction(id))
-        fetchAll()
-        return
-      }
-      const summary = pollSummaryFor({
-        ...a,
-        last_poll_status: r.status,
-        last_poll_found: r.messages_found,
-        last_poll_processed: r.processed,
-        last_poll_skipped: r.skipped,
-        last_poll_summary: r.summary ?? null,
-        last_poll_backlog: r.backlog ?? 0,
-      })
-      if (r.status === 'ok' || r.status === 'no_new_mail') {
-        const duplicateOnly =
-          summary.scanned > 0 &&
-          summary.created === 0 &&
-          summary.failed === 0 &&
-          summary.already_processed > 0
-        toast.success(
-          duplicateOnly
-            ? `ไม่มีอีเมลใหม่ — เมลที่พบเคยสร้างบิลแล้ว (${summary.already_processed})`
-            : `ดึงเสร็จ ${formatPollSummary(summary)}`,
-          withPurchaseBillsAction(id, summary.created > 0),
-        )
-      } else if (r.status === 'warning') {
-        const backlog = r.backlog ?? 0
-        toast.warning(
-          summary.created > 0
-            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว แต่มีบางอีเมลต้องตรวจ${backlog > 0 ? ` · ระบบจะดึงต่อเองอีกประมาณ ${backlog.toLocaleString('th-TH')} เมล` : `: ${formatPollSummary(summary)}`}`
-            : `ดึงเสร็จแต่มีรายการต้องตรวจ: ${formatPollSummary(summary)}`,
-          withPurchaseBillsAction(id, summary.created > 0),
-        )
-      } else if (r.status === 'backlog' || r.status === 'partial') {
-        const backlog = r.backlog ?? 0
-        toast.warning(
-          summary.created > 0
-            ? `สร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ระบบจะดึงต่อเองอีกประมาณ ${backlog.toLocaleString('th-TH')} เมล`
-            : backlog > 0
-              ? `ดึงได้บางส่วน ${formatPollSummary(summary)} · ระบบจะดึงต่อเองอีกประมาณ ${backlog.toLocaleString('th-TH')} เมล`
-              : `ดึงได้บางส่วน ${formatPollSummary(summary)}`,
-          withPurchaseBillsAction(id, summary.created > 0),
-        )
-      } else if (r.status === 'interrupted') {
-        toast.warning('รอบดึงอีเมลถูกตัดระหว่างรีสตาร์ท ระบบจะดึงใหม่ในรอบถัดไป', { id })
-      } else {
-        toast.error(`ดึงอีเมลไม่สำเร็จ: ${friendlyPollError(r.error || r.status)}`, { id })
-      }
+      toast.success('เริ่มงานดึงอีเมลแล้ว สามารถเปลี่ยนไปเมนูอื่นได้', withPurchaseBillsAction(id))
       fetchAll()
+      fetchActiveJobs()
     } catch (e) {
       if (axios.isAxiosError(e)) {
-        if (e.response?.status === 409) {
-          markBusyHint(a.id)
-          toast.warning(
-            'กล่องนี้กำลังดึงอีเมลอยู่แล้ว บิลอาจกำลังทยอยเข้า ให้ดูหน้าใบสั่งซื้อหรือรอสถานะอัปเดต',
-            withPurchaseBillsAction(id),
-          )
-          fetchAll()
-          return
-        }
-        if (e.code === 'ECONNABORTED') {
-          markBusyHint(a.id)
-          toast.warning(
-            'คำสั่งดึงอีเมลใช้เวลานาน ระบบอาจยังทำงานต่ออยู่ บิลจะทยอยเข้าในหน้าใบสั่งซื้อ',
-            withPurchaseBillsAction(id),
-          )
-          fetchAll()
-          return
-        }
-      }
-      const msg = axios.isAxiosError(e)
-        ? e.response?.data?.error || e.message
-        : ''
-      if (isPollRunningError(msg)) {
-        markBusyHint(a.id)
-        toast.warning(friendlyPollError(msg), withPurchaseBillsAction(id))
+        const msg = e.response?.data?.error || e.message
+        toast.error(`เริ่มงานดึงอีเมลไม่สำเร็จ${msg ? `: ${friendlyPollError(msg)}` : ''}`, { id })
         return
       }
-      toast.error(`ดึงอีเมลไม่สำเร็จ${msg ? `: ${msg}` : ''}`, { id })
+      toast.error('เริ่มงานดึงอีเมลไม่สำเร็จ', { id })
     } finally {
       setPollingIds((prev) => {
         const next = new Set(prev)
@@ -1079,9 +1048,7 @@ export default function EmailAccounts() {
       for (const account of backlogAccounts) {
         setPollingIds((prev) => new Set(prev).add(account.id))
         try {
-          await client.post(`/api/settings/imap-accounts/${account.id}/poll`, undefined, {
-            timeout: 180000,
-          })
+          await createIMAPPollJob(account.id)
           ok += 1
         } catch {
           failed += 1
@@ -1099,6 +1066,7 @@ export default function EmailAccounts() {
         toast.success(`เร่งดึงครบ ${ok} กล่องแล้ว`, { id })
       }
       fetchAll()
+      fetchActiveJobs()
     } finally {
       setPollingBacklogAll(false)
     }
@@ -1111,6 +1079,7 @@ export default function EmailAccounts() {
     const id = toast.loading(pollNow ? `กำลังตั้งช่วงย้อนหลังและดึงอีเมล ${a.name}…` : 'กำลังตั้งช่วงย้อนหลัง…')
     try {
       const res = await client.post<{
+        job?: IMAPPollJob
         status?: string
         messages_found?: number
         processed?: number
@@ -1127,43 +1096,17 @@ export default function EmailAccounts() {
       if (!pollNow) {
         toast.success(`ตั้งช่วงย้อนหลัง ${lookbackDays} วันแล้ว`, { id })
       } else {
-        const r = res.data
-        if (isPollRunningError(r.error)) {
-          markBusyHint(a.id)
-          toast.warning(friendlyPollError(r.error), withPurchaseBillsAction(id))
-          fetchAll()
-          return
+        const job = res.data.job
+        if (job) {
+          setActiveJobs((prev) => {
+            const next = prev.filter((x) => x.id !== job.id && x.account_id !== job.account_id)
+            return [job, ...next]
+          })
         }
-        const summary = pollSummaryFor({
-          ...a,
-          last_poll_status: r.status,
-          last_poll_found: r.messages_found,
-          last_poll_processed: r.processed,
-          last_poll_skipped: r.skipped,
-          last_poll_summary: r.summary ?? null,
-          last_poll_backlog: r.backlog ?? 0,
-        })
-        if (r.status === 'backlog' || r.status === 'partial') {
-          toast.warning(
-            summary.created > 0
-              ? `เริ่มอ่านใหม่และสร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว · ระบบจะดึงต่อเองอีกประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`
-              : `เริ่มอ่านใหม่แล้ว ${formatPollSummary(summary)} · ระบบจะดึงต่อเองอีกประมาณ ${(r.backlog ?? 0).toLocaleString('th-TH')} เมล`,
-            withPurchaseBillsAction(id, summary.created > 0),
-          )
-        } else if (r.status === 'ok' || r.status === 'no_new_mail') {
-          toast.success(`อ่านใหม่เสร็จ ${formatPollSummary(summary)}`, withPurchaseBillsAction(id, summary.created > 0))
-        } else if (r.status === 'warning') {
-          toast.warning(
-            summary.created > 0
-              ? `อ่านใหม่และสร้างบิลใหม่ ${summary.created.toLocaleString('th-TH')} ใบแล้ว แต่มีบางอีเมลต้องตรวจ`
-              : `อ่านใหม่เสร็จแต่มีรายการต้องตรวจ ${formatPollSummary(summary)}`,
-            withPurchaseBillsAction(id, summary.created > 0),
-          )
-        } else {
-          toast.error(`อ่านใหม่ไม่สำเร็จ: ${friendlyPollError(r.error || r.status || '')}`, { id })
-        }
+        toast.success('ตั้งช่วงย้อนหลังและเริ่มงานดึงอีเมลแล้ว สามารถเปลี่ยนไปเมนูอื่นได้', withPurchaseBillsAction(id))
       }
       fetchAll()
+      fetchActiveJobs()
     } catch (e) {
       if (axios.isAxiosError(e)) {
         if (e.response?.status === 409) {
@@ -1242,6 +1185,9 @@ export default function EmailAccounts() {
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(normalizedQuery))
   })
+  const activeJobByAccount = new Map(
+    activeJobs.filter(isActiveIMAPPollJob).map((job) => [job.account_id, job]),
+  )
 
   return (
     <div className="space-y-5">
@@ -1350,7 +1296,8 @@ export default function EmailAccounts() {
                   <EmailAccountRow
                     key={account.id}
                     account={account}
-                    polling={pollingIds.has(account.id) || account.poll_running === true || (busyUntilById[account.id] ?? 0) > Date.now()}
+                    job={activeJobByAccount.get(account.id)}
+                    polling={pollingIds.has(account.id) || activeJobByAccount.has(account.id) || account.poll_running === true || (busyUntilById[account.id] ?? 0) > Date.now()}
                     onPoll={handlePollNow}
                     onReset={setResetAccount}
                     onEdit={handleEdit}

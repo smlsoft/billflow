@@ -19,6 +19,7 @@ import (
 // server never has to restart to pick up config changes.
 type Coordinator struct {
 	repo       *repository.ImapAccountRepo
+	jobRepo    *repository.IMAPPollJobRepo
 	processors *Processors
 	lineSvc    *lineservice.Service
 	logger     *zap.Logger
@@ -32,12 +33,14 @@ type Coordinator struct {
 
 func NewCoordinator(
 	repo *repository.ImapAccountRepo,
+	jobRepo *repository.IMAPPollJobRepo,
 	processors *Processors,
 	lineSvc *lineservice.Service,
 	logger *zap.Logger,
 ) *Coordinator {
 	return &Coordinator{
 		repo:       repo,
+		jobRepo:    jobRepo,
 		processors: processors,
 		lineSvc:    lineSvc,
 		logger:     logger.With(zap.String("component", "imap_coordinator")),
@@ -147,10 +150,47 @@ func (c *Coordinator) PollNow(id string) (PollResult, error) {
 		if account == nil {
 			return PollResult{}, fmt.Errorf("account not found")
 		}
-		oneOff := NewAccountPoller(account.ID, c.repo, c.processors, c.lineSvc, c.logger)
+		oneOff := NewAccountPoller(account.ID, c.repo, c.jobRepo, c.processors, c.lineSvc, c.logger)
 		return oneOff.PollNow(c.ctx), nil
 	}
 	return p.PollNow(c.ctx), nil
+}
+
+func (c *Coordinator) StartPollJob(id, userID, userEmail string) (*models.IMAPPollJob, error) {
+	if c.jobRepo == nil {
+		return nil, fmt.Errorf("imap poll job repository not configured")
+	}
+	account, err := c.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if account == nil {
+		return nil, fmt.Errorf("account not found")
+	}
+	if !account.Enabled {
+		return nil, fmt.Errorf("account disabled")
+	}
+
+	job, existing, err := c.jobRepo.CreateOrGetActive(repository.CreateIMAPPollJobInput{
+		AccountID:      account.ID,
+		CreatedBy:      userID,
+		CreatedByEmail: userEmail,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if existing {
+		return job, nil
+	}
+
+	c.mu.Lock()
+	p := c.pollers[id]
+	c.mu.Unlock()
+	if p == nil {
+		p = NewAccountPoller(account.ID, c.repo, c.jobRepo, c.processors, c.lineSvc, c.logger)
+	}
+	go p.RunPollJob(c.ctx, job.ID)
+	return job, nil
 }
 
 // IsPolling reports whether the account currently has a poll cycle or
@@ -204,7 +244,7 @@ func (c *Coordinator) TestConnection(ctx context.Context, a *models.IMAPAccount)
 }
 
 func (c *Coordinator) startPoller(a *models.IMAPAccount, pollInitial bool) {
-	p := NewAccountPoller(a.ID, c.repo, c.processors, c.lineSvc, c.logger)
+	p := NewAccountPoller(a.ID, c.repo, c.jobRepo, c.processors, c.lineSvc, c.logger)
 	p.skipInitial = !pollInitial
 	c.mu.Lock()
 	c.pollers[a.ID] = p

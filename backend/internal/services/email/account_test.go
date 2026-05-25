@@ -3,6 +3,8 @@ package emailservice
 import (
 	"errors"
 	"testing"
+
+	"billflow/internal/models"
 )
 
 func TestShouldDrainBacklog(t *testing.T) {
@@ -39,5 +41,71 @@ func TestShouldDrainBacklog(t *testing.T) {
 				t.Fatalf("shouldDrainBacklog() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIMAPPollJobProgressAggregatesAcrossCycles(t *testing.T) {
+	var progress imapPollJobProgress
+
+	firstBase := progress.snapshotBase()
+	first := PollResult{
+		MessagesFound: 10,
+		Backlog:       5,
+		Limited:       true,
+		Summary: models.IMAPPollSummary{
+			Scanned:          5,
+			Created:          2,
+			AlreadyProcessed: 1,
+			SkippedUser:      2,
+			Failed:           1,
+		},
+		Details: []models.IMAPPollDetail{
+			{Status: "processed", ReasonCode: "accepted"},
+			{Status: "skipped", ReasonCode: "duplicate"},
+			{Status: "skipped", ReasonCode: "fetch_body_failed"},
+		},
+	}
+	progress.applyFinal(firstBase, first)
+
+	secondBase := progress.snapshotBase()
+	second := PollResult{
+		MessagesFound: 5,
+		Summary: models.IMAPPollSummary{
+			Scanned:          5,
+			Created:          3,
+			AlreadyProcessed: 1,
+			SkippedUser:      1,
+			Failed:           0,
+		},
+		Details: []models.IMAPPollDetail{
+			{Status: "processed", ReasonCode: "accepted"},
+			{Status: "skipped", ReasonCode: "duplicate_or_empty"},
+		},
+	}
+	progress.applyFinal(secondBase, second)
+
+	if progress.TotalCount != 10 {
+		t.Fatalf("TotalCount = %d, want 10", progress.TotalCount)
+	}
+	if progress.ScannedCount != 10 {
+		t.Fatalf("ScannedCount = %d, want 10", progress.ScannedCount)
+	}
+	if progress.CreatedCount != 5 {
+		t.Fatalf("CreatedCount = %d, want 5", progress.CreatedCount)
+	}
+	if progress.SkippedCount != 5 {
+		t.Fatalf("SkippedCount = %d, want 5", progress.SkippedCount)
+	}
+	if progress.FailedCount != 1 {
+		t.Fatalf("FailedCount = %d, want 1", progress.FailedCount)
+	}
+	if progress.BacklogCount != 0 {
+		t.Fatalf("BacklogCount = %d, want 0", progress.BacklogCount)
+	}
+	if progress.ReasonCounts["accepted"] != 2 {
+		t.Fatalf("accepted reason count = %d, want 2", progress.ReasonCounts["accepted"])
+	}
+	if progress.ReasonCounts["fetch_body_failed"] != 1 {
+		t.Fatalf("fetch_body_failed reason count = %d, want 1", progress.ReasonCounts["fetch_body_failed"])
 	}
 }

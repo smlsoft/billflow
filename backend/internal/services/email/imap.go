@@ -56,6 +56,7 @@ type PollConfig struct {
 	LastSeenUID    int64
 	Channel        string   // "general" | "shopee" | "lazada"
 	ShopeeDomains  []string // accepted senders for channel="shopee" (legacy DB name)
+	Progress       func(PollResult)
 }
 
 // PollResult summarises one poll cycle. Either Err is non-nil or the counts
@@ -213,10 +214,10 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	uidCandidates := candidateUIDs(searchData.AllUIDs(), cfg.LastSeenUID, configuredMaxMessagesPerRun())
 	uids := uidCandidates.Selected
 	res.MessagesFound = uidCandidates.Total
-	res.Summary.Scanned = len(uids)
 	res.Limited = uidCandidates.Limited
 	res.Backlog = uidCandidates.Backlog
 	res.LastSeenUID = cfg.LastSeenUID
+	emitPollProgress(cfg, res)
 	if len(uids) == 0 {
 		logger.Info("imap_poll_done",
 			zap.String("trace_id", res.TraceID),
@@ -245,6 +246,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 			res.Summary.Interrupted = true
 			res.Backlog = countUIDsAfter(uids, res.LastSeenUID) + uidCandidates.Backlog
 			res.Limited = res.Backlog > 0
+			emitPollProgress(cfg, res)
 			return res
 		default:
 		}
@@ -260,6 +262,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 			res.FailureStage = "fetch"
 			res.Backlog = countUIDsAfter(uids, res.LastSeenUID) + uidCandidates.Backlog
 			res.Limited = res.Backlog > 0
+			emitPollProgress(cfg, res)
 			return res
 		}
 		duplicateMessages := map[string]bool{}
@@ -291,6 +294,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		var batchProcessedUIDs imap.UIDSet
 		batchProcessed := 0
 		for _, summary := range summaries {
+			res.Summary.Scanned++
 			if int64(summary.UID) > res.LastSeenUID {
 				res.LastSeenUID = int64(summary.UID)
 			}
@@ -428,6 +432,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		if len(batchProcessedUIDs) > 0 {
 			markRead(c, batchProcessedUIDs, batchProcessed, logger, res.TraceID)
 		}
+		emitPollProgress(cfg, res)
 	}
 
 	if len(processedUIDs) > 0 {
@@ -451,7 +456,15 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		zap.Int64("duration_ms", time.Since(pollStart).Milliseconds()),
 	)
 
+	emitPollProgress(cfg, res)
 	return res
+}
+
+func emitPollProgress(cfg PollConfig, res PollResult) {
+	if cfg.Progress == nil {
+		return
+	}
+	cfg.Progress(res)
 }
 
 func configuredMaxMessagesPerRun() int {

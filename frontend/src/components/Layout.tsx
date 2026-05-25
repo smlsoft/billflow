@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Toaster } from '@/components/ui/sonner'
 import Sidebar from '@/components/layout/Sidebar'
 import Topbar from '@/components/layout/Topbar'
+import { EmailPollProgressBar } from '@/components/EmailPollProgressBar'
 import { CommandPalette } from '@/components/CommandPalette'
 import { BreadcrumbProvider } from '@/lib/breadcrumbs'
 import { useEventsStore } from '@/lib/events-store'
@@ -72,6 +73,7 @@ export default function Layout() {
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar onOpenPalette={() => setPaletteOpen(true)} />
+          <EmailPollProgressBar />
           {isFullHeight ? (
             // Full-height pages (chat, inbox) handle their own scroll regions.
             // No padding, no max-width — the page fills the viewport under topbar.
