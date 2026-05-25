@@ -41,6 +41,22 @@ parsed AS (
     ) AS order_id,
     source
   FROM source_bills
+),
+deduped AS (
+  SELECT DISTINCT ON (message_id, order_id, event_type)
+    bill_id,
+    order_id,
+    event_type,
+    status_label,
+    subject,
+    from_addr,
+    message_id,
+    email_date,
+    source
+  FROM parsed
+  WHERE event_type <> ''
+    AND order_id <> ''
+  ORDER BY message_id, order_id, event_type, email_date DESC NULLS LAST, bill_id
 )
 INSERT INTO shopee_order_events
   (bill_id, order_id, event_type, status_label, subject, from_addr, message_id, email_date, raw_data)
@@ -54,9 +70,7 @@ SELECT
   message_id,
   email_date,
   jsonb_build_object('backfilled', true, 'source', source)
-FROM parsed
-WHERE event_type <> ''
-  AND order_id <> ''
+FROM deduped
 ON CONFLICT (message_id, order_id, event_type) DO UPDATE
    SET bill_id = COALESCE(shopee_order_events.bill_id, EXCLUDED.bill_id),
        status_label = EXCLUDED.status_label,
