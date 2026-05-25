@@ -380,6 +380,7 @@ function makeFacts(log: AuditLog): LogFact[] {
     facts.push({ label: 'เก็บข้อมูลไว้', value: preserved.length ? preserved.join(', ') : 'ไม่มีข้อมูลที่ระบุ' })
     facts.push({ label: 'เลขรันเอกสาร', value: d.reset_doc_counter ? 'รีเซ็ตแล้ว' : 'ไม่ได้รีเซ็ต' })
     facts.push({ label: 'ประวัติอีเมลซ้ำ', value: d.reset_email_dedup ? 'ล้างแล้ว' : 'ไม่ได้ล้าง' })
+    facts.push({ label: 'ตำแหน่งอ่านอีเมล', value: d.reset_email_cursor ? 'ย้อนกลับไปอ่านเมลเก่าได้' : 'ไม่ได้รีเซ็ต' })
   }
 
   return facts.filter((fact) => fact.value != null && fact.value !== '')

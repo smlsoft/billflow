@@ -202,7 +202,12 @@ export default function SetupCenter() {
         reset_doc_counter: resetDocCounter,
         reset_email_dedup: resetEmailDedup,
       })
-      toast.success('ล้างข้อมูลทดสอบแล้ว', { id })
+      toast.success(
+        resetEmailDedup
+          ? 'ล้างข้อมูลแล้ว ระบบจะอ่านอีเมลเก่าในรอบ poll ถัดไป'
+          : 'ล้างข้อมูลทดสอบแล้ว',
+        { id },
+      )
       setResetOpen(false)
       setConfirmText('')
       setResetDocCounter(false)
@@ -498,8 +503,10 @@ function ResetDialog({
                 className="mt-0.5"
               />
               <span>
-                <span className="block font-medium">ล้างประวัติอีเมลที่เคยอ่านแล้ว</span>
-                <span className="text-muted-foreground">เปิดเมื่ออยากให้ระบบอ่านอีเมลเก่าในช่วงเวลาย้อนหลังซ้ำได้</span>
+                <span className="block font-medium">ล้างประวัติอีเมลและย้อนกลับไปอ่านเมลเก่า</span>
+                <span className="text-muted-foreground">
+                  เปิดเมื่อล้างบิลทดสอบแล้วต้องการให้ระบบดูดอีเมลเดิมกลับมาอีกครั้ง ระบบจะ reset ตำแหน่งอ่านล่าสุดของ inbox ด้วย
+                </span>
               </span>
             </label>
           </div>

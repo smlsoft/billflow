@@ -202,6 +202,24 @@ func (h *SetupHandler) ResetTestData(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
+		if _, err := execIfTableExists(tx, "imap_accounts", `
+			UPDATE imap_accounts
+			   SET last_seen_uid = 0,
+			       last_poll_status = NULL,
+			       last_poll_error = NULL,
+			       last_poll_messages = NULL,
+			       last_poll_found = NULL,
+			       last_poll_processed = NULL,
+			       last_poll_skipped = NULL,
+			       last_poll_details = '[]'::jsonb,
+			       last_poll_summary = '{}'::jsonb,
+			       last_poll_limited = FALSE,
+			       last_poll_backlog = NULL,
+			       updated_at = NOW()`); err != nil {
+			h.logger.Error("reset imap poll cursor", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
 	}
 	if req.ResetDocCounter {
 		if _, err := tx.Exec(`DELETE FROM doc_counters`); err != nil {
@@ -237,6 +255,7 @@ func (h *SetupHandler) ResetTestData(c *gin.Context) {
 				"before_logs":            beforeLogs,
 				"reset_doc_counter":      req.ResetDocCounter,
 				"reset_email_dedup":      req.ResetEmailDedup,
+				"reset_email_cursor":     req.ResetEmailDedup,
 				"preserved_catalog":      true,
 				"preserved_mappings":     true,
 				"preserved_feedback":     true,
@@ -254,6 +273,7 @@ func (h *SetupHandler) ResetTestData(c *gin.Context) {
 			"audit_logs":   beforeLogs,
 			"doc_counters": req.ResetDocCounter,
 			"email_dedup":  req.ResetEmailDedup,
+			"email_cursor": req.ResetEmailDedup,
 		},
 	})
 }

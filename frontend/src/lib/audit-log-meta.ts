@@ -196,7 +196,7 @@ export function summarize(log: AuditLog): string {
       ].filter(Boolean)
       const resetParts = [
         d.reset_doc_counter ? 'รีเซ็ตเลขรันเอกสาร' : '',
-        d.reset_email_dedup ? 'ล้างประวัติอีเมลที่เคยอ่านแล้ว' : '',
+        d.reset_email_dedup ? 'ล้างประวัติอีเมลและรีเซ็ตตำแหน่งอ่านล่าสุด' : '',
       ].filter(Boolean)
       return [
         `ล้างบิลทดสอบ ${totalDocs.toLocaleString()} ใบ`,
