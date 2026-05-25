@@ -188,6 +188,24 @@ func TestExtractShopeePaymentSummaryCreditDebit(t *testing.T) {
 	}
 }
 
+func TestExtractShopeePaymentSummaryFallsBackToEmailLevelSection(t *testing.T) {
+	body := `
+หมายเลขคำสั่งซื้อ: #ORDER-A
+รายการสินค้า
+หมายเลขคำสั่งซื้อ: #ORDER-B
+รายการสินค้า
+รายละเอียดการชำระเงิน
+วิธีการชำระเงิน: บัตรเครดิต/บัตรเดบิต
+วันที่ชำระเงิน: 23 พ.ค. 2026 16:45:11
+จำนวนเงินที่จ่าย: ฿15,800
+`
+
+	got := ExtractShopeePaymentSummary(body, "", "#ORDER-A")
+	if !got.IsCreditDebitCard || got.PaymentPaidAmount != 15800 || got.DocRefAmount != "15800" {
+		t.Fatalf("payment summary = %+v, want email-level card amount/doc_ref 15800", got)
+	}
+}
+
 func TestExtractShopeePaymentSummaryNonCardDoesNotSetDocRef(t *testing.T) {
 	body := `
 หมายเลขคำสั่งซื้อ: #A

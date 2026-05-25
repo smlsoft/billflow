@@ -126,7 +126,14 @@ func ExtractShopeePaymentSummary(bodyText, bodyHTML, orderID string) ShopeePayme
 	if block == "" {
 		block = body
 	}
-	return extractShopeePaymentSummaryFromBlock(block)
+	summary := extractShopeePaymentSummaryFromBlock(block)
+	if summary.HasAny() || block == body {
+		return summary
+	}
+	// Shopee payment details can be a single email-level section after all
+	// order blocks. It is safe to fall back for payment/card reference because
+	// BillFlow stores the total card charge in doc_ref, not a per-line amount.
+	return extractShopeePaymentSummaryFromBlock(body)
 }
 
 func extractShopeeDiscountSummaryFromBlock(block string) ShopeeDiscountSummary {
