@@ -31,10 +31,7 @@ func enrichShopeeBillRawData(b *models.Bill, itemCount int, stripBody bool) {
 	if orderID == "" {
 		orderID = strings.TrimSpace(stringField(raw, "shopee_order_id"))
 	}
-	body := stringField(raw, "body_text")
-	if body == "" {
-		body = htmlToSummaryText(stringField(raw, "body_html"))
-	}
+	body := shopeeSummaryBody(stringField(raw, "body_text"), stringField(raw, "body_html"))
 	block := shopeeOrderBlock(body, orderID)
 	if block == "" {
 		block = body
@@ -69,10 +66,7 @@ func enrichShopeeBillRawData(b *models.Bill, itemCount int, stripBody bool) {
 // Shopee purchase order email block. It shares the same parsing path as list
 // enrichment so persisted shipping-line behavior matches what users see.
 func ExtractShopeeShippingAmount(bodyText, bodyHTML, orderID string) (float64, bool) {
-	body := bodyText
-	if body == "" {
-		body = htmlToSummaryText(bodyHTML)
-	}
+	body := shopeeSummaryBody(bodyText, bodyHTML)
 	block := shopeeOrderBlock(body, strings.TrimSpace(orderID))
 	if block == "" {
 		block = body
@@ -100,10 +94,7 @@ func (s ShopeeDiscountSummary) HasAny() bool {
 // a single order block. It never treats coupon-code text as money because money
 // extraction requires the Thai baht symbol.
 func ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID string) ShopeeDiscountSummary {
-	body := bodyText
-	if body == "" {
-		body = htmlToSummaryText(bodyHTML)
-	}
+	body := shopeeSummaryBody(bodyText, bodyHTML)
 	block := shopeeOrderBlock(body, strings.TrimSpace(orderID))
 	if block == "" {
 		block = body
@@ -130,10 +121,7 @@ func (s ShopeePaymentSummary) HasAny() bool {
 // block. A missing or malformed block returns zero values and must not block
 // bill creation.
 func ExtractShopeePaymentSummary(bodyText, bodyHTML, orderID string) ShopeePaymentSummary {
-	body := bodyText
-	if body == "" {
-		body = htmlToSummaryText(bodyHTML)
-	}
+	body := shopeeSummaryBody(bodyText, bodyHTML)
 	block := shopeeOrderBlock(body, strings.TrimSpace(orderID))
 	if block == "" {
 		block = body
@@ -171,15 +159,11 @@ func extractShopeePaymentSummaryFromBlock(block string) ShopeePaymentSummary {
 }
 
 func extractShopeeTextLabel(label, block string) string {
-	if block == "" {
+	values := extractShopeeLabelValues(block, label)
+	if len(values) == 0 {
 		return ""
 	}
-	linePattern := regexp.MustCompile(regexp.QuoteMeta(label) + `[ \t]*[:：]?[ \t]*([^\r\n<]*)`)
-	match := linePattern.FindStringSubmatch(block)
-	if len(match) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(match[1])
+	return values[0]
 }
 
 func isShopeeCreditDebitMethod(method string) bool {
@@ -198,19 +182,10 @@ func formatShopeePaidAmount(amount float64) string {
 }
 
 func extractShopeeDiscountParts(block, label string) (float64, []string) {
-	if block == "" {
-		return 0, nil
-	}
-	linePattern := regexp.MustCompile(regexp.QuoteMeta(label) + `[ \t]*[:：]?[ \t]*([^\r\n<]*)`)
-	matches := linePattern.FindAllStringSubmatch(block, -1)
 	var total float64
 	codes := []string{}
 	seenCodes := map[string]bool{}
-	for _, m := range matches {
-		if len(m) < 2 {
-			continue
-		}
-		value := strings.TrimSpace(m[1])
+	for _, value := range extractShopeeLabelValues(block, label) {
 		if value == "" {
 			continue
 		}
@@ -298,6 +273,30 @@ func roundMoney(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
+func shopeeSummaryBody(bodyText, bodyHTML string) string {
+	bodyText = strings.TrimSpace(bodyText)
+	if bodyText != "" {
+		if looksLikeHTML(bodyText) {
+			if text := strings.TrimSpace(htmlToSummaryText(bodyText)); text != "" {
+				return text
+			}
+		}
+		return bodyText
+	}
+	return htmlToSummaryText(bodyHTML)
+}
+
+func looksLikeHTML(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "<html") ||
+		strings.Contains(lower, "<body") ||
+		strings.Contains(lower, "<table") ||
+		strings.Contains(lower, "<tr") ||
+		strings.Contains(lower, "<td") ||
+		strings.Contains(lower, "<div") ||
+		strings.Contains(lower, "<br")
+}
+
 func shopeeOrderBlock(body, orderID string) string {
 	if body == "" || orderID == "" {
 		return ""
@@ -370,16 +369,59 @@ func setMoneyIfMissing(raw map[string]interface{}, key, label, text string) {
 }
 
 func extractMoneyLabel(label, text string) (float64, bool) {
-	re := regexp.MustCompile(regexp.QuoteMeta(label) + `\s*[:：]\s*฿\s*([\d,]+(?:\.\d+)?)`)
-	m := re.FindStringSubmatch(text)
-	if len(m) < 2 {
-		return 0, false
-	}
-	clean := strings.ReplaceAll(m[1], ",", "")
-	if v, err := strconv.ParseFloat(clean, 64); err == nil {
-		return v, true
+	for _, value := range extractShopeeLabelValues(text, label) {
+		m := bahtAmountPattern.FindStringSubmatch(value)
+		if len(m) < 2 {
+			continue
+		}
+		clean := strings.ReplaceAll(m[1], ",", "")
+		if v, err := strconv.ParseFloat(clean, 64); err == nil {
+			return v, true
+		}
 	}
 	return 0, false
+}
+
+func extractShopeeLabelValues(block, label string) []string {
+	if block == "" || label == "" {
+		return nil
+	}
+	lines := strings.Split(block, "\n")
+	values := []string{}
+	for i, line := range lines {
+		idx := strings.Index(line, label)
+		if idx < 0 {
+			continue
+		}
+		value := trimShopeeLabelValue(line[idx+len(label):])
+		if value == "" {
+			value = nextShopeeLabelValue(lines, i+1, label)
+		}
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func nextShopeeLabelValue(lines []string, start int, currentLabel string) string {
+	for i := start; i < len(lines); i++ {
+		value := strings.TrimSpace(lines[i])
+		if value == "" {
+			continue
+		}
+		if strings.Contains(value, currentLabel) || strings.HasSuffix(value, ":") || strings.HasSuffix(value, "：") {
+			return ""
+		}
+		return trimShopeeLabelValue(value)
+	}
+	return ""
+}
+
+func trimShopeeLabelValue(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimLeft(value, " \t:-：")
+	return strings.TrimSpace(value)
 }
 
 func htmlToSummaryText(s string) string {

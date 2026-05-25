@@ -52,6 +52,105 @@ func TestExtractShopeeDiscountSummaryBothDiscountsAndCodes(t *testing.T) {
 	}
 }
 
+func TestExtractShopeeDiscountSummaryFromShopeeHTMLTableCells(t *testing.T) {
+	bodyHTML := `
+<table>
+  <tr><td>หมายเลขคำสั่งซื้อ: </td><td>#2605236MY1Q8EH</td></tr>
+  <tr><td>ยอดรวมค่าสินค้า: </td><td>฿1,338</td></tr>
+  <tr><td>โค้ดส่วนลดของ Shopee: </td><td>฿19</td></tr>
+  <tr><td>โค้ดส่วนลดของ Shopee: </td><td>17M20023A</td></tr>
+  <tr><td>ค่าจัดส่งสินค้า: </td><td>฿121</td></tr>
+  <tr><td>ยอดที่ต้องชำระทั้งหมด: </td><td>฿1,440</td></tr>
+</table>
+<table>
+  <tr><td>หมายเลขคำสั่งซื้อ: </td><td>#OTHER</td></tr>
+  <tr><td>โค้ดส่วนลดของ Shopee: </td><td>฿999</td></tr>
+</table>`
+
+	got := ExtractShopeeDiscountSummary("", bodyHTML, "#2605236MY1Q8EH")
+	if got.ShopeeDiscountAmount != 19 || got.TotalDiscountAmount != 19 {
+		t.Fatalf("summary amounts = %+v, want 19", got)
+	}
+	if len(got.ShopeeDiscountCodes) != 1 || got.ShopeeDiscountCodes[0] != "17M20023A" {
+		t.Fatalf("shopee codes = %#v", got.ShopeeDiscountCodes)
+	}
+}
+
+func TestExtractShopeeDiscountSummaryConvertsHTMLStoredInBodyText(t *testing.T) {
+	bodyText := `
+<html><body><table>
+  <tr><td>หมายเลขคำสั่งซื้อ: </td><td>#2605236MY1Q8EH</td></tr>
+  <tr><td>โค้ดส่วนลดของ Shopee: </td><td>฿19</td></tr>
+  <tr><td>โค้ดส่วนลดของ Shopee: </td><td>17M20023A</td></tr>
+  <tr><td>ค่าจัดส่งสินค้า: </td><td>฿121</td></tr>
+</table></body></html>`
+
+	got := ExtractShopeeDiscountSummary(bodyText, "", "#2605236MY1Q8EH")
+	if got.ShopeeDiscountAmount != 19 || got.TotalDiscountAmount != 19 {
+		t.Fatalf("summary amounts = %+v, want 19", got)
+	}
+	if len(got.ShopeeDiscountCodes) != 1 || got.ShopeeDiscountCodes[0] != "17M20023A" {
+		t.Fatalf("shopee codes = %#v", got.ShopeeDiscountCodes)
+	}
+}
+
+func TestExtractShopeeDiscountSummaryFromSplitHTMLTableCells(t *testing.T) {
+	bodyText := `
+<!doctype html>
+<html>
+<body>
+  <table>
+    <tr>
+      <td width="49%">โค้ดส่วนลดร้านค้า:</td>
+      <td width="49%">฿10</td>
+    </tr>
+    <tr>
+      <td width="49%">โค้ดส่วนลดร้านค้า:</td>
+      <td width="49%">SHOP10</td>
+    </tr>
+    <tr>
+      <td width="49%">โค้ดส่วนลดของ Shopee:</td>
+      <td width="49%">฿45</td>
+    </tr>
+    <tr>
+      <td width="49%">โค้ดส่วนลดของ Shopee:</td>
+      <td width="49%">17M20023A</td>
+    </tr>
+  </table>
+</body>
+</html>`
+
+	got := ExtractShopeeDiscountSummary(bodyText, "", "")
+	if got.ShopeeDiscountAmount != 45 || got.ShopDiscountAmount != 10 || got.TotalDiscountAmount != 55 {
+		t.Fatalf("summary amounts = %+v, want 45/10/55", got)
+	}
+	if len(got.ShopeeDiscountCodes) != 1 || got.ShopeeDiscountCodes[0] != "17M20023A" {
+		t.Fatalf("shopee codes = %#v", got.ShopeeDiscountCodes)
+	}
+	if len(got.ShopDiscountCodes) != 1 || got.ShopDiscountCodes[0] != "SHOP10" {
+		t.Fatalf("shop codes = %#v", got.ShopDiscountCodes)
+	}
+}
+
+func TestExtractShopeeShippingAmountFromSplitHTMLTableCells(t *testing.T) {
+	bodyText := `
+<html>
+<body>
+  <table>
+    <tr>
+      <td width="49%">ค่าจัดส่งสินค้า:</td>
+      <td width="49%">฿121</td>
+    </tr>
+  </table>
+</body>
+</html>`
+
+	got, ok := ExtractShopeeShippingAmount(bodyText, "", "")
+	if !ok || got != 121 {
+		t.Fatalf("shipping amount = %v ok=%v, want 121 true", got, ok)
+	}
+}
+
 func TestExtractShopeeDiscountSummaryToleratesMissingDiscountKinds(t *testing.T) {
 	shopeeOnly := ExtractShopeeDiscountSummary("หมายเลขคำสั่งซื้อ #A\nโค้ดส่วนลดของ Shopee: ฿20", "", "#A")
 	if shopeeOnly.TotalDiscountAmount != 20 || shopeeOnly.ShopDiscountAmount != 0 {
