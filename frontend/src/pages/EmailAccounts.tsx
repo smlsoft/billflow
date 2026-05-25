@@ -78,6 +78,7 @@ interface IMAPAccountFull extends IMAPAccount {
   last_poll_limited?: boolean
   last_poll_backlog?: number | null
   consecutive_failures?: number
+  poll_running?: boolean
 }
 
 interface IMAPPollSummary {
@@ -235,6 +236,9 @@ function pollProgressHint(account: IMAPAccountFull): string {
 function friendlyPollError(error?: string | null): string {
   if (!error) return ''
   const lower = error.toLowerCase()
+  if (lower.includes('poll already running') || lower.includes('กำลังดึงอีเมลอยู่แล้ว')) {
+    return 'กล่องนี้กำลังดึงอีเมลอยู่แล้ว บิลอาจกำลังทยอยเข้า ให้ดูหน้าใบสั่งซื้อหรือรอสถานะอัปเดต'
+  }
   if (lower.includes('context canceled')) {
     return 'รอบดึงอีเมลถูกตัดระหว่างรีสตาร์ท ระบบจะดึงใหม่ในรอบถัดไป'
   }
@@ -346,6 +350,11 @@ function withPurchaseBillsAction(id: string | number, enabled = true) {
     }
   }
   return opts
+}
+
+function isPollRunningError(error?: string | null): boolean {
+  const lower = (error ?? '').toLowerCase()
+  return lower.includes('poll already running') || lower.includes('กำลังดึงอีเมลอยู่แล้ว')
 }
 
 function accountState(account: IMAPAccountFull): 'ready' | 'backlog' | 'attention' | 'disabled' | 'unknown' {
@@ -795,6 +804,7 @@ function EmailAccountRow({
   onOpenDetails: (account: IMAPAccountFull) => void
 }) {
   const state = accountState(account)
+  const displayState = polling ? 'backlog' : state
   const meta = CHANNEL_META[account.channel] ?? CHANNEL_META.general
   const hint = pollProgressHint(account)
   const error = friendlyPollError(account.last_poll_error)
@@ -826,8 +836,8 @@ function EmailAccountRow({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn('rounded-full border px-2.5 py-1 text-xs font-medium', stateTone(state))}>
-            {stateLabel(state)}
+          <span className={cn('rounded-full border px-2.5 py-1 text-xs font-medium', stateTone(displayState))}>
+            {polling ? 'กำลังดึงอีเมล' : stateLabel(state)}
           </span>
           {account.last_poll_status && (
             <span className="text-[11px] text-muted-foreground">{statusLabel(account.last_poll_status)}</span>
@@ -839,6 +849,11 @@ function EmailAccountRow({
           {hint && (
             <div className="truncate text-[11px] text-info" title={hint}>
               {hint}
+            </div>
+          )}
+          {polling && (
+            <div className="truncate text-[11px] text-warning" title="ระบบกำลังประมวลผลอยู่ บิลอาจทยอยเข้าในหน้าใบสั่งซื้อ">
+              ระบบกำลังประมวลผลอยู่ บิลอาจทยอยเข้าในหน้าใบสั่งซื้อ
             </div>
           )}
           {error && state === 'attention' && (
@@ -864,7 +879,7 @@ function EmailAccountRow({
             disabled={!account.enabled || polling}
           >
             {polling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlayCircle className="h-3.5 w-3.5" />}
-            {state === 'backlog' ? 'ดึงต่อ' : 'ดึงตอนนี้'}
+            {polling ? 'กำลังดึง' : state === 'backlog' ? 'ดึงต่อ' : 'ดึงตอนนี้'}
           </Button>
           <Button
             variant="outline"
@@ -902,6 +917,7 @@ export default function EmailAccounts() {
   const [detailAccount, setDetailAccount] = useState<IMAPAccountFull | null>(null)
   const [resetAccount, setResetAccount] = useState<IMAPAccountFull | null>(null)
   const [pollingIds, setPollingIds] = useState<Set<string>>(() => new Set())
+  const [busyUntilById, setBusyUntilById] = useState<Record<string, number>>({})
   const [pollingBacklogAll, setPollingBacklogAll] = useState(false)
   const [query, setQuery] = useState('')
   const [stateFilter, setStateFilter] = useState('all')
@@ -920,10 +936,14 @@ export default function EmailAccounts() {
 
   useEffect(() => {
     fetchAll()
-    // Auto-refresh status every 30s — same cadence as the sidebar pending count.
-    const t = setInterval(fetchAll, 30_000)
+    // Refresh often enough that long IMAP polls do not look frozen to admins.
+    const t = setInterval(fetchAll, 10_000)
     return () => clearInterval(t)
   }, [])
+
+  const markBusyHint = (id: string) => {
+    setBusyUntilById((prev) => ({ ...prev, [id]: Date.now() + 3 * 60_000 }))
+  }
 
   const handleAdd = () => {
     setEditing(null)
@@ -955,6 +975,12 @@ export default function EmailAccounts() {
         timeout: 180000,
       })
       const r = res.data
+      if (isPollRunningError(r.error)) {
+        markBusyHint(a.id)
+        toast.warning(friendlyPollError(r.error), withPurchaseBillsAction(id))
+        fetchAll()
+        return
+      }
       const summary = pollSummaryFor({
         ...a,
         last_poll_status: r.status,
@@ -1002,6 +1028,7 @@ export default function EmailAccounts() {
     } catch (e) {
       if (axios.isAxiosError(e)) {
         if (e.response?.status === 409) {
+          markBusyHint(a.id)
           toast.warning(
             'กล่องนี้กำลังดึงอีเมลอยู่แล้ว บิลอาจกำลังทยอยเข้า ให้ดูหน้าใบสั่งซื้อหรือรอสถานะอัปเดต',
             withPurchaseBillsAction(id),
@@ -1010,6 +1037,7 @@ export default function EmailAccounts() {
           return
         }
         if (e.code === 'ECONNABORTED') {
+          markBusyHint(a.id)
           toast.warning(
             'คำสั่งดึงอีเมลใช้เวลานาน ระบบอาจยังทำงานต่ออยู่ บิลจะทยอยเข้าในหน้าใบสั่งซื้อ',
             withPurchaseBillsAction(id),
@@ -1021,6 +1049,11 @@ export default function EmailAccounts() {
       const msg = axios.isAxiosError(e)
         ? e.response?.data?.error || e.message
         : ''
+      if (isPollRunningError(msg)) {
+        markBusyHint(a.id)
+        toast.warning(friendlyPollError(msg), withPurchaseBillsAction(id))
+        return
+      }
       toast.error(`ดึงอีเมลไม่สำเร็จ${msg ? `: ${msg}` : ''}`, { id })
     } finally {
       setPollingIds((prev) => {
@@ -1094,6 +1127,12 @@ export default function EmailAccounts() {
         toast.success(`ตั้งช่วงย้อนหลัง ${lookbackDays} วันแล้ว`, { id })
       } else {
         const r = res.data
+        if (isPollRunningError(r.error)) {
+          markBusyHint(a.id)
+          toast.warning(friendlyPollError(r.error), withPurchaseBillsAction(id))
+          fetchAll()
+          return
+        }
         const summary = pollSummaryFor({
           ...a,
           last_poll_status: r.status,
@@ -1127,6 +1166,7 @@ export default function EmailAccounts() {
     } catch (e) {
       if (axios.isAxiosError(e)) {
         if (e.response?.status === 409) {
+          markBusyHint(a.id)
           toast.warning(
             'กล่องนี้กำลังดึงอีเมลอยู่แล้ว บิลอาจกำลังทยอยเข้า ให้ดูหน้าใบสั่งซื้อหรือรอสถานะอัปเดต',
             withPurchaseBillsAction(id),
@@ -1135,6 +1175,7 @@ export default function EmailAccounts() {
           return
         }
         if (e.code === 'ECONNABORTED') {
+          markBusyHint(a.id)
           toast.warning(
             'คำสั่งอ่านใหม่ใช้เวลานาน ระบบอาจยังทำงานต่ออยู่ บิลจะทยอยเข้าในหน้าใบสั่งซื้อ',
             withPurchaseBillsAction(id),
@@ -1146,6 +1187,11 @@ export default function EmailAccounts() {
       const msg = axios.isAxiosError(e)
         ? e.response?.data?.error || e.message
         : ''
+      if (isPollRunningError(msg)) {
+        markBusyHint(a.id)
+        toast.warning(friendlyPollError(msg), withPurchaseBillsAction(id))
+        return
+      }
       toast.error(`ตั้งช่วงย้อนหลังไม่สำเร็จ${msg ? `: ${msg}` : ''}`, { id })
     } finally {
       if (pollNow) {
@@ -1303,7 +1349,7 @@ export default function EmailAccounts() {
                   <EmailAccountRow
                     key={account.id}
                     account={account}
-                    polling={pollingIds.has(account.id)}
+                    polling={pollingIds.has(account.id) || account.poll_running === true || (busyUntilById[account.id] ?? 0) > Date.now()}
                     onPoll={handlePollNow}
                     onReset={setResetAccount}
                     onEdit={handleEdit}
