@@ -1,13 +1,37 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-21 15:20 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test/history page, frontend routes, container health, Shopee API readiness/status, Shopee console live status, real Shopee API preview discovery, and PostgreSQL schema for BillFlow main.
+> Updated: 2026-05-25 (end of day)
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test/history page, frontend routes, container health, Shopee API readiness/status, real Shopee API preview discovery, and PostgreSQL schema for BillFlow main + Henna.
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
+- Latest frontend deploy (ทั้ง 3 instances), 2026-05-25:
+  - **Email preview dialog (ArtifactList)** — แก้ช่องว่างด้านบนใน dialog ดูตัวอย่างอีเมล:
+    - ใช้ React `createPortal` mount modal ตรงที่ `document.body` แทน render ใน DOM tree — หลุดออกจาก `space-y-4` parent ที่ inject `margin-top` ผ่าน Tailwind sibling selector
+    - inject CSS reset ใน iframe HTML: `html,body { margin:0; padding:0 }` + `img { display:block }` เพื่อตัด tracking pixel baseline gap
+    - links ใน email เปิด new tab ได้ผ่าน `allow-popups-to-escape-sandbox` sandbox attribute
+  - deploy verified: main `3010` ✅, henna `3030` ✅, thaisunsport `3020` ✅
+  - Tunnel URLs ล่าสุด (2026-05-25):
+    - main: `https://edt-surfaces-graph-pension.trycloudflare.com`
+    - thaisunsport: `https://pets-mini-museums-ships.trycloudflare.com`
+    - henna: `https://animal-galvanize-tameness.ngrok-free.dev`
+- Latest frontend deploy (ทั้ง 3 instances), 2026-05-22 end of day:
+  - `/settings/channels` EditDialog — doc_format_code dropdown ดึงจาก `GET /api/sml/doc-formats` (sml-api-bybos)
+  - รหัสขึ้นต้น (prefix) = `code` ของ doc_format ที่เลือก; รูปแบบเลขรัน = `format` field ตัด `@` นำหน้าออก
+  - ทั้ง 2 field แสดงแบบ read-only — ดึงจาก SML อัตโนมัติ ไม่ให้ admin กรอกเอง
+  - `doc_format_code` ใน channel_defaults ไหลผ่าน bills.go → SML client → sml-api-bybos payload ครบ loop แล้ว ไม่มี hardcode
+  - deploy verified: main `3010` ✅, henna `3030` ✅, thaisunsport `3020` ✅
+  - sml-api-bybos เพิ่ม endpoint `GET /api/v1/ic/doc-formats?screen_code=PO|SI|SR` + แก้ `calc_flag` ให้คำนวณจาก transType (ขาย=-1, ซื้อ=1) ไม่ hardcode
+  - docs อัปเดตแล้ว: `sml-api-migration.md`, `deploy-instances.md` (เพิ่มส่วน sml-api-bybos multi-tenant)
+- Latest deploy parity checkpoint, 2026-05-22:
+  - Main (`3010/8090`) และ Henna (`3030/8110`) ถูก deploy จาก local source snapshot เดียวกันแล้ว; `billflow-thaisunsport` intentionally ไม่ได้ restart ในรอบนี้.
+  - Health/smoke ผ่านทั้ง 2 instance: backend `/health`, frontend `/login`, login API, `/api/bills`, `/api/settings/channel-defaults`.
+  - `scripts/preflight-main.sh` ผ่านสำหรับ main ค่า default และผ่านสำหรับ Henna ด้วย override `BF_HOST=192.168.2.109 BACKEND_PORT=8110 FRONTEND_PORT=3030 SML_API_PORT=8200 SML_TENANT=aoy`.
+  - Schema features ล่าสุดตรงกันทั้ง main + Henna: `channel_defaults.shipping_item_enabled|shipping_item_code|shipping_item_unit_code` และ `bill_items.discount_amount`.
+  - Runtime SML REST ของทั้ง main + Henna ใช้ `sml.rest_base_url=http://172.24.0.1:8200` และ channel sale routes ใช้ `/api/v1/ic/sale-invoices`.
 - BillFlow main latest code checkpoint, 2026-05-21:
   - Latest functional change: Bill Detail now treats low-confidence suggested matches as unconfirmed until `mapped=true`; Send SML and Bulk Send block these rows, and each row has a quick confirm button that reuses the existing F1 learning/update path.
   - Latest validation before this docs update: `go test ./...`, `npm run build`, `git diff --check`, and real-data Shopee API discovery for Henna.milkford passed locally; deploy/preflight/smoke should be rerun after any follow-up patch.
@@ -48,10 +72,14 @@
   - AI model ใน `.env`: `OPENROUTER_MODEL=google/gemini-2.5-flash-lite`, fallback `google/gemini-2.5-flash`.
   - สำหรับ demo Thaisunsport ตอนนี้อย่าเปิด Phase 1+ / Shopee Excel / ใบสั่งขาย จนกว่าลูกค้าจะผ่าน demo ฝั่งซื้อ.
 - Henna customer trial ถูกสร้างใหม่จาก BillFlow ปกติ ไม่ใช่ Thaisunsport:
-  - Public URL: `https://aurora-enjoyed-backup-lines.trycloudflare.com/login`
+  - Public URL: `https://animal-galvanize-tameness.ngrok-free.dev/login`
   - Frontend `3030`, backend `8110`, postgres `5440`
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
+  - Latest parity deploy 2026-05-22 15:26 +07:
+    - Sync backend/frontend/docs/scripts จาก local source เดียวกับ BillFlow main แล้ว build/restart เฉพาะ Henna services.
+    - Backend health `8110` = `{"database":"ok","env":"production","status":"ok"}` และ frontend `/login` HTTP 200.
+    - Shopee API status หลัง deploy: `connected=true`, `can_fetch=true`, `shop_id=264993963`, `shop_name=Henna.milkford`, `token_state=access_valid`.
   - Latest QA fix deploy 2026-05-12 13:05 +07:
     - Henna frontend rebuilt as Phase 1+ (`VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled) but chat is explicitly disabled with `VITE_ENABLE_CHAT=false`.
     - Policy clarification: Henna Phase 1+ means purchase + sales + marketplace Excel, not LINE/chat features.
