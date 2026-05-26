@@ -35,6 +35,7 @@ export interface CatalogMatch {
   image_url?: string
   has_hidden_chars?: boolean
   clean_item_code?: string
+  hidden_char_kinds?: string[]
   score: number
 }
 
@@ -72,6 +73,7 @@ export interface CatalogItem {
   image_url?: string
   has_hidden_chars?: boolean
   clean_item_code?: string
+  hidden_char_kinds?: string[]
   synced_at?: string | null
   last_seen_at?: string | null
   is_active?: boolean

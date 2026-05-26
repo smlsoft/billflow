@@ -584,6 +584,7 @@ func main() {
 		api.GET("/catalog", catalogH.List)
 		api.GET("/catalog/stats", catalogH.Stats)
 		api.GET("/catalog/search", catalogH.Search)
+		api.GET("/catalog/hidden-codes", middleware.RequireRole("admin"), catalogH.HiddenCodes)
 		api.GET("/catalog/:code/image", catalogH.GetImage)
 		api.GET("/catalog/:code/images", catalogH.GetImages)
 		api.GET("/catalog/:code/images/:roworder", catalogH.GetImageByRoworder)

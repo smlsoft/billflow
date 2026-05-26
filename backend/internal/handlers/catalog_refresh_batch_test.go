@@ -133,7 +133,7 @@ func TestCatalogRefreshBatchSanitizesSMLError(t *testing.T) {
 	router := gin.New()
 	router.POST("/api/catalog/refresh-batch", h.RefreshBatch)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/catalog/refresh-batch", strings.NewReader(`{"codes":["SKU500"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/catalog/refresh-batch", strings.NewReader("{\"codes\":[\"\\uFEFFSKU500\"]}"))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -146,6 +146,54 @@ func TestCatalogRefreshBatchSanitizesSMLError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"status":"failed"`) {
 		t.Fatalf("response missing failed status: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"hidden_char_kinds":["bom"]`) {
+		t.Fatalf("response missing hidden char kind: %s", rec.Body.String())
+	}
+}
+
+func TestCatalogHiddenCodesEndpointReturnsLimitedDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	mock.ExpectQuery("SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,").
+		WillReturnRows(sqlmock.NewRows(catalogUnitFallbackColumns()).
+			AddRow("\uFEFFITEM001", "สินค้าทดสอบ 1", "", "ชิ้น", "", "", nil, "", nil, "pending", nil, 0, nil, "", nil, nil, now, now).
+			AddRow("ITEM002", "สินค้าปกติ", "", "ชิ้น", "", "", nil, "", nil, "pending", nil, 0, nil, "", nil, nil, now, now).
+			AddRow("ITEM\u200B003", "สินค้าทดสอบ 3", "", "ชิ้น", "", "", nil, "", nil, "pending", nil, 0, nil, "", nil, nil, now, now))
+
+	h := &CatalogHandler{
+		catalogRepo: repository.NewSMLCatalogRepo(db),
+		logger:      zap.NewNop(),
+	}
+	router := gin.New()
+	router.GET("/api/catalog/hidden-codes", h.HiddenCodes)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/catalog/hidden-codes?limit=1", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body hiddenCatalogCodesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Total != 2 || body.Limit != 1 || !body.HasMore || len(body.Data) != 1 {
+		t.Fatalf("body = %+v", body)
+	}
+	if body.Data[0].CleanItemCode != "ITEM001" || len(body.Data[0].HiddenCharKinds) != 1 || body.Data[0].HiddenCharKinds[0] != "bom" {
+		t.Fatalf("hidden metadata = %+v", body.Data[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -680,6 +680,7 @@ func (s *SMLCatalogService) SearchByText(query string, topK int) ([]models.Catal
 			PrimaryImageBytes:    it.PrimaryImageBytes,
 			HasHiddenChars:       codeMeta.HasHiddenChars,
 			CleanItemCode:        codeMeta.CleanItemCode,
+			HiddenCharKinds:      codeMeta.Kinds,
 			Score:                results[i].score,
 		})
 	}

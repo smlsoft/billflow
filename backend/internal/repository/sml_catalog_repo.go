@@ -337,6 +337,54 @@ func (r *SMLCatalogRepo) CountHiddenItemCodes() (int, error) {
 	return n, rows.Err()
 }
 
+func (r *SMLCatalogRepo) ListHiddenItemCodes(limit int) ([]models.CatalogItem, int, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	rows, err := r.db.Query(`
+		SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,
+		       price, group_code, balance_qty, embedding_status, embedded_at,
+		       image_count, primary_image_roworder, primary_image_guid,
+		       primary_image_bytes, image_synced_at, synced_at, created_at
+		FROM sml_catalog
+		ORDER BY item_code
+	`)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	items := make([]models.CatalogItem, 0, limit)
+	total := 0
+	for rows.Next() {
+		var it models.CatalogItem
+		var primaryRoworder sql.NullInt64
+		var primaryBytes sql.NullInt64
+		var imageSyncedAt sql.NullTime
+		if err := rows.Scan(
+			&it.ItemCode, &it.ItemName, &it.ItemName2,
+			&it.UnitCode, &it.WHCode, &it.ShelfCode,
+			&it.Price, &it.GroupCode, &it.BalanceQty,
+			&it.EmbeddingStatus, &it.EmbeddedAt,
+			&it.ImageCount, &primaryRoworder, &it.PrimaryImageGuid,
+			&primaryBytes, &imageSyncedAt,
+			&it.SyncedAt, &it.CreatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		applyItemCodeMetadata(&it)
+		if !it.HasHiddenChars {
+			continue
+		}
+		total++
+		if len(items) < limit {
+			applyCatalogImageScan(&it, primaryRoworder, primaryBytes, imageSyncedAt)
+			items = append(items, it)
+		}
+	}
+	return items, total, rows.Err()
+}
+
 // Delete removes a single catalog row by item_code. SML 248 is not touched —
 // callers are expected to have already deleted the master in SML (or to be
 // pruning a zombie left over after an SML-side delete). Returns sql.ErrNoRows
@@ -451,6 +499,7 @@ func applyItemCodeMetadata(it *models.CatalogItem) {
 	meta := itemcode.Inspect(it.ItemCode)
 	it.HasHiddenChars = meta.HasHiddenChars
 	it.CleanItemCode = meta.CleanItemCode
+	it.HiddenCharKinds = meta.Kinds
 }
 
 func applyCatalogImageScan(it *models.CatalogItem, primaryRoworder, primaryBytes sql.NullInt64, imageSyncedAt sql.NullTime) {

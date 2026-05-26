@@ -25,6 +25,7 @@ type CatalogItem struct {
 	ImageURL             string     `json:"image_url,omitempty"`
 	HasHiddenChars       bool       `json:"has_hidden_chars"`
 	CleanItemCode        string     `json:"clean_item_code,omitempty"`
+	HiddenCharKinds      []string   `json:"hidden_char_kinds,omitempty"`
 	ImageMetadataSynced  bool       `json:"-"`
 	SyncedAt             time.Time  `json:"synced_at"`
 	CreatedAt            time.Time  `json:"created_at"`
@@ -32,19 +33,20 @@ type CatalogItem struct {
 
 // CatalogMatch is one similarity search result
 type CatalogMatch struct {
-	ItemCode             string  `json:"item_code"`
-	ItemName             string  `json:"item_name"`
-	ItemName2            string  `json:"item_name2"`
-	UnitCode             string  `json:"unit_code"`
-	WHCode               string  `json:"wh_code"`
-	ShelfCode            string  `json:"shelf_code"`
-	Price                float64 `json:"price"`
-	ImageCount           int     `json:"image_count"`
-	PrimaryImageRoworder *int    `json:"primary_image_roworder,omitempty"`
-	PrimaryImageGuid     string  `json:"primary_image_guid,omitempty"`
-	PrimaryImageBytes    *int64  `json:"primary_image_bytes,omitempty"`
-	ImageURL             string  `json:"image_url,omitempty"`
-	HasHiddenChars       bool    `json:"has_hidden_chars"`
-	CleanItemCode        string  `json:"clean_item_code,omitempty"`
-	Score                float64 `json:"score"` // cosine similarity 0–1
+	ItemCode             string   `json:"item_code"`
+	ItemName             string   `json:"item_name"`
+	ItemName2            string   `json:"item_name2"`
+	UnitCode             string   `json:"unit_code"`
+	WHCode               string   `json:"wh_code"`
+	ShelfCode            string   `json:"shelf_code"`
+	Price                float64  `json:"price"`
+	ImageCount           int      `json:"image_count"`
+	PrimaryImageRoworder *int     `json:"primary_image_roworder,omitempty"`
+	PrimaryImageGuid     string   `json:"primary_image_guid,omitempty"`
+	PrimaryImageBytes    *int64   `json:"primary_image_bytes,omitempty"`
+	ImageURL             string   `json:"image_url,omitempty"`
+	HasHiddenChars       bool     `json:"has_hidden_chars"`
+	CleanItemCode        string   `json:"clean_item_code,omitempty"`
+	HiddenCharKinds      []string `json:"hidden_char_kinds,omitempty"`
+	Score                float64  `json:"score"` // cosine similarity 0–1
 }

@@ -65,13 +65,14 @@ type catalogRefreshBatchRequest struct {
 }
 
 type catalogRefreshBatchResult struct {
-	Code           string              `json:"code"`
-	Status         string              `json:"status"`
-	Item           *models.CatalogItem `json:"item,omitempty"`
-	NotFound       bool                `json:"not_found,omitempty"`
-	Error          string              `json:"error,omitempty"`
-	HasHiddenChars bool                `json:"has_hidden_chars,omitempty"`
-	CleanItemCode  string              `json:"clean_item_code,omitempty"`
+	Code            string              `json:"code"`
+	Status          string              `json:"status"`
+	Item            *models.CatalogItem `json:"item,omitempty"`
+	NotFound        bool                `json:"not_found,omitempty"`
+	Error           string              `json:"error,omitempty"`
+	HasHiddenChars  bool                `json:"has_hidden_chars,omitempty"`
+	CleanItemCode   string              `json:"clean_item_code,omitempty"`
+	HiddenCharKinds []string            `json:"hidden_char_kinds,omitempty"`
 }
 
 type catalogRefreshBatchSummary struct {
@@ -80,6 +81,13 @@ type catalogRefreshBatchSummary struct {
 	NotFound  int `json:"not_found"`
 	Failed    int `json:"failed"`
 	Duplicate int `json:"duplicate"`
+}
+
+type hiddenCatalogCodesResponse struct {
+	Data    []models.CatalogItem `json:"data"`
+	Total   int                  `json:"total"`
+	Limit   int                  `json:"limit"`
+	HasMore bool                 `json:"has_more"`
 }
 
 func NewCatalogHandler(
@@ -160,6 +168,36 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 		"embed_status":      embedStatus,
 		"sync_running":      syncStatus.Running,
 		"sync_status":       syncStatus,
+	})
+}
+
+// GET /api/catalog/hidden-codes — lazy-loaded detail list for hidden code
+// warnings. The table has no stored hidden metadata, so this intentionally
+// scans catalog rows only when the admin asks to inspect the problem list.
+func (h *CatalogHandler) HiddenCodes(c *gin.Context) {
+	if h.catalogRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "catalog repository not configured"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	items, total, err := h.catalogRepo.ListHiddenItemCodes(limit)
+	if err != nil {
+		h.logger.Error("catalog hidden code list", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดรายการรหัสซ่อนไม่สำเร็จ"})
+		return
+	}
+	attachCatalogImageURLs(items)
+	c.JSON(http.StatusOK, hiddenCatalogCodesResponse{
+		Data:    items,
+		Total:   total,
+		Limit:   limit,
+		HasMore: total > len(items),
 	})
 }
 
@@ -313,10 +351,11 @@ func (h *CatalogHandler) RefreshBatch(c *gin.Context) {
 	for _, code := range duplicates {
 		meta := itemcode.Inspect(code)
 		results = append(results, catalogRefreshBatchResult{
-			Code:           code,
-			Status:         "duplicate",
-			HasHiddenChars: meta.HasHiddenChars,
-			CleanItemCode:  meta.CleanItemCode,
+			Code:            code,
+			Status:          "duplicate",
+			HasHiddenChars:  meta.HasHiddenChars,
+			CleanItemCode:   meta.CleanItemCode,
+			HiddenCharKinds: meta.Kinds,
 		})
 	}
 
@@ -324,9 +363,10 @@ func (h *CatalogHandler) RefreshBatch(c *gin.Context) {
 	for _, code := range codes {
 		meta := itemcode.Inspect(code)
 		result := catalogRefreshBatchResult{
-			Code:           code,
-			HasHiddenChars: meta.HasHiddenChars,
-			CleanItemCode:  meta.CleanItemCode,
+			Code:            code,
+			HasHiddenChars:  meta.HasHiddenChars,
+			CleanItemCode:   meta.CleanItemCode,
+			HiddenCharKinds: meta.Kinds,
 		}
 
 		item, notFound, err := h.catalogSvc.RefreshOne(code)
