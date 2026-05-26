@@ -8,8 +8,9 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { isSMLReady, smlBlockedMessage } from '@/lib/sml-readiness'
 import { isShopeePurchaseBill, isShopeeSalesBill, money, shopeeGoodsTotal, shopeePayableTotal } from '@/lib/shopeeBill'
-import type { Bill } from '@/types'
+import type { Bill, SMLReadiness } from '@/types'
 import { issueLabel, type ValidationResult } from '../utils/validation'
 
 interface Props {
@@ -29,6 +30,8 @@ interface Props {
   expectedRoute?: string
   expectedEndpoint?: string
   expectedDocFormat?: string
+  smlReadiness?: SMLReadiness | null
+  smlReadinessLoading?: boolean
 }
 
 const ROUTE_LABEL: Record<string, string> = {
@@ -48,6 +51,8 @@ export function BillTotal({
   expectedRoute,
   expectedEndpoint,
   expectedDocFormat,
+  smlReadiness,
+  smlReadinessLoading = false,
 }: Props) {
   const canShowSendButton =
     bill.status === 'failed' ||
@@ -64,8 +69,11 @@ export function BillTotal({
   // The disabled state is communicated by both the button's :disabled state
   // and the warning card above (which is the "why" — the button alone
   // wouldn't tell the admin what to fix).
-  const enabled = validation.canSend && !retrying
-  const readyText = validation.canSend
+  const smlReady = isSMLReady(smlReadiness)
+  const enabled = validation.canSend && smlReady && !retrying
+  const readyText = !smlReady
+    ? (smlReadinessLoading ? 'กำลังตรวจสถานะ SML ของร้านนี้' : 'SML ของร้านนี้ยังไม่พร้อม กรุณาตรวจการเชื่อมต่อก่อนส่ง')
+    : validation.canSend
     ? 'รายการครบแล้ว พร้อมเลือกผู้ขาย/คลัง/ภาษีและส่งเข้า SML'
     : `ยังต้องแก้ ${validation.issues.length} จุดก่อนส่งเข้า SML`
 
@@ -98,7 +106,7 @@ export function BillTotal({
             {canShowSendButton && (
               <p className={cn(
                 'mt-0.5 text-xs',
-                validation.canSend ? 'text-success' : 'text-warning',
+                validation.canSend && smlReady ? 'text-success' : 'text-warning',
               )}>
                 {readyText}
               </p>
@@ -136,9 +144,11 @@ export function BillTotal({
                   {/* Tooltip only renders content when the button is disabled
                       because of validation — when retrying, the button text
                       already explains itself ("กำลังส่ง..."). */}
-                  {!validation.canSend && (
+                  {(!validation.canSend || !smlReady) && (
                     <TooltipContent side="left" className="max-w-xs">
-                      ยังส่งไม่ได้ — พบ {validation.issues.length} ปัญหา · ตรวจรหัสสินค้า การยืนยัน หน่วย จำนวน และราคา
+                      {!smlReady
+                        ? smlBlockedMessage(smlReadiness)
+                        : `ยังส่งไม่ได้ — พบ ${validation.issues.length} ปัญหา · ตรวจรหัสสินค้า การยืนยัน หน่วย จำนวน และราคา`}
                     </TooltipContent>
                   )}
                 </Tooltip>
@@ -179,6 +189,20 @@ export function BillTotal({
             fix. Each issue links to the first offending row. Sits between
             the total + button summary and the items table so admin sees
             "what to do" before they look down at items. */}
+        {canShowSendButton && !smlReady && (
+          <div className="rounded-md border border-warning/40 bg-warning/[0.07] px-3 py-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" strokeWidth={2.25} />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-foreground">ยังส่ง SML ไม่ได้ — ฐานข้อมูลร้านยังไม่พร้อม</div>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {smlBlockedMessage(smlReadiness)} เปิดเครื่อง SML/Postgres ของร้านนี้ แล้วกดตรวจอีกครั้งบนแถบแจ้งเตือนด้านบน
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {canShowSendButton && !validation.canSend && (
           <div
             className={cn(

@@ -1,5 +1,7 @@
 import type { Bill, BillItem } from '@/types'
 
+export const SHOPEE_SHIPPING_SOURCE_SKU = '__shopee_shipping__'
+
 // Validation issue surfaced to the admin BEFORE sending to SML.
 // `kind` drives the warning copy; `firstItemId` is the first row that
 // triggered this kind so the UI can scroll to + highlight it.
@@ -54,6 +56,16 @@ export function issueLabel(kind: IssueKind): string {
   return ISSUE_LABEL[kind]
 }
 
+export function allowsZeroPrice(item: BillItem): boolean {
+  return item.source_sku === SHOPEE_SHIPPING_SOURCE_SKU
+}
+
+export function hasInvalidPrice(item: BillItem): boolean {
+  if (item.price == null) return true
+  if (allowsZeroPrice(item)) return item.price < 0
+  return item.price <= 0
+}
+
 // Per-row reason string — concatenates all issues found on this item so the
 // row indicator's tooltip is informative (e.g. "ยังไม่ได้ map · ขาด unit_code").
 // Returns "" if the row is fine.
@@ -70,7 +82,7 @@ export function rowIssueReason(item: BillItem): string {
   if (!item.qty || item.qty <= 0) {
     reasons.push(ISSUE_TOOLTIP.qty_zero)
   }
-  if (item.price == null || item.price <= 0) {
+  if (hasInvalidPrice(item)) {
     reasons.push(ISSUE_TOOLTIP.price_zero)
   }
   return reasons.join(' · ')
@@ -87,7 +99,9 @@ export function rowIssueReason(item: BillItem): string {
 //   - every item with item_code must be human-confirmed (mapped=true)
 //   - every item must have non-empty unit_code (SML required)
 //   - every item must have qty > 0  (F2 qty_zero block-level anomaly)
-//   - every item must have price > 0 (F2 price_zero block-level anomaly)
+//   - every normal item must have price > 0
+//   - Shopee shipping lines may have price = 0 when the email explicitly says
+//     "ค่าจัดส่งสินค้า: ฿0"
 export function validateForSML(bill: Bill): ValidationResult {
   const items = bill.items ?? []
 
@@ -132,7 +146,7 @@ export function validateForSML(bill: Bill): ValidationResult {
     }
     if (!it.unit_code || it.unit_code.trim() === '') itemHas('unmapped_unit_code')
     if (!it.qty || it.qty <= 0) itemHas('qty_zero')
-    if (it.price == null || it.price <= 0) itemHas('price_zero')
+    if (hasInvalidPrice(it)) itemHas('price_zero')
   }
 
   const issues: ValidationIssue[] = (

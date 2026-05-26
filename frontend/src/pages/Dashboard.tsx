@@ -16,7 +16,12 @@ import { ActionCards } from './Dashboard/ActionCards'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
-type SetupStatus = { ready: boolean; ready_count: number; total_count: number }
+type SetupStatus = {
+  ready: boolean
+  ready_count: number
+  total_count: number
+  steps?: { key: string; ready: boolean; status: string }[]
+}
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -65,6 +70,7 @@ export default function Dashboard() {
   }
 
   const awaitingReview = (stats?.pending ?? 0) + (stats?.needs_review ?? 0)
+  const smlSetupIssue = setupStatus?.steps?.find((step) => step.key === 'instance' && !step.ready)
 
   return (
     <div className="space-y-5">
@@ -89,7 +95,9 @@ export default function Dashboard() {
               <div>
                 <p className="text-sm font-semibold">ระบบยังตั้งค่าไม่ครบ</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  พร้อมแล้ว {setupStatus.ready_count}/{setupStatus.total_count} ขั้น กรุณาตรวจหน้าเริ่มต้นใช้งานก่อนเริ่มรับบิลจริง
+                  {smlSetupIssue
+                    ? `SML ยังไม่พร้อม: ${smlSetupIssue.status}`
+                    : `พร้อมแล้ว ${setupStatus.ready_count}/${setupStatus.total_count} ขั้น กรุณาตรวจหน้าเริ่มต้นใช้งานก่อนเริ่มรับบิลจริง`}
                 </p>
               </div>
             </div>

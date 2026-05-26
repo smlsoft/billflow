@@ -115,7 +115,14 @@ func main() {
 	} else if n > 0 {
 		logger.Info("startup shopee purchase payment summary backfilled", zap.Int("bills", n))
 	}
-	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, auditLogRepo, logger)
+	smlReadiness := sml.NewReadinessChecker(sml.PartyConfig{
+		BaseURL:    cfg.ShopeeSMLURL,
+		GUID:       cfg.ShopeeSMLGUID,
+		Provider:   cfg.ShopeeSMLProvider,
+		ConfigFile: cfg.ShopeeSMLConfigFile,
+		Database:   cfg.ShopeeSMLDatabase,
+	}, logger)
+	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, auditLogRepo, smlReadiness, logger)
 
 	// Services
 	aiClient := ai.NewClient(cfg.OpenRouterAPIKey, cfg.OpenRouterModel, cfg.OpenRouterFallback, cfg.OpenRouterAudioModel).
@@ -341,10 +348,11 @@ func main() {
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, logger)
 	billH.RecoverInterruptedBulkSendJobs()
-	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, logger)
+	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, catalogRepo, auditLogRepo, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
+	dashH.SetSMLReadiness(smlReadiness)
 	imapConfigured := false
 	if accs, err := imapAccountRepo.ListEnabled(); err == nil && len(accs) > 0 {
 		imapConfigured = true
@@ -457,6 +465,8 @@ func main() {
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
 		api.POST("/bills/:id/retry", billH.Retry)
+		api.POST("/bills/:id/ensure-shopee-shipping-line", middleware.RequireRole("admin", "staff"), billH.EnsureShopeeShippingLine)
+		api.GET("/bills/:id/latest-doc-no", middleware.RequireRole("admin", "staff"), billH.LatestDocNo)
 		api.POST("/bills/:id/regenerate-doc-no", middleware.RequireRole("admin", "staff"), billH.RegenerateDocNo)
 		api.POST("/bills/:id/archive", middleware.RequireRole("admin", "staff"), billH.Archive)
 		api.POST("/bills/:id/restore", middleware.RequireRole("admin", "staff"), billH.Restore)
@@ -543,6 +553,8 @@ func main() {
 		api.POST("/sml/refresh-parties", middleware.RequireRole("admin"), smlPartyH.Refresh)
 		api.GET("/sml/parties/last-sync", middleware.RequireRole("admin", "staff"), smlPartyH.LastSync)
 		api.GET("/sml/doc-formats", middleware.RequireRole("admin", "staff"), smlPartyH.DocFormats)
+		api.GET("/sml/branches", middleware.RequireRole("admin", "staff"), smlPartyH.Branches)
+		api.GET("/sml/sales", middleware.RequireRole("admin", "staff"), smlPartyH.Sales)
 		api.GET("/sml/units", middleware.RequireRole("admin", "staff"), catalogH.GetUnits)
 		api.GET("/sml/warehouses", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchWarehouses)
 		api.GET("/sml/warehouses/:code/shelves", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchShelves)
@@ -579,6 +591,7 @@ func main() {
 		api.GET("/catalog/:code", catalogH.GetOne)
 		api.POST("/catalog/products", middleware.RequireRole("admin", "staff"), catalogH.CreateProduct)
 		api.POST("/catalog/sync", middleware.RequireRole("admin"), catalogH.SyncFromAPI)
+		api.POST("/catalog/refresh-batch", middleware.RequireRole("admin"), catalogH.RefreshBatch)
 		api.POST("/catalog/import-csv", middleware.RequireRole("admin"), catalogH.ImportCSV)
 		api.POST("/catalog/embed-all", middleware.RequireRole("admin"), catalogH.EmbedAll)
 		api.POST("/catalog/reload-index", middleware.RequireRole("admin"), catalogH.ReloadIndex)

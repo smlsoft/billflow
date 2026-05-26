@@ -123,7 +123,9 @@ type SaleOrderResponse struct {
 	Error   any    `json:"error,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Data    struct {
-		DocNo string `json:"doc_no"`
+		DocNo      string `json:"doc_no"`
+		LogStatus  string `json:"log_status,omitempty"`
+		LogWarning string `json:"log_warning,omitempty"`
 	} `json:"data"`
 }
 

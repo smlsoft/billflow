@@ -68,7 +68,7 @@ export function DateRangePicker({
           </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[300px] p-2.5">
+      <PopoverContent align="start" className="w-[min(300px,calc(100vw-2rem))] p-2.5">
         <div className="space-y-2.5">
           <div>
             <div className="text-sm font-medium">ช่วงวันที่</div>

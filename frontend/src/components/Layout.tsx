@@ -4,11 +4,13 @@ import { Toaster } from '@/components/ui/sonner'
 import Sidebar from '@/components/layout/Sidebar'
 import Topbar from '@/components/layout/Topbar'
 import { EmailPollProgressBar } from '@/components/EmailPollProgressBar'
+import { SMLReadinessBanner } from '@/components/SMLReadinessBanner'
 import { CommandPalette } from '@/components/CommandPalette'
 import { BreadcrumbProvider } from '@/lib/breadcrumbs'
 import { useEventsStore } from '@/lib/events-store'
 import { useChordHotkeys, useHotkeys } from '@/hooks/useHotkeys'
 import { useAuth } from '@/hooks/useAuth'
+import { SMLReadinessProvider } from '@/hooks/useSMLReadiness'
 import { ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
 
 // Routes that want a full-height, no-padding viewport (chat / inbox style).
@@ -69,28 +71,31 @@ export default function Layout() {
 
   return (
     <BreadcrumbProvider>
-      <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
-        <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar onOpenPalette={() => setPaletteOpen(true)} />
-          <EmailPollProgressBar />
-          {isFullHeight ? (
-            // Full-height pages (chat, inbox) handle their own scroll regions.
-            // No padding, no max-width — the page fills the viewport under topbar.
-            <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <Outlet />
-            </main>
-          ) : (
-            <main className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_left,hsl(var(--accent)/0.45),transparent_32rem)]">
-              <div className={isBillDetail ? 'w-full p-4 lg:p-5' : 'mx-auto w-full max-w-[1480px] p-5 lg:p-6'}>
+      <SMLReadinessProvider>
+        <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
+          <Sidebar />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <Topbar onOpenPalette={() => setPaletteOpen(true)} />
+            <EmailPollProgressBar />
+            <SMLReadinessBanner />
+            {isFullHeight ? (
+              // Full-height pages (chat, inbox) handle their own scroll regions.
+              // No padding, no max-width — the page fills the viewport under topbar.
+              <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 <Outlet />
-              </div>
-            </main>
-          )}
+              </main>
+            ) : (
+              <main className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_left,hsl(var(--accent)/0.45),transparent_32rem)]">
+                <div className={isBillDetail ? 'w-full p-4 lg:p-5' : 'mx-auto w-full max-w-[1480px] p-5 lg:p-6'}>
+                  <Outlet />
+                </div>
+              </main>
+            )}
+          </div>
+          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+          <Toaster />
         </div>
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-        <Toaster />
-      </div>
+      </SMLReadinessProvider>
     </BreadcrumbProvider>
   )
 }

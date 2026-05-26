@@ -41,21 +41,43 @@ export const ACTION_META: Record<string, ActionMeta> = {
   bill_restored: { label: 'กู้คืนบิล', emoji: '♻️', tone: 'info' },
   bill_item_added: { label: 'เพิ่มรายการในบิล', emoji: '➕', tone: 'info' },
   bill_item_deleted: { label: 'ลบรายการในบิล', emoji: '➖', tone: 'muted' },
+  bill_doc_no_regenerated: { label: 'ออกเลขเอกสารใหม่', emoji: '🔢', tone: 'primary' },
+  bill_doc_no_regenerate_failed: { label: 'ออกเลขเอกสารใหม่ไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
+  bill_doc_no_preview_failed: { label: 'ดึงเลขล่าสุดไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
   // SML push
   sml_sent: { label: 'ส่ง SML สำเร็จ', emoji: '✅', tone: 'success' },
   sml_failed: { label: 'ส่ง SML ล้มเหลว', emoji: '❌', tone: 'danger' },
+  sml_erp_log_warning: { label: 'บันทึก Log SML ไม่ครบ', emoji: '⚠️', tone: 'warning' },
+  sml_readiness_blocked: { label: 'SML ยังไม่พร้อม', emoji: '⚠️', tone: 'warning' },
   // Mappings
   mapping_feedback: { label: 'ยืนยัน mapping', emoji: '🎯', tone: 'primary' },
+  marketplace_alias_confirmed: { label: 'ยืนยันสินค้าจาก Marketplace', emoji: '🎯', tone: 'primary' },
   // Email/Shopee receive
   shopee_email_received: { label: 'รับอีเมล Shopee Order', emoji: '📧', tone: 'info' },
   shopee_shipped_received: { label: 'รับอีเมล Shopee Shipped', emoji: '📦', tone: 'info' },
+  email_print_requested: { label: 'พิมพ์อีเมลต้นทาง', emoji: '🖨️', tone: 'info' },
+  shopee_shipping_line_ensured: { label: 'เติมค่าขนส่ง Shopee', emoji: '🚚', tone: 'info' },
   // Shopee Excel import
   shopee_import_preview: { label: 'พรีวิวไฟล์ Shopee Excel', emoji: '👁️', tone: 'muted' },
   shopee_import_done: { label: 'นำเข้า Shopee สำเร็จ', emoji: '📊', tone: 'success' },
+  shopee_duplicate_merged: { label: 'รวมรายการ Shopee ซ้ำ', emoji: '🔁', tone: 'muted' },
+  shopee_api_connection_updated: { label: 'แก้ไขการเชื่อมต่อ Shopee API', emoji: '🔌', tone: 'info' },
+  shopee_api_preview_requested: { label: 'พรีวิว Shopee API', emoji: '👁️', tone: 'info' },
+  lazada_import_preview: { label: 'พรีวิวไฟล์ Lazada Excel', emoji: '👁️', tone: 'muted' },
+  lazada_import_done: { label: 'นำเข้า Lazada สำเร็จ', emoji: '📊', tone: 'success' },
   tiktok_import_preview: { label: 'พรีวิวไฟล์ TikTok Excel', emoji: '👁️', tone: 'muted' },
   tiktok_import_done: { label: 'นำเข้า TikTok สำเร็จ', emoji: '📊', tone: 'success' },
   // Catalog
   product_created: { label: 'สร้างสินค้าใน SML', emoji: '🆕', tone: 'primary' },
+  catalog_refresh_one: { label: 'ดึงสินค้า SML รายตัว', emoji: '🔄', tone: 'info' },
+  catalog_delete_one: { label: 'ลบสินค้าออกจาก Catalog', emoji: '🗑️', tone: 'muted' },
+  hidden_item_code_detected: { label: 'พบรหัสสินค้ามีอักขระซ่อน', emoji: '⚠️', tone: 'warning' },
+  sml_customer_created: { label: 'สร้างลูกค้าใน SML', emoji: '🆕', tone: 'primary' },
+  sml_supplier_created: { label: 'สร้างผู้ขายใน SML', emoji: '🆕', tone: 'primary' },
+  // Users
+  user_created: { label: 'เพิ่มผู้ใช้ระบบ', emoji: '➕', tone: 'primary' },
+  user_updated: { label: 'แก้ไขผู้ใช้ระบบ', emoji: '✏️', tone: 'info' },
+  user_deleted: { label: 'ลบผู้ใช้ระบบ', emoji: '🗑️', tone: 'danger' },
   // Setup / demo maintenance
   demo_test_data_reset: { label: 'ล้างข้อมูลทดสอบ', emoji: '🧹', tone: 'warning' },
   // Channel defaults
@@ -97,10 +119,13 @@ export const SOURCE_LABELS: Record<string, string> = {
   shopee_shipped: 'Shopee Shipped',
   manual: 'Manual',
   sml: 'SML',
-  system: 'System',
-  setup: 'Setup',
-  channel_defaults: 'Settings',
-  catalog: 'Catalog',
+  system: 'ระบบ',
+  ui: 'หน้าจอผู้ใช้',
+  setup: 'ตั้งค่าระบบ',
+  settings: 'ตั้งค่าระบบ',
+  channel_defaults: 'ตั้งค่าเอกสาร',
+  catalog: 'สินค้า SML',
+  shopee_api: 'Shopee API',
 }
 
 export const SOURCE_TONE: Record<string, string> = {
@@ -117,6 +142,9 @@ export const SOURCE_TONE: Record<string, string> = {
   setup: 'bg-warning/10 text-warning',
   channel_defaults: 'bg-muted text-muted-foreground',
   catalog: 'bg-muted text-muted-foreground',
+  settings: 'bg-muted text-muted-foreground',
+  ui: 'bg-primary/10 text-primary',
+  shopee_api: 'bg-warning/10 text-warning',
 }
 
 export const TONE_DOT: Record<Tone, string> = {
@@ -141,6 +169,61 @@ export function smlRouteLabel(route: unknown): string {
   return map[normalized] ?? text
 }
 
+function auditViaLabel(value: unknown): string {
+  const text = String(value ?? '')
+  const map: Record<string, string> = {
+    retry: 'ส่งจากหน้าบิล',
+    bulk_job: 'ส่งแบบกลุ่ม',
+    import: 'ส่งตอนนำเข้า',
+  }
+  return map[text] ?? text
+}
+
+export function humanizeAuditError(value: unknown): string {
+  if (value == null || value === '') return ''
+  const text = String(value)
+  const lower = text.toLowerCase()
+  if (lower.includes('request failed with status code')) {
+    const code = text.match(/status code\s+(\d+)/i)?.[1]
+    return code ? `ระบบเรียก API ไม่สำเร็จ (HTTP ${code})` : 'ระบบเรียก API ไม่สำเร็จ'
+  }
+  if (lower.includes('sml doc_no next')) {
+    if (lower.includes('format must contain a # sequence block')) {
+      return 'รูปแบบเลขเอกสารไม่มีชุด # สำหรับเลขรัน ให้ตรวจ prefix/running format ในเส้นทางเอกสาร SML'
+    }
+    const code = text.match(/HTTP\s+(\d+)/i)?.[1]
+    const suffix = text.split(':').slice(1).join(':').trim()
+    return [
+      'ดึงเลข running ล่าสุดจาก SML ไม่สำเร็จ',
+      code ? `(HTTP ${code})` : '',
+      suffix && !suffix.toLowerCase().includes('sml doc_no next') ? suffix : '',
+    ].filter(Boolean).join(' ')
+  }
+  if (lower.includes('duplicate key') || lower.includes('already exists')) {
+    return 'เลขเอกสารซ้ำกับข้อมูลเดิมใน SML หรือใน BillFlow'
+  }
+  if (
+    lower.includes('customer_count_failed') ||
+    lower.includes('supplier_count_failed') ||
+    lower.includes('count customers failed') ||
+    lower.includes('count suppliers failed') ||
+    lower.includes('timeout') ||
+    lower.includes('deadline exceeded') ||
+    lower.includes('eof') ||
+    lower.includes('connection refused')
+  ) {
+    return 'เครื่อง SML/Postgres ของร้านนี้อาจยังไม่เปิดหรือเชื่อมต่อไม่ได้'
+  }
+  if (lower.includes('invalid credentials') || lower.includes('authenticationfailed')) {
+    return 'ข้อมูลเข้าสู่ระบบหรือ App Password ไม่ถูกต้อง'
+  }
+  if (lower === 'bill not found') return 'ไม่พบบิลนี้แล้ว'
+  if (lower.includes('record print event failed')) return 'บันทึกประวัติการพิมพ์อีเมลไม่สำเร็จ'
+  if (lower.includes('failed to save alias')) return 'บันทึกการจับคู่สินค้าไม่สำเร็จ'
+  if (lower.includes('failed to apply alias')) return 'นำการจับคู่สินค้าไปใช้กับบิลที่รอตรวจไม่สำเร็จ'
+  return text
+}
+
 // summarize returns the 1-line human description of a log entry, derived
 // from its detail fields. Falls back to '' when no shape matches; callers
 // then either use ACTION_META.label alone or hide the summary slot.
@@ -151,38 +234,74 @@ export function summarize(log: AuditLog): string {
       if (d.flow === 'shopee_email' || d.flow === 'shopee_excel' || d.flow === 'tiktok_excel' || d.shopee_order_id || d.tiktok_order_id) {
         const items = d.items_count ?? d.items ?? ''
         const id = d.order_id ?? d.shopee_order_id ?? d.tiktok_order_id ?? ''
-        return `order ${id}${items ? ` · ${items} รายการ` : ''}`
+        return `ออเดอร์ ${id}${items ? ` · ${items} รายการ` : ''}`
       }
       if (d.from_text || d.flow === 'line_text') return 'จากข้อความ LINE'
       if (d.flow) return String(d.flow)
       return ''
     case 'sml_sent':
-      return [d.doc_no, d.route ? smlRouteLabel(d.route) : '', d.via ? `via ${d.via}` : ''].filter(Boolean).join(' · ')
+      return [d.doc_no, d.route ? smlRouteLabel(d.route) : '', d.via ? auditViaLabel(d.via) : ''].filter(Boolean).join(' · ')
+    case 'sml_erp_log_warning':
+      return [d.doc_no, d.route ? smlRouteLabel(d.route) : '', d.message].filter(Boolean).join(' · ')
     case 'sml_failed': {
       const err = parseMaybeJSON(d.error)
       const route = err.route ?? d.route
       const docNo = err.doc_no_attempted ?? d.doc_no
-      const message = err.error ?? d.error ?? ''
+      const message = humanizeAuditError(err.error ?? d.error ?? '')
       return [route ? smlRouteLabel(route) : '', docNo, message].filter(Boolean).join(' · ')
     }
+    case 'sml_readiness_blocked':
+      return [d.via ? auditViaLabel(d.via) : '', d.tenant ? `ฐานข้อมูล ${d.tenant}` : '', d.message].filter(Boolean).join(' · ')
+    case 'bill_doc_no_regenerated':
+      return [d.doc_no, d.route ? smlRouteLabel(d.route) : ''].filter(Boolean).join(' · ')
+    case 'bill_doc_no_regenerate_failed':
+    case 'bill_doc_no_preview_failed':
+      return [d.route ? smlRouteLabel(d.route) : '', humanizeAuditError(d.error)].filter(Boolean).join(' · ')
     case 'shopee_import_done':
+    case 'lazada_import_done':
     case 'tiktok_import_done':
       return `สำเร็จ ${d.success_count ?? 0} / ล้มเหลว ${d.fail_count ?? 0} (รวม ${d.total ?? 0})`
     case 'shopee_import_preview':
+    case 'lazada_import_preview':
     case 'tiktok_import_preview':
-      return `${d.filename ?? ''} — ${d.total_orders ?? 0} order${
+      return `${d.filename ?? ''} — ${d.total_orders ?? 0} ออเดอร์${
         d.duplicate_count ? ` · ซ้ำ ${d.duplicate_count}` : ''
       }`
     case 'shopee_email_received':
     case 'shopee_shipped_received':
       return d.subject ? String(d.subject) : ''
+    case 'email_print_requested':
+      return d.email_group_key ? `Email #${d.email_group_key}` : ''
+    case 'shopee_shipping_line_ensured':
+      return [d.item_code, d.price != null ? `ราคา ${Number(d.price).toLocaleString()}` : ''].filter(Boolean).join(' · ')
     case 'channel_default_quick_setup':
-      return `ตั้งค่า ${d.applied_count ?? 0} channel`
+      return `ตั้งค่า ${d.applied_count ?? 0} ช่องทาง`
     case 'channel_default_updated':
     case 'channel_default_deleted':
       return [d.channel, d.bill_type, d.party_code].filter(Boolean).join(' / ')
     case 'product_created':
       return d.code ? `${d.code} — ${d.name ?? ''}` : ''
+    case 'catalog_refresh_one':
+      return [d.item_code, d.item_name].filter(Boolean).join(' — ')
+    case 'catalog_delete_one':
+      return d.item_code ? String(d.item_code) : ''
+    case 'hidden_item_code_detected':
+      return [d.item_code, d.clean_item_code ? `ควรเป็น ${d.clean_item_code}` : ''].filter(Boolean).join(' · ')
+    case 'sml_customer_created':
+    case 'sml_supplier_created':
+      return [d.code, d.name].filter(Boolean).join(' — ')
+    case 'user_created':
+    case 'user_updated':
+    case 'user_deleted':
+      return [d.email, d.role].filter(Boolean).join(' · ')
+    case 'marketplace_alias_confirmed':
+      return [d.raw_name, '→', d.item_code, d.applied_items ? `ใช้กับ ${d.applied_items} รายการ` : ''].filter(Boolean).join(' ')
+    case 'shopee_api_connection_updated':
+      return [d.shop_id ? `ร้าน ${d.shop_id}` : '', d.label, d.disabled ? 'ปิดใช้งาน' : 'เปิดใช้งาน'].filter(Boolean).join(' · ')
+    case 'shopee_api_preview_requested':
+      return [d.shop_id ? `ร้าน ${d.shop_id}` : '', d.order_count != null ? `${d.order_count} ออเดอร์` : ''].filter(Boolean).join(' · ')
+    case 'shopee_duplicate_merged':
+      return [d.order_id ?? d.shopee_order_id, d.bill_id ? `รวมเข้าบิล ${String(d.bill_id).slice(0, 8)}…` : ''].filter(Boolean).join(' · ')
     case 'demo_test_data_reset': {
       const docs = d.before_documents ?? {}
       const imports = d.before_imports ?? {}

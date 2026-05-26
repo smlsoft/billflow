@@ -339,7 +339,7 @@ export function MapItemModal({
           </TabsContent>
 
           {/* ── Create tab ─────────────────────────────────────────────────── */}
-          <TabsContent value="create" className="mt-3 space-y-3 overflow-y-auto pr-1">
+          <TabsContent value="create" className="mt-3 min-h-0 space-y-3 overflow-y-auto pr-1">
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <label className="text-sm text-muted-foreground">

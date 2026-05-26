@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"billflow/internal/models"
+	"billflow/internal/services/itemcode"
 )
 
 // SMLCatalogRepo handles DB operations for sml_catalog
@@ -286,6 +287,7 @@ func (r *SMLCatalogRepo) List(page, perPage int, statusFilter, q string) ([]mode
 		); err != nil {
 			continue
 		}
+		applyItemCodeMetadata(&it)
 		applyCatalogImageScan(&it, primaryRoworder, primaryBytes, imageSyncedAt)
 		items = append(items, it)
 	}
@@ -314,6 +316,25 @@ func (r *SMLCatalogRepo) Stats() (total, done, pending, errCount int, err error)
 		FROM sml_catalog
 	`).Scan(&total, &done, &pending, &errCount)
 	return
+}
+
+func (r *SMLCatalogRepo) CountHiddenItemCodes() (int, error) {
+	rows, err := r.db.Query(`SELECT item_code FROM sml_catalog`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return 0, err
+		}
+		if itemcode.Inspect(code).HasHiddenChars {
+			n++
+		}
+	}
+	return n, rows.Err()
 }
 
 // Delete removes a single catalog row by item_code. SML 248 is not touched —
@@ -357,6 +378,7 @@ func (r *SMLCatalogRepo) GetOne(itemCode string) (*models.CatalogItem, error) {
 		return nil, nil
 	}
 	if err == nil {
+		applyItemCodeMetadata(&it)
 		applyCatalogImageScan(&it, primaryRoworder, primaryBytes, imageSyncedAt)
 	}
 	return &it, err
@@ -418,10 +440,17 @@ func (r *SMLCatalogRepo) ListAllNames() ([]models.CatalogItem, error) {
 			&it.ImageCount, &primaryRoworder, &it.PrimaryImageGuid,
 			&primaryBytes, &imageSyncedAt)
 		it.Price = &price
+		applyItemCodeMetadata(&it)
 		applyCatalogImageScan(&it, primaryRoworder, primaryBytes, imageSyncedAt)
 		items = append(items, it)
 	}
 	return items, rows.Err()
+}
+
+func applyItemCodeMetadata(it *models.CatalogItem) {
+	meta := itemcode.Inspect(it.ItemCode)
+	it.HasHiddenChars = meta.HasHiddenChars
+	it.CleanItemCode = meta.CleanItemCode
 }
 
 func applyCatalogImageScan(it *models.CatalogItem, primaryRoworder, primaryBytes sql.NullInt64, imageSyncedAt sql.NullTime) {

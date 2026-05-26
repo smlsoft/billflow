@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import type { MouseEvent } from 'react'
-import { Archive, Mail, RotateCcw, Store, Trash2 } from 'lucide-react'
+import { Archive, Mail, Printer, RotateCcw, Store, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import BillStatusBadge from '@/components/BillStatusBadge'
@@ -375,10 +375,23 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
   if (!group?.message_id || !group.group_key) return null
 
   const isMultiOrder = (group.order_count ?? 0) > 1
+  const printCount = group.print_count ?? 0
+  const hasPrintHistory = printCount > 0
+  const printedAt = group.last_printed_at ? dayjs(group.last_printed_at) : null
+  const printedAtLabel = printedAt?.isValid() ? printedAt.format('DD/MM/YYYY HH:mm') : ''
+  const printedBy = group.last_printed_by_name || group.last_printed_by_email || ''
+  const printTooltip = hasPrintHistory
+    ? [
+        `พิมพ์แล้ว ${printCount.toLocaleString('th-TH')} ครั้ง`,
+        printedAtLabel ? `ล่าสุด ${printedAtLabel}` : '',
+        printedBy ? `โดย ${printedBy}` : '',
+      ].filter(Boolean).join(' · ')
+    : ''
   const tooltip = [
     group.subject ? `Subject: ${group.subject}` : '',
     group.from ? `From: ${group.from}` : '',
     `Message-ID: ${group.message_id}`,
+    printTooltip,
   ].filter(Boolean).join('\n')
 
   return (
@@ -391,11 +404,14 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
       title={tooltip}
     >
       <Mail className="h-3 w-3 shrink-0" />
-      <span className="min-w-0 truncate font-mono">Email #{group.group_key}</span>
+      <span className="shrink-0 font-mono">Email #{group.group_key}</span>
       {isMultiOrder && (
         <span className="shrink-0 font-medium">
           · {group.order_count.toLocaleString('th-TH')} คำสั่งซื้อ
         </span>
+      )}
+      {hasPrintHistory && (
+        <Printer className="h-3 w-3 shrink-0" aria-label="พิมพ์แล้ว" />
       )}
     </div>
   )

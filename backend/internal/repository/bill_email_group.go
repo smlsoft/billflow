@@ -7,14 +7,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"billflow/internal/models"
 	"github.com/lib/pq"
 )
 
 type emailGroupStats struct {
-	OrderCount        int
-	HasPrintableEmail bool
+	OrderCount         int
+	HasPrintableEmail  bool
+	PrintCount         int
+	LastPrintedAt      sql.NullTime
+	LastPrintedByEmail string
+	LastPrintedByName  string
 }
 
 func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
@@ -45,14 +50,36 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		   WHERE raw_data ? 'message_id'
 		     AND COALESCE(raw_data->>'email_message_id', '') = ''
 		     AND raw_data->>'message_id' = ANY($1)
+		),
+		group_stats AS (
+		  SELECT message_id,
+		         COUNT(DISTINCT mb.id)::int AS order_count,
+		         COALESCE(BOOL_OR(kind IN ('email_html', 'email_text')), FALSE) AS has_printable_email
+		    FROM matched_bills mb
+		    LEFT JOIN bill_artifacts ba ON ba.bill_id = mb.id
+		   WHERE message_id IS NOT NULL AND message_id <> ''
+		   GROUP BY message_id
+		),
+		print_stats AS (
+		  SELECT e.email_message_id AS message_id,
+		         COUNT(e.id)::int AS print_count,
+		         (ARRAY_AGG(e.created_at ORDER BY e.created_at DESC))[1] AS last_printed_at,
+		         (ARRAY_AGG(e.requested_by_email ORDER BY e.created_at DESC))[1] AS last_printed_by_email,
+		         (ARRAY_AGG(COALESCE(u.name, '') ORDER BY e.created_at DESC))[1] AS last_printed_by_name
+		    FROM email_print_events e
+		    LEFT JOIN users u ON u.id = e.requested_by
+		   WHERE e.email_message_id = ANY($1)
+		   GROUP BY e.email_message_id
 		)
-		SELECT message_id,
-		       COUNT(DISTINCT mb.id)::int AS order_count,
-		       COALESCE(BOOL_OR(kind IN ('email_html', 'email_text')), FALSE) AS has_printable_email
-		  FROM matched_bills mb
-		  LEFT JOIN bill_artifacts ba ON ba.bill_id = mb.id
-		 WHERE message_id IS NOT NULL AND message_id <> ''
-		 GROUP BY message_id`,
+		SELECT gs.message_id,
+		       gs.order_count,
+		       gs.has_printable_email,
+		       COALESCE(ps.print_count, 0) AS print_count,
+		       ps.last_printed_at,
+		       COALESCE(ps.last_printed_by_email, '') AS last_printed_by_email,
+		       COALESCE(ps.last_printed_by_name, '') AS last_printed_by_name
+		  FROM group_stats gs
+		  LEFT JOIN print_stats ps ON ps.message_id = gs.message_id`,
 		pq.Array(messageIDs),
 	)
 	if err != nil {
@@ -62,7 +89,15 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 	for rows.Next() {
 		var messageID string
 		var stat emailGroupStats
-		if err := rows.Scan(&messageID, &stat.OrderCount, &stat.HasPrintableEmail); err != nil {
+		if err := rows.Scan(
+			&messageID,
+			&stat.OrderCount,
+			&stat.HasPrintableEmail,
+			&stat.PrintCount,
+			&stat.LastPrintedAt,
+			&stat.LastPrintedByEmail,
+			&stat.LastPrintedByName,
+		); err != nil {
 			return err
 		}
 		stats[messageID] = stat
@@ -80,13 +115,22 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		if stat.OrderCount == 0 {
 			stat.OrderCount = 1
 		}
+		var lastPrintedAt *time.Time
+		if stat.LastPrintedAt.Valid {
+			t := stat.LastPrintedAt.Time
+			lastPrintedAt = &t
+		}
 		bills[i].EmailGroup = &models.BillEmailGroup{
-			MessageID:         messageID,
-			GroupKey:          emailGroupKey(messageID),
-			Subject:           billEmailSubject(&bills[i]),
-			From:              billEmailFrom(&bills[i]),
-			OrderCount:        stat.OrderCount,
-			HasPrintableEmail: stat.HasPrintableEmail,
+			MessageID:          messageID,
+			GroupKey:           emailGroupKey(messageID),
+			Subject:            billEmailSubject(&bills[i]),
+			From:               billEmailFrom(&bills[i]),
+			OrderCount:         stat.OrderCount,
+			HasPrintableEmail:  stat.HasPrintableEmail,
+			PrintCount:         stat.PrintCount,
+			LastPrintedAt:      lastPrintedAt,
+			LastPrintedByEmail: stat.LastPrintedByEmail,
+			LastPrintedByName:  stat.LastPrintedByName,
 		}
 	}
 	return nil

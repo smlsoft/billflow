@@ -140,7 +140,9 @@ type PurchaseOrderResponse struct {
 	Error   any    `json:"error,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Data    struct {
-		DocNo string `json:"doc_no"`
+		DocNo      string `json:"doc_no"`
+		LogStatus  string `json:"log_status,omitempty"`
+		LogWarning string `json:"log_warning,omitempty"`
 	} `json:"data"`
 }
 
@@ -331,8 +333,7 @@ func BuildPurchaseOrderPayload(
 		netAmount := round2(grossAmount - discountAmount)
 		v := CalcItemVAT(netAmount, 1, cfg.VATType, cfg.VATRate)
 		unitVAT := CalcItemVAT(item.Price, 1, cfg.VATType, cfg.VATRate)
-		totalValue += grossAmount
-		totalDiscount += discountAmount
+		totalValue += v.SumAmount
 		totalNet += v.SumAmount
 		totalVAT += v.VATAmount
 		totalExc += v.SumAmountExclVAT
@@ -348,7 +349,7 @@ func BuildPurchaseOrderPayload(
 			WHCode:           wh,
 			ShelfCode:        shelf,
 			WHCode2:          wh,
-			ShelfCode2:       wh,
+			ShelfCode2:       shelf,
 			Qty:              item.Qty,
 			Price:            round2(item.Price),
 			PriceExcludeVAT:  roundN(unitVAT.PriceExcludeVAT, 4),

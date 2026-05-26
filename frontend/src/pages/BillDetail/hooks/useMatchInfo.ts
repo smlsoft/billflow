@@ -7,13 +7,12 @@ import type { BillItem } from '@/types'
 // item_code only fetch once and subsequent renders get instant results.
 export const catalogMetaCache = new Map<
   string,
-  { item_name: string; price?: number | null; unit_code?: string }
+  { item_name: string; unit_code?: string }
 >()
 
 export interface MatchInfo {
   itemName: string | null
   score: number | null   // 0..1, null = user-picked code outside candidates
-  catalogPrice: number | null
 }
 
 export function useMatchInfo(item: BillItem): MatchInfo {
@@ -22,7 +21,6 @@ export function useMatchInfo(item: BillItem): MatchInfo {
 
   const [fetched, setFetched] = useState<{
     item_name: string
-    price?: number | null
   } | null>(() =>
     code && catalogMetaCache.has(code) ? (catalogMetaCache.get(code) ?? null) : null,
   )
@@ -35,12 +33,12 @@ export function useMatchInfo(item: BillItem): MatchInfo {
     }
     let cancelled = false
     api
-      .get<{ item_name: string; price?: number | null }>(
+      .get<{ item_name: string }>(
         `/api/catalog/${encodeURIComponent(code)}`,
       )
       .then((res) => {
         if (cancelled) return
-        const meta = { item_name: res.data.item_name, price: res.data.price }
+        const meta = { item_name: res.data.item_name }
         catalogMetaCache.set(code, meta)
         setFetched(meta)
       })
@@ -56,16 +54,11 @@ export function useMatchInfo(item: BillItem): MatchInfo {
     return {
       itemName: candidate.item_name,
       score: candidate.score,
-      catalogPrice:
-        typeof (candidate as { price?: number }).price === 'number'
-          ? ((candidate as { price?: number }).price ?? null)
-          : null,
     }
   }
 
   return {
     itemName: fetched?.item_name ?? null,
     score: null,
-    catalogPrice: fetched?.price ?? null,
   }
 }

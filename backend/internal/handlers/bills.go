@@ -16,6 +16,7 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/artifact"
+	"billflow/internal/services/itemcode"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/sml"
@@ -37,6 +38,7 @@ type BillHandler struct {
 	bulkJobRepo     *repository.SMLBulkJobRepo     // async SML bulk send jobs
 	artifactSvc     *artifact.Service              // source-artifact storage (PDF/HTML/etc.)
 	warehouseCache  *sml.WarehouseCache            // optional validation for wh/shelf chosen in dialog
+	smlReadiness    *sml.ReadinessChecker          // fail-closed guard for tenant DB availability
 	log             *zap.Logger
 }
 
@@ -56,6 +58,7 @@ func NewBillHandler(
 	bulkJobRepo *repository.SMLBulkJobRepo,
 	artifactSvc *artifact.Service,
 	warehouseCache *sml.WarehouseCache,
+	smlReadiness *sml.ReadinessChecker,
 	log *zap.Logger,
 ) *BillHandler {
 	return &BillHandler{
@@ -74,6 +77,7 @@ func NewBillHandler(
 		bulkJobRepo:     bulkJobRepo,
 		artifactSvc:     artifactSvc,
 		warehouseCache:  warehouseCache,
+		smlReadiness:    smlReadiness,
 		log:             log,
 	}
 }
@@ -138,6 +142,64 @@ func (h *BillHandler) allocateFreshDocNo(bill *models.Bill, def *models.ChannelD
 		}
 	}
 	return "", fmt.Errorf("cannot allocate unique doc_no for prefix %s", prefix)
+}
+
+func (h *BillHandler) previewFreshDocNo(bill *models.Bill, def *models.ChannelDefault, fallbackPrefix, route string) (string, error) {
+	prefix, format := resolveDocCounterPattern(def, fallbackPrefix)
+	docDate := docDateFromBill(bill)
+	docNoDate, _ := time.Parse("2006-01-02", docDate)
+	if docNoDate.IsZero() {
+		docNoDate = time.Now()
+	}
+
+	if h.docNoClient != nil && h.docNoClient.IsConfigured() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		next, err := h.docNoClient.Next(ctx, sml.NextDocNoRequest{
+			Route:   route,
+			Prefix:  prefix,
+			Format:  format,
+			DocDate: docDate,
+		})
+		if err != nil {
+			return "", fmt.Errorf("ดึงเลข running ล่าสุดจาก SML ไม่สำเร็จ: %w", err)
+		}
+		if parsed, err := time.Parse("2006-01-02", next.DocDate); err == nil && !parsed.IsZero() {
+			docNoDate = parsed
+		}
+		for i := 0; i < 100; i++ {
+			docNo := next.NextDocNo
+			if i > 0 {
+				docNo = repository.RenderDocNoFromSeq(prefix, format, docNoDate, next.NextSeq+i)
+			}
+			exists, err := h.localDocNoExists(docNo, bill.ID)
+			if err != nil {
+				return "", err
+			}
+			if !exists {
+				return docNo, nil
+			}
+		}
+		return "", fmt.Errorf("cannot preview unique doc_no for prefix %s", prefix)
+	}
+
+	if h.docCounters == nil {
+		return "", fmt.Errorf("local doc_no counter not configured")
+	}
+	for i := 0; i < 100; i++ {
+		docNo, err := h.docCounters.PeekDocNoWithOffset(prefix, format, docNoDate, i)
+		if err != nil {
+			return "", err
+		}
+		exists, err := h.localDocNoExists(docNo, bill.ID)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return docNo, nil
+		}
+	}
+	return "", fmt.Errorf("cannot preview unique doc_no for prefix %s", prefix)
 }
 
 func isDuplicateDocNoError(errMsg *string) bool {
@@ -248,15 +310,8 @@ func (h *BillHandler) resolvedInvoiceConfig(def *models.ChannelDefault, req Retr
 		Provider:   h.cfg.ShopeeSMLProvider,
 		ConfigFile: h.cfg.ShopeeSMLConfigFile,
 		Database:   h.cfg.ShopeeSMLDatabase,
-		DocFormat:  h.cfg.ShopeeSMLDocFormat,
-		SaleCode:   h.cfg.ShopeeSMLSaleCode,
-		BranchCode: h.cfg.ShopeeSMLBranchCode,
-		WHCode:     h.cfg.ShopeeSMLWHCode,
-		ShelfCode:  h.cfg.ShopeeSMLShelfCode,
-		UnitCode:   h.cfg.ShopeeSMLUnitCode,
-		VATType:    h.cfg.ShopeeSMLVATType,
-		VATRate:    h.cfg.ShopeeSMLVATRate,
-		DocTime:    h.cfg.ShopeeSMLDocTime,
+		VATType:    -1,
+		VATRate:    -1,
 	}
 	if def != nil && def.PartyCode != "" {
 		cfg.CustCode = def.PartyCode
@@ -291,8 +346,12 @@ func (h *BillHandler) resolvedPurchaseConfig(def *models.ChannelDefault, req Ret
 	return cfg
 }
 
-func (h *BillHandler) validateResolvedSendFields(whCode, shelfCode, docTime string, vatType int, vatRate float64) error {
+func (h *BillHandler) validateResolvedSendFields(docFormat, whCode, shelfCode, docTime string, vatType int, vatRate float64) error {
 	switch {
+	case strings.TrimSpace(docFormat) == "":
+		return fmt.Errorf("กรุณาเลือกรูปแบบเอกสาร SML ใน /settings/channels ก่อนส่ง")
+	case strings.TrimSpace(docTime) == "":
+		return fmt.Errorf("กรุณากรอกเวลาเอกสารก่อนส่ง SML")
 	case strings.TrimSpace(whCode) == "":
 		return fmt.Errorf("กรุณากรอกรหัสคลังก่อนส่ง SML")
 	case strings.TrimSpace(shelfCode) == "":
@@ -301,8 +360,6 @@ func (h *BillHandler) validateResolvedSendFields(whCode, shelfCode, docTime stri
 		return fmt.Errorf("กรุณาเลือกประเภทภาษีก่อนส่ง SML")
 	case vatRate < 0:
 		return fmt.Errorf("กรุณากรอกอัตราภาษีก่อนส่ง SML")
-	case strings.TrimSpace(docTime) == "":
-		return fmt.Errorf("กรุณากรอกเวลาเอกสารก่อนส่ง SML")
 	}
 	if h.warehouseCache != nil {
 		wh := strings.TrimSpace(whCode)
@@ -728,6 +785,70 @@ type retrySendResult struct {
 	DocNoAttempted string
 	Route          string
 	Skipped        bool
+	Warnings       []hiddenItemCodeWarning
+	LogWarning     string
+}
+
+type hiddenItemCodeWarning struct {
+	BillID        string   `json:"bill_id,omitempty"`
+	ItemID        string   `json:"item_id,omitempty"`
+	RawName       string   `json:"raw_name,omitempty"`
+	ItemCode      string   `json:"item_code"`
+	CleanItemCode string   `json:"clean_item_code"`
+	Kinds         []string `json:"hidden_char_kinds,omitempty"`
+	Message       string   `json:"message"`
+}
+
+func (h *BillHandler) checkSMLReadiness(ctx context.Context, force bool) sml.ReadinessStatus {
+	if h.smlReadiness == nil {
+		return sml.ReadinessStatus{
+			Configured: true,
+			Ready:      true,
+			Status:     "ok",
+			Message:    "ไม่ได้เปิดใช้ SML readiness guard",
+			CheckedAt:  time.Now(),
+		}
+	}
+	return h.smlReadiness.Check(ctx, force)
+}
+
+func (h *BillHandler) auditSMLReadinessBlocked(action string, targetID *string, userID, traceID, via string, readiness sml.ReadinessStatus) {
+	if h.auditRepo == nil {
+		return
+	}
+	var uid *string
+	if userID != "" {
+		uid = &userID
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action:   action,
+		TargetID: targetID,
+		UserID:   uid,
+		Source:   "sml",
+		Level:    "warn",
+		TraceID:  traceID,
+		Detail: map[string]interface{}{
+			"via":         via,
+			"tenant":      readiness.Tenant,
+			"status":      readiness.Status,
+			"http_status": readiness.HTTPStatus,
+			"message":     readiness.Message,
+			"checked_at":  readiness.CheckedAt,
+		},
+	})
+}
+
+func (h *BillHandler) blockIfSMLNotReady(c *gin.Context, action string, targetID *string, via string) bool {
+	readiness := h.checkSMLReadiness(c.Request.Context(), false)
+	if readiness.Ready {
+		return false
+	}
+	h.auditSMLReadinessBlocked(action, targetID, c.GetString("user_id"), c.GetString("trace_id"), via, readiness)
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error":         readiness.Message,
+		"sml_readiness": readiness,
+	})
+	return true
 }
 
 func (h *BillHandler) Retry(c *gin.Context) {
@@ -744,6 +865,9 @@ func (h *BillHandler) Retry(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "only failed/pending/needs_review bills can be sent"})
 		return
 	}
+	if h.blockIfSMLNotReady(c, "sml_readiness_blocked", &bill.ID, "retry") {
+		return
+	}
 
 	// Parse optional request body (party_code / remark overrides for purchase bills)
 	var req RetryRequest
@@ -755,11 +879,22 @@ func (h *BillHandler) Retry(c *gin.Context) {
 		Via:     "retry",
 	})
 	if result.HTTPStatus == http.StatusOK {
-		c.JSON(http.StatusOK, gin.H{"message": result.Message, "doc_no": result.DocNo})
+		resp := gin.H{"message": result.Message, "doc_no": result.DocNo}
+		if len(result.Warnings) > 0 {
+			resp["warnings"] = result.Warnings
+		}
+		if result.LogWarning != "" {
+			resp["sml_log_warning"] = result.LogWarning
+		}
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 	if result.HTTPStatus == http.StatusAccepted {
-		c.JSON(http.StatusAccepted, gin.H{"message": result.Message})
+		resp := gin.H{"message": result.Message}
+		if len(result.Warnings) > 0 {
+			resp["warnings"] = result.Warnings
+		}
+		c.JSON(http.StatusAccepted, resp)
 		return
 	}
 	if result.HTTPStatus == 0 {
@@ -779,6 +914,9 @@ func (h *BillHandler) RegenerateDocNo(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "บิลที่ส่งเข้า SML แล้วไม่ควรออกเลขเอกสารใหม่"})
 		return
 	}
+	if h.blockIfSMLNotReady(c, "sml_readiness_blocked", &bill.ID, "regenerate_doc_no") {
+		return
+	}
 	var def *models.ChannelDefault
 	if h.channelDefaults != nil {
 		def, _ = h.channelDefaults.Get(bill.Source, bill.BillType)
@@ -786,11 +924,13 @@ func (h *BillHandler) RegenerateDocNo(c *gin.Context) {
 	kind, _ := resolveEndpoint(def, bill.Source, bill.BillType)
 	docNo, err := h.allocateFreshDocNo(bill, def, fallbackDocPrefix(kind), kind)
 	if err != nil {
+		h.auditDocNoRegenerateFailed(c, bill, kind, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "ออกเลขเอกสารใหม่ไม่สำเร็จ: " + err.Error()})
 		return
 	}
 	if err := h.billRepo.UpdateStatus(bill.ID, bill.Status, &docNo, nil, nil); err != nil {
 		h.log.Error("regenerate doc_no update bill", zap.String("bill_id", bill.ID), zap.Error(err))
+		h.auditDocNoRegenerateFailed(c, bill, kind, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "บันทึกเลขเอกสารใหม่ไม่สำเร็จ"})
 		return
 	}
@@ -815,6 +955,120 @@ func (h *BillHandler) RegenerateDocNo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"doc_no": docNo, "route": kind})
 }
 
+func (h *BillHandler) LatestDocNo(c *gin.Context) {
+	id := c.Param("id")
+	bill, err := h.billRepo.FindByID(id)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if h.blockIfSMLNotReady(c, "sml_readiness_blocked", &bill.ID, "latest_doc_no") {
+		return
+	}
+	var def *models.ChannelDefault
+	if h.channelDefaults != nil {
+		def, _ = h.channelDefaults.Get(bill.Source, bill.BillType)
+	}
+	kind, _ := resolveEndpoint(def, bill.Source, bill.BillType)
+	docNo, err := h.previewFreshDocNo(bill, def, fallbackDocPrefix(kind), kind)
+	if err != nil {
+		h.auditDocNoPreviewFailed(c, bill, kind, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "ดึงเลขล่าสุดจาก SML ไม่สำเร็จ: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"doc_no": docNo, "route": kind})
+}
+
+func (h *BillHandler) auditDocNoRegenerateFailed(c *gin.Context, bill *models.Bill, route string, err error) {
+	if h.auditRepo == nil || bill == nil || err == nil {
+		return
+	}
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action:   "bill_doc_no_regenerate_failed",
+		TargetID: &bill.ID,
+		UserID:   userID,
+		Source:   "ui",
+		Level:    "error",
+		TraceID:  c.GetString("trace_id"),
+		Detail: map[string]interface{}{
+			"route": route,
+			"error": err.Error(),
+		},
+	})
+}
+
+func (h *BillHandler) auditDocNoPreviewFailed(c *gin.Context, bill *models.Bill, route string, err error) {
+	if h.auditRepo == nil || bill == nil || err == nil {
+		return
+	}
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action:   "bill_doc_no_preview_failed",
+		TargetID: &bill.ID,
+		UserID:   userID,
+		Source:   "ui",
+		Level:    "error",
+		TraceID:  c.GetString("trace_id"),
+		Detail: map[string]interface{}{
+			"route": route,
+			"error": err.Error(),
+		},
+	})
+}
+
+func (h *BillHandler) EnsureShopeeShippingLine(c *gin.Context) {
+	id := c.Param("id")
+	bill, err := h.billRepo.FindByID(id)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	switch bill.Status {
+	case "failed", "pending", "needs_review":
+		// ok
+	default:
+		c.JSON(http.StatusOK, gin.H{"ok": true, "inserted": false})
+		return
+	}
+	item, err := h.ensureShopeeShippingLineForSend(bill)
+	if err != nil {
+		h.log.Warn("ensure shopee shipping line failed",
+			zap.String("bill_id", bill.ID),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "เตรียมรายการค่าขนส่ง Shopee ไม่สำเร็จ: " + err.Error()})
+		return
+	}
+	if item != nil && h.auditRepo != nil {
+		billID := bill.ID
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "shopee_shipping_line_ensured",
+			TargetID: &billID,
+			UserID:   userID,
+			Source:   "ui",
+			Level:    "info",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"item_id":    item.ID,
+				"item_code":  item.ItemCode,
+				"price":      item.Price,
+				"source_sku": item.SourceSKU,
+			},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "inserted": item != nil, "item": item})
+}
+
 func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts retrySendOptions) retrySendResult {
 	if bill == nil {
 		return retrySendResult{HTTPStatus: http.StatusNotFound, Error: "bill not found"}
@@ -835,9 +1089,28 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 	if err := validateRemark2(req.Remark2); err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error()}
 	}
+	readiness := h.checkSMLReadiness(context.Background(), false)
+	if !readiness.Ready {
+		targetID := bill.ID
+		h.auditSMLReadinessBlocked("sml_readiness_blocked", &targetID, opts.UserID, opts.TraceID, opts.Via, readiness)
+		return retrySendResult{
+			HTTPStatus: http.StatusServiceUnavailable,
+			Error:      readiness.Message,
+		}
+	}
+	if _, err := h.ensureShopeeShippingLineForSend(bill); err != nil {
+		h.log.Warn("ensure shopee shipping line for send failed",
+			zap.String("bill_id", bill.ID),
+			zap.Error(err))
+		return retrySendResult{
+			HTTPStatus: http.StatusInternalServerError,
+			Error:      "เตรียมรายการค่าขนส่ง Shopee ไม่สำเร็จ: " + err.Error(),
+		}
+	}
 
 	allMapped := true
 	missingCatalogCode := ""
+	warnings := []hiddenItemCodeWarning{}
 	for _, item := range bill.Items {
 		if !item.Mapped || item.ItemCode == nil || strings.TrimSpace(*item.ItemCode) == "" {
 			allMapped = false
@@ -845,16 +1118,29 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 		}
 		if h.catalogRepo != nil {
 			code := strings.TrimSpace(*item.ItemCode)
-			if cat, _ := h.catalogRepo.GetOne(code); cat == nil {
+			cat, _ := h.catalogRepo.GetOne(code)
+			meta := itemcode.Inspect(code)
+			if cat == nil {
 				missingCatalogCode = code
 				allMapped = false
 				break
+			}
+			if meta.HasHiddenChars {
+				warnings = append(warnings, hiddenWarningFromItem(bill.ID, item, code, meta))
 			}
 		}
 	}
 	if !allMapped {
 		_ = h.billRepo.UpdateStatus(bill.ID, "needs_review", nil, nil, nil)
 		if missingCatalogCode != "" {
+			meta := itemcode.Inspect(missingCatalogCode)
+			if meta.HasHiddenChars {
+				return retrySendResult{
+					HTTPStatus: http.StatusAccepted,
+					Message:    fmt.Sprintf("รหัสสินค้า %s มีอักขระซ่อนและไม่พบในสินค้า SML — ควรเป็น %s", missingCatalogCode, meta.CleanItemCode),
+					Skipped:    true,
+				}
+			}
 			return retrySendResult{
 				HTTPStatus: http.StatusAccepted,
 				Message:    fmt.Sprintf("ไม่พบรหัสสินค้า %s ในสินค้า SML — bill set to needs_review", missingCatalogCode),
@@ -881,12 +1167,119 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 	kind, urlOverride := resolveEndpoint(def, bill.Source, bill.BillType)
 	switch kind {
 	case "purchaseorder":
-		return h.sendPurchaseOrderToSML(bill, req, urlOverride, opts)
+		result := h.sendPurchaseOrderToSML(bill, req, urlOverride, opts)
+		result.Warnings = warnings
+		h.logHiddenItemCodeWarnings(bill, warnings, opts, "sml_send")
+		return result
 	case "saleinvoice":
-		return h.sendSaleInvoiceToSML(bill, req, urlOverride, opts)
+		result := h.sendSaleInvoiceToSML(bill, req, urlOverride, opts)
+		result.Warnings = warnings
+		h.logHiddenItemCodeWarnings(bill, warnings, opts, "sml_send")
+		return result
 	default:
-		return h.sendSaleOrderToSML(bill, req, urlOverride, opts)
+		result := h.sendSaleOrderToSML(bill, req, urlOverride, opts)
+		result.Warnings = warnings
+		h.logHiddenItemCodeWarnings(bill, warnings, opts, "sml_send")
+		return result
 	}
+}
+
+func hiddenWarningFromItem(billID string, item models.BillItem, code string, meta itemcode.Analysis) hiddenItemCodeWarning {
+	return hiddenItemCodeWarning{
+		BillID:        billID,
+		ItemID:        item.ID,
+		RawName:       item.RawName,
+		ItemCode:      code,
+		CleanItemCode: meta.CleanItemCode,
+		Kinds:         meta.Kinds,
+		Message:       fmt.Sprintf("รหัสสินค้า %s มีอักขระซ่อน ควรเป็น %s แต่รหัสนี้มีอยู่ใน SML จึงยังส่งได้", code, meta.CleanItemCode),
+	}
+}
+
+func (h *BillHandler) logHiddenItemCodeWarnings(bill *models.Bill, warnings []hiddenItemCodeWarning, opts retrySendOptions, context string) {
+	if h.auditRepo == nil || len(warnings) == 0 {
+		return
+	}
+	var userID *string
+	if opts.UserID != "" {
+		userID = &opts.UserID
+	}
+	for _, warning := range warnings {
+		targetID := warning.ItemID
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "hidden_item_code_detected",
+			TargetID: &targetID,
+			UserID:   userID,
+			Source:   bill.Source,
+			Level:    "warn",
+			TraceID:  opts.TraceID,
+			Detail: map[string]interface{}{
+				"context":            context,
+				"via":                opts.Via,
+				"bill_id":            bill.ID,
+				"item_id":            warning.ItemID,
+				"raw_name":           warning.RawName,
+				"item_code":          warning.ItemCode,
+				"clean_item_code":    warning.CleanItemCode,
+				"hidden_char_kinds":  warning.Kinds,
+				"bulk_job_id":        opts.BulkJobID,
+				"bulk_job_item_id":   opts.BulkJobItemID,
+				"bulk_item_sequence": opts.BulkItemSequence,
+				"allowed":            true,
+				"reason":             "dirty code exists in SML catalog",
+			},
+		})
+	}
+}
+
+func (h *BillHandler) validateWritableItemCode(c *gin.Context, bill *models.Bill, itemID, code, context string) (itemcode.Analysis, bool) {
+	meta := itemcode.Inspect(code)
+	if !meta.HasHiddenChars {
+		return meta, true
+	}
+	if h.catalogRepo == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":           "item_code has hidden characters but catalog validation is unavailable",
+			"item_code":       code,
+			"clean_item_code": meta.CleanItemCode,
+		})
+		return meta, false
+	}
+	cat, _ := h.catalogRepo.GetOne(code)
+	if cat == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":           "item_code has hidden characters and does not exist in SML catalog",
+			"item_code":       code,
+			"clean_item_code": meta.CleanItemCode,
+		})
+		return meta, false
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		targetID := itemID
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "hidden_item_code_detected",
+			TargetID: &targetID,
+			UserID:   userID,
+			Source:   bill.Source,
+			Level:    "warn",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"context":           context,
+				"bill_id":           bill.ID,
+				"item_id":           itemID,
+				"item_code":         code,
+				"clean_item_code":   meta.CleanItemCode,
+				"hidden_char_kinds": meta.Kinds,
+				"allowed":           true,
+				"reason":            "dirty code exists in SML catalog",
+			},
+		})
+	}
+	return meta, true
 }
 
 func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, urlOverride string, opts retrySendOptions) retrySendResult {
@@ -929,7 +1322,7 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 	if cfg.CustCode == "" {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "กรุณาเลือกลูกค้าก่อนส่ง SML", Route: route}
 	}
-	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+	if err := h.validateResolvedSendFields(cfg.DocFormat, cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
 	}
 
@@ -970,12 +1363,14 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	logWarning := extractSMLERPLogWarning(respJSON)
 	return retrySendResult{
 		HTTPStatus:     http.StatusOK,
 		Message:        "bill sent to SML (saleorder)",
 		DocNo:          docNo,
 		DocNoAttempted: reqDocNo,
 		Route:          route,
+		LogWarning:     logWarning,
 	}
 }
 
@@ -1014,7 +1409,7 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 	if cfg.CustCode == "" {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "กรุณาเลือกลูกค้าก่อนส่ง SML", Route: route}
 	}
-	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+	if err := h.validateResolvedSendFields(cfg.DocFormat, cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
 	}
 	productCache := map[string]*sml.ProductInfo{}
@@ -1065,12 +1460,14 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	logWarning := extractSMLERPLogWarning(respJSON)
 	return retrySendResult{
 		HTTPStatus:     http.StatusOK,
 		Message:        "bill sent to SML (saleinvoice)",
 		DocNo:          docNo,
 		DocNoAttempted: reqDocNo,
 		Route:          route,
+		LogWarning:     logWarning,
 	}
 }
 
@@ -1118,7 +1515,7 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	if cfg.CustCode == "" {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "กรุณาเลือกผู้ขายก่อนส่ง SML", Route: route}
 	}
-	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+	if err := h.validateResolvedSendFields(cfg.DocFormat, cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
 	}
 	inquiryType, err := validatePurchaseInquiryType(req.InquiryType)
@@ -1175,13 +1572,73 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	logWarning := extractSMLERPLogWarning(respJSON)
 	return retrySendResult{
 		HTTPStatus:     http.StatusOK,
 		Message:        "bill sent to SML (purchaseorder)",
 		DocNo:          docNo,
 		DocNoAttempted: reqDocNo,
 		Route:          route,
+		LogWarning:     logWarning,
 	}
+}
+
+func (h *BillHandler) ensureShopeeShippingLineForSend(bill *models.Bill) (*models.BillItem, error) {
+	if !isShopeePurchaseEmailBill(bill) || h.channelDefaults == nil || h.billRepo == nil {
+		return nil, nil
+	}
+	for _, item := range bill.Items {
+		if item.SourceSKU == models.ShopeeShippingSourceSKU {
+			return nil, nil
+		}
+	}
+	rd := rawDataMapFromBill(bill)
+	shippingAmount, ok := rawMoneyField(rd, "shipping_amount")
+	if !ok || shippingAmount < 0 {
+		return nil, nil
+	}
+	def, err := h.channelDefaults.Get(bill.Source, bill.BillType)
+	if err != nil {
+		return nil, err
+	}
+	if def == nil || !def.ShippingItemEnabled {
+		return nil, nil
+	}
+	code := strings.TrimSpace(def.ShippingItemCode)
+	if code == "" {
+		return nil, fmt.Errorf("เปิดใช้ค่าขนส่ง Shopee แต่ยังไม่ได้เลือกสินค้า SML")
+	}
+	unit := strings.TrimSpace(def.ShippingItemUnitCode)
+	rawName := "ค่าจัดส่งสินค้า"
+	if h.catalogRepo != nil {
+		if cat, err := h.catalogRepo.GetOne(code); err == nil && cat != nil {
+			if strings.TrimSpace(cat.ItemName) != "" {
+				rawName = strings.TrimSpace(cat.ItemName)
+			}
+			if unit == "" {
+				unit = strings.TrimSpace(cat.UnitCode)
+			}
+		}
+	}
+	itemCode := code
+	price := shippingAmount
+	item := models.BillItem{
+		BillID:    bill.ID,
+		RawName:   rawName,
+		SourceSKU: models.ShopeeShippingSourceSKU,
+		ItemCode:  &itemCode,
+		Qty:       1,
+		Price:     &price,
+		Mapped:    true,
+	}
+	if unit != "" {
+		item.UnitCode = &unit
+	}
+	if err := h.billRepo.InsertItem(&item); err != nil {
+		return nil, err
+	}
+	bill.Items = append(bill.Items, item)
+	return &bill.Items[len(bill.Items)-1], nil
 }
 
 type smlMessageResponse interface {
@@ -1283,6 +1740,9 @@ func (h *BillHandler) CreateBulkSendJob(c *gin.Context) {
 	}
 	if err := validateBulkSendPayload(req.BillType, req.DocumentRoute, req.Payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if h.blockIfSMLNotReady(c, "sml_readiness_blocked", nil, "bulk_job_create") {
 		return
 	}
 	payloadJSON, _ := json.Marshal(req.Payload)
@@ -1471,6 +1931,9 @@ func (h *BillHandler) RetryFailedBulkSendJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if h.blockIfSMLNotReady(c, "sml_readiness_blocked", nil, "bulk_job_retry_failed") {
+		return
+	}
 	filterJSON := appendRetryOfJob(original.FilterSnapshot, original.ID)
 	newJob, err := h.bulkJobRepo.Create(repository.CreateSMLBulkJobInput{
 		ClientRequestID: req.ClientRequestID,
@@ -1547,6 +2010,12 @@ func (h *BillHandler) runBulkSendJob(jobID string) {
 	userID := ""
 	if job.CreatedBy != nil {
 		userID = *job.CreatedBy
+	}
+	readiness := h.checkSMLReadiness(context.Background(), false)
+	if !readiness.Ready {
+		h.auditSMLReadinessBlocked("sml_readiness_blocked", nil, userID, traceID, "bulk_job", readiness)
+		_ = h.bulkJobRepo.MarkJobFailed(jobID, readiness.Message)
+		return
 	}
 
 	for _, item := range job.Items {
@@ -1725,7 +2194,7 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req Retr
 		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาเลือกลูกค้าก่อนส่ง SML"})
 		return
 	}
-	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+	if err := h.validateResolvedSendFields(cfg.DocFormat, cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -1811,7 +2280,7 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req Re
 		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาเลือกลูกค้าก่อนส่ง SML"})
 		return
 	}
-	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+	if err := h.validateResolvedSendFields(cfg.DocFormat, cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -1910,7 +2379,7 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาเลือกผู้ขายก่อนส่ง SML"})
 		return
 	}
-	if err := h.validateResolvedSendFields(cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
+	if err := h.validateResolvedSendFields(cfg.DocFormat, cfg.WHCode, cfg.ShelfCode, cfg.DocTime, cfg.VATType, cfg.VATRate); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -2084,10 +2553,38 @@ func rawDataMapFromBill(bill *models.Bill) map[string]interface{} {
 	return rd
 }
 
+func rawMoneyField(raw map[string]interface{}, key string) (float64, bool) {
+	if raw == nil {
+		return 0, false
+	}
+	switch v := raw[key].(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		n, err := v.Float64()
+		return n, err == nil
+	case string:
+		clean := strings.TrimSpace(v)
+		clean = strings.TrimPrefix(clean, "฿")
+		clean = strings.ReplaceAll(clean, ",", "")
+		if clean == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(clean, 64)
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-// shopeeSaleOrderConfig returns the static SML 248 saleorder config without
-// CustCode — caller fills it from channel_defaults via lookupChannelDefault.
+// shopeeSaleOrderConfig returns only the technical SML 248 saleorder config.
+// Business send fields are filled from channel_defaults or the visible dialog.
 func (h *BillHandler) shopeeSaleOrderConfig() sml.SaleOrderConfig {
 	return sml.SaleOrderConfig{
 		BaseURL:    h.cfg.ShopeeSMLURL,
@@ -2095,15 +2592,8 @@ func (h *BillHandler) shopeeSaleOrderConfig() sml.SaleOrderConfig {
 		Provider:   h.cfg.ShopeeSMLProvider,
 		ConfigFile: h.cfg.ShopeeSMLConfigFile,
 		Database:   h.cfg.ShopeeSMLDatabase,
-		DocFormat:  h.cfg.ShopeeSMLDocFormat,
-		SaleCode:   h.cfg.ShopeeSMLSaleCode,
-		BranchCode: h.cfg.ShopeeSMLBranchCode,
-		WHCode:     h.cfg.ShopeeSMLWHCode,
-		ShelfCode:  h.cfg.ShopeeSMLShelfCode,
-		UnitCode:   h.cfg.ShopeeSMLUnitCode,
-		VATType:    h.cfg.ShopeeSMLVATType,
-		VATRate:    h.cfg.ShopeeSMLVATRate,
-		DocTime:    h.cfg.ShopeeSMLDocTime,
+		VATType:    -1,
+		VATRate:    -1,
 	}
 }
 
@@ -2114,15 +2604,8 @@ func (h *BillHandler) shopeePurchaseConfig() sml.PurchaseOrderConfig {
 		Provider:   h.cfg.ShopeeSMLProvider,
 		ConfigFile: h.cfg.ShopeeSMLConfigFile,
 		Database:   h.cfg.ShopeeSMLDatabase,
-		DocFormat:  h.cfg.ShippedSMLDocFormat,
-		SaleCode:   h.cfg.ShopeeSMLSaleCode,
-		BranchCode: h.cfg.ShopeeSMLBranchCode,
-		WHCode:     h.cfg.ShopeeSMLWHCode,
-		ShelfCode:  h.cfg.ShopeeSMLShelfCode,
-		UnitCode:   h.cfg.ShopeeSMLUnitCode,
-		VATType:    h.cfg.ShopeeSMLVATType,
-		VATRate:    h.cfg.ShopeeSMLVATRate,
-		DocTime:    h.cfg.ShopeeSMLDocTime,
+		VATType:    -1,
+		VATRate:    -1,
 	}
 }
 
@@ -2160,7 +2643,7 @@ func (h *BillHandler) previewSMLDefaults(def *models.ChannelDefault, billType st
 }
 
 // applyDocumentOverrides overlays per-channel document defaults. Empty means
-// "keep instance/env fallback".
+// "unset"; send validation will ask the admin/user to choose a visible value.
 func applyDocumentOverrides(def *models.ChannelDefault, branch, sale, unit, docTime *string) {
 	if def == nil {
 		return
@@ -2179,9 +2662,8 @@ func applyDocumentOverrides(def *models.ChannelDefault, branch, sale, unit, docT
 	}
 }
 
-// applyChannelOverrides overlays the per-channel WH/Shelf/VAT settings onto
-// the env-derived dst values. Sentinel (empty / -1) means "no override — keep env".
-// Pointer args so we can leave dst untouched when the channel didn't override.
+// applyChannelOverrides overlays the per-channel WH/Shelf/VAT settings. Sentinel
+// (empty / -1) means unset; there is intentionally no hidden env fallback.
 func applyChannelOverrides(def *models.ChannelDefault, wh, shelf *string, vatType *int, vatRate *float64) {
 	if def == nil {
 		return
@@ -2219,8 +2701,8 @@ func applyRetryOverrides(req RetryRequest, wh, shelf *string, vatType *int, vatR
 }
 
 // applyRetryDocumentOverrides overlays one-off document values from the Bill
-// Detail send dialog. Channels intentionally no longer own these fields in
-// Phase 1, so the source of truth is instance/env + this per-bill override.
+// Detail send dialog. These per-bill decisions win over channel config without
+// mutating the saved channel config.
 func applyRetryDocumentOverrides(req RetryRequest, branch, sale, unit, docTime *string) {
 	if req.BranchCode != "" {
 		*branch = req.BranchCode
@@ -2409,7 +2891,51 @@ func (h *BillHandler) recordSuccessForSend(id, source string, respJSON []byte, d
 		DurationMs: &durMs,
 		Detail:     detail,
 	})
+	if warning := extractSMLERPLogWarning(respJSON); warning != "" {
+		warnDetail := map[string]interface{}{
+			"doc_no":         docNo,
+			"route":          route,
+			"message":        warning,
+			"via":            opts.Via,
+			"source_channel": source,
+		}
+		if opts.BulkJobID != "" {
+			warnDetail["bulk_job_id"] = opts.BulkJobID
+		}
+		if opts.BulkJobItemID != "" {
+			warnDetail["bulk_job_item_id"] = opts.BulkJobItemID
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:     "sml_erp_log_warning",
+			TargetID:   &billID,
+			UserID:     userID,
+			Source:     "sml",
+			Level:      "warn",
+			TraceID:    opts.TraceID,
+			DurationMs: &durMs,
+			Detail:     warnDetail,
+		})
+	}
 	h.log.Info("SML bill sent", zap.String("bill", id), zap.String("doc", docNo), zap.String("via", opts.Via))
+}
+
+func extractSMLERPLogWarning(respJSON []byte) string {
+	if len(respJSON) == 0 {
+		return ""
+	}
+	var raw struct {
+		LogWarning string `json:"log_warning"`
+		Data       struct {
+			LogWarning string `json:"log_warning"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respJSON, &raw); err != nil {
+		return ""
+	}
+	if s := strings.TrimSpace(raw.Data.LogWarning); s != "" {
+		return s
+	}
+	return strings.TrimSpace(raw.LogWarning)
 }
 
 func inferSMLFailureCode(msg string) string {
@@ -2462,6 +2988,12 @@ func (h *BillHandler) AddItem(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if req.ItemCode != nil && strings.TrimSpace(*req.ItemCode) != "" {
+		*req.ItemCode = strings.TrimSpace(*req.ItemCode)
+		if _, ok := h.validateWritableItemCode(c, bill, "", *req.ItemCode, "bill_item_add"); !ok {
+			return
+		}
 	}
 
 	mapped := req.ItemCode != nil && *req.ItemCode != ""
@@ -2583,6 +3115,14 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if req.ItemCode != nil {
+		*req.ItemCode = strings.TrimSpace(*req.ItemCode)
+		if *req.ItemCode != "" {
+			if _, ok := h.validateWritableItemCode(c, bill, itemID, *req.ItemCode, "bill_item_update"); !ok {
+				return
+			}
+		}
 	}
 
 	// If user is changing item_code, fill unit_code from catalog if not provided.

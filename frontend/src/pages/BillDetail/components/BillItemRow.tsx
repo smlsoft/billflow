@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Check, CheckCircle2, Edit, Trash2, X } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Check, CheckCircle2, Edit, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -193,18 +193,12 @@ export function BillItemRow({
       ? {
           itemName: pickedMatch.item_name,
           score: pickedMatch.score,
-          catalogPrice: null,
         }
       : matchInfo
   const billPrice = item.price ?? 0
   const discountAmount = item.discount_amount ?? 0
   const grossAmount = (item.qty ?? 0) * billPrice
   const netAmount = Math.max(grossAmount - discountAmount, 0)
-  const catalogPrice = matchInfo.catalogPrice ?? 0
-  const priceMismatch =
-    billPrice > 0 &&
-    catalogPrice > 0 &&
-    Math.abs(billPrice - catalogPrice) / catalogPrice > 0.3
 
   if (!editing) {
     return (
@@ -237,6 +231,15 @@ export function BillItemRow({
             {item.item_code ? (
               <div className="space-y-1">
                 <code className="font-mono text-xs text-foreground">{item.item_code}</code>
+                {item.has_hidden_chars && (
+                  <div
+                    className="inline-flex max-w-full items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning"
+                    title={`รหัสนี้มาจาก SML และมีอักขระมองไม่เห็น${item.clean_item_code ? ` ควรเป็น ${item.clean_item_code}` : ''}`}
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">รหัสมีอักขระซ่อน</span>
+                  </div>
+                )}
                 {needsConfirm && (
                   <div className="inline-flex rounded-md border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
                     ต้องยืนยัน
@@ -259,14 +262,6 @@ export function BillItemRow({
           <TableCell>{item.unit_code || '—'}</TableCell>
           <TableCell className="text-right tabular-nums font-medium">
             ฿{(item.price ?? 0).toLocaleString()}
-            {priceMismatch && (
-              <div
-                className="text-[11px] text-amber-700 mt-0.5"
-                title={`ราคาใน SML ฿${catalogPrice.toLocaleString()} — ต่างจากบิล ${Math.round((Math.abs(billPrice - catalogPrice) / catalogPrice) * 100)}%`}
-              >
-                ราคา SML ฿{catalogPrice.toLocaleString()}
-              </div>
-            )}
           </TableCell>
           {showDiscountColumn && (
             <TableCell className="text-right tabular-nums">

@@ -23,6 +23,8 @@ import { Switch } from '@/components/ui/switch'
 import { UnitSelect } from '@/components/common/UnitSelect'
 import client from '@/api/client'
 import type { CatalogMatch } from '@/types'
+import { SMLMasterCodePicker } from '../BillDetail/components/SMLMasterCodePicker'
+import { ShelfPicker, WarehousePicker } from '../BillDetail/components/WarehousePicker'
 
 interface SmlDocFormat {
   code: string
@@ -69,6 +71,15 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const [shippingItemUnitCode, setShippingItemUnitCode] = useState('')
   const [shippingItemName, setShippingItemName] = useState('')
   const [shippingPickerOpen, setShippingPickerOpen] = useState(false)
+  const [branchCode, setBranchCode] = useState('')
+  const [saleCode, setSaleCode] = useState('')
+  const [unitCode, setUnitCode] = useState('')
+  const [docTime, setDocTime] = useState('')
+  const [whCode, setWhCode] = useState('')
+  const [shelfCode, setShelfCode] = useState('')
+  const [manualWarehouse, setManualWarehouse] = useState(false)
+  const [vatTypeStr, setVatTypeStr] = useState('')
+  const [vatRate, setVatRate] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -90,11 +101,21 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     setShippingItemCode(row.shipping_item_code || '')
     setShippingItemUnitCode(row.shipping_item_unit_code || '')
     setShippingItemName('')
+    setBranchCode(row.branch_code || '')
+    setSaleCode(row.sale_code || '')
+    setUnitCode(row.unit_code || '')
+    setDocTime(row.doc_time || '')
+    setWhCode(row.wh_code || '')
+    setShelfCode(row.shelf_code || '')
+    setManualWarehouse(false)
+    setVatTypeStr(typeof row.vat_type === 'number' && row.vat_type >= 0 ? String(row.vat_type) : '')
+    setVatRate(typeof row.vat_rate === 'number' && row.vat_rate >= 0 ? String(row.vat_rate) : '')
   }, [open, row])
 
   // Fetch doc formats from SML when destination changes; auto-fill prefix + running format from selected format
   useEffect(() => {
     if (!open) return
+    let cancelled = false
     const screenCodeMap: Record<EndpointKind, string> = {
       saleorder: 'SR',
       saleinvoice: 'SI',
@@ -105,6 +126,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     setDocFormatsLoading(true)
     client.get(`/api/sml/doc-formats?screen_code=${screenCode}`)
       .then((res) => {
+        if (cancelled) return
         const formats: SmlDocFormat[] = res.data?.data ?? []
         setDocFormats(formats)
         if (formats.length === 0) return
@@ -117,10 +139,16 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         if (runningFormat) setDocRunningFormat(runningFormat)
       })
       .catch(() => {
+        if (cancelled) return
         setDocFormats([])
       })
-      .finally(() => setDocFormatsLoading(false))
-  }, [open, selectedDestination])
+      .finally(() => {
+        if (!cancelled) setDocFormatsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, selectedDestination, selectedDocFormatCode])
 
   if (!row) return null
 
@@ -139,6 +167,15 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const docRunningFormatTrimmed = docRunningFormat.trim().toUpperCase()
   const shippingItemCodeTrimmed = shippingItemCode.trim()
   const shippingItemUnitCodeTrimmed = shippingItemUnitCode.trim()
+  const branchCodeTrimmed = branchCode.trim()
+  const saleCodeTrimmed = saleCode.trim()
+  const unitCodeTrimmed = unitCode.trim()
+  const docTimeTrimmed = docTime.trim()
+  const whCodeTrimmed = whCode.trim()
+  const shelfCodeTrimmed = shelfCode.trim()
+  const vatTypeValue = vatTypeStr === '' ? -1 : Number(vatTypeStr)
+  const parsedVatRate = Number(vatRate)
+  const vatRateValue = vatRate.trim() === '' || !Number.isFinite(parsedVatRate) ? -1 : parsedVatRate
   const docWarning = docNoPatternWarning(docPrefixTrimmed, docRunningFormatTrimmed)
   const canSave =
     !!selectedDestinationMeta &&
@@ -190,17 +227,17 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         endpoint: selectedDestinationMeta.apiPath,
         doc_prefix: docPrefixTrimmed,
         doc_running_format: docRunningFormatTrimmed,
-        branch_code: '',
-        sale_code: '',
-        unit_code: '',
-        doc_time: '',
+        branch_code: branchCodeTrimmed,
+        sale_code: saleCodeTrimmed,
+        unit_code: unitCodeTrimmed,
+        doc_time: docTimeTrimmed,
         shipping_item_enabled: isShopeePurchase ? shippingEnabled : false,
         shipping_item_code: isShopeePurchase ? shippingItemCodeTrimmed : '',
         shipping_item_unit_code: isShopeePurchase ? shippingItemUnitCodeTrimmed : '',
-        wh_code: '',
-        shelf_code: '',
-        vat_type: -1,
-        vat_rate: -1,
+        wh_code: whCodeTrimmed,
+        shelf_code: shelfCodeTrimmed,
+        vat_type: vatTypeValue,
+        vat_rate: vatRateValue,
       })
       toast.success('บันทึกสำเร็จ')
       onSaved()
@@ -271,7 +308,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
             </div>
 
             <div className="space-y-1.5">
-              <Label>รูปแบบเอกสาร</Label>
+              <Label>รูปแบบเอกสาร (doc_format_code)</Label>
               {docFormatsLoading ? (
                 <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
                   กำลังโหลด...
@@ -316,19 +353,19 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
             <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
               <div className="flex items-center justify-between">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  เลขเอกสาร (doc_no)
+                  เลขเอกสาร SML (doc_no)
                 </div>
                 <span className="text-[10px] text-muted-foreground">ดึงจากรูปแบบเอกสารที่เลือก</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">รหัสขึ้นต้น (prefix)</Label>
+                  <Label className="text-xs text-muted-foreground">รหัสขึ้นต้นเลขเอกสาร (doc_prefix)</Label>
                   <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 font-mono text-sm text-foreground">
                     {docPrefixTrimmed || <span className="text-muted-foreground">—</span>}
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">รูปแบบเลขรัน</Label>
+                  <Label className="text-xs text-muted-foreground">รูปแบบเลขรัน (doc_running_format)</Label>
                   <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 font-mono text-sm text-foreground">
                     {docRunningFormatTrimmed || <span className="text-muted-foreground">—</span>}
                   </div>
@@ -340,6 +377,130 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                   {previewDocNo(docPrefixTrimmed || 'BF', docRunningFormatTrimmed || 'YYMM####')}
                 </code>
               </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  ค่าเริ่มต้นตอนส่ง SML
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  ค่าชุดนี้จะถูกเติมใน dialog ส่งบิลให้ user เห็นก่อนกดยืนยัน ถ้าเว้นว่าง ระบบจะให้ user เลือกเองก่อนส่ง
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">เวลาเอกสาร (doc_time)</Label>
+                  <Input
+                    value={docTime}
+                    onChange={(e) => setDocTime(e.target.value)}
+                    placeholder="เช่น 09:00"
+                    className="font-mono"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">หน่วย fallback (unit_code)</Label>
+                  <UnitSelect
+                    value={unitCode}
+                    onValueChange={setUnitCode}
+                    placeholder="ไม่ระบุหน่วย fallback"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">สาขา (branch_code)</Label>
+                  <SMLMasterCodePicker
+                    kind="branch"
+                    value={branchCode}
+                    onChange={setBranchCode}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">พนักงานขาย (sale_code)</Label>
+                  <SMLMasterCodePicker
+                    kind="sale"
+                    value={saleCode}
+                    onChange={setSaleCode}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="text-xs">คลัง (wh_code)</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-1.5 text-[11px]"
+                      onClick={() => setManualWarehouse((v) => !v)}
+                    >
+                      {manualWarehouse ? 'เลือกจาก SML' : 'พิมพ์รหัสเอง'}
+                    </Button>
+                  </div>
+                  {manualWarehouse ? (
+                    <Input
+                      value={whCode}
+                      onChange={(e) => {
+                        setWhCode(e.target.value.toUpperCase())
+                        setShelfCode('')
+                      }}
+                      placeholder="เช่น WH-01"
+                      className="font-mono"
+                    />
+                  ) : (
+                    <WarehousePicker
+                      value={whCode}
+                      onChange={(warehouse) => {
+                        setWhCode(warehouse.code)
+                        setShelfCode('')
+                      }}
+                    />
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">พื้นที่เก็บ (shelf_code)</Label>
+                  {manualWarehouse ? (
+                    <Input
+                      value={shelfCode}
+                      onChange={(e) => setShelfCode(e.target.value.toUpperCase())}
+                      placeholder="เช่น SH-01"
+                      className="font-mono"
+                    />
+                  ) : (
+                    <ShelfPicker
+                      warehouseCode={whCode}
+                      value={shelfCode}
+                      onChange={(shelf) => setShelfCode(shelf.code)}
+                    />
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">ประเภทภาษี (vat_type)</Label>
+                  <Select value={vatTypeStr} onValueChange={setVatTypeStr}>
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="ไม่ระบุ" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0 — แยกนอก</SelectItem>
+                      <SelectItem value="1">1 — รวมใน</SelectItem>
+                      <SelectItem value="2">2 — ศูนย์%</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">อัตราภาษี (vat_rate)</Label>
+                  <Input
+                    value={vatRate}
+                    onChange={(e) => setVatRate(e.target.value)}
+                    placeholder="เช่น 7"
+                    inputMode="decimal"
+                    className="font-mono"
+                  />
+                </div>
+              </div>
+              {(!docTimeTrimmed || !whCodeTrimmed || !shelfCodeTrimmed || vatTypeStr === '' || vatRateValue < 0) && (
+                <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
+                  ยังตั้งค่า default สำหรับส่ง SML ไม่ครบ บันทึกได้ แต่ตอนส่งบิล user ต้องเลือกค่าที่ขาดก่อนยืนยัน
+                </div>
+              )}
             </div>
 
             {isShopeePurchase && (

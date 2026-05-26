@@ -270,7 +270,8 @@ func (pc *PartyCache) FindByExactName(billType, name string) *Party {
 //	 70  code contains query
 //	 60  name starts with query
 //	 40  name contains query
-//	 20  tax_id contains query
+//	 30  English name contains query
+//	 20  tax_id/card_id contains query
 //
 // Strings are compared case-insensitive for ASCII; Thai is left as-is
 // (Thai has no case so strings.Contains works directly).
@@ -299,7 +300,9 @@ func (pc *PartyCache) Search(billType, query string, limit int) []Party {
 	for _, p := range src {
 		code := strings.ToLower(p.Code)
 		name := strings.ToLower(p.Name)
+		nameEng := strings.ToLower(p.NameEng1)
 		taxID := strings.ToLower(p.TaxID)
+		cardID := strings.ToLower(p.CardID)
 
 		score := 0
 		switch {
@@ -325,7 +328,13 @@ func (pc *PartyCache) Search(billType, query string, limit int) []Party {
 		if score == 0 && strings.Contains(p.Name, query) {
 			score = 40
 		}
+		if score == 0 && nameEng != "" && strings.Contains(nameEng, q) {
+			score = 30
+		}
 		if score == 0 && taxID != "" && strings.Contains(taxID, q) {
+			score = 20
+		}
+		if score == 0 && cardID != "" && strings.Contains(cardID, q) {
 			score = 20
 		}
 		if score > 0 {

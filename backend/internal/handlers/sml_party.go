@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -53,8 +54,21 @@ func (h *SMLPartyHandler) SearchSuppliers(c *gin.Context) {
 }
 
 type createPartyRequest struct {
-	Code  string `json:"code" binding:"required"`
-	Name1 string `json:"name_1" binding:"required"`
+	Code       string `json:"code" binding:"required"`
+	Name1      string `json:"name_1"`
+	ARStatus   *int   `json:"ar_status"`
+	FirstName  string `json:"first_name"`
+	LastName   string `json:"last_name"`
+	APStatus   *int   `json:"ap_status"`
+	Firstname  string `json:"firstname"`
+	Lastname   string `json:"lastname"`
+	NameEng1   string `json:"name_eng_1"`
+	Address    string `json:"address"`
+	Remark     string `json:"remark"`
+	TaxID      string `json:"tax_id"`
+	BranchType *int   `json:"branch_type"`
+	BranchCode string `json:"branch_code"`
+	CardID     string `json:"card_id"`
 }
 
 func (h *SMLPartyHandler) search(c *gin.Context, billType string) {
@@ -75,14 +89,17 @@ func (h *SMLPartyHandler) search(c *gin.Context, billType string) {
 	if billType == "purchase" {
 		total = status.Suppliers
 	}
-	c.JSON(http.StatusOK, gin.H{
+	out := gin.H{
 		"data":         results,
 		"total":        total,
 		"last_sync":    nullableTime(status.LastSync),
 		"last_attempt": nullableTime(status.LastAttempt),
 		"status":       status.Status,
-		"error":        status.Error,
-	})
+	}
+	if status.Error != "" {
+		out["error"] = sml.HumanizeConnectionError(status.Error)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *SMLPartyHandler) CreateCustomer(c *gin.Context) {
@@ -103,10 +120,24 @@ func (h *SMLPartyHandler) create(c *gin.Context, billType string) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.Code != strings.TrimSpace(req.Code) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "รหัสห้ามมีช่องว่างหน้า/หลัง"})
+		return
+	}
 	req.Code = strings.TrimSpace(req.Code)
 	req.Name1 = strings.TrimSpace(req.Name1)
-	if req.Code == "" || req.Name1 == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "code and name_1 are required"})
+	req.FirstName = strings.TrimSpace(req.FirstName)
+	req.LastName = strings.TrimSpace(req.LastName)
+	req.Firstname = strings.TrimSpace(req.Firstname)
+	req.Lastname = strings.TrimSpace(req.Lastname)
+	req.NameEng1 = strings.TrimSpace(req.NameEng1)
+	req.Address = strings.TrimSpace(req.Address)
+	req.Remark = strings.TrimSpace(req.Remark)
+	req.TaxID = strings.TrimSpace(req.TaxID)
+	req.BranchCode = strings.TrimSpace(req.BranchCode)
+	req.CardID = strings.TrimSpace(req.CardID)
+	if req.Code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณากรอกรหัส"})
 		return
 	}
 
@@ -116,9 +147,35 @@ func (h *SMLPartyHandler) create(c *gin.Context, billType string) {
 	var statusCode int
 	var err error
 	if billType == "purchase" {
-		statusCode, party, err = h.client.CreateSupplier(ctx, req.Code, req.Name1)
+		statusCode, party, err = h.client.CreateSupplier(ctx, sml.SupplierCreateInput{
+			Code:       req.Code,
+			APStatus:   req.APStatus,
+			Firstname:  req.Firstname,
+			Lastname:   req.Lastname,
+			Name1:      req.Name1,
+			NameEng1:   req.NameEng1,
+			Address:    req.Address,
+			Remark:     req.Remark,
+			TaxID:      req.TaxID,
+			BranchType: req.BranchType,
+			BranchCode: req.BranchCode,
+			CardID:     req.CardID,
+		})
 	} else {
-		statusCode, party, err = h.client.CreateCustomer(ctx, req.Code, req.Name1)
+		statusCode, party, err = h.client.CreateCustomer(ctx, sml.CustomerCreateInput{
+			Code:       req.Code,
+			ARStatus:   req.ARStatus,
+			FirstName:  req.FirstName,
+			LastName:   req.LastName,
+			Name1:      req.Name1,
+			NameEng1:   req.NameEng1,
+			Address:    req.Address,
+			Remark:     req.Remark,
+			TaxID:      req.TaxID,
+			BranchType: req.BranchType,
+			BranchCode: req.BranchCode,
+			CardID:     req.CardID,
+		})
 	}
 	if err != nil {
 		if statusCode == http.StatusConflict {
@@ -150,16 +207,24 @@ func (h *SMLPartyHandler) create(c *gin.Context, billType string) {
 		if billType == "purchase" {
 			action = "sml_supplier_created"
 		}
+		detail := map[string]interface{}{
+			"code": party.Code,
+			"name": party.Name,
+		}
+		if billType == "purchase" {
+			detail["ap_status"] = party.APStatus
+			detail["branch_type"] = party.BranchType
+		} else {
+			detail["ar_status"] = party.ARStatus
+			detail["branch_type"] = party.BranchType
+		}
 		_ = h.auditRepo.Log(models.AuditEntry{
 			Action:  action,
 			UserID:  userID,
 			Source:  "ui",
 			Level:   "info",
 			TraceID: c.GetString("trace_id"),
-			Detail: map[string]interface{}{
-				"code": party.Code,
-				"name": party.Name,
-			},
+			Detail:  detail,
 		})
 	}
 	c.JSON(http.StatusCreated, gin.H{"party": party})
@@ -175,8 +240,9 @@ func (h *SMLPartyHandler) Refresh(c *gin.Context) {
 	defer cancel()
 	if err := h.cache.RefreshNow(ctx); err != nil {
 		status := h.cache.Status()
+		msg := sml.HumanizeConnectionError(err.Error())
 		c.JSON(http.StatusBadGateway, gin.H{
-			"error":        "ดึงรายชื่อลูกค้า/ผู้ขายจาก SML ไม่สำเร็จ: " + err.Error(),
+			"error":        "ดึงรายชื่อลูกค้า/ผู้ขายจาก SML ไม่สำเร็จ: " + msg,
 			"customers":    status.Customers,
 			"suppliers":    status.Suppliers,
 			"last_sync":    nullableTime(status.LastSync),
@@ -208,14 +274,17 @@ func (h *SMLPartyHandler) LastSync(c *gin.Context) {
 		return
 	}
 	status := h.cache.Status()
-	c.JSON(http.StatusOK, gin.H{
+	out := gin.H{
 		"customers":    status.Customers,
 		"suppliers":    status.Suppliers,
 		"last_sync":    nullableTime(status.LastSync),
 		"last_attempt": nullableTime(status.LastAttempt),
 		"status":       status.Status,
-		"error":        status.Error,
-	})
+	}
+	if status.Error != "" {
+		out["error"] = sml.HumanizeConnectionError(status.Error)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func nullableTime(t time.Time) any {
@@ -232,6 +301,23 @@ type DocFormatItem struct {
 	Name2      string `json:"name_2"`
 	Format     string `json:"format"`
 	ScreenCode string `json:"screen_code"`
+}
+
+type SMLMasterItem struct {
+	Code  string `json:"code"`
+	Name1 string `json:"name_1"`
+}
+
+type smlProxyErrorBody struct {
+	Code    string      `json:"code"`
+	Message string      `json:"message"`
+	Details interface{} `json:"details"`
+}
+
+type smlMasterPageMeta struct {
+	Total int `json:"total"`
+	Page  int `json:"page"`
+	Size  int `json:"size"`
 }
 
 // GET /api/sml/doc-formats?screen_code=PO|SI|SR
@@ -287,4 +373,82 @@ func (h *SMLPartyHandler) DocFormats(c *gin.Context) {
 		result.Data = []DocFormatItem{}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": result.Data})
+}
+
+// GET /api/sml/branches?search=&limit=
+func (h *SMLPartyHandler) Branches(c *gin.Context) {
+	h.proxyERPMaster(c, "/api/v1/erp/branches")
+}
+
+// GET /api/sml/sales?search=&limit=
+func (h *SMLPartyHandler) Sales(c *gin.Context) {
+	h.proxyERPMaster(c, "/api/v1/erp/users")
+}
+
+func (h *SMLPartyHandler) proxyERPMaster(c *gin.Context, upstreamPath string) {
+	if h.smlBaseURL == "" || h.smlGUID == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML REST URL ยังไม่ได้ตั้งค่า"})
+		return
+	}
+
+	q := url.Values{}
+	q.Set("page", "1")
+	q.Set("size", strconv.Itoa(queryLimit(c, 20, 100)))
+	if search := strings.TrimSpace(c.Query("search")); search != "" {
+		q.Set("search", search)
+	}
+	targetURL := h.smlBaseURL + upstreamPath + "?" + q.Encode()
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	req.Header.Set("x-api-key", h.smlGUID)
+	if h.smlTenant != "" {
+		req.Header.Set("x-tenant", h.smlTenant)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "เรียก SML ไม่สำเร็จ: " + sml.HumanizeConnectionError(err.Error())})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		Success bool               `json:"success"`
+		Data    []SMLMasterItem    `json:"data"`
+		Meta    smlMasterPageMeta  `json:"meta"`
+		Error   *smlProxyErrorBody `json:"error"`
+		Message string             `json:"message"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "อ่านข้อมูล master จาก SML ไม่สำเร็จ"})
+		return
+	}
+	if resp.StatusCode >= 400 || !result.Success {
+		msg := result.Message
+		if result.Error != nil && result.Error.Message != "" {
+			msg = strings.TrimSpace(result.Error.Code + " " + result.Error.Message + " " + fmt.Sprint(result.Error.Details))
+		}
+		if msg == "" {
+			msg = strings.TrimSpace(string(body))
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "ดึงข้อมูล master จาก SML ไม่สำเร็จ: " + sml.HumanizeConnectionError(msg)})
+		return
+	}
+	if result.Data == nil {
+		result.Data = []SMLMasterItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"data":  result.Data,
+		"total": result.Meta.Total,
+		"page":  result.Meta.Page,
+		"size":  result.Meta.Size,
+	})
 }

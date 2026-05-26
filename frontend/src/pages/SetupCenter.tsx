@@ -38,6 +38,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { PageHeader } from '@/components/common/PageHeader'
 import { cn } from '@/lib/utils'
+import type { SMLReadiness } from '@/types'
 
 type SetupStep = {
   key: string
@@ -96,6 +97,7 @@ type SetupStatus = {
   system: SetupSystem
   documents: SetupCounters
   imports: ImportCounters
+  sml_readiness?: SMLReadiness
 }
 
 const iconByStep: Record<string, typeof ServerCog> = {
@@ -163,10 +165,10 @@ export default function SetupCenter() {
   const [resetDocCounter, setResetDocCounter] = useState(false)
   const [resetEmailDedup, setResetEmailDedup] = useState(false)
 
-  const load = async () => {
+  const load = async (forceSML = false) => {
     setLoading(true)
     try {
-      const res = await client.get<SetupStatus>('/api/setup/status')
+      const res = await client.get<SetupStatus>(forceSML ? '/api/setup/status?refresh_sml=1' : '/api/setup/status')
       setStatus(res.data)
     } catch (e: any) {
       toast.error('โหลดสถานะระบบไม่สำเร็จ: ' + (e?.response?.data?.error ?? e?.message ?? 'unknown'))
@@ -186,6 +188,7 @@ export default function SetupCenter() {
   const pct = status ? Math.round((status.blocking_ready_count / Math.max(status.blocking_total_count, 1)) * 100) : 0
   const docs = status?.documents
   const imports = status?.imports
+  const smlReadiness = status?.sml_readiness
   const workPending = (docs?.pending ?? 0) + (docs?.needs_review ?? 0) + (docs?.failed ?? 0)
   const hasWorkPending = !!status?.ready && workPending > 0
 
@@ -227,7 +230,7 @@ export default function SetupCenter() {
         description="ตรวจความพร้อมร้านและจัดการข้อมูลทดสอบก่อนเริ่มใช้งานจริง"
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading}>
               <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               ตรวจใหม่
             </Button>
@@ -318,6 +321,14 @@ export default function SetupCenter() {
             <InfoRow label="ร้าน" value={status?.system?.instance_name ?? 'BillFlow'} />
             <InfoRow label="รหัสร้าน" value={status?.system?.instance_slug ?? 'default'} />
             <InfoRow label="ฐานข้อมูล SML" value={status?.system?.sml_database ?? '-'} />
+            <InfoRow
+              label="สถานะ SML"
+              value={
+                smlReadiness?.ready
+                  ? 'พร้อมใช้งาน'
+                  : smlReadiness?.message ?? 'ยังไม่ได้ตรวจ'
+              }
+            />
             <InfoRow label="AI ที่ใช้งาน" value={status?.system?.openrouter_model ?? '-'} />
           </CardContent>
         </Card>

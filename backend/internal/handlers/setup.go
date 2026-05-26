@@ -11,6 +11,7 @@ import (
 	"billflow/internal/config"
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/sml"
 )
 
 type SetupHandler struct {
@@ -18,11 +19,12 @@ type SetupHandler struct {
 	cfg         *config.Config
 	appSettings *repository.AppSettingsRepo
 	auditRepo   *repository.AuditLogRepo
+	smlReady    *sml.ReadinessChecker
 	logger      *zap.Logger
 }
 
-func NewSetupHandler(db *sql.DB, cfg *config.Config, appSettings *repository.AppSettingsRepo, auditRepo *repository.AuditLogRepo, logger *zap.Logger) *SetupHandler {
-	return &SetupHandler{db: db, cfg: cfg, appSettings: appSettings, auditRepo: auditRepo, logger: logger}
+func NewSetupHandler(db *sql.DB, cfg *config.Config, appSettings *repository.AppSettingsRepo, auditRepo *repository.AuditLogRepo, smlReady *sml.ReadinessChecker, logger *zap.Logger) *SetupHandler {
+	return &SetupHandler{db: db, cfg: cfg, appSettings: appSettings, auditRepo: auditRepo, smlReady: smlReady, logger: logger}
 }
 
 func (h *SetupHandler) Status(c *gin.Context) {
@@ -45,7 +47,21 @@ func (h *SetupHandler) Status(c *gin.Context) {
 		"sml.config_file",
 		"sml.database",
 	})
-	smlReady := len(smlMissing) == 0 && !pendingRestart
+	smlReadiness := sml.ReadinessStatus{
+		Configured: len(smlMissing) == 0,
+		Ready:      len(smlMissing) == 0,
+		Status:     "not_configured",
+		Tenant:     runtime["sml.database"],
+		Message:    "ยังไม่ได้ตั้งค่า SML REST URL, API key หรือฐานข้อมูลร้าน",
+	}
+	if h.smlReady != nil {
+		smlReadiness = h.smlReady.Check(c.Request.Context(), c.Query("refresh_sml") == "1")
+	}
+	smlReady := len(smlMissing) == 0 && !pendingRestart && smlReadiness.Ready
+	smlStatus := statusText(smlReady, pendingRestart)
+	if len(smlMissing) == 0 && !pendingRestart && !smlReadiness.Ready {
+		smlStatus = smlReadiness.Message
+	}
 
 	channelReady, channelMissing := h.channelReady()
 	emailReady, emailDetail := h.emailReady()
@@ -66,7 +82,7 @@ func (h *SetupHandler) Status(c *gin.Context) {
 			"description": "กรอก SML REST URL, GUID, Provider, Config file และ Database ของร้านนี้",
 			"href":        "/settings/instance",
 			"ready":       smlReady,
-			"status":      statusText(smlReady, pendingRestart),
+			"status":      smlStatus,
 			"missing":     smlMissing,
 			"blocking":    true,
 		},
@@ -142,6 +158,7 @@ func (h *SetupHandler) Status(c *gin.Context) {
 		"pending_restart":          pendingRestart,
 		"pending_restart_settings": pendingKeys,
 		"steps":                    steps,
+		"sml_readiness":            smlReadiness,
 		"system":                   system,
 		"documents":                docCounts,
 		"imports":                  importCounts,

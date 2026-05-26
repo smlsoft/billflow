@@ -405,7 +405,7 @@ func (h *EmailHandler) saveShopeeShippedEmailArtifacts(billID, subject, from, bo
 }
 
 func (h *EmailHandler) configuredShopeeShippingLine(orderID string, amount float64, hasAmount bool) (*models.BillItem, bool) {
-	if !hasAmount || amount <= 0 || h.channelDefaults == nil {
+	if !hasAmount || amount < 0 || h.channelDefaults == nil {
 		return nil, false
 	}
 	def, err := h.channelDefaults.Get("shopee_shipped", "purchase")

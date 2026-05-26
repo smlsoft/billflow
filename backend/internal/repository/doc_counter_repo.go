@@ -101,6 +101,13 @@ func (r *DocCounterRepo) GenerateDocNoAtLeast(prefix, format string, now time.Ti
 	return renderDocNoFromSeq(prefix, format, now, seq), nil
 }
 
+// RenderDocNoFromSeq renders a doc_no for a known sequence without reading or
+// mutating doc_counters. Use this for SML-authoritative preview only; sending
+// still must reserve through GenerateDocNo/GenerateDocNoAtLeast.
+func RenderDocNoFromSeq(prefix, format string, now time.Time, seq int) string {
+	return renderDocNoFromSeq(prefix, format, now, seq)
+}
+
 // PeekDocNo renders the next doc_no without incrementing/reserving the
 // sequence. It is for UI preview only; GenerateDocNo remains the source of
 // truth when sending.

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { DetailPageSkeleton } from '@/components/common/LoadingSkeleton'
 import type { BillItem } from '@/types'
@@ -15,8 +16,25 @@ import { BillTimeline } from './components/BillTimeline'
 import { ArtifactList } from './components/ArtifactList'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
 import { SendPurchaseDialog } from './components/SendPurchaseDialog'
+import { SMLSendProgressDialog, type SMLSendProgressStatus } from './components/SMLSendProgressDialog'
 import { validateForSML } from './utils/validation'
 import type { RetryBillPayload } from '@/hooks/useBills'
+import { useSMLReadiness } from '@/hooks/useSMLReadiness'
+import { humanizeSMLConnectionError, isSMLReady, smlBlockedMessage } from '@/lib/sml-readiness'
+
+type SingleSMLSendResult = {
+  docNo?: string | null
+  bill?: {
+    sml_doc_no?: string | null
+  } | null
+}
+
+type SendProgressState = {
+  open: boolean
+  status: SMLSendProgressStatus
+  docNo: string | null
+  error: string | null
+}
 
 export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
@@ -27,14 +45,17 @@ export default function BillDetail() {
     loading,
     retrying,
     regeneratingDocNo,
+    refreshingDocNo,
     retryError,
     reloadBill,
     handleRetry,
     handleRetryWithOverride,
     handleRegenerateDocNo,
+    handleFetchLatestDocNo,
     setBill,
   } =
     useBillData(id)
+  const { readiness: smlReadiness, loading: smlReadinessLoading } = useSMLReadiness()
 
   // ⚠ All hooks must be declared BEFORE any early return. React tracks hooks
   // by call order; conditional early returns make the count vary between
@@ -50,6 +71,12 @@ export default function BillDetail() {
   // sendDialogOpen — SML 248 documents show a dialog (party picker + WH/VAT)
   // before the retry call, so admin can override per-bill send values.
   const [sendDialogOpen, setSendDialogOpen] = useState(false)
+  const [sendProgress, setSendProgress] = useState<SendProgressState>({
+    open: false,
+    status: 'sending',
+    docNo: null,
+    error: null,
+  })
 
   // Frontend-side validation against backend retry rules. Memo on `bill`
   // so BillTotal/BillItemRow don't recompute on unrelated parent renders.
@@ -82,17 +109,49 @@ export default function BillDetail() {
   }
 
   // Marketplace purchase/sale documents need explicit per-bill SML values.
+  const runSingleSMLSend = async (runner: () => Promise<SingleSMLSendResult | void>) => {
+    if (retrying || (sendProgress.status === 'sending' && sendProgress.open)) return
+    setSendProgress({ open: true, status: 'sending', docNo: null, error: null })
+    try {
+      const result = await runner()
+      setSendProgress({
+        open: true,
+        status: 'success',
+        docNo: result?.docNo || result?.bill?.sml_doc_no || null,
+        error: null,
+      })
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'ส่ง SML ไม่สำเร็จ'
+      setSendProgress({
+        open: true,
+        status: 'error',
+        docNo: null,
+        error: humanizeSMLConnectionError(message),
+      })
+    }
+  }
+
   const handleSendClick = () => {
+    if (retrying || (sendProgress.status === 'sending' && sendProgress.open)) return
+    if (!isSMLReady(smlReadiness)) {
+      toast.error('ยังส่ง SML ไม่ได้', {
+        description: smlBlockedMessage(smlReadiness),
+      })
+      return
+    }
     if (bill?.bill_type === 'purchase' || (bill?.bill_type === 'sale' && (bill?.source === 'shopee' || bill?.source === 'lazada' || bill?.source === 'tiktok'))) {
       setSendDialogOpen(true)
     } else {
-      handleRetry()
+      void runSingleSMLSend(() => handleRetry())
     }
   }
 
   const handlePurchaseConfirm = async (body: RetryBillPayload) => {
     setSendDialogOpen(false)
-    await handleRetryWithOverride(body)
+    await runSingleSMLSend(() => handleRetryWithOverride(body))
   }
 
   if (loading) {
@@ -165,6 +224,7 @@ export default function BillDetail() {
           retryError={retryError}
           regeneratingDocNo={regeneratingDocNo}
           onRegenerateDocNo={handleRegenerateDocNo}
+          smlReadiness={smlReadiness}
         />
       )}
 
@@ -178,6 +238,8 @@ export default function BillDetail() {
         expectedRoute={bill.preview?.route}
         expectedEndpoint={bill.preview?.endpoint}
         expectedDocFormat={bill.preview?.doc_format}
+        smlReadiness={smlReadiness}
+        smlReadinessLoading={smlReadinessLoading}
       />
 
       <BillItemsTable
@@ -219,10 +281,19 @@ export default function BillDetail() {
           bill={bill}
           onConfirm={handlePurchaseConfirm}
           onCancel={() => setSendDialogOpen(false)}
-          onRegenerateDocNo={handleRegenerateDocNo}
-          regeneratingDocNo={regeneratingDocNo}
+          onRegenerateDocNo={handleFetchLatestDocNo}
+          regeneratingDocNo={refreshingDocNo}
+          smlReadiness={smlReadiness}
+          smlReadinessLoading={smlReadinessLoading}
         />
       )}
+      <SMLSendProgressDialog
+        open={sendProgress.open}
+        status={sendProgress.status}
+        docNo={sendProgress.docNo}
+        error={sendProgress.error}
+        onClose={() => setSendProgress((prev) => ({ ...prev, open: false }))}
+      />
     </div>
   )
 }

@@ -8,6 +8,7 @@ import BillStatusBadge from '@/components/BillStatusBadge'
 import type { Bill } from '@/types'
 import { isShopeeSalesBill, rawNumber, rawString, shopeeOrderID } from '@/lib/shopeeBill'
 import { SOURCE_LABELS } from '../utils/formatters'
+import { hasInvalidPrice } from '../utils/validation'
 
 interface Props {
   bill: Bill
@@ -41,7 +42,7 @@ export function BillHeader({ bill }: Props) {
   const rawItemCount = rawNumber(rawData, 'item_count')
   const itemCount = bill.items?.length ?? 0
   const issueCount = (bill.items ?? []).filter((item) => {
-    return !item.item_code || !item.unit_code || !item.qty || item.qty <= 0 || item.price == null || item.price <= 0
+    return !item.item_code || !item.unit_code || !item.qty || item.qty <= 0 || hasInvalidPrice(item)
   }).length
 
   return (

@@ -13,6 +13,7 @@ import (
 
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/itemcode"
 )
 
 const EmbeddingModel = "openai/text-embedding-3-small"
@@ -262,6 +263,7 @@ func (idx *CatalogIndex) Reload(repo *repository.SMLCatalogRepo) error {
 		if d.Price != nil {
 			price = *d.Price
 		}
+		codeMeta := itemcode.Inspect(d.ItemCode)
 		items = append(items, indexedItem{
 			CatalogMatch: models.CatalogMatch{
 				ItemCode:             d.ItemCode,
@@ -275,6 +277,8 @@ func (idx *CatalogIndex) Reload(repo *repository.SMLCatalogRepo) error {
 				PrimaryImageRoworder: d.PrimaryImageRoworder,
 				PrimaryImageGuid:     d.PrimaryImageGuid,
 				PrimaryImageBytes:    d.PrimaryImageBytes,
+				HasHiddenChars:       codeMeta.HasHiddenChars,
+				CleanItemCode:        codeMeta.CleanItemCode,
 			},
 			embedding: d.Embedding,
 		})

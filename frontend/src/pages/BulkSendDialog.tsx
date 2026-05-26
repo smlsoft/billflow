@@ -22,8 +22,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { PartyPicker, type Party } from '@/pages/ChannelDefaults/PartyPicker'
+import type { ChannelDefaultRow } from '@/pages/ChannelDefaults/labels'
+import { SMLMasterCodePicker } from '@/pages/BillDetail/components/SMLMasterCodePicker'
 import { ShelfPicker, WarehousePicker } from '@/pages/BillDetail/components/WarehousePicker'
-import { REMARK2_NONE, SML_REMARK2_OPTIONS, normalizeRemark2, remark2Label, remark2PayloadValue } from '@/lib/smlRemark2'
+import { REMARK2_NONE, normalizeRemark2, remark2PayloadValue } from '@/lib/smlRemark2'
+import { isSMLReady, smlBlockedMessage, humanizeSMLConnectionError } from '@/lib/sml-readiness'
 import {
   createBulkSendJob,
   getActiveBulkSendJob,
@@ -33,6 +36,7 @@ import {
   type BulkSendJob,
   type RetryBillPayload,
 } from '@/hooks/useBills'
+import { useSMLReadiness } from '@/hooks/useSMLReadiness'
 import type { Bill } from '@/types'
 import { validateForSML, issueLabel } from '@/pages/BillDetail/utils/validation'
 
@@ -45,7 +49,22 @@ function currentTimeHHMM() {
 
 function errorMessage(err: unknown) {
   const maybe = err as { response?: { data?: { error?: string } }; message?: string }
-  return maybe.response?.data?.error ?? maybe.message ?? 'ส่งไม่สำเร็จ'
+  return humanizeSMLConnectionError(maybe.response?.data?.error ?? maybe.message ?? 'ส่งไม่สำเร็จ')
+}
+
+function channelDefaultPayload(row?: ChannelDefaultRow): RetryBillPayload | undefined {
+  if (!row) return undefined
+  return {
+    party_code: row.party_code || undefined,
+    party_name: row.party_name || undefined,
+    branch_code: row.branch_code || undefined,
+    sale_code: row.sale_code || undefined,
+    unit_code: row.unit_code || undefined,
+    wh_code: row.wh_code || undefined,
+    shelf_code: row.shelf_code || undefined,
+    vat_type: typeof row.vat_type === 'number' && row.vat_type >= 0 ? row.vat_type : undefined,
+    vat_rate: typeof row.vat_rate === 'number' && row.vat_rate >= 0 ? row.vat_rate : undefined,
+  }
 }
 
 function isActiveJob(job: BulkSendJob | null) {
@@ -64,6 +83,24 @@ function jobItemResult(status?: string): 'sent' | 'failed' | 'skipped' | undefin
   if (status === 'failed') return 'failed'
   if (status === 'skipped') return 'skipped'
   return undefined
+}
+
+function bulkJobTitle(job: BulkSendJob | null, active: boolean) {
+  if (!job) return ''
+  if (active) return 'กำลังส่ง SML แบบหลายรายการ'
+  if (job.status === 'completed') return 'ส่ง SML แบบหลายรายการเสร็จแล้ว'
+  if (job.status === 'completed_with_errors') return 'ส่งเสร็จแล้ว แต่มีรายการไม่สำเร็จ'
+  return 'Bulk send หยุดด้วยข้อผิดพลาด'
+}
+
+function bulkJobDescription(job: BulkSendJob | null, active: boolean) {
+  if (!job) return ''
+  if (active) return 'ระบบกำลังส่งทีละบิล ปิด dialog นี้ได้ งานจะยังทำต่อและกลับมาเปิดดูผลได้'
+  if (job.status === 'completed') return 'ระบบบันทึกผลสำเร็จและอัปเดตรายการแล้ว'
+  if (job.status === 'completed_with_errors') return 'ตรวจรายการที่ไม่สำเร็จด้านล่าง แล้ว retry เฉพาะรายการนั้นได้'
+  return job.last_error
+    ? humanizeSMLConnectionError(job.last_error)
+    : 'ตรวจ error ด้านล่าง แล้วลองส่งใหม่หลังแก้สาเหตุ'
 }
 
 function newClientRequestID() {
@@ -161,6 +198,8 @@ type DisplayRow = Candidate & {
   jobStatus?: string
 }
 
+type BulkDialogMode = 'setup' | 'progress'
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -189,7 +228,7 @@ export function BulkSendDialog({
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [party, setParty] = useState<Party | null>(null)
-  const [docTime, setDocTime] = useState(currentTimeHHMM())
+  const [docTime, setDocTime] = useState(currentTimeHHMM)
   const [whCode, setWhCode] = useState('')
   const [shelfCode, setShelfCode] = useState('')
   const [manualWarehouse, setManualWarehouse] = useState(false)
@@ -204,12 +243,16 @@ export function BulkSendDialog({
   const [totalPending, setTotalPending] = useState(0)
   const [job, setJob] = useState<BulkSendJob | null>(null)
   const [jobError, setJobError] = useState('')
+  const [showSlowHint, setShowSlowHint] = useState(false)
+  const [mode, setMode] = useState<BulkDialogMode>('setup')
+  const { readiness: smlReadiness, loading: smlReadinessLoading } = useSMLReadiness()
   const storageKey = useMemo(() => bulkJobStorageKey(filters), [filters.source, filters.bill_type, filters.document_route, filters.shopee_shop_id])
 
   const readyCount = candidates.filter((c) => c.ready).length
   const skippedCount = candidates.length - readyCount
   const activeJob = isActiveJob(job)
   const controlsLocked = sending || activeJob
+  const sendingOrActive = sending || activeJob
   const jobItems = job?.items ?? []
   const jobItemByBillID = useMemo(() => {
     const map = new Map<string, NonNullable<BulkSendJob['items']>[number]>()
@@ -269,31 +312,69 @@ export function BulkSendDialog({
       ? `${firstDocNo} - ${lastDocNo}`
       : firstDocNo || ''
   const parsedVatRate = Number(vatRateStr)
-  const vatRateNum = Number.isFinite(parsedVatRate) ? parsedVatRate : 7
+  const vatRateValid = vatRateStr.trim() !== '' && Number.isFinite(parsedVatRate) && parsedVatRate >= 0
+  const vatRateNum = vatRateValid ? parsedVatRate : 0
   const isPurchaseOrder = billType === 'purchase'
   const isShopeePurchaseBulk = isPurchaseOrder && filters.source === 'shopee_shipped'
+  const smlReady = isSMLReady(smlReadiness)
   const canSend =
+    smlReady &&
     readyCount > 0 &&
     !!party?.code &&
     whCode.trim() !== '' &&
     shelfCode.trim() !== '' &&
     vatTypeStr !== '' &&
+    vatRateValid &&
     (!isPurchaseOrder || inquiryTypeStr !== '') &&
     docTime.trim() !== '' &&
     !controlsLocked &&
     !job
   const missingFields = [
-    !party?.code ? (billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย') : '',
-    whCode.trim() === '' ? 'คลัง' : '',
-    shelfCode.trim() === '' ? 'พื้นที่เก็บ' : '',
-    vatTypeStr === '' ? 'ประเภทภาษี' : '',
-    isPurchaseOrder && inquiryTypeStr === '' ? 'ประเภทรายการ' : '',
-    docTime.trim() === '' ? 'เวลาเอกสาร' : '',
+    !party?.code ? (billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)') : '',
+    whCode.trim() === '' ? 'คลัง (wh_code)' : '',
+    shelfCode.trim() === '' ? 'พื้นที่เก็บ (shelf_code)' : '',
+    vatTypeStr === '' ? 'ประเภทภาษี (vat_type)' : '',
+    !vatRateValid ? 'อัตราภาษี (vat_rate)' : '',
+    isPurchaseOrder && inquiryTypeStr === '' ? 'ประเภทรายการซื้อ (inquiry_type)' : '',
+    docTime.trim() === '' ? 'เวลาเอกสาร (doc_time)' : '',
   ].filter(Boolean)
   const failedRows = displayRows.filter((row) => row.result === 'failed')
+  const sentRows = displayRows.filter((row) => row.result === 'sent')
   const completedRows = displayRows.filter((row) => row.result)
+  const hiddenCodeRows = useMemo(() => {
+    return displayRows.flatMap((row) =>
+      (row.bill.items ?? [])
+        .filter((item) => item.has_hidden_chars && item.item_code)
+        .map((item) => ({ row, item })),
+    )
+  }, [displayRows])
   const resultSkippedCount = (job ? job.skipped_count : candidates.filter((c) => c.result === 'skipped').length) + (job && !activeJob ? skippedCount : 0)
   const finished = job ? !activeJob : completedRows.length > 0 && !sending
+  const startingRetry = Boolean(sending && job && !activeJob && finished)
+  const progressMode = mode === 'progress' || sending || !!job
+  const progressTitle = startingRetry
+    ? 'กำลังเริ่ม retry รายการที่ไม่สำเร็จ'
+    : job
+    ? bulkJobTitle(job, activeJob)
+    : jobError
+      ? 'เริ่มงานส่ง SML ไม่สำเร็จ'
+      : 'กำลังเริ่มงานส่ง SML'
+  const progressDescription = startingRetry
+    ? 'ระบบกำลังสร้างงานใหม่สำหรับรายการที่ส่งไม่สำเร็จในรอบก่อน'
+    : job
+    ? bulkJobDescription(job, activeJob)
+    : jobError
+      ? 'ระบบยังไม่ได้เริ่มส่งเอกสาร สามารถกลับไปตรวจค่าตั้งค่าแล้วลองใหม่ได้'
+      : 'ระบบกำลังสร้างงานส่งหลายรายการ กรุณารอสักครู่'
+
+  useEffect(() => {
+    if (!open || !sendingOrActive) {
+      setShowSlowHint(false)
+      return
+    }
+    const timer = window.setTimeout(() => setShowSlowHint(true), 8000)
+    return () => window.clearTimeout(timer)
+  }, [open, sendingOrActive])
 
   const destination = useMemo(() => {
     if (filters.document_route === 'saleinvoice') {
@@ -305,19 +386,20 @@ export function BulkSendDialog({
     return { label: 'ซื้อ -> ใบสั่งซื้อ', code: 'PO' }
   }, [filters.document_route])
 
-  const resetFormDefaults = () => {
+  const resetFormDefaults = (p?: RetryBillPayload) => {
     setParty(null)
+    setParty(p?.party_code ? { code: p.party_code, name: p.party_name || '' } : null)
     setDocTime(currentTimeHHMM())
-    setWhCode('')
-    setShelfCode('')
+    setWhCode(p?.wh_code || '')
+    setShelfCode(p?.shelf_code || '')
     setManualWarehouse(false)
-    setVatTypeStr('')
-    setVatRateStr('7')
-    setInquiryTypeStr('')
-    setRemark2Str(REMARK2_NONE)
-    setBranchCode('')
-    setSaleCode('')
-    setRemark('')
+    setVatTypeStr(typeof p?.vat_type === 'number' ? String(p.vat_type) : '')
+    setVatRateStr(typeof p?.vat_rate === 'number' ? String(p.vat_rate) : '7')
+    setInquiryTypeStr(typeof p?.inquiry_type === 'number' ? String(p.inquiry_type) : '')
+    setRemark2Str(normalizeRemark2(p?.remark_2))
+    setBranchCode(p?.branch_code || '')
+    setSaleCode(p?.sale_code || '')
+    setRemark(p?.remark || '')
   }
 
   const applyPayloadToForm = (p?: RetryBillPayload) => {
@@ -326,12 +408,12 @@ export function BulkSendDialog({
       return
     }
     setParty(p.party_code ? { code: p.party_code, name: p.party_name || '' } : null)
-    setDocTime(p.doc_time || currentTimeHHMM())
+    setDocTime(p.doc_time || '')
     setWhCode(p.wh_code || '')
     setShelfCode(p.shelf_code || '')
     setManualWarehouse(false)
     setVatTypeStr(typeof p.vat_type === 'number' ? String(p.vat_type) : '')
-    setVatRateStr(typeof p.vat_rate === 'number' ? String(p.vat_rate) : '7')
+    setVatRateStr(typeof p.vat_rate === 'number' ? String(p.vat_rate) : '')
     setInquiryTypeStr(typeof p.inquiry_type === 'number' ? String(p.inquiry_type) : '')
     setRemark2Str(normalizeRemark2(p.remark_2))
     setBranchCode(p.branch_code || '')
@@ -341,6 +423,7 @@ export function BulkSendDialog({
 
   const restoreJob = (next: BulkSendJob) => {
     setJob(next)
+    setMode('progress')
     setCandidates(jobToCandidates(next))
     setTotalPending(next.total_count)
     applyPayloadToForm(next.request_payload)
@@ -358,6 +441,7 @@ export function BulkSendDialog({
     setLoading(true)
     setSending(false)
     setJobError('')
+    setMode('setup')
     resetFormDefaults()
     setCandidates([])
     setTotalPending(0)
@@ -404,6 +488,17 @@ export function BulkSendDialog({
         if (active) {
           restoreJob(active)
           return
+        }
+
+        try {
+          const defaultsRes = await client.get<{ data: ChannelDefaultRow[] }>('/api/settings/channel-defaults')
+          if (!alive) return
+          const defaultsRow = (defaultsRes.data.data ?? []).find((row) =>
+            row.channel === filters.source && row.bill_type === filters.bill_type,
+          )
+          resetFormDefaults(channelDefaultPayload(defaultsRow))
+        } catch {
+          resetFormDefaults()
         }
 
         const params = new URLSearchParams({
@@ -525,7 +620,7 @@ export function BulkSendDialog({
       '',
       ...failedRows.map((row) => [
         `Order: ${row.orderNo}`,
-        row.docNo ? `doc_no: ${row.docNo}` : '',
+        row.docNo ? `เลขเอกสาร SML (doc_no): ${row.docNo}` : '',
         `Bill: ${row.bill.id}`,
         `Error: ${row.message ?? 'ไม่ทราบสาเหตุ'}`,
       ].filter(Boolean).join('\n')),
@@ -538,8 +633,31 @@ export function BulkSendDialog({
     }
   }
 
+  const copySentDocNos = async () => {
+    if (sentRows.length === 0) return
+    const text = [
+      `Bulk Send SML doc_no: ${title}`,
+      `ปลายทาง: ${destination.label} (${destination.code})`,
+      `ส่งสำเร็จ: ${sentRows.length}`,
+      '',
+      ...sentRows.map((row) => [
+        row.sequence ? `ลำดับ: ${row.sequence}` : '',
+        `Order: ${row.orderNo}`,
+        row.docNo ? `เลขเอกสาร SML (doc_no): ${row.docNo}` : 'เลขเอกสาร SML (doc_no): ไม่พบเลขเอกสาร',
+        `Bill: ${row.bill.id}`,
+      ].filter(Boolean).join('\n')),
+    ].join('\n\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success('คัดลอกเลขเอกสาร SML แล้ว')
+    } catch {
+      toast.error('คัดลอกไม่สำเร็จ')
+    }
+  }
+
   const handleSend = async () => {
     if (!canSend) return
+    setMode('progress')
     setSending(true)
     setJobError('')
     try {
@@ -568,7 +686,8 @@ export function BulkSendDialog({
   }
 
   const handleRetryFailed = async () => {
-    if (!job || failedCount === 0 || activeJob) return
+    if (!job || failedCount === 0 || activeJob || !smlReady) return
+    setMode('progress')
     setSending(true)
     setJobError('')
     try {
@@ -592,6 +711,8 @@ export function BulkSendDialog({
     if (activeJob) return
     setJob(null)
     setJobError('')
+    setMode('setup')
+    resetFormDefaults()
     setCandidates((prev) => prev.map((row) => ({ ...row, result: undefined, message: undefined })))
     try {
       window.localStorage.removeItem(storageKey)
@@ -600,14 +721,229 @@ export function BulkSendDialog({
     }
   }
 
+  const handleDialogOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && sending && !job) return
+    onOpenChange(nextOpen)
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-3xl">
+    <Dialog open={open} onOpenChange={handleDialogOpenChange}>
+      <DialogContent className={[
+        'grid max-h-[92vh] grid-rows-[auto_minmax(0,1fr)_auto]',
+        progressMode ? 'sm:max-w-2xl' : 'sm:max-w-3xl',
+      ].join(' ')}>
         <DialogHeader>
-          <DialogTitle>ส่ง SML รายการพร้อมส่ง: {title}</DialogTitle>
+          <DialogTitle>{progressMode ? progressTitle : `ส่ง SML รายการพร้อมส่ง: ${title}`}</DialogTitle>
         </DialogHeader>
 
         <div className="-mx-6 space-y-4 overflow-y-auto px-6 py-2">
+          {progressMode && (
+            <>
+              <div className={[
+                'rounded-lg border px-4 py-3 text-xs shadow-sm',
+                !job && jobError
+                  ? 'border-destructive/35 bg-destructive/[0.06]'
+                  : activeJob || sending
+                    ? 'border-info/35 bg-info/[0.06]'
+                    : failedCount > 0 || job?.status === 'failed'
+                      ? 'border-destructive/35 bg-destructive/[0.06]'
+                      : 'border-success/35 bg-success/[0.06]',
+              ].join(' ')}>
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      {!job && jobError ? (
+                        <AlertTriangle className="h-4 w-4 text-destructive" />
+                      ) : activeJob || sending ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-info" />
+                      ) : failedCount > 0 || job?.status === 'failed' ? (
+                        <AlertTriangle className="h-4 w-4 text-destructive" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 text-success" />
+                      )}
+                      {progressTitle}
+                    </div>
+                    <div className="mt-1 text-muted-foreground">
+                      {progressDescription}
+                    </div>
+                  </div>
+                  {job?.id && (
+                    <div className="rounded-md bg-background/70 px-2.5 py-1 text-right font-mono text-[11px] text-muted-foreground">
+                      {job.id.slice(0, 8)}
+                    </div>
+                  )}
+                </div>
+
+                {job ? (
+                  <>
+                    <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={[
+                          'h-full transition-all',
+                          activeJob
+                            ? 'bg-info'
+                            : failedCount > 0 || job.status === 'failed'
+                              ? 'bg-destructive'
+                              : 'bg-success',
+                        ].join(' ')}
+                        style={{ width: `${progressPct}%` }}
+                      />
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      <BulkProgressStat label="สำเร็จ" value={sentCount} tone="success" />
+                      <BulkProgressStat label="ไม่สำเร็จ" value={failedCount} tone={failedCount > 0 ? 'destructive' : undefined} />
+                      <BulkProgressStat label="ข้าม" value={jobSkippedCount} />
+                      <BulkProgressStat label="คงเหลือ" value={remainingCount} tone={remainingCount > 0 ? 'info' : undefined} />
+                      <BulkProgressStat label="ความคืบหน้า" value={`${progressPct}%`} />
+                    </div>
+                  </>
+                ) : (
+                  <div className={[
+                    'rounded-md border px-3 py-2 text-sm',
+                    jobError
+                      ? 'border-destructive/25 bg-destructive/[0.06] text-destructive'
+                      : 'border-info/25 bg-background/70 text-muted-foreground',
+                  ].join(' ')}>
+                    {jobError ? jobError : 'กำลังสร้างงานส่ง SML และล็อกปุ่มส่งเพื่อป้องกันการส่งซ้ำ'}
+                  </div>
+                )}
+
+                {(activeJob || (sending && job)) && showSlowHint && (
+                  <div className="mt-3 rounded-md border border-warning/30 bg-warning/[0.08] px-2.5 py-1.5 text-warning">
+                    SML อาจใช้เวลานานกว่าปกติ กรุณารอสักครู่ งานนี้ยังทำต่อได้แม้ปิด dialog
+                  </div>
+                )}
+                {job && jobError && (
+                  <div className="mt-2 rounded-md border border-warning/35 bg-warning/[0.07] px-2 py-1.5 text-warning">
+                    Poll job ไม่สำเร็จชั่วคราว: {jobError}
+                  </div>
+                )}
+              </div>
+
+              {finished && (
+                <div className={[
+                  'rounded-md border px-3 py-2.5 text-xs',
+                  failedCount > 0
+                    ? 'border-destructive/35 bg-destructive/[0.06]'
+                    : 'border-success/35 bg-success/[0.06]',
+                ].join(' ')}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-medium text-foreground">ผลการส่งรอบนี้</div>
+                      <div className="mt-0.5 text-muted-foreground">
+                        สำเร็จ {sentCount} · ไม่สำเร็จ {failedCount} · ข้าม {resultSkippedCount}
+                      </div>
+                    </div>
+                    {(sentRows.length > 0 || failedRows.length > 0) && (
+                      <div className="flex flex-wrap gap-2">
+                        {sentRows.length > 0 && (
+                          <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={copySentDocNos}>
+                            <Clipboard className="h-3.5 w-3.5" />
+                            คัดลอก doc_no
+                          </Button>
+                        )}
+                        {failedRows.length > 0 && (
+                          <>
+                        <Button type="button" size="sm" className="h-8 gap-1.5" onClick={handleRetryFailed} disabled={controlsLocked || !smlReady}>
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          Retry failed
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={copyFailureSummary}>
+                          <Clipboard className="h-3.5 w-3.5" />
+                          คัดลอก error
+                        </Button>
+                        <Button asChild size="sm" variant="outline" className="h-8 gap-1.5">
+                          <Link to={billDetailPath(failedRows[0].bill)}>
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            ดูบิลแรกที่ไม่สำเร็จ
+                          </Link>
+                        </Button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {sentRows.length > 0 && (
+                    <div className="mt-3 overflow-hidden rounded-md border border-success/25 bg-background/75">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-2.5 py-2">
+                        <div>
+                          <div className="font-medium text-foreground">เอกสารที่ส่งสำเร็จ</div>
+                          <div className="mt-0.5 text-muted-foreground">
+                            แสดงเลขเอกสาร SML (doc_no) รายบิล รองรับหลายรายการในรอบเดียว
+                          </div>
+                        </div>
+                        <div className="font-mono text-[11px] text-success">
+                          {sentRows.length} รายการ
+                        </div>
+                      </div>
+                      <div className="hidden grid-cols-[54px_minmax(0,1fr)_170px_74px] gap-2 border-b border-border/70 bg-muted/20 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground sm:grid">
+                        <div>ลำดับ</div>
+                        <div>เอกสาร</div>
+                        <div>เลขเอกสาร SML (doc_no)</div>
+                        <div className="text-right">เปิด</div>
+                      </div>
+                      <div className="max-h-72 overflow-y-auto divide-y divide-border/70">
+                        {sentRows.map((row) => (
+                          <div key={row.bill.id} className="grid gap-2 px-2.5 py-2 text-xs sm:grid-cols-[54px_minmax(0,1fr)_170px_74px] sm:items-center">
+                            <div className="hidden sm:block">
+                              <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-success/10 px-2 font-mono font-semibold text-success">
+                                {row.sequence ?? '-'}
+                              </span>
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-foreground">
+                                <span className="mr-1 text-muted-foreground sm:hidden">#{row.sequence ?? '-'}</span>
+                                Order <span className="font-mono">{row.orderNo}</span>
+                              </div>
+                              <div className="truncate text-[11px] text-muted-foreground">
+                                Bill {row.bill.id}
+                              </div>
+                            </div>
+                            <div className="min-w-0">
+                              <span className="inline-flex max-w-full rounded-md border border-success/25 bg-success/[0.06] px-2 py-1 font-mono font-semibold text-success">
+                                <span className="truncate">{row.docNo || 'ไม่พบเลขเอกสาร'}</span>
+                              </span>
+                            </div>
+                            <div className="flex justify-end">
+                              <Button asChild size="sm" variant="ghost" className="h-7 gap-1 px-2">
+                                <Link to={billDetailPath(row.bill)}>
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                  <span className="sr-only">เปิดบิล</span>
+                                </Link>
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {failedRows.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {failedRows.slice(0, 5).map((row) => (
+                        <div key={row.bill.id} className="rounded-md border border-border/70 bg-background/70 px-2 py-1.5">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="font-mono font-medium text-foreground">{row.orderNo}</span>
+                            {row.docNo && <span className="font-mono text-muted-foreground">{row.docNo}</span>}
+                          </div>
+                          <div className="mt-0.5 line-clamp-2 text-destructive">
+                            {row.message ?? 'ส่งไม่สำเร็จ'}
+                          </div>
+                        </div>
+                      ))}
+                      {failedRows.length > 5 && (
+                        <div className="text-muted-foreground">
+                          ยังมีรายการไม่สำเร็จอีก {failedRows.length - 5} รายการ ใช้ปุ่มคัดลอก error เพื่อส่งให้ทีมตรวจได้
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {!progressMode && (
+            <>
           <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2 text-xs text-muted-foreground">
             <div className="font-medium text-foreground">
               ปลายทาง SML: {destination.label} · {destination.code}
@@ -616,40 +952,26 @@ export function BulkSendDialog({
               ระบบจะส่งเฉพาะเอกสารสถานะพร้อมส่ง และใช้ค่าชุดนี้ร่วมกันทุกเอกสารในรอบนี้
             </div>
           </div>
+          {!smlReady && (
+            <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-foreground">ยังเริ่มส่ง SML แบบกลุ่มไม่ได้ — ฐานข้อมูลร้านยังไม่พร้อม</div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    {smlReadinessLoading ? 'กำลังตรวจสถานะ SML ของร้านนี้' : smlBlockedMessage(smlReadiness)}
+                    {' '}เปิดเครื่อง SML/Postgres ของร้านนี้ แล้วกดตรวจอีกครั้งบนแถบแจ้งเตือนด้านบน
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {totalPending > candidates.length && (
             <div className="rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
               รอบนี้โหลดมา {candidates.length} จาก {totalPending} รายการเพื่อให้ระบบทำงานนิ่ง
               หลังส่งชุดแรกเสร็จ ให้เปิด dialog นี้อีกครั้งเพื่อส่งรายการที่เหลือ
             </div>
           )}
-          {job && (
-            <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2.5 text-xs">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div className="font-medium text-foreground">
-                  Bulk job <span className="font-mono">{job.id.slice(0, 8)}</span>
-                </div>
-                <div className="text-muted-foreground">
-                  {activeJob ? 'กำลังส่งทีละบิล' : job.status === 'completed' ? 'เสร็จสมบูรณ์' : job.status === 'completed_with_errors' ? 'เสร็จพร้อมรายการไม่สำเร็จ' : 'หยุดด้วยข้อผิดพลาด'}
-                </div>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div className="h-full bg-info transition-all" style={{ width: `${progressPct}%` }} />
-              </div>
-              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
-                <span>สำเร็จ {sentCount}</span>
-                <span>ไม่สำเร็จ {failedCount}</span>
-                <span>ข้าม {jobSkippedCount}</span>
-                <span>เหลือ {remainingCount}</span>
-                <span>{progressPct}%</span>
-              </div>
-              {jobError && (
-                <div className="mt-2 rounded-md border border-warning/35 bg-warning/[0.07] px-2 py-1.5 text-warning">
-                  Poll job ไม่สำเร็จชั่วคราว: {jobError}
-                </div>
-              )}
-            </div>
-          )}
-
           <div className="rounded-md border border-border bg-card px-3 py-2.5 text-xs">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="font-medium text-foreground">สรุปก่อนส่ง</div>
@@ -659,52 +981,47 @@ export function BulkSendDialog({
             </div>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               <SummaryItem
-                label={billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'}
+                label={billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)'}
                 value={party?.code ? `${party.code} · ${party.name}` : 'ยังไม่เลือก'}
                 muted={!party?.code}
               />
-              <SummaryItem label="ปลายทาง" value={`${destination.label} · ${destination.code}`} />
-              <SummaryItem label="doc_no" value={docNoRange || 'รอ preview'} mono muted={!docNoRange} />
+              <SummaryItem label="ปลายทาง / รูปแบบเอกสาร (doc_format_code)" value={`${destination.label} · ${destination.code}`} />
+              <SummaryItem label="เลขเอกสาร SML (doc_no)" value={docNoRange || 'รอ preview'} mono muted={!docNoRange} />
               <SummaryItem
-                label="คลัง / พื้นที่เก็บ"
+                label="คลัง / พื้นที่เก็บ (wh_code, shelf_code)"
                 value={whCode && shelfCode ? `${whCode} / ${shelfCode}` : 'ยังไม่ครบ'}
                 mono
                 muted={!whCode || !shelfCode}
               />
               <SummaryItem
-                label="VAT"
+                label="ภาษี (vat_type, vat_rate)"
                 value={`${vatTypeLabel(vatTypeStr)} · ${vatRateStr || '-'}%`}
                 muted={!vatTypeStr || !vatRateStr}
               />
               {isPurchaseOrder && (
                 <SummaryItem
-                  label="ประเภทรายการ"
+                  label="ประเภทรายการซื้อ (inquiry_type)"
                   value={PURCHASE_INQUIRY_TYPE_OPTIONS.find((option) => option.value === inquiryTypeStr)?.label || 'ยังไม่เลือก'}
                   muted={!inquiryTypeStr}
                 />
               )}
-              <SummaryItem
-                label="สถานะเอกสาร"
-                value={remark2Label(remark2PayloadValue(remark2Str))}
-                muted={remark2Str === REMARK2_NONE}
-              />
-              <SummaryItem label="เวลาเอกสาร" value={docTime || 'ยังไม่ระบุ'} mono muted={!docTime} />
+              <SummaryItem label="เวลาเอกสาร (doc_time)" value={docTime || 'ยังไม่ระบุ'} mono muted={!docTime} />
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <Label>{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'} <span className="text-destructive">*</span></Label>
+            <Label>{billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)'} <span className="text-destructive">*</span></Label>
             <PartyPicker billType={billType} value={party} onChange={setParty} disabled={controlsLocked} />
             {!party?.code && (
               <p className="text-[11px] text-warning">
-                ต้องเลือก{billType === 'sale' ? 'ลูกค้า' : 'ผู้ขาย'}ก่อนส่งเข้า SML
+                ต้องเลือก{billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)'}ก่อนส่งเข้า SML
               </p>
             )}
           </div>
 
           <div className="grid gap-2.5 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label className="text-xs">เวลาเอกสาร <span className="text-destructive">*</span></Label>
+              <Label className="text-xs">เวลาเอกสาร (doc_time) <span className="text-destructive">*</span></Label>
               <Input
                 value={docTime}
                 onChange={(e) => setDocTime(e.target.value)}
@@ -716,7 +1033,7 @@ export function BulkSendDialog({
 
             <div className="space-y-1">
               <div className="flex items-center justify-between gap-2">
-                <Label className="text-xs">คลัง <span className="text-destructive">*</span></Label>
+                <Label className="text-xs">คลัง (wh_code) <span className="text-destructive">*</span></Label>
                 <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => setManualWarehouse((v) => !v)} disabled={controlsLocked}>
                   {manualWarehouse ? 'เลือกจาก SML' : 'พิมพ์รหัสเอง'}
                 </Button>
@@ -744,7 +1061,7 @@ export function BulkSendDialog({
               )}
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">พื้นที่เก็บ <span className="text-destructive">*</span></Label>
+              <Label className="text-xs">พื้นที่เก็บ (shelf_code) <span className="text-destructive">*</span></Label>
               {manualWarehouse ? (
                 <Input
                   value={shelfCode}
@@ -759,7 +1076,7 @@ export function BulkSendDialog({
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs">ประเภทภาษี <span className="text-destructive">*</span></Label>
+              <Label className="text-xs">ประเภทภาษี (vat_type) <span className="text-destructive">*</span></Label>
               <Select value={vatTypeStr} onValueChange={setVatTypeStr} disabled={controlsLocked}>
                 <SelectTrigger className="h-9 text-sm">
                   <SelectValue placeholder="เลือกประเภทภาษี" />
@@ -771,10 +1088,21 @@ export function BulkSendDialog({
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs">อัตราภาษี (vat_rate) <span className="text-destructive">*</span></Label>
+              <Input
+                value={vatRateStr}
+                onChange={(e) => setVatRateStr(e.target.value)}
+                placeholder="เช่น 7"
+                inputMode="decimal"
+                className="font-mono"
+                disabled={controlsLocked}
+              />
+            </div>
 
             {isPurchaseOrder && (
               <div className="space-y-1">
-                <Label className="text-xs">ประเภทรายการ <span className="text-destructive">*</span></Label>
+                <Label className="text-xs">ประเภทรายการซื้อ (inquiry_type) <span className="text-destructive">*</span></Label>
                 <Select value={inquiryTypeStr} onValueChange={setInquiryTypeStr} disabled={controlsLocked}>
                   <SelectTrigger className="h-9 text-sm">
                     <SelectValue placeholder="เลือกประเภทรายการ" />
@@ -789,42 +1117,28 @@ export function BulkSendDialog({
                 </Select>
               </div>
             )}
-            <div className="space-y-1">
-              <Label className="text-xs">สถานะเอกสาร</Label>
-              <Select value={remark2Str} onValueChange={setRemark2Str} disabled={controlsLocked}>
-                <SelectTrigger className="h-9 text-sm">
-                  <SelectValue placeholder="ไม่ระบุ" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={REMARK2_NONE}>ไม่ระบุ</SelectItem>
-                  {SML_REMARK2_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
-              อัตราภาษีใช้ {vatRateNum}% จากค่าเริ่มต้นของระบบเพื่อกัน user กรอกผิด
-            </div>
+            {!vatRateValid && (
+              <div className="rounded-md bg-warning/[0.08] px-2.5 py-1.5 text-[11px] text-warning sm:col-span-2">
+                ตั้งค่าอัตราภาษีใน /settings/channels หรือกรอกใน dialog นี้ก่อนส่ง
+              </div>
+            )}
             <details className="space-y-2 rounded-md border border-border bg-background px-3 py-2 sm:col-span-2">
               <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-                ตัวเลือกเพิ่มเติม: Branch code / Sale code (ไม่บังคับ)
+                ตัวเลือกเพิ่มเติม: สาขา (branch_code) / พนักงานขาย (sale_code) (ไม่บังคับ)
               </summary>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <Label className="text-xs">Branch code</Label>
-                  <Input value={branchCode} onChange={(e) => setBranchCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" disabled={controlsLocked} />
+                  <Label className="text-xs">สาขา (branch_code)</Label>
+                  <SMLMasterCodePicker kind="branch" value={branchCode} onChange={setBranchCode} disabled={controlsLocked} />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Sale code</Label>
-                  <Input value={saleCode} onChange={(e) => setSaleCode(e.target.value)} className="font-mono" placeholder="ปล่อยว่างได้" disabled={controlsLocked} />
+                  <Label className="text-xs">พนักงานขาย (sale_code)</Label>
+                  <SMLMasterCodePicker kind="sale" value={saleCode} onChange={setSaleCode} disabled={controlsLocked} />
                 </div>
               </div>
             </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
-              เลือกคลังจาก SML หรือพิมพ์รหัสเองได้ เลข doc_no ด้านล่างเป็นเลขคาดการณ์จาก SML ล่าสุดและจะจองเลขจริงอีกครั้งเมื่อกดส่ง
+              เลือกคลังจาก SML หรือพิมพ์รหัสเองได้ เลขเอกสาร SML (doc_no) ด้านล่างเป็นเลขคาดการณ์จาก SML ล่าสุดและจะจองเลขจริงอีกครั้งเมื่อกดส่ง
             </div>
           </div>
 
@@ -834,7 +1148,7 @@ export function BulkSendDialog({
             </div>
           ) : (
             <div className="space-y-1.5">
-              <Label htmlFor="bulk-remark">หมายเหตุ</Label>
+              <Label htmlFor="bulk-remark">หมายเหตุ (remark)</Label>
               <textarea
                 id="bulk-remark"
                 value={remark}
@@ -847,12 +1161,42 @@ export function BulkSendDialog({
             </div>
           )}
 
+          {hiddenCodeRows.length > 0 && (
+            <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-foreground">พบรหัสสินค้าที่มีอักขระมองไม่เห็นในรายการที่จะส่ง</div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    รหัสเหล่านี้มีอยู่ใน SML จึงยังไม่ถูก block แต่ควรตรวจสอบก่อนเริ่ม bulk send
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {hiddenCodeRows.slice(0, 10).map(({ row, item }) => (
+                      <div key={`${row.bill.id}-${item.id}`} className="truncate">
+                        <span className="text-muted-foreground">Order </span>
+                        <code className="font-mono">{row.orderNo}</code>
+                        <span className="text-muted-foreground"> · </span>
+                        <code className="font-mono">{item.item_code}</code>
+                        {item.clean_item_code && (
+                          <span className="text-muted-foreground"> ควรเป็น <code className="font-mono">{item.clean_item_code}</code></span>
+                        )}
+                      </div>
+                    ))}
+                    {hiddenCodeRows.length > 10 && (
+                      <div className="text-muted-foreground">และอีก {hiddenCodeRows.length - 10} รายการ</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="overflow-hidden rounded-md border border-border">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs">
               <div>
                 <div className="font-medium text-foreground">ตรวจรายการพร้อมส่งและเลขเอกสาร</div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  doc_no เป็นเลขคาดการณ์จาก SML ล่าสุด ถ้า SML แจ้งเลขซ้ำให้กดออกเลขใหม่ที่หน้า detail ของบิลนั้น
+                  เลขเอกสาร SML (doc_no) เป็นเลขคาดการณ์จาก SML ล่าสุด ถ้า SML แจ้งเลขซ้ำให้กดออกเลขใหม่ที่หน้า detail ของบิลนั้น
                 </div>
               </div>
               <div className="flex flex-wrap justify-end gap-2 text-muted-foreground">
@@ -866,7 +1210,7 @@ export function BulkSendDialog({
               <div className="hidden grid-cols-[54px_minmax(0,1fr)_180px_86px] gap-2 border-b border-border bg-background px-3 py-2 text-[11px] font-medium text-muted-foreground sm:grid">
                 <div>ลำดับ</div>
                 <div>เอกสาร</div>
-                <div>doc_no ที่จะได้</div>
+                <div>เลขเอกสาร SML (doc_no) ที่จะได้</div>
                 <div className="text-right">สถานะ</div>
               </div>
             )}
@@ -940,7 +1284,7 @@ export function BulkSendDialog({
                 </div>
                 {failedRows.length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    <Button type="button" size="sm" className="h-8 gap-1.5" onClick={handleRetryFailed} disabled={controlsLocked}>
+                    <Button type="button" size="sm" className="h-8 gap-1.5" onClick={handleRetryFailed} disabled={controlsLocked || !smlReady}>
                       <RotateCcw className="h-3.5 w-3.5" />
                       Retry failed
                     </Button>
@@ -985,30 +1329,98 @@ export function BulkSendDialog({
               <div>ต้องกรอกเพิ่มก่อนส่ง: {missingFields.join(', ')}</div>
             </div>
           )}
+          {!smlReady && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>{smlBlockedMessage(smlReadiness)}</div>
+            </div>
+          )}
+            </>
+          )}
         </div>
 
         <DialogFooter className="items-center gap-2 sm:justify-between">
-          <div className="text-xs text-muted-foreground">
-            {activeJob ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount} · เหลือ ${remainingCount}` : finished ? `สำเร็จ ${sentCount} · ไม่สำเร็จ ${failedCount}` : 'ตรวจ doc_no ในรายการก่อนกดส่ง'}
-          </div>
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              ปิด
-            </Button>
-            {finished ? (
-              <Button type="button" onClick={resetJobResult} variant="outline" disabled={activeJob}>
-                โหลดรายการใหม่
-              </Button>
-            ) : (
-              <Button type="button" onClick={handleSend} disabled={!canSend} className="gap-2">
-                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                ส่ง SML {readyCount} รายการ
-              </Button>
-            )}
-          </div>
+          {progressMode ? (
+            <>
+              <div className="text-xs text-muted-foreground">
+                {!job && sending
+                  ? 'กำลังเริ่มงานส่ง SML'
+                  : !job && jobError
+                    ? 'ยังไม่ได้เริ่มส่งเอกสาร'
+                    : activeJob
+                      ? `ส่งแล้ว ${sentCount} · ไม่สำเร็จ ${failedCount} · เหลือ ${remainingCount}`
+                      : finished
+                        ? `สำเร็จ ${sentCount} · ไม่สำเร็จ ${failedCount}`
+                        : 'ตรวจผลการส่งล่าสุด'}
+              </div>
+              <div className="flex gap-2">
+                {!job && jobError && (
+                  <Button type="button" variant="outline" onClick={() => { setJobError(''); setMode('setup') }}>
+                    กลับไปตั้งค่า
+                  </Button>
+                )}
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={sending && !job}>
+                  {activeJob ? 'ปิดไว้ก่อน (งานยังทำต่อ)' : 'ปิด'}
+                </Button>
+                {finished && (
+                  <Button type="button" onClick={resetJobResult} variant="outline" disabled={activeJob}>
+                    โหลดรายการใหม่
+                  </Button>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-xs text-muted-foreground">
+                ตรวจเลขเอกสาร SML (doc_no) ในรายการก่อนกดส่ง
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                  ปิด
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  className="gap-2"
+                  title={!smlReady ? smlBlockedMessage(smlReadiness) : undefined}
+                >
+                  <Send className="h-4 w-4" />
+                  ส่ง SML {readyCount} รายการ
+                </Button>
+              </div>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function BulkProgressStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number | string
+  tone?: 'success' | 'destructive' | 'info'
+}) {
+  const toneClass =
+    tone === 'success'
+      ? 'text-success'
+      : tone === 'destructive'
+        ? 'text-destructive'
+        : tone === 'info'
+          ? 'text-info'
+          : 'text-foreground'
+  return (
+    <div className="rounded-md border border-border/70 bg-background/80 px-2.5 py-2">
+      <div className="text-[10px] font-medium text-muted-foreground">{label}</div>
+      <div className={`mt-0.5 font-mono text-base font-semibold ${toneClass}`}>
+        {value}
+      </div>
+    </div>
   )
 }
 

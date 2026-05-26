@@ -53,6 +53,7 @@ import {
   SOURCE_LABELS,
   SOURCE_TONE,
   TONE_DOT,
+  humanizeAuditError,
   smlRouteLabel,
   type ActionMeta,
   type AuditLog,
@@ -76,6 +77,31 @@ interface LogsResponse {
 const ALL = '__all__'
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 type QuickView = 'all' | 'actionable' | 'sml_failed' | 'imports' | 'mapping' | 'data_quality'
+
+const LEVEL_LABELS: Record<string, string> = {
+  info: 'ข้อมูล',
+  warn: 'คำเตือน',
+  error: 'ผิดพลาด',
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'ผู้ดูแล',
+  staff: 'พนักงาน',
+  viewer: 'ดูอย่างเดียว',
+  user: 'ผู้ใช้',
+  worker: 'งานอัตโนมัติ',
+  system: 'ระบบ',
+}
+
+function viaLabel(value: unknown): string {
+  const text = String(value ?? '')
+  const map: Record<string, string> = {
+    retry: 'ส่งจากหน้าบิล',
+    bulk_job: 'ส่งแบบกลุ่ม',
+    import: 'ส่งตอนนำเข้า',
+  }
+  return map[text] ?? text
+}
 
 // Action keys that belong to Phase 2+ (LINE chat, chat tags, etc.)
 const PHASE2_ACTIONS = new Set([
@@ -111,7 +137,7 @@ function CopyChip({ value, label }: { value: string; label: string }) {
       title={`คัดลอก ${label}: ${value}`}
     >
       <span className="text-[9px] uppercase opacity-60">{label}</span>
-      <span>{copied ? 'copied' : value.length > 16 ? value.slice(0, 12) + '…' : value}</span>
+      <span>{copied ? 'คัดลอกแล้ว' : value.length > 16 ? value.slice(0, 12) + '…' : value}</span>
       <Copy className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100" />
     </button>
   )
@@ -146,7 +172,8 @@ function parseDetailError(log: AuditLog): Record<string, any> {
 function guidanceFor(log: AuditLog): LogGuidance | null {
   const d = log.detail ?? {}
   const parsedError = parseDetailError(log)
-  const errorText = String(parsedError.error ?? d.error ?? '').toLowerCase()
+  const rawError = parsedError.error ?? d.error ?? ''
+  const errorText = String(rawError).toLowerCase()
 
   if (log.action === 'demo_test_data_reset') {
     return {
@@ -154,6 +181,15 @@ function guidanceFor(log: AuditLog): LogGuidance | null {
       description:
         'รายการนี้เกิดจากผู้ดูแลกดล้างข้อมูลทดสอบในหน้าเริ่มต้นใช้งาน ระบบลบเฉพาะบิล/import/log เดิม และเก็บการตั้งค่า สินค้า SML ตารางจับคู่ และประวัติ AI ไว้ตามค่าเริ่มต้น',
       tone: 'info',
+    }
+  }
+
+  if (log.action === 'bill_doc_no_regenerate_failed') {
+    return {
+      title: 'ออกเลขเอกสารใหม่ไม่สำเร็จ',
+      description:
+        'ให้ตรวจเส้นทางเอกสาร SML, prefix/running format และการเชื่อมต่อ SML API แล้วลองกดออกเลขใหม่อีกครั้ง',
+      tone: 'danger',
     }
   }
 
@@ -299,16 +335,22 @@ function orderIdOf(log: AuditLog): string {
 }
 
 function actorName(log: AuditLog): string {
-  if (log.actor?.name) return log.actor.name
-  if (log.user_id) return 'Unknown user'
-  if (log.source === 'email' || log.source === 'shopee_email' || log.source === 'shopee_shipped') return 'Email worker'
-  return 'System'
+  if (log.actor?.name) {
+    const normalized = log.actor.name.toLowerCase()
+    if (normalized === 'system') return 'ระบบ'
+    if (normalized === 'email worker') return 'ระบบอ่านอีเมล'
+    if (normalized === 'unknown user') return 'ผู้ใช้ไม่ทราบชื่อ'
+    return log.actor.name
+  }
+  if (log.user_id) return 'ผู้ใช้ไม่ทราบชื่อ'
+  if (log.source === 'email' || log.source === 'shopee_email' || log.source === 'shopee_shipped') return 'ระบบอ่านอีเมล'
+  return 'ระบบ'
 }
 
 function actorRoleLabel(log: AuditLog): string {
-  if (log.actor?.type === 'user') return log.actor.role ? log.actor.role : 'user'
-  if (log.actor?.type === 'worker') return 'worker'
-  return 'system'
+  if (log.actor?.type === 'user') return ROLE_LABELS[log.actor.role ?? 'user'] ?? log.actor.role ?? 'ผู้ใช้'
+  if (log.actor?.type === 'worker') return 'งานอัตโนมัติ'
+  return 'ระบบ'
 }
 
 function makeFacts(log: AuditLog): LogFact[] {
@@ -344,7 +386,7 @@ function makeFacts(log: AuditLog): LogFact[] {
     const route = d.route ?? parsedError.route
     facts.push({ label: 'ปลายทาง SML', value: smlRouteLabel(route), mono: false })
   }
-  if (d.via) facts.push({ label: 'วิธีส่ง', value: d.via, mono: true })
+  if (d.via) facts.push({ label: 'วิธีส่ง', value: viaLabel(d.via), mono: false })
   if (d.subject) facts.push({ label: 'หัวข้ออีเมล', value: compact(d.subject, 140) })
   if (d.message_id) facts.push({ label: 'Message ID', value: compact(d.message_id, 64), mono: true, copyValue: String(d.message_id) })
   if (d.raw_name) facts.push({ label: 'ชื่อจากบิล', value: compact(d.raw_name, 140) })
@@ -401,7 +443,7 @@ function LogExpandedSummary({
 }) {
   const d = log.detail ?? {}
   const parsedError = parseDetailError(log)
-  const errorMessage = parsedError.error ?? d.error
+  const errorMessage = humanizeAuditError(parsedError.error ?? d.error)
   const facts = makeFacts(log)
   const guidance = guidanceFor(log)
   const isSmlSent = log.action === 'sml_sent'
@@ -480,7 +522,7 @@ function LogExpandedSummary({
                   className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
                 >
                   <RotateCw className={cn('h-3 w-3', retrying && 'animate-spin')} />
-                  {retrying ? 'กำลัง retry…' : 'Retry'}
+                  {retrying ? 'กำลังส่งซ้ำ…' : 'ส่งซ้ำ'}
                 </Button>
               )}
               <Button
@@ -490,7 +532,7 @@ function LogExpandedSummary({
                 className="h-7 gap-1.5 px-2 text-[11px]"
               >
                 <Copy className="h-3 w-3" />
-                DEV
+                ส่งให้ DEV
               </Button>
             </div>
           </div>
@@ -590,7 +632,7 @@ function LogExpandedSummary({
       {devMode && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed bg-background px-3 py-2">
           <Bug className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">DEV mode:</span>
+          <span className="text-xs text-muted-foreground">ข้อมูลเทคนิค:</span>
           {log.trace_id && <CopyChip value={log.trace_id} label="trace" />}
           {log.target_id && <CopyChip value={log.target_id} label="bill" />}
           {originalDocNo && <CopyChip value={originalDocNo} label="doc" />}
@@ -632,7 +674,7 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
       onRetried()
     } catch (err: any) {
       toast.error(
-        'Retry ล้มเหลว: ' +
+        'ส่งซ้ำไม่สำเร็จ: ' +
           (err?.response?.data?.error ?? err?.message ?? 'unknown'),
       )
     } finally {
@@ -728,7 +770,7 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
                 variant={isError ? 'destructive' : 'secondary'}
                 className="h-5 px-1.5 text-[10px] font-medium uppercase"
               >
-                {log.level}
+                {LEVEL_LABELS[log.level] ?? log.level}
               </Badge>
             )}
           </div>
@@ -762,7 +804,7 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="left">
-                Retry บิลนี้
+                ส่งซ้ำบิลนี้
               </TooltipContent>
             </Tooltip>
           )}
@@ -1282,7 +1324,7 @@ export default function Logs() {
             onClick={() => setQuickView('imports')}
           />
           <SummaryButton
-            label="Mapping"
+            label="จับคู่สินค้า"
             value={pageStats.mapping}
             icon={Sparkles}
             tone="primary"
@@ -1290,7 +1332,7 @@ export default function Logs() {
             onClick={() => setQuickView('mapping')}
           />
           <SummaryButton
-            label="Doc No แปลก"
+            label="เลขเอกสารแปลก"
             value={pageStats.dataQuality}
             icon={Bug}
             tone={pageStats.dataQuality > 0 ? 'warning' : 'muted'}
@@ -1310,16 +1352,16 @@ export default function Logs() {
                 <SelectContent>
                   <SelectItem value={ALL}>ทั้งหมด</SelectItem>
                   {PHASE >= 2 && <SelectItem value="line">LINE</SelectItem>}
-                  <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="email">อีเมล</SelectItem>
                   <SelectItem value="shopee_email">Shopee Email</SelectItem>
 	                  <SelectItem value="shopee_shipped">Shopee Shipped</SelectItem>
 	                  {PHASE >= 2 && <SelectItem value="shopee_excel">Shopee Excel</SelectItem>}
 	                  {PHASE >= 2 && <SelectItem value="lazada">Lazada</SelectItem>}
 	                  {PHASE >= 2 && <SelectItem value="tiktok">TikTok Excel</SelectItem>}
 	                  <SelectItem value="sml">SML</SelectItem>
-                  <SelectItem value="catalog">Catalog</SelectItem>
-                  <SelectItem value="channel_defaults">Settings</SelectItem>
-                  <SelectItem value="system">System</SelectItem>
+                  <SelectItem value="catalog">สินค้า SML</SelectItem>
+                  <SelectItem value="channel_defaults">ตั้งค่าเอกสาร</SelectItem>
+                  <SelectItem value="system">ระบบ</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1349,7 +1391,7 @@ export default function Logs() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>ทั้งหมด</SelectItem>
-                  <SelectItem value="info">info</SelectItem>
+                  <SelectItem value="info">ข้อมูล</SelectItem>
                   <SelectItem value="warn">คำเตือน</SelectItem>
                   <SelectItem value="error">ผิดพลาด</SelectItem>
                 </SelectContent>

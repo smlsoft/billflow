@@ -31,12 +31,24 @@ type PartyConfig struct {
 // the list view (they appear only in /customer/{code}) so those columns may
 // be empty; supplier responses do include them.
 type Party struct {
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	Name1     string `json:"name_1,omitempty"`
-	TaxID     string `json:"tax_id,omitempty"`
-	Telephone string `json:"telephone,omitempty"`
-	Address   string `json:"address,omitempty"`
+	Code       string `json:"code"`
+	Name       string `json:"name"`
+	Name1      string `json:"name_1,omitempty"`
+	Name2      string `json:"name_2,omitempty"`
+	NameEng1   string `json:"name_eng_1,omitempty"`
+	FirstName  string `json:"first_name,omitempty"`
+	LastName   string `json:"last_name,omitempty"`
+	Firstname  string `json:"firstname,omitempty"`
+	Lastname   string `json:"lastname,omitempty"`
+	TaxID      string `json:"tax_id,omitempty"`
+	CardID     string `json:"card_id,omitempty"`
+	BranchType int    `json:"branch_type,omitempty"`
+	BranchCode string `json:"branch_code,omitempty"`
+	ARStatus   int    `json:"ar_status,omitempty"`
+	APStatus   int    `json:"ap_status,omitempty"`
+	Telephone  string `json:"telephone,omitempty"`
+	Address    string `json:"address,omitempty"`
+	Remark     string `json:"remark,omitempty"`
 }
 
 // PartyClient is a paginated GET-only client for SML 248 party master.
@@ -194,6 +206,36 @@ type createPartyResponse struct {
 	Message string `json:"message"`
 }
 
+type CustomerCreateInput struct {
+	Code       string `json:"code"`
+	ARStatus   *int   `json:"ar_status,omitempty"`
+	FirstName  string `json:"first_name,omitempty"`
+	LastName   string `json:"last_name,omitempty"`
+	Name1      string `json:"name_1,omitempty"`
+	NameEng1   string `json:"name_eng_1,omitempty"`
+	Address    string `json:"address,omitempty"`
+	Remark     string `json:"remark,omitempty"`
+	TaxID      string `json:"tax_id,omitempty"`
+	BranchType *int   `json:"branch_type,omitempty"`
+	BranchCode string `json:"branch_code,omitempty"`
+	CardID     string `json:"card_id,omitempty"`
+}
+
+type SupplierCreateInput struct {
+	Code       string `json:"code"`
+	APStatus   *int   `json:"ap_status,omitempty"`
+	Firstname  string `json:"firstname,omitempty"`
+	Lastname   string `json:"lastname,omitempty"`
+	Name1      string `json:"name_1,omitempty"`
+	NameEng1   string `json:"name_eng_1,omitempty"`
+	Address    string `json:"address,omitempty"`
+	Remark     string `json:"remark,omitempty"`
+	TaxID      string `json:"tax_id,omitempty"`
+	BranchType *int   `json:"branch_type,omitempty"`
+	BranchCode string `json:"branch_code,omitempty"`
+	CardID     string `json:"card_id,omitempty"`
+}
+
 // GetCustomer fetches a single customer by code. Returns nil (no error) when
 // SML responds with 404 / data:null.
 func (c *PartyClient) GetCustomer(ctx context.Context, code string) (*Party, error) {
@@ -205,19 +247,36 @@ func (c *PartyClient) GetSupplier(ctx context.Context, code string) (*Party, err
 	return c.getOne(ctx, "supplier", code)
 }
 
-func (c *PartyClient) CreateCustomer(ctx context.Context, code, name string) (int, *Party, error) {
-	return c.createOne(ctx, "customer", code, name)
+func (c *PartyClient) CreateCustomer(ctx context.Context, input CustomerCreateInput) (int, *Party, error) {
+	input.Code = strings.TrimSpace(input.Code)
+	input.FirstName = strings.TrimSpace(input.FirstName)
+	input.LastName = strings.TrimSpace(input.LastName)
+	input.Name1 = strings.TrimSpace(input.Name1)
+	input.NameEng1 = strings.TrimSpace(input.NameEng1)
+	input.Address = strings.TrimSpace(input.Address)
+	input.Remark = strings.TrimSpace(input.Remark)
+	input.TaxID = strings.TrimSpace(input.TaxID)
+	input.BranchCode = strings.TrimSpace(input.BranchCode)
+	input.CardID = strings.TrimSpace(input.CardID)
+	return c.createOne(ctx, "customer", input)
 }
 
-func (c *PartyClient) CreateSupplier(ctx context.Context, code, name string) (int, *Party, error) {
-	return c.createOne(ctx, "supplier", code, name)
+func (c *PartyClient) CreateSupplier(ctx context.Context, input SupplierCreateInput) (int, *Party, error) {
+	input.Code = strings.TrimSpace(input.Code)
+	input.Firstname = strings.TrimSpace(input.Firstname)
+	input.Lastname = strings.TrimSpace(input.Lastname)
+	input.Name1 = strings.TrimSpace(input.Name1)
+	input.NameEng1 = strings.TrimSpace(input.NameEng1)
+	input.Address = strings.TrimSpace(input.Address)
+	input.Remark = strings.TrimSpace(input.Remark)
+	input.TaxID = strings.TrimSpace(input.TaxID)
+	input.BranchCode = strings.TrimSpace(input.BranchCode)
+	input.CardID = strings.TrimSpace(input.CardID)
+	return c.createOne(ctx, "supplier", input)
 }
 
-func (c *PartyClient) createOne(ctx context.Context, endpoint, code, name string) (int, *Party, error) {
-	body, err := json.Marshal(map[string]string{
-		"code":   strings.TrimSpace(code),
-		"name_1": strings.TrimSpace(name),
-	})
+func (c *PartyClient) createOne(ctx context.Context, endpoint string, payload any) (int, *Party, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -300,8 +359,19 @@ func (c *PartyClient) getOne(ctx context.Context, endpoint, code string) (*Party
 }
 
 func normalizeParty(p *Party) {
+	firstName := strings.TrimSpace(p.FirstName)
+	if firstName == "" {
+		firstName = strings.TrimSpace(p.Firstname)
+	}
+	lastName := strings.TrimSpace(p.LastName)
+	if lastName == "" {
+		lastName = strings.TrimSpace(p.Lastname)
+	}
 	if p.Name == "" {
 		p.Name = p.Name1
+	}
+	if p.Name == "" {
+		p.Name = strings.TrimSpace(strings.TrimSpace(firstName + " " + lastName))
 	}
 }
 

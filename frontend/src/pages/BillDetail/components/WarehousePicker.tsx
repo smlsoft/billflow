@@ -249,7 +249,7 @@ function PickerShell({
 }) {
   const hasChildren = Array.isArray(children) ? children.length > 0 : !!children
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover modal open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -271,7 +271,7 @@ function PickerShell({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[420px] p-0" align="start">
+      <PopoverContent className="w-[min(420px,calc(100vw-2rem))] p-0" align="start">
         <div className="relative border-b border-border">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -285,7 +285,10 @@ function PickerShell({
             <div className="absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
           )}
         </div>
-        <div className="max-h-[300px] overflow-y-auto py-1">
+        <div
+          className="overflow-y-auto py-1"
+          style={{ maxHeight: 'min(300px, var(--radix-popover-content-available-height, 300px))' }}
+        >
           {!hasChildren && !loading ? (
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">{emptyText}</div>
           ) : (

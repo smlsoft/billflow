@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import client from '../api/client'
 import { notifyWorkQueueChanged } from '../lib/work-queue-events'
-import type { Bill, BillListResponse } from '../types'
+import { humanizeSMLConnectionError } from '../lib/sml-readiness'
+import type { Bill, BillItem, BillListResponse } from '../types'
 
 interface BillsFilter {
   page?: number
@@ -37,6 +38,12 @@ export interface RetryBillPayload {
   vat_type?: number
   vat_rate?: number
   inquiry_type?: number
+}
+
+export interface RetryBillResponse {
+  message?: string
+  doc_no?: string
+  error?: string
 }
 
 export type BulkSendJobStatus =
@@ -144,22 +151,65 @@ export async function getBill(id: string): Promise<Bill> {
 export async function retryBill(
   id: string,
   body?: RetryBillPayload,
-): Promise<void> {
-  const res = await client.post<{ message?: string; error?: string }>(`/api/bills/${id}/retry`, body ?? {}, {
+): Promise<RetryBillResponse> {
+  const res = await client.post<RetryBillResponse>(`/api/bills/${id}/retry`, body ?? {}, {
     validateStatus: () => true,
   })
   if (res.status !== 200) {
-    throw new Error(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`)
+    throw new Error(humanizeSMLConnectionError(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`))
   }
   notifyWorkQueueChanged()
+  return res.data
+}
+
+export async function ensureShopeeShippingLine(
+  id: string,
+): Promise<{ inserted: boolean; item?: BillItem | null }> {
+  const res = await client.post<{ inserted: boolean; item?: BillItem | null }>(
+    `/api/bills/${id}/ensure-shopee-shipping-line`,
+  )
+  if (res.data.inserted) notifyWorkQueueChanged()
+  return res.data
 }
 
 export async function regenerateBillDocNo(
   id: string,
 ): Promise<{ doc_no: string; route: string }> {
-  const res = await client.post<{ doc_no: string; route: string }>(`/api/bills/${id}/regenerate-doc-no`)
+  const res = await client.post<{ doc_no?: string; route?: string; error?: string; message?: string }>(
+    `/api/bills/${id}/regenerate-doc-no`,
+    {},
+    { validateStatus: () => true },
+  )
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(
+      humanizeSMLConnectionError(
+        res.data?.error ||
+          res.data?.message ||
+          `ออกเลขเอกสารใหม่ไม่สำเร็จ (HTTP ${res.status})`,
+      ),
+    )
+  }
   notifyWorkQueueChanged()
-  return res.data
+  return { doc_no: res.data.doc_no ?? '', route: res.data.route ?? '' }
+}
+
+export async function getLatestBillDocNo(
+  id: string,
+): Promise<{ doc_no: string; route: string }> {
+  const res = await client.get<{ doc_no?: string; route?: string; error?: string; message?: string }>(
+    `/api/bills/${id}/latest-doc-no`,
+    { validateStatus: () => true },
+  )
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(
+      humanizeSMLConnectionError(
+        res.data?.error ||
+          res.data?.message ||
+          `ดึงเลขล่าสุดไม่สำเร็จ (HTTP ${res.status})`,
+      ),
+    )
+  }
+  return { doc_no: res.data.doc_no ?? '', route: res.data.route ?? '' }
 }
 
 export async function createBulkSendJob(body: {

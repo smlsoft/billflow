@@ -6,11 +6,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"billflow/internal/config"
+	"billflow/internal/repository"
 )
 
 func TestDecodeSMLUnitsPayloadSupportsNestedAndDeduplicates(t *testing.T) {
@@ -95,7 +98,7 @@ func TestCatalogGetUnitsProxyForwardsSMLHeaders(t *testing.T) {
 	}
 }
 
-func TestCatalogGetProductUnitsMapsUpstreamNotFound(t *testing.T) {
+func TestCatalogGetProductUnitsReturnsEmptyWhenUpstreamNotFound(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +120,91 @@ func TestCatalogGetProductUnitsMapsUpstreamNotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Units []catalogUnitOption `json:"units"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Units) != 0 {
+		t.Fatalf("units = %+v, want empty", body.Units)
+	}
+}
+
+func TestCatalogGetProductUnitsFallsBackToLocalCatalogUnit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/ic/products/SHIP_POL/units" {
+			t.Fatalf("path = %s, want product units path", r.URL.Path)
+		}
+		http.Error(w, `{"error":{"message":"not found"}}`, http.StatusNotFound)
+	}))
+	defer upstream.Close()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	mock.ExpectQuery("SELECT item_code, item_name, item_name2, unit_code, wh_code, shelf_code,").
+		WithArgs("SHIP_POL").
+		WillReturnRows(sqlmock.NewRows(catalogUnitFallbackColumns()).
+			AddRow("SHIP_POL", "ค่าขนส่งสินค้า", "", "บาท", "", "", nil, "", nil, "pending", nil, 0, nil, "", nil, nil, now, now))
+
+	h := &CatalogHandler{
+		cfg:         &config.Config{ShopeeSMLURL: upstream.URL},
+		catalogRepo: repository.NewSMLCatalogRepo(db),
+		logger:      zap.NewNop(),
+	}
+	router := gin.New()
+	router.GET("/api/catalog/:code/units", h.GetProductUnits)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/catalog/SHIP_POL/units", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Units []catalogUnitOption `json:"units"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Units) != 1 || body.Units[0].Code != "บาท" || !body.Units[0].IsDefault {
+		t.Fatalf("units = %+v, want local default บาท", body.Units)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet db expectations: %v", err)
+	}
+}
+
+func catalogUnitFallbackColumns() []string {
+	return []string{
+		"item_code",
+		"item_name",
+		"item_name2",
+		"unit_code",
+		"wh_code",
+		"shelf_code",
+		"price",
+		"group_code",
+		"balance_qty",
+		"embedding_status",
+		"embedded_at",
+		"image_count",
+		"primary_image_roworder",
+		"primary_image_guid",
+		"primary_image_bytes",
+		"image_synced_at",
+		"synced_at",
+		"created_at",
 	}
 }

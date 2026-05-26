@@ -19,6 +19,7 @@ import client from '@/api/client'
 import { cn } from '@/lib/utils'
 import { PAGE_TITLE } from '@/lib/labels'
 import { ENABLE_CHAT } from '@/lib/featureFlags'
+import type { SMLReadiness } from '@/types'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
@@ -34,6 +35,7 @@ type SystemStatus = {
   imap_total?: number
   imap_enabled?: number
   imap_failing?: number
+  sml_readiness?: SMLReadiness
 }
 
 // SubsystemRow is a single subsystem on the system-health card. Each row is
@@ -155,6 +157,36 @@ export default function Settings() {
     }
   })()
 
+  const sml = (() => {
+    const readiness = status?.sml_readiness
+    if (readiness) {
+      if (!readiness.configured) {
+        return {
+          status: 'ยังไม่ได้ตั้งค่า',
+          tone: 'danger' as const,
+          detail: readiness.message || 'ตั้งค่า SML ในหน้าการเชื่อมต่อระบบ',
+        }
+      }
+      if (!readiness.ready) {
+        return {
+          status: 'เชื่อมต่อไม่ได้',
+          tone: 'danger' as const,
+          detail: readiness.message || 'เครื่อง SML/Postgres ของร้านนี้อาจยังไม่เปิด',
+        }
+      }
+      return {
+        status: 'พร้อมใช้งาน',
+        tone: 'ok' as const,
+        detail: readiness.tenant ? `ฐานข้อมูล ${readiness.tenant} พร้อมใช้งาน` : 'เชื่อมต่อฐานข้อมูล SML ได้',
+      }
+    }
+    return {
+      status: status?.sml_configured ? 'พร้อมใช้งาน' : 'ยังไม่ได้ตั้งค่า',
+      tone: status?.sml_configured ? ('ok' as const) : ('danger' as const),
+      detail: status?.sml_configured ? 'แก้ URL/database/header ได้ที่การเชื่อมต่อระบบ' : 'ตั้งค่า SML ในหน้าการเชื่อมต่อระบบ',
+    }
+  })()
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -203,9 +235,9 @@ export default function Settings() {
           <SubsystemRow
             icon={Database}
             label="SML ERP"
-            status={status?.sml_configured ? 'พร้อมใช้งาน' : 'ยังไม่ได้ตั้งค่า'}
-            tone={status?.sml_configured ? 'ok' : 'danger'}
-            detail={status?.sml_configured ? 'แก้ URL/database/header ได้ที่การเชื่อมต่อระบบ' : 'ตั้งค่า SML ในหน้าการเชื่อมต่อระบบ'}
+            status={sml.status}
+            tone={sml.tone}
+            detail={sml.detail}
             to="/settings/instance"
           />
 

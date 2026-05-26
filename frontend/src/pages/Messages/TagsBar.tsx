@@ -161,7 +161,7 @@ function TagPickerContent({
   onToggle: (t: ChatTag) => void
 }) {
   return (
-    <PopoverContent className="w-64 p-0" align="start">
+    <PopoverContent className="w-[min(16rem,calc(100vw-2rem))] p-0" align="start">
       {allTags.length === 0 ? (
         <div className="p-3 text-xs text-muted-foreground">
           ยังไม่มี tag — สร้างได้ที่{' '}
@@ -170,7 +170,10 @@ function TagPickerContent({
           </a>
         </div>
       ) : (
-        <ul className="max-h-64 divide-y divide-border overflow-y-auto">
+        <ul
+          className="divide-y divide-border overflow-y-auto"
+          style={{ maxHeight: 'min(16rem, var(--radix-popover-content-available-height, 16rem))' }}
+        >
           {allTags.map((t) => {
             const isAttached = attached.some((a) => a.id === t.id)
             return (

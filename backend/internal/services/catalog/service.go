@@ -17,6 +17,7 @@ import (
 
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/itemcode"
 )
 
 // -------------------------------------------------------------------
@@ -664,6 +665,7 @@ func (s *SMLCatalogService) SearchByText(query string, topK int) ([]models.Catal
 		if it.Price != nil {
 			price = *it.Price
 		}
+		codeMeta := itemcode.Inspect(it.ItemCode)
 		matches = append(matches, models.CatalogMatch{
 			ItemCode:             it.ItemCode,
 			ItemName:             it.ItemName,
@@ -676,6 +678,8 @@ func (s *SMLCatalogService) SearchByText(query string, topK int) ([]models.Catal
 			PrimaryImageRoworder: it.PrimaryImageRoworder,
 			PrimaryImageGuid:     it.PrimaryImageGuid,
 			PrimaryImageBytes:    it.PrimaryImageBytes,
+			HasHiddenChars:       codeMeta.HasHiddenChars,
+			CleanItemCode:        codeMeta.CleanItemCode,
 			Score:                results[i].score,
 		})
 	}

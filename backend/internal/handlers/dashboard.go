@@ -10,6 +10,7 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/insight"
+	"billflow/internal/services/sml"
 )
 
 type DashboardHandler struct {
@@ -22,6 +23,7 @@ type DashboardHandler struct {
 	lineConfigured       bool
 	imapConfigured       bool
 	smlConfigured        bool
+	smlReadiness         *sml.ReadinessChecker
 	aiConfigured         bool
 	autoConfirmThreshold float64
 	log                  *zap.Logger
@@ -54,6 +56,10 @@ func (h *DashboardHandler) SetConfigStatus(line, imap, sml, ai bool, threshold f
 	h.smlConfigured = sml
 	h.aiConfigured = ai
 	h.autoConfirmThreshold = threshold
+}
+
+func (h *DashboardHandler) SetSMLReadiness(checker *sml.ReadinessChecker) {
+	h.smlReadiness = checker
 }
 
 // GET /api/dashboard/stats
@@ -148,6 +154,11 @@ func (h *DashboardHandler) SettingsStatus(c *gin.Context) {
 		"sml_configured":         h.smlConfigured,
 		"ai_configured":          h.aiConfigured,
 		"auto_confirm_threshold": h.autoConfirmThreshold,
+	}
+	if h.smlReadiness != nil {
+		readiness := h.smlReadiness.Check(c.Request.Context(), c.Query("refresh_sml") == "1")
+		out["sml_readiness"] = readiness
+		out["sml_configured"] = readiness.Configured
 	}
 
 	// LINE OA — count enabled vs total. Multi-OA in DB since session 13.

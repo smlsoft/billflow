@@ -34,14 +34,18 @@ type Bill struct {
 }
 
 type BillEmailGroup struct {
-	MessageID         string                 `json:"message_id"`
-	GroupKey          string                 `json:"group_key"`
-	Subject           string                 `json:"subject"`
-	From              string                 `json:"from"`
-	OrderCount        int                    `json:"order_count"`
-	HasPrintableEmail bool                   `json:"has_printable_email"`
-	RelatedBills      []BillEmailRelatedBill `json:"related_bills,omitempty"`
-	PrintEvents       []EmailPrintEvent      `json:"print_events,omitempty"`
+	MessageID          string                 `json:"message_id"`
+	GroupKey           string                 `json:"group_key"`
+	Subject            string                 `json:"subject"`
+	From               string                 `json:"from"`
+	OrderCount         int                    `json:"order_count"`
+	HasPrintableEmail  bool                   `json:"has_printable_email"`
+	PrintCount         int                    `json:"print_count"`
+	LastPrintedAt      *time.Time             `json:"last_printed_at,omitempty"`
+	LastPrintedByEmail string                 `json:"last_printed_by_email,omitempty"`
+	LastPrintedByName  string                 `json:"last_printed_by_name,omitempty"`
+	RelatedBills       []BillEmailRelatedBill `json:"related_bills,omitempty"`
+	PrintEvents        []EmailPrintEvent      `json:"print_events,omitempty"`
 }
 
 type BillEmailRelatedBill struct {
@@ -101,6 +105,8 @@ type BillItem struct {
 	SourceSKU      string          `json:"source_sku,omitempty"`
 	SourceImageURL string          `json:"source_image_url,omitempty"`
 	ItemCode       *string         `json:"item_code,omitempty"`
+	HasHiddenChars bool            `json:"has_hidden_chars"`
+	CleanItemCode  string          `json:"clean_item_code,omitempty"`
 	Qty            float64         `json:"qty"`
 	UnitCode       *string         `json:"unit_code,omitempty"`
 	Price          *float64        `json:"price,omitempty"`

@@ -1,9 +1,11 @@
 package repository
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	"billflow/internal/models"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
@@ -42,6 +44,95 @@ func TestRecordEmailPrintEventUsesArtifactSourceMeta(t *testing.T) {
 	}
 	if event.EmailMessageID != "artifact-message@example.test" || event.Subject != "artifact subject" || event.From != "artifact sender" {
 		t.Fatalf("event used wrong metadata: %#v", event)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestAttachEmailGroupsIncludesNoPrintSummary(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewBillRepo(db)
+	raw, err := json.Marshal(map[string]interface{}{
+		"email_message_id": "message@example.test",
+		"subject":          "คำสั่งซื้อ #A ถูกจัดส่งแล้ว",
+		"from":             "Shopee <noreply@shopee.test>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bills := []models.Bill{{ID: "bill-1", RawData: raw}}
+
+	mock.ExpectQuery("WITH matched_bills").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "order_count", "has_printable_email", "print_count",
+			"last_printed_at", "last_printed_by_email", "last_printed_by_name",
+		}).AddRow("message@example.test", 1, true, 0, nil, "", ""))
+
+	if err := repo.attachEmailGroups(bills); err != nil {
+		t.Fatalf("attachEmailGroups: %v", err)
+	}
+	if bills[0].EmailGroup == nil {
+		t.Fatal("expected email group")
+	}
+	if bills[0].EmailGroup.PrintCount != 0 {
+		t.Fatalf("print_count = %d, want 0", bills[0].EmailGroup.PrintCount)
+	}
+	if bills[0].EmailGroup.LastPrintedAt != nil {
+		t.Fatalf("last_printed_at = %v, want nil", bills[0].EmailGroup.LastPrintedAt)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestAttachEmailGroupsIncludesPrintSummary(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewBillRepo(db)
+	raw, err := json.Marshal(map[string]interface{}{
+		"email_message_id": "message@example.test",
+		"subject":          "คำสั่งซื้อ #A ถูกจัดส่งแล้ว",
+		"from":             "Shopee <noreply@shopee.test>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bills := []models.Bill{{ID: "bill-1", RawData: raw}}
+	printedAt := time.Date(2026, 5, 25, 23, 10, 0, 0, time.UTC)
+
+	mock.ExpectQuery("WITH matched_bills").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "order_count", "has_printable_email", "print_count",
+			"last_printed_at", "last_printed_by_email", "last_printed_by_name",
+		}).AddRow("message@example.test", 14, true, 2, printedAt, "admin@example.test", "Admin"))
+
+	if err := repo.attachEmailGroups(bills); err != nil {
+		t.Fatalf("attachEmailGroups: %v", err)
+	}
+	group := bills[0].EmailGroup
+	if group == nil {
+		t.Fatal("expected email group")
+	}
+	if group.OrderCount != 14 || group.PrintCount != 2 {
+		t.Fatalf("group counts = order:%d print:%d, want order:14 print:2", group.OrderCount, group.PrintCount)
+	}
+	if group.LastPrintedAt == nil || !group.LastPrintedAt.Equal(printedAt) {
+		t.Fatalf("last_printed_at = %v, want %v", group.LastPrintedAt, printedAt)
+	}
+	if group.LastPrintedByEmail != "admin@example.test" || group.LastPrintedByName != "Admin" {
+		t.Fatalf("last printed by = %q/%q", group.LastPrintedByEmail, group.LastPrintedByName)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)

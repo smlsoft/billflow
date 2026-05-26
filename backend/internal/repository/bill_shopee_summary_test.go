@@ -29,6 +29,21 @@ func TestExtractShopeeShippingAmountMissingReturnsFalse(t *testing.T) {
 	}
 }
 
+func TestExtractShopeeShippingAmountZeroReturnsTrue(t *testing.T) {
+	body := `
+หมายเลขคำสั่งซื้อ #2601AAA
+ค่าจัดส่งสินค้า: ฿0
+`
+
+	got, ok := ExtractShopeeShippingAmount(body, "", "#2601AAA")
+	if !ok {
+		t.Fatal("expected shipping amount label to be detected")
+	}
+	if got != 0 {
+		t.Fatalf("shipping amount = %v, want 0", got)
+	}
+}
+
 func TestExtractShopeeDiscountSummaryBothDiscountsAndCodes(t *testing.T) {
 	body := `
 หมายเลขคำสั่งซื้อ: #2605211KR3XK1G

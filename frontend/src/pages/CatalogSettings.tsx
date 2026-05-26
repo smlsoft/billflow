@@ -4,11 +4,14 @@ import {
   AlertCircle,
   AlertTriangle,
   BookOpen,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clipboard,
   Database,
   ExternalLink,
   ImageIcon,
+  Info,
   Loader2,
   RefreshCcw,
   RefreshCw,
@@ -22,6 +25,13 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import {
   Table,
@@ -31,6 +41,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { AuthImage } from '@/components/common/AuthImage'
 import { PageHeader } from '@/components/common/PageHeader'
@@ -38,6 +55,7 @@ import { ProductImagePreviewDialog } from '@/components/common/ProductImagePrevi
 import api from '@/api/client'
 import { cn } from '@/lib/utils'
 import { PAGE_TITLE } from '@/lib/labels'
+import { humanizeSMLConnectionError } from '@/lib/sml-readiness'
 import type { CatalogItem } from '@/types'
 
 interface CatalogStats {
@@ -45,6 +63,7 @@ interface CatalogStats {
   embedded: number
   pending: number
   error: number
+  hidden_code_count?: number
   index_size: number
   embed_running: boolean
   embed_status?: {
@@ -74,6 +93,29 @@ interface ListResponse {
   per_page: number
 }
 
+type CatalogPullStatus = 'success' | 'not_found' | 'failed' | 'duplicate'
+
+interface CatalogPullResult {
+  code: string
+  status: CatalogPullStatus
+  item?: CatalogItem
+  not_found?: boolean
+  error?: string
+  has_hidden_chars?: boolean
+  clean_item_code?: string
+}
+
+interface CatalogPullResponse {
+  summary: {
+    total: number
+    success: number
+    not_found: number
+    failed: number
+    duplicate: number
+  }
+  results: CatalogPullResult[]
+}
+
 interface InstanceSettingsStatus {
   pending_restart?: boolean
   pending_restart_settings?: string[]
@@ -81,6 +123,36 @@ interface InstanceSettingsStatus {
 
 type StatusFilter = '' | 'pending' | 'done' | 'error'
 interface FetchParams { page: number; filter: StatusFilter; query: string }
+
+const CATALOG_PULL_LIMIT = 50
+const CATALOG_CODE_MAX_LEN = 64
+const HIDDEN_ITEM_CODE_RE = /[\uFEFF\u200B\u200C\u200D\u2060\u180E\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g
+const HIDDEN_CODE_DESCRIPTION =
+  'รหัสสินค้าที่มีอักขระมองไม่เห็น เช่น zero-width, BOM หรือเครื่องหมายไทยลอย ทำให้ตาเห็นเหมือนรหัสปกติแต่ระบบมองเป็นคนละรหัส'
+
+function inspectCatalogCode(code: string) {
+  const clean = code.replace(HIDDEN_ITEM_CODE_RE, '').trim()
+  return {
+    hasHiddenChars: clean !== code.trim(),
+    cleanItemCode: clean,
+  }
+}
+
+function parseCatalogCodes(input: string) {
+  const rawCodes = input.split(/[\s,]+/).map((part) => part.trim()).filter(Boolean)
+  const seen = new Set<string>()
+  const codes: string[] = []
+  const duplicates: string[] = []
+  for (const code of rawCodes) {
+    if (seen.has(code)) {
+      duplicates.push(code)
+      continue
+    }
+    seen.add(code)
+    codes.push(code)
+  }
+  return { codes, duplicates }
+}
 
 function formatEmbedProgress(status: NonNullable<CatalogStats['embed_status']>): string | null {
   if (!status.session_id && !status.started_at) return null
@@ -185,10 +257,12 @@ function StatChip({
   label,
   value,
   variant = 'muted',
+  tooltip,
 }: {
   label: string
   value: number | string
   variant?: 'success' | 'warning' | 'danger' | 'primary' | 'muted'
+  tooltip?: string
 }) {
   const styles: Record<typeof variant, string> = {
     success: 'border-success/25 bg-success/5 text-success',
@@ -197,15 +271,27 @@ function StatChip({
     primary: 'border-primary/25 bg-primary/5 text-primary',
     muted: 'border-border bg-card text-foreground',
   }
-  return (
+  const chip = (
     <Card className={cn('min-w-[150px] flex-1 shadow-none', styles[variant])}>
       <CardContent className="flex items-baseline justify-between gap-3 px-3 py-2.5">
         <p className="text-lg font-semibold tabular-nums leading-none">{value}</p>
-        <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <p className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           {label}
+          {tooltip && <Info className="h-3 w-3" />}
         </p>
       </CardContent>
     </Card>
+  )
+  if (!tooltip) return chip
+  return (
+    <TooltipProvider delayDuration={120}>
+      <Tooltip>
+        <TooltipTrigger asChild>{chip}</TooltipTrigger>
+        <TooltipContent className="max-w-xs text-xs leading-relaxed">
+          {tooltip}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -253,6 +339,233 @@ function CatalogThumbnail({
   )
 }
 
+function CatalogPullDialog({
+  open,
+  onOpenChange,
+  onPulled,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onPulled: (firstCode: string) => Promise<void>
+}) {
+  const [input, setInput] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [results, setResults] = useState<CatalogPullResult[]>([])
+  const [error, setError] = useState('')
+  const { codes, duplicates } = useMemo(() => parseCatalogCodes(input), [input])
+  const hiddenCodes = useMemo(
+    () => codes
+      .map((code) => ({ code, ...inspectCatalogCode(code) }))
+      .filter((row) => row.hasHiddenChars),
+    [codes],
+  )
+  const invalidLengthCodes = useMemo(
+    () => codes.filter((code) => Array.from(code).length > CATALOG_CODE_MAX_LEN),
+    [codes],
+  )
+  const resultCounts = useMemo(() => {
+    return results.reduce(
+      (acc, row) => {
+        acc[row.status] += 1
+        return acc
+      },
+      { success: 0, not_found: 0, failed: 0, duplicate: 0 } satisfies Record<CatalogPullStatus, number>,
+    )
+  }, [results])
+  const problemCodes = results
+    .filter((row) => row.status === 'not_found' || row.status === 'failed')
+    .map((row) => row.code)
+  const canSubmit =
+    codes.length > 0 &&
+    codes.length <= CATALOG_PULL_LIMIT &&
+    invalidLengthCodes.length === 0 &&
+    !submitting
+
+  async function copyProblemCodes() {
+    if (problemCodes.length === 0) return
+    try {
+      await navigator.clipboard.writeText(problemCodes.join('\n'))
+    } catch {
+      setError('คัดลอกรหัสไม่สำเร็จ')
+    }
+  }
+
+  async function handleSubmit() {
+    if (!canSubmit) return
+    setSubmitting(true)
+    setError('')
+    const duplicateResults: CatalogPullResult[] = duplicates.map((code) => {
+      const meta = inspectCatalogCode(code)
+      return {
+        code,
+        status: 'duplicate',
+        has_hidden_chars: meta.hasHiddenChars,
+        clean_item_code: meta.cleanItemCode,
+      }
+    })
+    try {
+      const res = await api.post<CatalogPullResponse>('/api/catalog/refresh-batch', { codes })
+      const nextResults = [...duplicateResults, ...(res.data.results ?? [])]
+      setResults(nextResults)
+      const firstSuccess = nextResults.find((row) => row.status === 'success')
+      const firstCode = firstSuccess?.item?.item_code || firstSuccess?.code
+      if (firstCode) {
+        await onPulled(firstCode)
+      }
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } }
+      setError(humanizeSMLConnectionError(e?.response?.data?.error ?? 'ดึงสินค้าจาก SML ไม่สำเร็จ'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  function resetAndClose(nextOpen: boolean) {
+    if (!nextOpen && submitting) return
+    onOpenChange(nextOpen)
+    if (!nextOpen) {
+      setError('')
+      setResults([])
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={resetAndClose}>
+      <DialogContent className="grid max-h-[90vh] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>ดึงสินค้าจาก SML</DialogTitle>
+        </DialogHeader>
+
+        <div className="-mx-6 space-y-4 overflow-y-auto px-6 py-2">
+          <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2 text-xs text-muted-foreground">
+            กรอกรหัสสินค้า SML ที่สร้างไว้แล้ว ระบบจะดึงเฉพาะรหัสที่ระบุ ไม่ซิงก์สินค้าทั้งหมด และไม่สร้างข้อมูลจับคู่อัตโนมัติ
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-foreground">รหัสสินค้า SML</label>
+            <Textarea
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value)
+                setError('')
+                setResults([])
+              }}
+              placeholder={'SHIP_POL\nSHIP_CUS'}
+              className="min-h-40 font-mono text-sm"
+              disabled={submitting}
+            />
+            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span>{codes.length.toLocaleString()} / {CATALOG_PULL_LIMIT} รหัสที่จะดึง</span>
+              {duplicates.length > 0 && <span>ซ้ำใน input {duplicates.length.toLocaleString()} รหัส</span>}
+              <span>คั่นด้วยบรรทัด, comma, space หรือ tab ได้</span>
+            </div>
+          </div>
+
+          {codes.length > CATALOG_PULL_LIMIT && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/[0.06] px-3 py-2 text-xs text-destructive">
+              ดึงสินค้าได้สูงสุด {CATALOG_PULL_LIMIT} รหัสต่อครั้ง กรุณาแบ่งเป็นหลายรอบ
+            </div>
+          )}
+          {invalidLengthCodes.length > 0 && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/[0.06] px-3 py-2 text-xs text-destructive">
+              มีรหัสยาวเกิน {CATALOG_CODE_MAX_LEN} ตัวอักษร: <span className="font-mono">{invalidLengthCodes.slice(0, 3).join(', ')}</span>
+            </div>
+          )}
+          {hiddenCodes.length > 0 && (
+            <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
+              <div className="font-medium">พบอักขระซ่อนในรหัสที่กรอก</div>
+              <div className="mt-1 space-y-1">
+                {hiddenCodes.slice(0, 5).map((row) => (
+                  <div key={row.code}>
+                    <code className="font-mono">{row.code}</code>
+                    {row.cleanItemCode && (
+                      <span className="text-muted-foreground"> · ควรเป็น <code className="font-mono">{row.cleanItemCode}</code></span>
+                    )}
+                  </div>
+                ))}
+                {hiddenCodes.length > 5 && <div>และอีก {hiddenCodes.length - 5} รหัส</div>}
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/[0.06] px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
+
+          {results.length > 0 && (
+            <div className="overflow-hidden rounded-md border border-border">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs">
+                <div>
+                  <div className="font-medium text-foreground">ผลการดึงจาก SML</div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    สำเร็จ {resultCounts.success} · ไม่พบ {resultCounts.not_found} · ล้มเหลว {resultCounts.failed} · ซ้ำ {resultCounts.duplicate}
+                  </div>
+                </div>
+                {problemCodes.length > 0 && (
+                  <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={copyProblemCodes}>
+                    <Clipboard className="h-3.5 w-3.5" />
+                    คัดลอกไม่พบ/ล้มเหลว
+                  </Button>
+                )}
+              </div>
+              <div className="max-h-72 overflow-y-auto divide-y divide-border">
+                {results.map((row, index) => (
+                  <div key={`${row.code}-${row.status}-${index}`} className="grid gap-2 px-3 py-2 text-xs sm:grid-cols-[140px_110px_minmax(0,1fr)] sm:items-center">
+                    <div className="font-mono font-medium text-foreground">{row.code}</div>
+                    <CatalogPullStatusBadge status={row.status} />
+                    <div className="min-w-0 text-muted-foreground">
+                      {row.status === 'success' && (
+                        <span className="line-clamp-1">{row.item?.item_name || 'ดึงสำเร็จ'}</span>
+                      )}
+                      {row.status === 'not_found' && 'ไม่พบรหัสนี้ใน SML master กรุณาตรวจรหัสหรือเพิ่มสินค้าใน SML ก่อน'}
+                      {row.status === 'failed' && (row.error || 'ดึงไม่สำเร็จ')}
+                      {row.status === 'duplicate' && 'ซ้ำใน input ระบบข้ามให้แล้ว'}
+                      {row.has_hidden_chars && row.clean_item_code && (
+                        <span className="ml-1">· ควรเป็น <code className="font-mono">{row.clean_item_code}</code></span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resultCounts.success > 0 && (
+            <div className="rounded-md border border-success/30 bg-success/[0.06] px-3 py-2 text-xs text-success">
+              ดึงสินค้าเรียบร้อยแล้ว ถ้าต้องการให้ระบบจับคู่จากชื่อสินค้าแบบ semantic matching ให้กด “สร้างข้อมูลจับคู่”
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2 sm:justify-between">
+          <Button type="button" variant="ghost" onClick={() => resetAndClose(false)} disabled={submitting}>
+            ปิด
+          </Button>
+          <Button type="button" onClick={handleSubmit} disabled={!canSubmit} className="gap-1.5">
+            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            ดึงจาก SML {codes.length > 0 ? `${codes.length} รหัส` : ''}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function CatalogPullStatusBadge({ status }: { status: CatalogPullStatus }) {
+  if (status === 'success') {
+    return <span className="inline-flex items-center gap-1 text-success"><CheckCircle2 className="h-3.5 w-3.5" />สำเร็จ</span>
+  }
+  if (status === 'not_found') {
+    return <span className="inline-flex items-center gap-1 text-warning"><AlertTriangle className="h-3.5 w-3.5" />ไม่พบ</span>
+  }
+  if (status === 'duplicate') {
+    return <span className="text-muted-foreground">ซ้ำ</span>
+  }
+  return <span className="inline-flex items-center gap-1 text-destructive"><AlertCircle className="h-3.5 w-3.5" />ล้มเหลว</span>
+}
+
 export default function CatalogSettings() {
   const [stats, setStats] = useState<CatalogStats | null>(null)
   const [items, setItems] = useState<CatalogItem[]>([])
@@ -264,6 +577,7 @@ export default function CatalogSettings() {
   const [pendingRestart, setPendingRestart] = useState(false)
   const [pendingRestartKeys, setPendingRestartKeys] = useState<string[]>([])
   const [draft, setDraft] = useState('')
+  const [pullDialogOpen, setPullDialogOpen] = useState(false)
   const [params, setParams] = useReducer(
     (_prev: FetchParams, next: Partial<FetchParams> & { reset?: boolean }) => {
       const base = next.reset ? { page: 1, filter: '' as StatusFilter, query: '' } : _prev
@@ -330,7 +644,7 @@ export default function CatalogSettings() {
           if (pollRef.current) clearInterval(pollRef.current)
           fetchItems(params)
           if (s.sync_status?.error) {
-            notify(`Sync ล้มเหลว: ${s.sync_status.error}`, false)
+            notify(`Sync ล้มเหลว: ${humanizeSMLConnectionError(s.sync_status.error)}`, false)
           } else if (stats?.sync_running && s.sync_status?.count) {
             notify(`Sync สำเร็จ ${s.sync_status.count} รายการ`)
           }
@@ -384,7 +698,7 @@ export default function CatalogSettings() {
         setPendingRestart(true)
         setPendingRestartKeys(msg.pending_restart_settings ?? [])
       }
-      notify(msg?.error ?? 'Sync ล้มเหลว', false)
+      notify(humanizeSMLConnectionError(msg?.error ?? 'Sync ล้มเหลว'), false)
     } finally {
       setSyncing(false)
     }
@@ -441,11 +755,20 @@ export default function CatalogSettings() {
       if (e?.response?.data?.not_found) {
         notify(`ไม่พบ ${code} ใน SML — ลบจาก BillFlow ได้`, false)
       } else {
-        notify(e?.response?.data?.error ?? `รีเฟรช ${code} ล้มเหลว`, false)
+        notify(humanizeSMLConnectionError(e?.response?.data?.error ?? `รีเฟรช ${code} ล้มเหลว`), false)
       }
     } finally {
       setBusyRow(null)
     }
+  }
+
+  async function handleCatalogPulled(firstCode: string) {
+    const nextParams = { page: 1, filter: params.filter, query: firstCode }
+    notify(`ดึง ${firstCode} จาก SML สำเร็จ`)
+    setDraft(firstCode)
+    setParams(nextParams)
+    await fetchStats()
+    await fetchItems(nextParams)
   }
 
   async function handleDeleteOne(code: string) {
@@ -607,6 +930,14 @@ export default function CatalogSettings() {
           <StatChip label="พร้อมจับคู่" value={stats.embedded.toLocaleString()} variant="success" />
           <StatChip label="รอเตรียมข้อมูล" value={stats.pending.toLocaleString()} variant="warning" />
           <StatChip label="โหลดไว้ใช้งาน" value={stats.index_size.toLocaleString()} variant="primary" />
+          {(stats.hidden_code_count ?? 0) > 0 && (
+            <StatChip
+              label="รหัสซ่อน"
+              value={(stats.hidden_code_count ?? 0).toLocaleString()}
+              variant="danger"
+              tooltip={HIDDEN_CODE_DESCRIPTION}
+            />
+          )}
           {stats.embed_running || embedProgress ? (
             <Card className="flex-1 border-primary/30 bg-primary/5">
               <CardContent className="flex items-center gap-3 px-4 py-3">
@@ -698,37 +1029,52 @@ export default function CatalogSettings() {
           })}
         </div>
 
-        <div className="relative w-full max-w-sm">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="ค้นหา… (Enter เพื่อค้นหา)"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            className="h-9 pl-8 pr-16"
-          />
-          {draft && (
-            <button
-              type="button"
-              className="absolute right-12 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                setDraft('')
-                commitSearch('')
-              }}
-              aria-label="ล้างการค้นหา"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
+        <div className="flex w-full flex-col gap-2 lg:w-auto lg:flex-row lg:items-center">
           <Button
             type="button"
             size="sm"
-            variant="ghost"
-            className="absolute right-1 top-1/2 h-7 -translate-y-1/2 px-2 text-xs"
-            onClick={() => commitSearch(draft)}
+            variant="outline"
+            className="h-9 justify-start gap-1.5"
+            onClick={() => setPullDialogOpen(true)}
+            disabled={pendingRestart}
+            title={pendingRestart ? 'มีการเปลี่ยนค่า SML ที่ยังไม่ได้รีสตาร์ท' : 'ดึงสินค้าใหม่จาก SML แบบระบุรหัส'}
           >
-            ค้นหา
+            <Database className="h-3.5 w-3.5" />
+            ดึงสินค้าจาก SML
           </Button>
+
+          <div className="relative w-full max-w-sm">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="ค้นหา… (Enter เพื่อค้นหา)"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              className="h-9 pl-8 pr-16"
+            />
+            {draft && (
+              <button
+                type="button"
+                className="absolute right-12 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setDraft('')
+                  commitSearch('')
+                }}
+                aria-label="ล้างการค้นหา"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="absolute right-1 top-1/2 h-7 -translate-y-1/2 px-2 text-xs"
+              onClick={() => commitSearch(draft)}
+            >
+              ค้นหา
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -739,7 +1085,6 @@ export default function CatalogSettings() {
               <TableHead className="w-[140px]">รหัสสินค้า</TableHead>
               <TableHead>ชื่อสินค้า</TableHead>
               <TableHead className="w-[80px]">หน่วย</TableHead>
-              <TableHead className="w-[100px] text-right">ราคา</TableHead>
               <TableHead className="w-[120px]">สถานะ</TableHead>
               <TableHead className="w-[120px]">เตรียมข้อมูลเมื่อ</TableHead>
               <TableHead className="w-[200px] text-right">จัดการ</TableHead>
@@ -748,14 +1093,14 @@ export default function CatalogSettings() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-12 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={6} className="py-12 text-center text-sm text-muted-foreground">
                   <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
                   กำลังโหลด…
                 </TableCell>
               </TableRow>
             ) : items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-12 text-center text-sm">
+                <TableCell colSpan={6} className="py-12 text-center text-sm">
                   <Database className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
                   <p className="text-muted-foreground">
                     {params.query
@@ -768,7 +1113,23 @@ export default function CatalogSettings() {
               items.map((item) => (
                 <TableRow key={item.item_code} className="h-16">
                   <TableCell className="py-2 font-mono text-xs font-medium">
-                    {item.item_code}
+                    <div className="space-y-1">
+                      <div>{item.item_code}</div>
+                      {item.has_hidden_chars && (
+                        <div
+                          className="inline-flex max-w-full items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-warning"
+                          title={`รหัสนี้มีอักขระมองไม่เห็นจาก SML${item.clean_item_code ? ` ควรเป็น ${item.clean_item_code}` : ''}`}
+                        >
+                          <AlertTriangle className="h-3 w-3 shrink-0" />
+                          <span className="truncate">รหัสมีอักขระซ่อน</span>
+                        </div>
+                      )}
+                      {item.has_hidden_chars && item.clean_item_code && (
+                        <div className="font-sans text-[10px] text-muted-foreground">
+                          ควรเป็น <code className="font-mono">{item.clean_item_code}</code>
+                        </div>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="py-2">
                     <div className="flex min-w-0 items-center gap-3">
@@ -785,11 +1146,6 @@ export default function CatalogSettings() {
                   </TableCell>
                   <TableCell className="py-2 text-xs text-muted-foreground">
                     {item.unit_code || '—'}
-                  </TableCell>
-                  <TableCell className="py-2 text-right tabular-nums">
-                    {item.sale_price != null || item.price != null
-                      ? `฿${(item.sale_price ?? item.price ?? 0).toLocaleString()}`
-                      : '—'}
                   </TableCell>
                   <TableCell className="py-2">
                     <Badge
@@ -901,6 +1257,12 @@ export default function CatalogSettings() {
         itemCode={previewItem?.item_code}
         itemName={previewItem?.item_name}
         imageCount={previewItem?.image_count ?? 0}
+      />
+
+      <CatalogPullDialog
+        open={pullDialogOpen}
+        onOpenChange={setPullDialogOpen}
+        onPulled={handleCatalogPulled}
       />
     </div>
   )

@@ -6,7 +6,9 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { isSMLReady, smlBlockedMessage } from '@/lib/sml-readiness'
 import { cn } from '@/lib/utils'
+import type { SMLReadiness } from '@/types'
 
 // Failure detail schema persisted to bills.error_msg by the backend's
 // recordFailure helper. Old rows have a plain string instead of JSON;
@@ -27,6 +29,7 @@ interface Props {
   retryError?: string | null
   regeneratingDocNo?: boolean
   onRegenerateDocNo?: () => Promise<string | null> | string | null | void
+  smlReadiness?: SMLReadiness | null
 }
 
 function parseFailure(msg: string): FailureDetail | null {
@@ -68,6 +71,7 @@ export function BillFailureCard({
   retryError,
   regeneratingDocNo = false,
   onRegenerateDocNo,
+  smlReadiness,
 }: Props) {
   const [copied, setCopied] = useState(false)
 
@@ -81,6 +85,7 @@ export function BillFailureCard({
   const docNoAttempted = detail?.doc_no_attempted ?? ''
   const occurredAt = detail?.occurred_at
   const canRegenerateDocNo = Boolean(onRegenerateDocNo && isDuplicateDocNoFailure(rawError))
+  const smlReady = isSMLReady(smlReadiness)
 
   const handleCopy = async () => {
     // Build a multi-line block that's useful for dev triage out-of-context:
@@ -159,9 +164,9 @@ export function BillFailureCard({
               variant="default"
               size="sm"
               onClick={() => onRegenerateDocNo?.()}
-              disabled={regeneratingDocNo}
+              disabled={regeneratingDocNo || !smlReady}
               className="h-7 shrink-0 gap-1 px-2 text-[11px]"
-              title="ดึงเลข running ล่าสุดจาก SML แล้วออก doc_no ใหม่ให้บิลนี้"
+              title={smlReady ? 'ดึงเลข running ล่าสุดจาก SML แล้วออก doc_no ใหม่ให้บิลนี้' : smlBlockedMessage(smlReadiness)}
             >
               <RefreshCw className={cn('h-3 w-3', regeneratingDocNo && 'animate-spin')} />
               ออกเลขใหม่

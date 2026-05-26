@@ -23,6 +23,8 @@ type CatalogItem struct {
 	PrimaryImageBytes    *int64     `json:"primary_image_bytes,omitempty"`
 	ImageSyncedAt        *time.Time `json:"image_synced_at,omitempty"`
 	ImageURL             string     `json:"image_url,omitempty"`
+	HasHiddenChars       bool       `json:"has_hidden_chars"`
+	CleanItemCode        string     `json:"clean_item_code,omitempty"`
 	ImageMetadataSynced  bool       `json:"-"`
 	SyncedAt             time.Time  `json:"synced_at"`
 	CreatedAt            time.Time  `json:"created_at"`
@@ -42,5 +44,7 @@ type CatalogMatch struct {
 	PrimaryImageGuid     string  `json:"primary_image_guid,omitempty"`
 	PrimaryImageBytes    *int64  `json:"primary_image_bytes,omitempty"`
 	ImageURL             string  `json:"image_url,omitempty"`
+	HasHiddenChars       bool    `json:"has_hidden_chars"`
+	CleanItemCode        string  `json:"clean_item_code,omitempty"`
 	Score                float64 `json:"score"` // cosine similarity 0–1
 }

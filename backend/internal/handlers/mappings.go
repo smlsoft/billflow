@@ -2,23 +2,27 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"billflow/internal/models"
 	"billflow/internal/repository"
+	"billflow/internal/services/itemcode"
 	"billflow/internal/services/mapper"
 )
 
 type MappingHandler struct {
 	mappingRepo *repository.MappingRepo
 	mapperSvc   *mapper.Service
+	catalogRepo *repository.SMLCatalogRepo
+	auditRepo   *repository.AuditLogRepo
 	log         *zap.Logger
 }
 
-func NewMappingHandler(mappingRepo *repository.MappingRepo, mapperSvc *mapper.Service, log *zap.Logger) *MappingHandler {
-	return &MappingHandler{mappingRepo: mappingRepo, mapperSvc: mapperSvc, log: log}
+func NewMappingHandler(mappingRepo *repository.MappingRepo, mapperSvc *mapper.Service, catalogRepo *repository.SMLCatalogRepo, auditRepo *repository.AuditLogRepo, log *zap.Logger) *MappingHandler {
+	return &MappingHandler{mappingRepo: mappingRepo, mapperSvc: mapperSvc, catalogRepo: catalogRepo, auditRepo: auditRepo, log: log}
 }
 
 // GET /api/mappings
@@ -39,6 +43,10 @@ func (h *MappingHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.ItemCode = strings.TrimSpace(req.ItemCode)
+	if !h.validateMappingItemCode(c, req.ItemCode, "mapping_create", "") {
+		return
+	}
 
 	userID, _ := c.Get("user_id")
 	mapping, err := h.mappingRepo.Create(req.RawName, req.ItemCode, req.UnitCode, userID.(string))
@@ -56,6 +64,10 @@ func (h *MappingHandler) Update(c *gin.Context) {
 	var req models.CreateMappingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.ItemCode = strings.TrimSpace(req.ItemCode)
+	if !h.validateMappingItemCode(c, req.ItemCode, "mapping_update", id) {
 		return
 	}
 
@@ -102,6 +114,10 @@ func (h *MappingHandler) Feedback(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.CorrectedCode = strings.TrimSpace(req.CorrectedCode)
+	if !h.validateMappingItemCode(c, req.CorrectedCode, "mapping_feedback", req.BillItemID) {
+		return
+	}
 
 	var billItemID *string
 	if req.BillItemID != "" {
@@ -115,4 +131,55 @@ func (h *MappingHandler) Feedback(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "feedback saved"})
+}
+
+func (h *MappingHandler) validateMappingItemCode(c *gin.Context, code, context, target string) bool {
+	meta := itemcode.Inspect(code)
+	if !meta.HasHiddenChars {
+		return true
+	}
+	if h.catalogRepo == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":           "item_code has hidden characters but catalog validation is unavailable",
+			"item_code":       code,
+			"clean_item_code": meta.CleanItemCode,
+		})
+		return false
+	}
+	cat, _ := h.catalogRepo.GetOne(code)
+	if cat == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":           "item_code has hidden characters and does not exist in SML catalog",
+			"item_code":       code,
+			"clean_item_code": meta.CleanItemCode,
+		})
+		return false
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		var targetID *string
+		if target != "" {
+			targetID = &target
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "hidden_item_code_detected",
+			TargetID: targetID,
+			UserID:   userID,
+			Source:   "mappings",
+			Level:    "warn",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"context":           context,
+				"item_code":         code,
+				"clean_item_code":   meta.CleanItemCode,
+				"hidden_char_kinds": meta.Kinds,
+				"allowed":           true,
+				"reason":            "dirty code exists in SML catalog",
+			},
+		})
+	}
+	return true
 }

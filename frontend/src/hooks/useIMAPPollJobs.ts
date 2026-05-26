@@ -34,6 +34,9 @@ export function isActiveIMAPPollJob(job?: IMAPPollJob | null) {
 
 export async function createIMAPPollJob(accountID: string): Promise<IMAPPollJob> {
   const res = await client.post<{ job_id: string; job: IMAPPollJob }>(`/api/settings/imap-accounts/${accountID}/poll-jobs`)
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('billflow:imap-poll-job-started', { detail: { job_id: res.data.job_id } }))
+  }
   return res.data.job
 }
 

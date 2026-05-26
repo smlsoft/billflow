@@ -20,6 +20,7 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/catalog"
+	"billflow/internal/services/itemcode"
 	"billflow/internal/services/sml"
 )
 
@@ -52,6 +53,33 @@ type catalogUnitOption struct {
 	StandValue  float64 `json:"stand_value,omitempty"`
 	DivideValue float64 `json:"divide_value,omitempty"`
 	IsDefault   bool    `json:"is_default,omitempty"`
+}
+
+const (
+	catalogRefreshBatchLimit      = 50
+	catalogRefreshBatchCodeMaxLen = 64
+)
+
+type catalogRefreshBatchRequest struct {
+	Codes []string `json:"codes"`
+}
+
+type catalogRefreshBatchResult struct {
+	Code           string              `json:"code"`
+	Status         string              `json:"status"`
+	Item           *models.CatalogItem `json:"item,omitempty"`
+	NotFound       bool                `json:"not_found,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	HasHiddenChars bool                `json:"has_hidden_chars,omitempty"`
+	CleanItemCode  string              `json:"clean_item_code,omitempty"`
+}
+
+type catalogRefreshBatchSummary struct {
+	Total     int `json:"total"`
+	Success   int `json:"success"`
+	NotFound  int `json:"not_found"`
+	Failed    int `json:"failed"`
+	Duplicate int `json:"duplicate"`
 }
 
 func NewCatalogHandler(
@@ -115,18 +143,23 @@ func (h *CatalogHandler) Stats(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	hiddenCount, hiddenErr := h.catalogRepo.CountHiddenItemCodes()
+	if hiddenErr != nil {
+		h.logger.Warn("catalog hidden code count", zap.Error(hiddenErr))
+	}
 	syncStatus := h.catalogSvc.SyncStatus()
 	embedStatus := h.catalogSvc.EmbedStatus()
 	c.JSON(http.StatusOK, gin.H{
-		"total":         total,
-		"embedded":      done,
-		"pending":       pending,
-		"error":         errCount,
-		"index_size":    h.catalogIdx.Size(),
-		"embed_running": h.catalogSvc.IsEmbedRunning(),
-		"embed_status":  embedStatus,
-		"sync_running":  syncStatus.Running,
-		"sync_status":   syncStatus,
+		"total":             total,
+		"embedded":          done,
+		"pending":           pending,
+		"error":             errCount,
+		"hidden_code_count": hiddenCount,
+		"index_size":        h.catalogIdx.Size(),
+		"embed_running":     h.catalogSvc.IsEmbedRunning(),
+		"embed_status":      embedStatus,
+		"sync_running":      syncStatus.Running,
+		"sync_status":       syncStatus,
 	})
 }
 
@@ -219,6 +252,161 @@ func (h *CatalogHandler) RefreshOne(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"item": item, "message": "refreshed from SML"})
+}
+
+// POST /api/catalog/refresh-batch — refresh a small set of products from SML.
+// This is intentionally not a replacement for full sync: it supports admin
+// workflows where a few newly-created SML item codes need to appear in
+// BillFlow immediately, without paging the entire SML catalog.
+func (h *CatalogHandler) RefreshBatch(c *gin.Context) {
+	if h.hasPendingRestart(c) {
+		return
+	}
+
+	var req catalogRefreshBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "codes are required"})
+		return
+	}
+
+	codes := make([]string, 0, len(req.Codes))
+	seen := map[string]bool{}
+	duplicates := []string{}
+	for _, raw := range req.Codes {
+		code := strings.TrimSpace(raw)
+		if code == "" {
+			continue
+		}
+		if len([]rune(code)) > catalogRefreshBatchCodeMaxLen {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":    fmt.Sprintf("รหัสสินค้า %s ยาวเกิน %d ตัวอักษร", code, catalogRefreshBatchCodeMaxLen),
+				"code":     code,
+				"max_size": catalogRefreshBatchCodeMaxLen,
+			})
+			return
+		}
+		if seen[code] {
+			duplicates = append(duplicates, code)
+			continue
+		}
+		seen[code] = true
+		codes = append(codes, code)
+	}
+	if len(codes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาระบุรหัสสินค้า SML อย่างน้อย 1 รหัส"})
+		return
+	}
+	if len(codes) > catalogRefreshBatchLimit {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":    fmt.Sprintf("ดึงสินค้าได้สูงสุด %d รหัสต่อครั้ง", catalogRefreshBatchLimit),
+			"max_size": catalogRefreshBatchLimit,
+		})
+		return
+	}
+	if h.catalogSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "catalog service not configured"})
+		return
+	}
+
+	results := make([]catalogRefreshBatchResult, 0, len(codes)+len(duplicates))
+	summary := catalogRefreshBatchSummary{Total: len(codes) + len(duplicates), Duplicate: len(duplicates)}
+	for _, code := range duplicates {
+		meta := itemcode.Inspect(code)
+		results = append(results, catalogRefreshBatchResult{
+			Code:           code,
+			Status:         "duplicate",
+			HasHiddenChars: meta.HasHiddenChars,
+			CleanItemCode:  meta.CleanItemCode,
+		})
+	}
+
+	successCount := 0
+	for _, code := range codes {
+		meta := itemcode.Inspect(code)
+		result := catalogRefreshBatchResult{
+			Code:           code,
+			HasHiddenChars: meta.HasHiddenChars,
+			CleanItemCode:  meta.CleanItemCode,
+		}
+
+		item, notFound, err := h.catalogSvc.RefreshOne(code)
+		if err != nil {
+			h.logger.Warn("catalog refresh batch item failed", zap.String("code", code), zap.Error(err))
+			result.Status = "failed"
+			result.Error = catalogRefreshUserError(err)
+			summary.Failed++
+			results = append(results, result)
+			continue
+		}
+		if notFound {
+			result.Status = "not_found"
+			result.NotFound = true
+			result.Error = "ไม่พบรหัสนี้ใน SML master กรุณาตรวจรหัสหรือเพิ่มสินค้าใน SML ก่อน"
+			summary.NotFound++
+			results = append(results, result)
+			continue
+		}
+		if item != nil {
+			item.ImageURL = catalogImageURL(item.ItemCode, item.ImageCount, item.PrimaryImageRoworder)
+			result.Item = item
+		}
+		result.Status = "success"
+		summary.Success++
+		successCount++
+		results = append(results, result)
+	}
+
+	if successCount > 0 && h.catalogIdx != nil && h.catalogRepo != nil {
+		if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
+			h.logger.Warn("catalog: reload index after refresh batch", zap.Error(err))
+		}
+	}
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "catalog_refresh_batch",
+			UserID:  userID,
+			Source:  "catalog",
+			Level:   "info",
+			TraceID: c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"total":     summary.Total,
+				"success":   summary.Success,
+				"not_found": summary.NotFound,
+				"failed":    summary.Failed,
+				"duplicate": summary.Duplicate,
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"summary": summary,
+		"results": results,
+	})
+}
+
+func catalogRefreshUserError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "context deadline exceeded"),
+		strings.Contains(msg, "timeout"),
+		strings.Contains(msg, "i/o timeout"):
+		return "เชื่อมต่อ SML ใช้เวลานานเกินไป เครื่อง SML/Postgres ของร้านนี้อาจยังไม่พร้อม"
+	case strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "network is unreachable"):
+		return "เชื่อมต่อ SML ไม่สำเร็จ กรุณาตรวจว่าเครื่อง SML/Postgres ของร้านเปิดอยู่"
+	case strings.Contains(msg, "sml api"):
+		return "SML API ตอบกลับว่าดึงสินค้าไม่สำเร็จ กรุณาตรวจสถานะ SML แล้วลองใหม่"
+	default:
+		return "ดึงสินค้าจาก SML ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"
+	}
 }
 
 // DELETE /api/catalog/:code — delete a single row from BillFlow's catalog.
@@ -484,8 +672,14 @@ func (h *CatalogHandler) GetProductUnits(c *gin.Context) {
 	)
 	units, statusCode, err := h.fetchSMLUnits(c.Request.Context(), listURL)
 	if err != nil {
+		if fallback, ok := h.catalogUnitFallback(code); ok {
+			c.Header("Cache-Control", "private, max-age=300")
+			c.JSON(http.StatusOK, gin.H{"units": fallback})
+			return
+		}
 		if statusCode == http.StatusNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "product units not found"})
+			c.Header("Cache-Control", "private, max-age=300")
+			c.JSON(http.StatusOK, gin.H{"units": []catalogUnitOption{}})
 			return
 		}
 		h.logger.Warn("catalog product units: SML request failed",
@@ -493,8 +687,41 @@ func (h *CatalogHandler) GetProductUnits(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "อ่านหน่วยนับสินค้าจาก SML ไม่สำเร็จ"})
 		return
 	}
+	if len(units) == 0 {
+		if fallback, ok := h.catalogUnitFallback(code); ok {
+			units = fallback
+		}
+	}
 	c.Header("Cache-Control", "private, max-age=300")
 	c.JSON(http.StatusOK, gin.H{"units": units})
+}
+
+func (h *CatalogHandler) catalogUnitFallback(code string) ([]catalogUnitOption, bool) {
+	if h.catalogRepo == nil {
+		return nil, false
+	}
+	item, err := h.catalogRepo.GetOne(code)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("catalog product units: local fallback lookup failed",
+				zap.String("code", code), zap.Error(err))
+		}
+		return nil, false
+	}
+	if item == nil {
+		return nil, false
+	}
+	unit := strings.TrimSpace(item.UnitCode)
+	if unit == "" {
+		return nil, false
+	}
+	return []catalogUnitOption{{
+		Code:        unit,
+		Name1:       unit,
+		StandValue:  1,
+		DivideValue: 1,
+		IsDefault:   true,
+	}}, true
 }
 
 func (h *CatalogHandler) fetchSMLUnits(ctx context.Context, listURL string) ([]catalogUnitOption, int, error) {
@@ -834,11 +1061,6 @@ type createProductRequest struct {
 // Returns the canonical code (from SML response) so the frontend can fill
 // the bill_item with it.
 func (h *CatalogHandler) CreateProduct(c *gin.Context) {
-	if h.productClient == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "product client not configured"})
-		return
-	}
-
 	var req createProductRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -850,6 +1072,18 @@ func (h *CatalogHandler) CreateProduct(c *gin.Context) {
 	req.UnitCode = strings.TrimSpace(req.UnitCode)
 	if req.Code == "" || req.Name == "" || req.UnitCode == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "code, name, unit_code are required"})
+		return
+	}
+	if meta := itemcode.Inspect(req.Code); meta.HasHiddenChars {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":           "item_code has hidden characters; create product is blocked to avoid dirty SML master data",
+			"code":            req.Code,
+			"clean_item_code": meta.CleanItemCode,
+		})
+		return
+	}
+	if h.productClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "product client not configured"})
 		return
 	}
 
@@ -1002,6 +1236,17 @@ func (h *CatalogHandler) ConfirmMatch(c *gin.Context) {
 			shelfCode = catalogItem.ShelfCode
 		}
 	}
+	if meta := itemcode.Inspect(req.ItemCode); meta.HasHiddenChars {
+		if catalogItem == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":           "item_code has hidden characters and does not exist in SML catalog",
+				"item_code":       req.ItemCode,
+				"clean_item_code": meta.CleanItemCode,
+			})
+			return
+		}
+		h.logHiddenItemCodeWarning(c, billID, itemID, req.ItemCode, meta, "confirm_match")
+	}
 
 	// Update bill_item
 	db := h.catalogRepo.DB()
@@ -1032,6 +1277,10 @@ func (h *CatalogHandler) ConfirmMatch(c *gin.Context) {
 		"wh_code":       whCode,
 		"shelf_code":    shelfCode,
 	}
+	if meta := itemcode.Inspect(req.ItemCode); meta.HasHiddenChars {
+		resp["has_hidden_chars"] = true
+		resp["clean_item_code"] = meta.CleanItemCode
+	}
 
 	// Optionally store wh/shelf back to bill_item (for SML payload)
 	if whCode != "" || shelfCode != "" {
@@ -1052,4 +1301,31 @@ func (h *CatalogHandler) ConfirmMatch(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func (h *CatalogHandler) logHiddenItemCodeWarning(c *gin.Context, billID, itemID, code string, meta itemcode.Analysis, context string) {
+	if h.auditRepo == nil {
+		return
+	}
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action:   "hidden_item_code_detected",
+		TargetID: &itemID,
+		UserID:   userID,
+		Source:   "catalog",
+		Level:    "warn",
+		TraceID:  c.GetString("trace_id"),
+		Detail: map[string]interface{}{
+			"context":         context,
+			"bill_id":         billID,
+			"item_code":       code,
+			"clean_item_code": meta.CleanItemCode,
+			"kinds":           meta.Kinds,
+			"allowed":         true,
+			"reason":          "dirty code exists in SML catalog",
+		},
+	})
 }

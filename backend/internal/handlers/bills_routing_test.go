@@ -74,6 +74,24 @@ func TestSMLSendErrorMessageExplainsEmpty404(t *testing.T) {
 	}
 }
 
+func TestValidateResolvedSendFieldsRequiresVisibleConfig(t *testing.T) {
+	h := &BillHandler{}
+	if err := h.validateResolvedSendFields("", "WH", "SH", "09:00", 0, 7); err == nil {
+		t.Fatal("missing doc_format should be rejected")
+	}
+	if err := h.validateResolvedSendFields("PO", "WH", "SH", "09:00", 0, 7); err != nil {
+		t.Fatalf("complete visible config rejected: %v", err)
+	}
+}
+
+func TestExtractSMLERPLogWarningFromNativeResponse(t *testing.T) {
+	raw := []byte(`{"success":true,"data":{"doc_no":"PO26050001","log_status":"warning","log_warning":"ไม่พบฐานข้อมูล data1_test_logs"}}`)
+	got := extractSMLERPLogWarning(raw)
+	if got != "ไม่พบฐานข้อมูล data1_test_logs" {
+		t.Fatalf("warning = %q", got)
+	}
+}
+
 func TestResolveEndpointFallsBackBySourceAndBillType(t *testing.T) {
 	tests := []struct {
 		name     string

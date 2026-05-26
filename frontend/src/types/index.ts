@@ -7,6 +7,18 @@ export interface User {
   created_at: string
 }
 
+// Live SML tenant DB readiness from sml-api-bybos /health/ready.
+export interface SMLReadiness {
+  configured: boolean
+  ready: boolean
+  status: string
+  tenant?: string
+  message: string
+  http_status?: number
+  checked_at: string
+  cached?: boolean
+}
+
 // ─── Catalog ─────────────────────────────────────────────────────────────────
 export interface CatalogMatch {
   item_code: string
@@ -21,6 +33,8 @@ export interface CatalogMatch {
   primary_image_guid?: string
   primary_image_bytes?: number
   image_url?: string
+  has_hidden_chars?: boolean
+  clean_item_code?: string
   score: number
 }
 
@@ -56,6 +70,8 @@ export interface CatalogItem {
   primary_image_bytes?: number
   image_synced_at?: string | null
   image_url?: string
+  has_hidden_chars?: boolean
+  clean_item_code?: string
   synced_at?: string | null
   last_seen_at?: string | null
   is_active?: boolean
@@ -79,6 +95,8 @@ export interface BillItem {
   source_sku?: string
   source_image_url?: string
   item_code?: string | null
+  has_hidden_chars?: boolean
+  clean_item_code?: string
   qty: number
   unit_code?: string | null
   price?: number | null
@@ -127,6 +145,10 @@ export interface BillEmailGroup {
   from?: string
   order_count: number
   has_printable_email?: boolean
+  print_count?: number
+  last_printed_at?: string | null
+  last_printed_by_email?: string
+  last_printed_by_name?: string
   related_bills?: BillEmailRelatedBill[]
   print_events?: EmailPrintEvent[]
 }

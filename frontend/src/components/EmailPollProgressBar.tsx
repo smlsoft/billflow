@@ -13,6 +13,8 @@ import {
 import { cn } from '@/lib/utils'
 
 const PURCHASE_BILLS_URL = '/bills?status=needs_review&source=shopee_shipped&bill_type=purchase'
+const ACTIVE_POLL_MS = 4_000
+const IDLE_POLL_MS = 30_000
 
 function doneCount(job: IMAPPollJob) {
   return Math.min(job.scanned_count || 0, Math.max(job.total_count || job.scanned_count || 0, 0))
@@ -29,10 +31,24 @@ export function EmailPollProgressBar() {
 
   useEffect(() => {
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let inFlight = false
+    let rerunRequested = false
     const load = async () => {
+      if (inFlight) {
+        rerunRequested = true
+        return
+      }
+      inFlight = true
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      let nextDelay = IDLE_POLL_MS
       try {
         const active = await listActiveIMAPPollJobs()
         if (cancelled) return
+        nextDelay = active.some(isActiveIMAPPollJob) ? ACTIVE_POLL_MS : IDLE_POLL_MS
         const nextIds = new Set(active.map((job) => job.id))
         for (const id of activeIdsRef.current) {
           if (nextIds.has(id)) continue
@@ -59,13 +75,27 @@ export function EmailPollProgressBar() {
         setJobs(active)
       } catch {
         if (!cancelled) setJobs([])
+      } finally {
+        inFlight = false
+        if (rerunRequested && !cancelled) {
+          rerunRequested = false
+          void load()
+          return
+        }
+        if (!cancelled) {
+          timer = setTimeout(load, nextDelay)
+        }
       }
     }
     load()
-    const t = setInterval(load, 4_000)
+    const handleJobStarted = () => {
+      void load()
+    }
+    window.addEventListener('billflow:imap-poll-job-started', handleJobStarted)
     return () => {
       cancelled = true
-      clearInterval(t)
+      if (timer) clearTimeout(timer)
+      window.removeEventListener('billflow:imap-poll-job-started', handleJobStarted)
     }
   }, [])
 

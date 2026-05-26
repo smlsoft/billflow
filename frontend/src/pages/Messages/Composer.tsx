@@ -264,7 +264,7 @@ export function Composer({
                 <MessageSquare className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-72 p-0" align="start" side="top">
+            <PopoverContent className="w-[min(18rem,calc(100vw-2rem))] p-0" align="start" side="top">
               {quickReplies.length === 0 ? (
                 <div className="p-3 text-xs text-muted-foreground">
                   ยังไม่มี template — เพิ่มใน{' '}
@@ -273,7 +273,10 @@ export function Composer({
                   </a>
                 </div>
               ) : (
-                <ul className="max-h-72 divide-y divide-border overflow-y-auto">
+                <ul
+                  className="divide-y divide-border overflow-y-auto"
+                  style={{ maxHeight: 'min(18rem, var(--radix-popover-content-available-height, 18rem))' }}
+                >
                   {quickReplies.map((q) => (
                     <li key={q.id}>
                       <button

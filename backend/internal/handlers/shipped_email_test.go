@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -191,6 +192,214 @@ func TestConfiguredShopeeShippingLineUsesConfiguredItem(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
 	}
+}
+
+func TestConfiguredShopeeShippingLineAllowsZeroAmount(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &EmailHandler{
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		logger:          zap.NewNop(),
+	}
+	mock.ExpectQuery("FROM channel_defaults").
+		WithArgs("shopee_shipped", "purchase").
+		WillReturnRows(channelDefaultRows().AddRow(
+			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_TEST", "ครั้ง", "", "", -1, -1.0, nil, time.Now(),
+		))
+
+	item, ready := h.configuredShopeeShippingLine("#2601AAA", 0, true)
+	if item == nil {
+		t.Fatal("expected zero-baht shipping item")
+	}
+	if !ready {
+		t.Fatal("expected ready shipping item")
+	}
+	if item.Price == nil || *item.Price != 0 {
+		t.Fatalf("price = %v, want 0", item.Price)
+	}
+	if item.ItemCode == nil || *item.ItemCode != "SHIP_TEST" {
+		t.Fatalf("item_code = %v, want SHIP_TEST", item.ItemCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestEnsureShopeeShippingLineForSendAddsMissingConfiguredLine(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &BillHandler{
+		billRepo:        repository.NewBillRepo(db),
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		log:             zap.NewNop(),
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"shipping_amount": 48.0})
+	bill := &models.Bill{
+		ID:       "ff6fb63d-ab51-4041-a943-c5a2cea6bbca",
+		Source:   "shopee_shipped",
+		BillType: "purchase",
+		RawData:  raw,
+		Items: []models.BillItem{{
+			ID:       "item-1",
+			RawName:  "สินค้า",
+			Qty:      1,
+			Mapped:   true,
+			ItemCode: testStringPtr("BF0004"),
+		}},
+	}
+	mock.ExpectQuery("FROM channel_defaults").
+		WithArgs("shopee_shipped", "purchase").
+		WillReturnRows(channelDefaultRows().AddRow(
+			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_POL", "บาท", "", "", -1, -1.0, nil, time.Now(),
+		))
+	mock.ExpectQuery("INSERT INTO bill_items").
+		WithArgs(
+			bill.ID, "ค่าจัดส่งสินค้า", models.ShopeeShippingSourceSKU, "",
+			sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ship-item"))
+
+	inserted, err := h.ensureShopeeShippingLineForSend(bill)
+	if err != nil {
+		t.Fatalf("ensureShopeeShippingLineForSend: %v", err)
+	}
+	if inserted == nil {
+		t.Fatalf("inserted item is nil")
+	}
+	if len(bill.Items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(bill.Items))
+	}
+	ship := bill.Items[1]
+	if ship.SourceSKU != models.ShopeeShippingSourceSKU {
+		t.Fatalf("source_sku = %q, want shipping sentinel", ship.SourceSKU)
+	}
+	if ship.ItemCode == nil || *ship.ItemCode != "SHIP_POL" {
+		t.Fatalf("item_code = %v, want SHIP_POL", ship.ItemCode)
+	}
+	if ship.UnitCode == nil || *ship.UnitCode != "บาท" {
+		t.Fatalf("unit_code = %v, want บาท", ship.UnitCode)
+	}
+	if ship.Price == nil || *ship.Price != 48 || ship.Qty != 1 || !ship.Mapped {
+		t.Fatalf("shipping item = %+v, want qty=1 price=48 mapped=true", ship)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestEnsureShopeeShippingLineForSendAddsZeroAmountLine(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &BillHandler{
+		billRepo:        repository.NewBillRepo(db),
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		log:             zap.NewNop(),
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"shipping_amount": 0.0})
+	bill := &models.Bill{
+		ID:       "ff6fb63d-ab51-4041-a943-c5a2cea6bbca",
+		Source:   "shopee_shipped",
+		BillType: "purchase",
+		RawData:  raw,
+		Items: []models.BillItem{{
+			ID:       "item-1",
+			RawName:  "สินค้า",
+			Qty:      1,
+			Mapped:   true,
+			ItemCode: testStringPtr("BF0004"),
+		}},
+	}
+	mock.ExpectQuery("FROM channel_defaults").
+		WithArgs("shopee_shipped", "purchase").
+		WillReturnRows(channelDefaultRows().AddRow(
+			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_POL", "บาท", "", "", -1, -1.0, nil, time.Now(),
+		))
+	mock.ExpectQuery("INSERT INTO bill_items").
+		WithArgs(
+			bill.ID, "ค่าจัดส่งสินค้า", models.ShopeeShippingSourceSKU, "",
+			sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ship-item"))
+
+	inserted, err := h.ensureShopeeShippingLineForSend(bill)
+	if err != nil {
+		t.Fatalf("ensureShopeeShippingLineForSend: %v", err)
+	}
+	if inserted == nil {
+		t.Fatal("inserted item is nil")
+	}
+	ship := bill.Items[1]
+	if ship.Price == nil || *ship.Price != 0 {
+		t.Fatalf("shipping price = %v, want 0", ship.Price)
+	}
+	if ship.ItemCode == nil || *ship.ItemCode != "SHIP_POL" {
+		t.Fatalf("item_code = %v, want SHIP_POL", ship.ItemCode)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestEnsureShopeeShippingLineForSendSkipsExistingLine(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &BillHandler{
+		billRepo:        repository.NewBillRepo(db),
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		log:             zap.NewNop(),
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"shipping_amount": 48.0})
+	bill := &models.Bill{
+		ID:       "bill-1",
+		Source:   "shopee_shipped",
+		BillType: "purchase",
+		RawData:  raw,
+		Items: []models.BillItem{{
+			ID:        "ship-item",
+			SourceSKU: models.ShopeeShippingSourceSKU,
+			RawName:   "ค่าจัดส่งสินค้า",
+			Qty:       1,
+			Mapped:    true,
+			ItemCode:  testStringPtr("SHIP_POL"),
+		}},
+	}
+
+	inserted, err := h.ensureShopeeShippingLineForSend(bill)
+	if err != nil {
+		t.Fatalf("ensureShopeeShippingLineForSend: %v", err)
+	}
+	if inserted != nil {
+		t.Fatalf("inserted item = %+v, want nil for existing line", inserted)
+	}
+	if len(bill.Items) != 1 {
+		t.Fatalf("items len = %d, want unchanged 1", len(bill.Items))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func testStringPtr(v string) *string {
+	return &v
 }
 
 func channelDefaultRows() *sqlmock.Rows {

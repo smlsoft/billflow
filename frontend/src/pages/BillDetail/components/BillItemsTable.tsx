@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/table'
 import type { Bill, BillItem } from '@/types'
 import { isShopeePurchaseBill, isShopeeSalesBill, money } from '@/lib/shopeeBill'
+import { hasInvalidPrice } from '../utils/validation'
 import { BillItemRow } from './BillItemRow'
 
 interface Props {
@@ -67,8 +68,7 @@ export function BillItemsTable({
       !item.unit_code ||
       !item.qty ||
       item.qty <= 0 ||
-      item.price == null ||
-      item.price <= 0
+      hasInvalidPrice(item)
     )
   }).length
 

@@ -243,7 +243,7 @@ function GmailSetupChecklist() {
 function AppPasswordHelp({ host }: { host: string }) {
   const guide = getProviderGuide(host)
   return (
-    <Popover>
+    <Popover modal>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -253,7 +253,11 @@ function AppPasswordHelp({ host }: { host: string }) {
           วิธีรับ App Password
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[420px]" align="end">
+      <PopoverContent
+        className="w-[min(420px,calc(100vw-2rem))] overflow-y-auto"
+        align="end"
+        style={{ maxHeight: 'min(70vh, var(--radix-popover-content-available-height, 70vh))' }}
+      >
         {guide ? (
           <div className="space-y-3">
             <div>

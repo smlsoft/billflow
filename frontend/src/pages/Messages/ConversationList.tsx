@@ -199,7 +199,7 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
                 )}
               </Button>
             </PopoverTrigger>
-            <PopoverContent align="end" className="w-64 p-1">
+            <PopoverContent align="end" className="w-[min(16rem,calc(100vw-2rem))] p-1">
               <div className="flex items-center justify-between px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
                 <span>กรองตาม tag (any-match)</span>
                 {selectedTagIDs.length > 0 && (
@@ -218,7 +218,10 @@ export function ConversationList({ selectedID, onSelect, onSelectedConvChange }:
               <div className="border-b border-border/50 px-2 pb-1.5 text-[10px] leading-snug text-muted-foreground">
                 💡 ติด tag ให้ห้องแชทได้ที่ <span className="font-medium text-foreground">header ของห้อง</span>
               </div>
-              <div className="flex max-h-64 flex-col overflow-auto">
+              <div
+                className="flex flex-col overflow-auto"
+                style={{ maxHeight: 'min(16rem, var(--radix-popover-content-available-height, 16rem))' }}
+              >
                 {allTags.map((t) => {
                   const checked = selectedTagIDs.includes(t.id)
                   return (

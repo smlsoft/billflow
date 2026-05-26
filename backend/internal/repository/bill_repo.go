@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"billflow/internal/models"
+	"billflow/internal/services/itemcode"
 	"github.com/lib/pq"
 )
 
@@ -592,9 +594,31 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 		if len(candidatesRaw) > 0 {
 			item.Candidates = json.RawMessage(candidatesRaw)
 		}
+		if item.ItemCode != nil {
+			meta := itemcode.Inspect(*item.ItemCode)
+			item.HasHiddenChars = meta.HasHiddenChars
+			item.CleanItemCode = meta.CleanItemCode
+		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortBillItemsForDisplay(items)
+	return items, nil
+}
+
+func sortBillItemsForDisplay(items []models.BillItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return billItemDisplayGroup(items[i]) < billItemDisplayGroup(items[j])
+	})
+}
+
+func billItemDisplayGroup(item models.BillItem) int {
+	if item.SourceSKU == models.ShopeeShippingSourceSKU {
+		return 1
+	}
+	return 0
 }
 
 func (r *BillRepo) InsertItem(item *models.BillItem) error {

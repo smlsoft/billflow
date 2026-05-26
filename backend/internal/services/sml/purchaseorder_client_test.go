@@ -29,8 +29,8 @@ func TestBuildPurchaseOrderPayloadAppliesLineDiscounts(t *testing.T) {
 	if payload.Items[1].DiscountAmount != 5 || payload.Items[1].SumAmount != 95 {
 		t.Fatalf("second line = %+v, want discount=5 sum=95", payload.Items[1])
 	}
-	if payload.TotalValue != 200 || payload.TotalDiscount != 15 || payload.TotalAmount != 185 {
-		t.Fatalf("totals value=%v discount=%v amount=%v, want 200/15/185",
+	if payload.TotalValue != 185 || payload.TotalDiscount != 0 || payload.TotalAmount != 185 {
+		t.Fatalf("totals value=%v discount=%v amount=%v, want 185/0/185",
 			payload.TotalValue, payload.TotalDiscount, payload.TotalAmount)
 	}
 }
@@ -49,8 +49,9 @@ func TestBuildPurchaseOrderPayloadCapsLineDiscountAtGross(t *testing.T) {
 	if payload.Items[0].DiscountAmount != 100 || payload.Items[0].SumAmount != 0 {
 		t.Fatalf("line = %+v, want capped discount=100 sum=0", payload.Items[0])
 	}
-	if payload.TotalDiscount != 100 || payload.TotalAmount != 0 {
-		t.Fatalf("totals discount=%v amount=%v, want 100/0", payload.TotalDiscount, payload.TotalAmount)
+	if payload.TotalValue != 0 || payload.TotalDiscount != 0 || payload.TotalAmount != 0 {
+		t.Fatalf("totals value=%v discount=%v amount=%v, want 0/0/0",
+			payload.TotalValue, payload.TotalDiscount, payload.TotalAmount)
 	}
 }
 
@@ -61,7 +62,7 @@ func TestBuildPurchaseOrderPayloadIncludesHeaderFields(t *testing.T) {
 		"7275",
 		"",
 		[]POItem{{ItemCode: "ITEM-1", Qty: 1, Price: 100, UnitCode: "ชิ้น"}},
-		PurchaseOrderConfig{DocFormat: "PO", CustCode: "V001", VATType: 2, UnitCode: "ชิ้น"},
+		PurchaseOrderConfig{DocFormat: "PO", CustCode: "V001", VATType: 2, UnitCode: "ชิ้น", WHCode: "WH-01", ShelfCode: "SH-01"},
 		"alove922",
 		PurchaseOrderHeaderOptions{
 			Remark:      "alove922",
@@ -79,6 +80,9 @@ func TestBuildPurchaseOrderPayloadIncludesHeaderFields(t *testing.T) {
 	}
 	if payload.InquiryType != 1 {
 		t.Fatalf("inquiry_type = %d, want 1", payload.InquiryType)
+	}
+	if payload.Items[0].WHCode2 != "WH-01" || payload.Items[0].ShelfCode2 != "SH-01" {
+		t.Fatalf("secondary warehouse/shelf = %q/%q, want WH-01/SH-01", payload.Items[0].WHCode2, payload.Items[0].ShelfCode2)
 	}
 }
 
