@@ -1,16 +1,16 @@
 # BillFlow Deploy Instances
 
-Registry สำหรับจำว่าแต่ละร้านใช้ folder, port, container และ Cloudflare tunnel ไหนบน server `192.168.2.109`.
+Registry สำหรับจำว่าแต่ละร้านใช้ folder, port, container และ public tunnel ไหนบน server `192.168.2.109`.
 
-> หมายเหตุ: Main/Thaisunsport ยังใช้ Cloudflare Quick Tunnel (`trycloudflare.com`) และ URL จะเปลี่ยนเมื่อ process `cloudflared` restart. Henna ตอนนี้ใช้ `ngrok` (fixed dev domain) แทน.
+> หมายเหตุ: Main/Thaisunsport ใช้ Cloudflare Quick Tunnel (`trycloudflare.com`) และ URL จะเปลี่ยนเมื่อ process `cloudflared` restart. Henna ตอนนี้มีทั้ง Cloudflare Quick Tunnel ที่ user ใช้งาน (`tops-twins-oasis-philip.trycloudflare.com`) และ ngrok domain ที่ยังตั้งใน `PUBLIC_BASE_URL`/Shopee redirect.
 
 ## Summary
 
 | Instance | ร้าน / วัตถุประสงค์ | Server folder | Frontend | Backend | PostgreSQL | Cloudflare URL ล่าสุด | Tunnel log |
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
-| `billflow` | BillFlow ปกติ / demo หลัก | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | ดูจาก log | `/tmp/billflow-tunnel.log` |
+| `billflow` | BillFlow ปกติ / demo หลัก | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | `https://edt-surfaces-graph-pension.trycloudflare.com` | `/tmp/billflow-tunnel.log` |
 | `billflow-thaisunsport` | Thaisunsport demo Phase 1 ฝั่งซื้อ | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | `https://pets-mini-museums-ships.trycloudflare.com` | `/tmp/billflow-thaisunsport-tunnel.log` |
-| `billflow-henna` | Henna customer trial | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5458` | `https://animal-galvanize-tameness.ngrok-free.dev` | `- (ngrok)` |
+| `billflow-henna` | Henna customer trial | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5440` | `https://tops-twins-oasis-philip.trycloudflare.com` | `/tmp/billflow-henna-tunnel.log` |
 
 ## Deploy Policy
 
@@ -25,13 +25,14 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 
 ก่อน deploy ทุกครั้งต้องระบุ `Change type`, `Deploy targets`, และ instance ที่ตั้งใจ skip ให้ชัดเจนในข้อความสรุป.
 
-## Next Planned Phase — Shopee API Direct
+## Current Marketplace / Shopee Policy
 
-- เริ่ม development/test บน `billflow` ก่อน เพราะเป็น demo หลักและใช้ตรวจ flow ใหม่ได้เร็วที่สุด.
-- เมื่อ stable แล้ว deploy ไป `billflow` + `billflow-henna` เพราะ Henna ต้องเทียบเท่า main สำหรับ Phase 1+ / งานฝั่งขาย.
-- ยังไม่ deploy ไป `billflow-thaisunsport` เพราะ instance นี้ยังเป็น Phase 1 ฝั่งซื้อ และปิด sales/import channel ด้วย feature flags.
-- Shopee API direct ต้อง feed เข้า review/SML retry pipeline เดิมเหมือน Shopee Excel; ห้ามสร้าง SML send flow แยกถ้าไม่จำเป็น.
-- Shopee Excel ต้องคงไว้เป็น fallback/manual import ระหว่าง UAT ของ API direct.
+- `billflow` main ใช้เป็นพื้นที่ dev/demo หลัก แต่หลัง cleanup 2026-05-27 `SHOPEE_OPEN_API_ENABLED=false` และไม่ควรโชว์ Henna shop เป็นสถานะพร้อมใช้งานใน MAIN.
+- `billflow-henna` เป็น instance ที่เปิด Shopee API จริงสำหรับ Henna.milkford และใช้ทดสอบ/ใช้งาน flow รับชำระ Shopee.
+- `billflow-thaisunsport` ยังเป็น Phase 1 ฝั่งซื้อเท่านั้น; code deploy ได้เพื่อ parity แต่ห้ามเปิด sales/import/Shopee settlement โดยไม่สั่งชัดเจน.
+- Shopee order import ต้อง feed เข้า review/SML retry pipeline เดิมเหมือน Shopee Excel: create local bills → review/mapping → retry/bulk send SML.
+- Shopee settlement (`/shopee-settlements`) เป็น workflow แยกสำหรับ Shopee released payout → SML AR receipt (`RC`), config อยู่ใน `/settings/channels` row `shopee_settlement/ar_receipt`, และไม่ปนกับ `/bulk-send-jobs`.
+- Shopee Excel ยังควรอยู่เป็น fallback/manual import ระหว่าง UAT/API outage.
 
 ## Container Names
 
@@ -62,7 +63,8 @@ docker ps --format '{{.Names}} {{.Ports}}' | grep billflow
 ```bash
 grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-tunnel.log | tail -1
 grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-thaisunsport-tunnel.log | tail -1
-# Henna currently uses ngrok domain from its own ngrok setup/config.
+grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/billflow-henna-tunnel.log | tail -1
+# Henna also has ngrok domain configured in PUBLIC_BASE_URL.
 ```
 
 ### Restart a Quick Tunnel
@@ -133,7 +135,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Henna Notes
 
-- Latest deploy verified: 2026-05-22 15:26 +07.
+- Latest deploy verified: 2026-05-27 13:35 +07.
 - Created from current normal BillFlow version, not Thaisunsport branch/config.
 - Deployed as isolated Docker Compose project in `/home/bosscatdog/billflow-henna`.
 - Database is separate PostgreSQL volume `billflow-henna_billflow_henna_pgdata`.
@@ -141,30 +143,48 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - App settings seeded:
   - `instance.name = BillFlow Henna`
   - `instance.slug = billflowhenna`
-- Runtime parity notes (2026-05-22):
-  - Synced from the same local source snapshot as BillFlow main and rebuilt `billflow-henna-backend` + `billflow-henna-frontend`.
+- Runtime parity notes (2026-05-27):
+  - Synced backend/frontend from the same local source snapshot as BillFlow main and rebuilt `billflow-henna-backend` + `billflow-henna-frontend`.
   - Runtime SML base URL in DB: `sml.rest_base_url=http://172.24.0.1:8200`.
-  - Health checks passed: `http://192.168.2.109:8110/health`, `http://192.168.2.109:3030/login`.
+  - Health checks passed: `http://192.168.2.109:8110/health`, `http://192.168.2.109:3030/shopee-settlements`, and `https://tops-twins-oasis-philip.trycloudflare.com/login`.
+  - Feature flags remain Phase 1+ (`VITE_ENABLE_SALES_ORDERS=true`, Shopee/Lazada/TikTok enabled) with `VITE_ENABLE_CHAT=false`.
+  - `SHOPEE_OPEN_API_ENABLED=true`.
 
 ## Thaisunsport Notes
 
-- Latest deploy verified: 2026-05-11 15:32 +07.
+- Latest deploy verified: 2026-05-27 13:35 +07.
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
   - `VITE_PHASE=1`
   - `VITE_ENABLE_SALES_ORDERS=false`
   - `VITE_ENABLE_SHOPEE_EXCEL=false`
+  - `VITE_ENABLE_LAZADA_EXCEL=false`
+  - `VITE_ENABLE_TIKTOK_EXCEL=false`
+  - `VITE_ENABLE_CHAT=false`
 - AI model config on server:
   - `OPENROUTER_MODEL=google/gemini-2.5-flash-lite`
   - `OPENROUTER_FALLBACK_MODEL=google/gemini-2.5-flash`
 - Verified after latest deploy:
   - backend health on `8100` is ok
   - frontend on `3020` serves HTML
-  - frontend flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`
+  - frontend flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`, `VITE_ENABLE_LAZADA_EXCEL=false`, `VITE_ENABLE_TIKTOK_EXCEL=false`, `VITE_ENABLE_CHAT=false`
   - containers `billflow-thaisunsport-frontend`, `billflow-thaisunsport-backend`, and `billflow-thaisunsport-postgres` are up
 
 ## Latest Shared Deploy
 
+- 2026-05-27 13:35 +07: Main UI consistency audit fixes deployed to all three instances.
+- Scope: `/setup` email readiness now treats `no_new_mail` as successful no-new-mail state, `/settings/email` shows instance context, Shopee disabled state is no longer presented as connected, Command Palette and Sidebar share the same nav metadata, document list wording separates "เอกสารสถานะพร้อมส่ง" from dialog "พร้อมส่งจริง", and Shopee settlement/channel defaults readiness language is aligned.
+- Cleanup on BillFlow main only:
+  - `PUBLIC_BASE_URL` and Shopee redirect set to `https://edt-surfaces-graph-pension.trycloudflare.com`.
+  - Thaisun inbox in main disabled, not deleted: `pd.thaisunsport2@gmail.com`.
+  - Henna Shopee connection in main disabled, not deleted: `Henna.milkford`.
+  - Audit action `main_config_cleanup` inserted with `reversible=true`.
+- Verification:
+  - Local: `go test ./...`, `npm run build`, `git diff --check`.
+  - Health: `8090`, `8110`, `8100` all returned healthy JSON.
+  - Frontend smoke: main `/settings/channels`, main `/settings/instance`, Henna `/shopee-settlements`, Thaisun `/bills`, and public login URLs all returned HTTP 200.
+  - Built assets in all three frontend containers contain current patch markers: `เอกสารสถานะพร้อมส่ง`, `พร้อมส่งจริง`, `Shopee API ปิดใช้งาน`.
+  - Thaisunsport remains Phase 1 with sales/Shopee/Lazada/TikTok/chat disabled.
 - 2026-05-22 15:26 +07: Main + Henna parity deploy and verification completed.
 - Scope: deployed local backend/frontend/docs/scripts snapshot to `billflow` then `billflow-henna`; rebuilt and restarted only those two instances.
 - Verification: `go test ./...`, `npm run build`, main preflight (`scripts/preflight-main.sh`), Henna preflight override (`BF_HOST=192.168.2.109 BACKEND_PORT=8110 FRONTEND_PORT=3030 SML_API_PORT=8200 SML_TENANT=aoy`), and API smoke for login/bills/channel-defaults on both passed.

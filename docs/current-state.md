@@ -1,20 +1,44 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-25 (end of day)
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, production preflight, SML image DB index verification, async SML bulk job smoke test/history page, frontend routes, container health, Shopee API readiness/status, real Shopee API preview discovery, and PostgreSQL schema for BillFlow main + Henna.
+> Updated: 2026-05-27 13:35 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, container asset inspection, LAN + public URL smoke checks, PostgreSQL cleanup verification on BillFlow main, and feature-flag verification for Thaisunsport.
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
+- Latest deploy (ทั้ง 3 instances), 2026-05-27:
+  - Commit deployed: `4e20c33 fix: align main ui readiness states`.
+  - Scope: UI consistency audit fixes across Login/Setup/Dashboard/Logs/Bills/Shopee Settlement/Settings/Instance config.
+  - `/setup` now treats IMAP `last_poll_status='no_new_mail'` as "ทดสอบสำเร็จ แต่ไม่มีอีเมลใหม่" instead of not-ready.
+  - `/settings/email` shows instance context so admins know which shop/channel an inbox belongs to.
+  - Shopee API disabled state no longer looks connected/usable; `/settings/instance`, `/import/shopee`, and `/shopee-settlements` show disabled/readiness warnings.
+  - Sidebar and Command Palette now share one navigation source; menus such as `/shopee-settlements`, `/marketplace-aliases`, `/settings/channels`, `/settings/old-data`, `/settings/users`, and `/settings/instance` stay consistent.
+  - Bills/Sale Invoice list wording now separates "เอกสารสถานะพร้อมส่ง" from dialog preflight "พร้อมส่งจริง".
+  - `/settings/channels` makes Shopee settlement passbook/expense saved values clearer, and `/shopee-settlements` uses the same "ยังไม่ตั้งค่า" readiness language.
+  - MAIN cleanup performed after deploy:
+    - `PUBLIC_BASE_URL` and Shopee redirect updated to `https://edt-surfaces-graph-pension.trycloudflare.com`.
+    - Thaisun inbox row in MAIN was disabled, not deleted: `Shopee Inbox THAISUNSPORT (ปิดใน MAIN)`.
+    - Henna Shopee connection row in MAIN was disabled, not deleted: `Henna.milkford (ปิดใน MAIN)`.
+    - Audit log action `main_config_cleanup` recorded with `reversible=true`.
+  - Validation before deploy: `go test ./...`, `npm run build`, and `git diff --check` passed.
+  - Deploy verification after restart:
+    - Backend health: main `8090`, Henna `8110`, Thaisun `8100` all returned `{"database":"ok","env":"production","status":"ok"}`.
+    - Frontend route smoke: main `/settings/channels`, main `/settings/instance`, Henna `/shopee-settlements`, Thaisun `/bills` all HTTP 200.
+    - Public URL smoke: main, Henna, and Thaisun login pages all HTTP 200.
+    - Built frontend bundles contain current patch markers such as `เอกสารสถานะพร้อมส่ง`, `พร้อมส่งจริง`, and `Shopee API ปิดใช้งาน`.
+  - Current public URLs:
+    - main: `https://edt-surfaces-graph-pension.trycloudflare.com`
+    - henna: `https://tops-twins-oasis-philip.trycloudflare.com` (active quick tunnel) and `https://animal-galvanize-tameness.ngrok-free.dev` (configured `PUBLIC_BASE_URL`/Shopee redirect)
+    - thaisunsport: `https://pets-mini-museums-ships.trycloudflare.com`
 - Latest frontend deploy (ทั้ง 3 instances), 2026-05-25:
   - **Email preview dialog (ArtifactList)** — แก้ช่องว่างด้านบนใน dialog ดูตัวอย่างอีเมล:
     - ใช้ React `createPortal` mount modal ตรงที่ `document.body` แทน render ใน DOM tree — หลุดออกจาก `space-y-4` parent ที่ inject `margin-top` ผ่าน Tailwind sibling selector
     - inject CSS reset ใน iframe HTML: `html,body { margin:0; padding:0 }` + `img { display:block }` เพื่อตัด tracking pixel baseline gap
     - links ใน email เปิด new tab ได้ผ่าน `allow-popups-to-escape-sandbox` sandbox attribute
   - deploy verified: main `3010` ✅, henna `3030` ✅, thaisunsport `3020` ✅
-  - Tunnel URLs ล่าสุด (2026-05-25):
+  - Tunnel URLs at that time (superseded by 2026-05-27 snapshot above):
     - main: `https://edt-surfaces-graph-pension.trycloudflare.com`
     - thaisunsport: `https://pets-mini-museums-ships.trycloudflare.com`
     - henna: `https://animal-galvanize-tameness.ngrok-free.dev`
@@ -35,10 +59,11 @@
 - BillFlow main latest code checkpoint, 2026-05-21:
   - Latest functional change: Bill Detail now treats low-confidence suggested matches as unconfirmed until `mapped=true`; Send SML and Bulk Send block these rows, and each row has a quick confirm button that reuses the existing F1 learning/update path.
   - Latest validation before this docs update: `go test ./...`, `npm run build`, `git diff --check`, and real-data Shopee API discovery for Henna.milkford passed locally; deploy/preflight/smoke should be rerun after any follow-up patch.
-- BillFlow main latest deploy/runtime checkpoint, 2026-05-21:
+- BillFlow main Shopee API runtime checkpoint, originally deployed 2026-05-21:
   - Shopee Open API readiness is deployed on `/import/shopee`: status checklist, OAuth URL generation, callback/token tables, preview-only API import, structured error UX, and live-cutover script/docs.
-  - Shopee console status is `Online`; BillFlow main is cut over to live Partner ID `2034838` with public redirect `https://animal-galvanize-tameness.ngrok-free.dev/api/shopee-api/callback`.
-  - BillFlow has connected live shops including `Henna.milkford` (`shop_id=264993963`) and `Semicolon Constructions` (`shop_id=1029622928`). UI requires an active selected shop for API/Excel import traceability.
+  - As of 2026-05-27 cleanup, BillFlow main has `SHOPEE_OPEN_API_ENABLED=false`; the stale Henna shop connection in MAIN is disabled rather than deleted, so MAIN no longer presents Henna as ready-to-use.
+  - MAIN `PUBLIC_BASE_URL` and Shopee redirect now point to `https://edt-surfaces-graph-pension.trycloudflare.com`.
+  - Henna is the active Shopee API/settlement test instance (`shop_id=264993963`, `Henna.milkford`).
   - Real Shopee API discovery for Henna.milkford over `2026-05-07` to `2026-05-21`: `create_time=28` orders, `update_time=38` orders. Shopee rejects `pay_time` for `get_order_list`; BillFlow now rejects it with a readable error.
   - API preview defaults to ready-to-bill statuses (`SHIPPED`, `TO_CONFIRM_RECEIVE`, `COMPLETED`), shows shipping/package/carrier/COD, includes shipping in mismatch detection, and blocks confirm when Shopee reports more pages.
   - Shopee Excel/email stays the fallback while the direct API path is tested with real date windows.
@@ -65,21 +90,22 @@
   - Verified on main after deploy: `go test ./...`, `npm run build`, `scripts/preflight-main.sh`, smoke checks for `/api/logs`, `/api/bills`, `/api/bills/counts`, and `/api/bills/old-data/summary`.
   - Residual risk: current production workload passed, but the planned 1M audit log / 100k bill performance seed test is still recommended before claiming full one-year high-volume proof.
 - Thaisunsport แยก instance อยู่ที่ frontend `3020`, backend `8100`, postgres `5448`.
-  - ล่าสุด deploy แล้วเมื่อ 2026-05-11 สำหรับ demo Phase 1 ฝั่งซื้อเท่านั้น.
+  - ล่าสุด deploy แล้วเมื่อ 2026-05-27 จาก codebase ปัจจุบัน แต่ยังคง feature flags Phase 1 ฝั่งซื้อเท่านั้น.
   - Public URL: `https://pets-mini-museums-ships.trycloudflare.com/login`
   - Health checked: backend `8100` = `ok`, frontend `3020` serve HTML ได้, containers up.
-  - Frontend build flags: `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`.
+  - Frontend build flags: `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`, `VITE_ENABLE_LAZADA_EXCEL=false`, `VITE_ENABLE_TIKTOK_EXCEL=false`, `VITE_ENABLE_CHAT=false`.
   - AI model ใน `.env`: `OPENROUTER_MODEL=google/gemini-2.5-flash-lite`, fallback `google/gemini-2.5-flash`.
   - สำหรับ demo Thaisunsport ตอนนี้อย่าเปิด Phase 1+ / Shopee Excel / ใบสั่งขาย จนกว่าลูกค้าจะผ่าน demo ฝั่งซื้อ.
 - Henna customer trial ถูกสร้างใหม่จาก BillFlow ปกติ ไม่ใช่ Thaisunsport:
-  - Public URL: `https://animal-galvanize-tameness.ngrok-free.dev/login`
+  - Public URL: `https://tops-twins-oasis-philip.trycloudflare.com/login` (active quick tunnel); `https://animal-galvanize-tameness.ngrok-free.dev/login` also works and remains configured for `PUBLIC_BASE_URL`/Shopee redirect.
   - Frontend `3030`, backend `8110`, postgres `5440`
   - Server folder `/home/bosscatdog/billflow-henna`
   - Containers `billflow-henna-frontend`, `billflow-henna-backend`, `billflow-henna-postgres`
-  - Latest parity deploy 2026-05-22 15:26 +07:
-    - Sync backend/frontend/docs/scripts จาก local source เดียวกับ BillFlow main แล้ว build/restart เฉพาะ Henna services.
-    - Backend health `8110` = `{"database":"ok","env":"production","status":"ok"}` และ frontend `/login` HTTP 200.
-    - Shopee API status หลัง deploy: `connected=true`, `can_fetch=true`, `shop_id=264993963`, `shop_name=Henna.milkford`, `token_state=access_valid`.
+  - Latest parity deploy 2026-05-27 13:35 +07:
+    - Sync backend/frontend จาก local source เดียวกับ BillFlow main แล้ว build/restart Henna services.
+    - Backend health `8110` = `{"database":"ok","env":"production","status":"ok"}` และ frontend `/shopee-settlements` HTTP 200.
+    - Feature flags remain Phase 1+ for purchase + sales + marketplace/Shopee settlement, with chat disabled.
+    - Shopee API stays enabled for Henna (`SHOPEE_OPEN_API_ENABLED=true`).
   - Latest QA fix deploy 2026-05-12 13:05 +07:
     - Henna frontend rebuilt as Phase 1+ (`VITE_PHASE=99`, sales/Shopee/Lazada/TikTok Excel enabled) but chat is explicitly disabled with `VITE_ENABLE_CHAT=false`.
     - Policy clarification: Henna Phase 1+ means purchase + sales + marketplace Excel, not LINE/chat features.
@@ -426,8 +452,8 @@
 ### Local Workspace
 
 - Git branch: `main`.
-- Last known committed code change before this docs update: `871e8f5 feat: add async SML bulk send jobs`.
-- Untracked customer sample file remains local: `Order.all.20260401_20260430.xlsx`. Do not commit unless explicitly requested.
+- Last committed code change before this docs update: `4e20c33 fix: align main ui readiness states`.
+- Worktree was clean after commit/deploy before this docs update.
 - Codex skill `buddhist-method` is installed locally and updated with principles 7-16; current session can use it.
 
 ## Deployment
@@ -436,7 +462,7 @@
 |---|---|---:|---:|---:|---|
 | BillFlow main | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | ✅ |
 | Thaisunsport | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | ✅ |
-| Henna | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5458` | ✅ |
+| Henna | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5440` | ✅ |
 
 The server folders are deployed copies, not git checkouts. Deploy/update commands should target the correct folder and must not assume `git status` works there.
 

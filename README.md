@@ -41,6 +41,7 @@
 | Lazada Excel | Export จาก Lazada Seller Center | บิลขาย | Phase 4b | ✅ deployed main + Henna |
 | TikTok Excel/CSV | Export จาก TikTok Seller Center | บิลขาย | Phase 4c | ✅ deployed main + Henna |
 | Shopee API direct | Shopee Open Platform order sync | บิลขาย | Phase 4d | ✅ live OAuth + multi-shop preview/import by selected shop; review-first before SML |
+| Shopee Settlement | Shopee released payout → SML AR receipt (`RC`) | รับชำระลูกหนี้ | Phase 4e | ✅ deployed main + Henna; hidden on Thaisun by feature flags |
 
 
 **Output:** สร้างบิลใน SML ERP ผ่าน JSON-RPC API + บันทึก log ลง PostgreSQL + แจ้ง admin ผ่าน LINE เมื่อเกิด error
@@ -926,7 +927,7 @@ sudo systemctl start cloudflared
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
-### Latest Production Check (2026-05-20)
+### Latest Production Check (2026-05-27)
 
 ```
 Server folder: /home/bosscatdog/billflow
@@ -937,9 +938,23 @@ Containers:
 Health:
   {"database":"ok","env":"production","status":"ok"}
 DB:
-  migrations through 045 present in code, including Shopee Open API,
-  SML catalog image metadata, async SML bulk job tables, and Shopee
-  multi-shop metadata / shop-scoped duplicate protection.
+  migrations through 052 present in code, including Shopee Open API,
+  SML catalog image metadata, async SML bulk job tables, Shopee
+  multi-shop metadata, Shopee settlement runs/items, and hidden settlement runs.
+Latest deployed commit:
+  4e20c33 fix: align main ui readiness states
+Frontend/runtime smoke:
+  main 3010/8090, Henna 3030/8110, Thaisun 3020/8100 all healthy.
+  Public URLs verified:
+    main    https://edt-surfaces-graph-pension.trycloudflare.com
+    Henna   https://tops-twins-oasis-philip.trycloudflare.com
+    Thaisun https://pets-mini-museums-ships.trycloudflare.com
+  Built assets contain current UI copy: "เอกสารสถานะพร้อมส่ง",
+  "พร้อมส่งจริง", and "Shopee API ปิดใช้งาน".
+Main cleanup:
+  PUBLIC_BASE_URL now points to main Cloudflare URL.
+  Thaisun inbox and Henna Shopee connection in main DB are disabled, not deleted,
+  with audit action main_config_cleanup and reversible=true.
 SML images:
   active tenant SML1_2026 uses sml1_2026_images; image lookup index
   images_trim_image_id_order_roworder_file_idx verified.
@@ -953,6 +968,14 @@ Async SML bulk send:
   smoke-tested after deploy.
   Live smoke passed: job 128ceffe-5055-4863-8944-c6ce52301d26
   sent bill 20275aed-fe5f-402f-9160-a93a3f5b2ccb to SML PO BF-PO26050001.
+Shopee settlement:
+  /shopee-settlements handles released Shopee payout preview, duplicate/reconcile
+  guards, SML RC send, Thai audit logs, pagination, and hide/restore of stale runs.
+  Config lives in /settings/channels as channel shopee_settlement/ar_receipt.
+  /bulk-send-jobs intentionally remains only for sending bills to SML, not RC runs.
+Thaisun:
+  Current code is deployed for parity, but frontend flags remain purchase-only:
+  VITE_PHASE=1, sales/Shopee/Lazada/TikTok/chat all disabled.
 
 Email IMAP pipeline (2026-04-24):
 ✅ SASL PLAIN auth (Gmail App Password)
@@ -1167,4 +1190,4 @@ bash scripts/test.sh all 192.168.2.109:8090
 
 ---
 
-*BillFlow v0.2.0 — Last updated: 2026-05-21 | Server: 192.168.2.109 | Ports: backend:8090 / frontend:3010 / postgres:5438*
+*BillFlow v0.2.0 — Last updated: 2026-05-27 | Server: 192.168.2.109 | Main ports: backend:8090 / frontend:3010 / postgres:5438*
