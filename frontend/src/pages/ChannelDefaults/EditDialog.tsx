@@ -436,6 +436,11 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                         </option>
                       ))}
                     </select>
+                    <p className="text-[11px] text-muted-foreground">
+                      {passbookCodeTrimmed
+                        ? 'ค่าที่เลือกนี้จะถูกบันทึกเป็นบัญชีรับเงินจริงสำหรับรับชำระ Shopee'
+                        : 'รายการในช่องนี้เป็นตัวเลือกจาก SML ยังไม่ใช่ค่าที่บันทึก จนกว่าจะเลือกแล้วกดบันทึก'}
+                    </p>
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-xs">ส่วนต่าง Shopee</Label>
@@ -452,6 +457,11 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                         </option>
                       ))}
                     </select>
+                    <p className="text-[11px] text-muted-foreground">
+                      {expenseCodeTrimmed
+                        ? 'ค่าที่เลือกนี้จะใช้เมื่อต้องลงค่าธรรมเนียม/ส่วนต่าง Shopee'
+                        : 'เว้นว่างได้ แต่ถ้ารอบส่งมีส่วนต่าง ระบบจะบังคับเลือกก่อนสร้าง RC'}
+                    </p>
                   </div>
                 </div>
                 {!expenseCodeTrimmed && (

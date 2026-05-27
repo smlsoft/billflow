@@ -288,6 +288,26 @@ export default function ChannelDefaults() {
     return !r.endpoint || !r.doc_format_code || !r.doc_prefix || !r.doc_running_format
   }
 
+  const configSummary = (r: ChannelDefaultRow) => {
+    if (r.channel === 'shopee_settlement' && r.bill_type === 'ar_receipt') {
+      return (
+        <div className="space-y-0.5 text-xs">
+          <div className={r.passbook_code ? 'text-foreground' : 'text-warning'}>
+            บัญชีรับเงิน: {r.passbook_code ? `${r.passbook_code}${r.passbook_name ? ` · ${r.passbook_name}` : ''}` : 'ยังไม่ตั้งค่า'}
+          </div>
+          <div className={r.expense_code ? 'text-muted-foreground' : 'text-muted-foreground'}>
+            ส่วนต่าง Shopee: {r.expense_code ? `${r.expense_code}${r.expense_name ? ` · ${r.expense_name}` : ''}` : 'ยังไม่ตั้งค่า'}
+          </div>
+        </div>
+      )
+    }
+    return (
+      <span className="text-xs text-muted-foreground">
+        ค่า wh/shelf/VAT เลือกใน dialog ส่ง SML
+      </span>
+    )
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -366,6 +386,11 @@ export default function ChannelDefaults() {
                 <span className="text-xs text-warning">ยังไม่ตั้ง</span>
               )
             },
+          },
+          {
+            key: 'config_summary',
+            header: 'ค่าใช้งาน',
+            cell: (r) => configSummary(r),
           },
           {
             key: 'updated',

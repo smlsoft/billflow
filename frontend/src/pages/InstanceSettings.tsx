@@ -43,6 +43,14 @@ type Response = {
 
 type TestResult = { ok: boolean; error?: string; detail?: string }
 type TestResults = { sml?: TestResult; line?: TestResult; openrouter?: TestResult }
+type ShopeeAPIStatus = {
+  enabled: boolean
+  connected: boolean
+  shop_id?: number
+  shop_name?: string
+  redirect_url?: string
+  blocking_reason?: string
+}
 
 const GROUP_META: Record<SettingGroup, { title: string; description: string; icon: typeof Building2 }> = {
   instance: {
@@ -113,6 +121,7 @@ export default function InstanceSettings() {
 
   const [testing, setTesting] = useState(false)
   const [testResults, setTestResults] = useState<TestResults | null>(null)
+  const [shopeeAPIStatus, setShopeeAPIStatus] = useState<ShopeeAPIStatus | null>(null)
 
   const [confirmSave, setConfirmSave] = useState(false)
   const [confirmSaveDesc, setConfirmSaveDesc] = useState('')
@@ -128,6 +137,10 @@ export default function InstanceSettings() {
       setDraft(
         Object.fromEntries((res.data.settings ?? []).map((s) => [s.key, s.value ?? ''])),
       )
+      client
+        .get<ShopeeAPIStatus>('/api/settings/shopee-api/status')
+        .then((statusRes) => setShopeeAPIStatus(statusRes.data))
+        .catch(() => setShopeeAPIStatus(null))
     } catch {
       toast.error('โหลดค่าการเชื่อมต่อไม่สำเร็จ')
     } finally {
@@ -150,6 +163,16 @@ export default function InstanceSettings() {
     () => new Set(grouped.flatMap((g) => g.items.map((s) => s.key))),
     [grouped],
   )
+  const shopeeRedirectHost = useMemo(() => {
+    if (!shopeeAPIStatus?.redirect_url) return ''
+    try {
+      return new URL(shopeeAPIStatus.redirect_url).host
+    } catch {
+      return ''
+    }
+  }, [shopeeAPIStatus?.redirect_url])
+  const currentHost = typeof window !== 'undefined' ? window.location.host : ''
+  const shopeeRedirectMismatch = Boolean(shopeeAPIStatus?.enabled && shopeeRedirectHost && currentHost && shopeeRedirectHost !== currentHost)
 
   const waitForBackend = async () => {
     await new Promise((resolve) => setTimeout(resolve, 1200))
@@ -295,6 +318,26 @@ export default function InstanceSettings() {
           </div>
         </div>
       </div>
+
+      {shopeeAPIStatus && (!shopeeAPIStatus.enabled || shopeeRedirectMismatch) && (
+        <div className="rounded-lg border border-warning/35 bg-warning/[0.07] p-3 text-sm">
+          <div className="flex gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <div className="min-w-0">
+              <p className="font-medium text-foreground">
+                {shopeeAPIStatus.enabled ? 'Shopee Redirect URL อาจไม่ตรงกับ instance นี้' : 'Shopee API ปิดใช้งานใน instance นี้'}
+              </p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                {shopeeAPIStatus.enabled
+                  ? `หน้าปัจจุบันคือ ${currentHost || 'ไม่ทราบ host'} แต่ redirect URL ชี้ไปที่ ${shopeeRedirectHost}. ให้ตรวจ PUBLIC_BASE_URL / SHOPEE_OPEN_API_REDIRECT_URL ก่อนเชื่อมร้าน`
+                  : shopeeAPIStatus.connected
+                    ? `มีข้อมูลร้านที่เคยเชื่อมต่อ (${shopeeAPIStatus.shop_name || shopeeAPIStatus.shop_id || 'Shopee shop'}) แต่ระบบปิดการใช้งาน API อยู่ จึงไม่ถือว่าพร้อมใช้งาน`
+                    : shopeeAPIStatus.blocking_reason || 'เปิด SHOPEE_OPEN_API_ENABLED=true เมื่อต้องการใช้ Shopee API'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Test connection results */}
       {testResults && (

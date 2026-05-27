@@ -58,7 +58,7 @@ export function ActionCards({ stats, loading }: Props) {
     {
       label: 'ใบสั่งซื้อ',
       count: purchasePending + purchaseNeedsReview,
-      hint: `${purchaseNeedsReview} ต้องตรวจ · ${purchasePending} พร้อมส่ง`,
+      hint: `${purchaseNeedsReview} ต้องตรวจ · ${purchasePending} สถานะพร้อมส่ง`,
       icon: FileText,
       to: purchaseNeedsReview > 0 ? '/bills?status=needs_review' : '/bills?status=pending',
       tone: 'neutral',
@@ -66,7 +66,7 @@ export function ActionCards({ stats, loading }: Props) {
     {
       label: 'ใบสั่งขาย',
       count: salesPending + salesNeedsReview,
-      hint: `${salesNeedsReview} ต้องตรวจ · ${salesPending} พร้อมส่ง`,
+      hint: `${salesNeedsReview} ต้องตรวจ · ${salesPending} สถานะพร้อมส่ง`,
       icon: ShoppingBag,
       to: salesNeedsReview > 0 ? '/sales-orders?status=needs_review' : '/sales-orders?status=pending',
       tone: salesNeedsReview > 0 ? 'urgent' : 'neutral',

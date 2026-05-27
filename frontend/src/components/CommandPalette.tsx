@@ -1,24 +1,12 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Database,
-  Bot,
-  ClipboardCheck,
-  FileText,
-  LayoutDashboard,
   LogOut,
-  Mail,
   Moon,
   PanelLeftClose,
-  ScrollText,
   Search,
-  Send,
-  Settings,
-  ShoppingBag,
   Sparkles,
   Sun,
-  Upload,
-  Workflow,
 } from 'lucide-react'
 import {
   CommandDialog,
@@ -35,7 +23,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/lib/theme'
 import { useUIStore } from '@/lib/ui-store'
 import { billSourceLabel, billStatusLabel } from '@/lib/labels'
-import { ENABLE_LAZADA_EXCEL, ENABLE_SALES_ORDERS, ENABLE_SHOPEE_EXCEL, ENABLE_TIKTOK_EXCEL } from '@/lib/featureFlags'
+import { visibleNavItems } from '@/lib/navigation'
 import type { Bill } from '@/types'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
@@ -49,30 +37,6 @@ interface RecentBill {
   status: string
   created_at: string
 }
-
-const NAV_ITEMS: Array<{
-  to: string
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-  minPhase?: number
-  enabled?: boolean
-}> = [
-  { to: '/setup', label: 'เริ่มต้นใช้งาน', icon: ClipboardCheck },
-  { to: '/dashboard', label: 'ภาพรวม', icon: LayoutDashboard },
-  { to: '/bills', label: 'ใบสั่งซื้อ', icon: FileText },
-  { to: '/sales-orders', label: 'ใบสั่งขาย', icon: ShoppingBag, enabled: ENABLE_SALES_ORDERS },
-  { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, enabled: ENABLE_SALES_ORDERS },
-  { to: '/settings/email', label: 'กล่องอีเมลรับบิล', icon: Mail },
-  { to: '/import/shopee', label: 'Shopee', icon: Upload, enabled: ENABLE_SHOPEE_EXCEL },
-  { to: '/import/lazada', label: 'Lazada Excel', icon: Upload, enabled: ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS },
-  { to: '/import/tiktok', label: 'TikTok Excel', icon: Upload, enabled: ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS },
-  { to: '/mappings', label: 'ตารางจับคู่สินค้า', icon: Workflow },
-  { to: '/settings/catalog', label: 'สินค้าใน SML', icon: Database },
-  { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot },
-  { to: '/logs', label: 'ประวัติการทำงาน', icon: ScrollText },
-  { to: '/bulk-send-jobs', label: 'ประวัติส่ง SML แบบกลุ่ม', icon: Send },
-  { to: '/settings', label: 'ตั้งค่า', icon: Settings },
-]
 
 export function CommandPalette({
   open,
@@ -91,6 +55,7 @@ export function CommandPalette({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isAdmin = user?.role === 'admin'
+  const navItems = visibleNavItems().filter((item) => item.to !== '/settings/users' || isAdmin)
 
   useEffect(() => {
     if (!open) return
@@ -185,7 +150,7 @@ export function CommandPalette({
         <CommandEmpty>ไม่พบรายการ</CommandEmpty>
 
         <CommandGroup heading="ไปหน้า">
-          {NAV_ITEMS.filter((item) => item.enabled !== false && (!item.minPhase || PHASE >= item.minPhase)).map((item) => {
+          {navItems.map((item) => {
             const Icon = item.icon
             return (
               <CommandItem

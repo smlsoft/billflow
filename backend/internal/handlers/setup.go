@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -364,18 +365,33 @@ func (h *SetupHandler) channelReady() (bool, []string) {
 }
 
 func (h *SetupHandler) emailReady() (bool, string) {
-	var total, okCount int
+	var total, readyCount, noNewMailCount, errorCount, neverPollCount int
 	_ = h.db.QueryRow(`
 		SELECT COUNT(*),
-		       COUNT(*) FILTER (WHERE last_poll_status='ok')
+		       COUNT(*) FILTER (WHERE last_poll_status IN ('ok', 'no_new_mail')),
+		       COUNT(*) FILTER (WHERE last_poll_status='no_new_mail'),
+		       COUNT(*) FILTER (WHERE last_poll_status IS NOT NULL AND last_poll_status NOT IN ('ok', 'no_new_mail', 'backlog', 'partial', 'warning', 'interrupted')),
+		       COUNT(*) FILTER (WHERE last_poll_status IS NULL)
 		  FROM imap_accounts
 		 WHERE enabled=TRUE`,
-	).Scan(&total, &okCount)
+	).Scan(&total, &readyCount, &noNewMailCount, &errorCount, &neverPollCount)
 	if total == 0 {
 		return false, "ยังไม่มี inbox ที่เปิดใช้งาน"
 	}
-	if okCount == 0 {
+	if readyCount == 0 {
+		if errorCount > 0 {
+			return false, "เพิ่ม inbox แล้ว แต่รอบล่าสุดดึงอีเมลไม่สำเร็จ"
+		}
+		if neverPollCount == total {
+			return false, "เพิ่ม inbox แล้ว แต่ยังไม่เคยทดสอบหรือดึงอีเมล"
+		}
 		return false, "เพิ่ม inbox แล้ว แต่ยังไม่เคยทดสอบ/poll ผ่าน"
+	}
+	if readyCount < total {
+		return true, fmt.Sprintf("พร้อมใช้งานบางกล่อง (%d/%d) · มีกล่องที่ต้องตรวจ", readyCount, total)
+	}
+	if noNewMailCount == total {
+		return true, "ทดสอบสำเร็จ แต่ไม่มีอีเมลใหม่"
 	}
 	return true, "พร้อมใช้งาน"
 }

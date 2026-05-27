@@ -733,7 +733,7 @@ export function BulkSendDialog({
         progressMode ? 'sm:max-w-2xl' : 'sm:max-w-3xl',
       ].join(' ')}>
         <DialogHeader>
-          <DialogTitle>{progressMode ? progressTitle : `ส่ง SML รายการพร้อมส่ง: ${title}`}</DialogTitle>
+          <DialogTitle>{progressMode ? progressTitle : `ส่ง SML จากเอกสารสถานะพร้อมส่ง: ${title}`}</DialogTitle>
         </DialogHeader>
 
         <div className="-mx-6 space-y-4 overflow-y-auto px-6 py-2">
@@ -976,7 +976,7 @@ export function BulkSendDialog({
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="font-medium text-foreground">สรุปก่อนส่ง</div>
               <div className="text-muted-foreground">
-                พร้อมส่ง {readyCount} · ข้าม {skippedCount}
+                พร้อมส่งจริง {readyCount} · ข้าม {skippedCount}
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -1194,13 +1194,13 @@ export function BulkSendDialog({
           <div className="overflow-hidden rounded-md border border-border">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs">
               <div>
-                <div className="font-medium text-foreground">ตรวจรายการพร้อมส่งและเลขเอกสาร</div>
+                <div className="font-medium text-foreground">ตรวจรายการพร้อมส่งจริงและเลขเอกสาร</div>
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
                   เลขเอกสาร SML (doc_no) เป็นเลขคาดการณ์จาก SML ล่าสุด ถ้า SML แจ้งเลขซ้ำให้กดออกเลขใหม่ที่หน้า detail ของบิลนั้น
                 </div>
               </div>
               <div className="flex flex-wrap justify-end gap-2 text-muted-foreground">
-                <span>พร้อมส่ง {readyCount}</span>
+                <span>พร้อมส่งจริง {readyCount}</span>
                 <span>ต้องข้าม {skippedCount}</span>
                 {docNoRange && <span className="font-mono text-foreground">{docNoRange}</span>}
                 {totalPending > candidates.length && <span>โหลด {BULK_BATCH_SIZE}/{totalPending}</span>}
@@ -1218,7 +1218,7 @@ export function BulkSendDialog({
               {loading ? (
                 <div className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  กำลังตรวจเอกสารพร้อมส่ง…
+                  กำลังตรวจเอกสารสถานะพร้อมส่ง…
                 </div>
               ) : candidates.length === 0 ? (
                 <div className="px-3 py-4 text-sm text-muted-foreground">ไม่มีเอกสารสถานะพร้อมส่งในเมนูนี้</div>
@@ -1386,7 +1386,7 @@ export function BulkSendDialog({
                   title={!smlReady ? smlBlockedMessage(smlReadiness) : undefined}
                 >
                   <Send className="h-4 w-4" />
-                  ส่ง SML {readyCount} รายการ
+                  ส่ง SML รายการพร้อมส่งจริง {readyCount} รายการ
                 </Button>
               </div>
             </>

@@ -96,6 +96,14 @@ interface IMAPPollSummary {
   interrupted?: boolean
 }
 
+type SetupStatusLite = {
+  system?: {
+    instance_name?: string
+    instance_slug?: string
+    sml_database?: string
+  }
+}
+
 interface IMAPPollDetail {
   uid?: number
   message_id?: string
@@ -947,6 +955,7 @@ function EmailAccountRow({
 
 export default function EmailAccounts() {
   const [accounts, setAccounts] = useState<IMAPAccountFull[]>([])
+  const [instanceContext, setInstanceContext] = useState<SetupStatusLite['system'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<IMAPAccount | null>(null)
@@ -983,6 +992,10 @@ export default function EmailAccounts() {
   useEffect(() => {
     fetchAll()
     fetchActiveJobs()
+    client
+      .get<SetupStatusLite>('/api/setup/status')
+      .then((res) => setInstanceContext(res.data.system ?? null))
+      .catch(() => setInstanceContext(null))
     // Refresh often enough that long IMAP polls do not look frozen to admins.
     const t = setInterval(() => {
       fetchAll()
@@ -1196,6 +1209,21 @@ export default function EmailAccounts() {
         description="กล่องเมลที่ใช้ดึงอีเมล Shopee และสร้างบิลซื้ออัตโนมัติ"
         actions={headerActions}
       />
+
+      {instanceContext && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+          <Mail className="h-3.5 w-3.5 text-primary" />
+          <span>กล่องเมลหน้านี้ผูกกับ BillFlow instance:</span>
+          <span className="font-medium text-foreground">{instanceContext.instance_name || 'BillFlow'}</span>
+          <span className="font-mono text-[11px]">({instanceContext.instance_slug || 'default'})</span>
+          {instanceContext.sml_database && (
+            <>
+              <span>· SML tenant</span>
+              <span className="font-mono text-[11px] text-foreground">{instanceContext.sml_database}</span>
+            </>
+          )}
+        </div>
+      )}
 
       <HelpBanner />
 

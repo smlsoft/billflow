@@ -241,10 +241,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     archiveMode !== 'active'
       ? 'ส่ง SML ใช้ได้เฉพาะรายการปกติ'
       : !bulkStatusAllowed
-        ? 'ส่ง SML ใช้ได้เมื่อดูทุกสถานะ/พร้อมส่ง'
+        ? 'ส่ง SML ใช้ได้เมื่อดูทุกสถานะ/เอกสารสถานะพร้อมส่ง'
         : bulkCandidateCount > BULK_BATCH_SIZE
-          ? `ส่ง SML ชุดแรก ${BULK_BATCH_SIZE}/${bulkCandidateCount.toLocaleString()} รายการ`
-          : `ส่ง SML พร้อมส่ง ${bulkCandidateCount.toLocaleString()} รายการ`
+          ? `ส่ง SML เอกสารสถานะพร้อมส่งชุดแรก ${BULK_BATCH_SIZE}/${bulkCandidateCount.toLocaleString()} รายการ`
+          : `ส่ง SML เอกสารสถานะพร้อมส่ง ${bulkCandidateCount.toLocaleString()} รายการ`
   const detailBasePath =
     mode === 'sale-invoice' ? '/sale-invoices' : mode === 'sales-order' ? '/sales-orders' : '/bills'
 
@@ -390,7 +390,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <QueueMetric label="ต้องตรวจสินค้า" value={counts.needs_review} icon={AlertTriangle} tone="warning" />
-        <QueueMetric label="พร้อมส่ง" value={counts.pending} icon={Clock} tone="primary" />
+        <QueueMetric label="เอกสารสถานะพร้อมส่ง" value={counts.pending} icon={Clock} tone="primary" />
         <QueueMetric label="ส่งแล้ว" value={counts.sent} icon={CheckCircle2} tone="success" />
         <QueueMetric label="ส่งไม่สำเร็จ" value={counts.failed} icon={Send} tone="danger" />
       </div>
@@ -523,9 +523,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               archiveMode !== 'active'
                 ? 'Bulk send ปิดไว้เมื่อดูบิลที่เก็บแล้ว เพื่อไม่ส่งเอกสารย้อนหลังโดยไม่ตั้งใจ'
                 : !bulkStatusAllowed
-                  ? 'Bulk send ส่งเฉพาะสถานะพร้อมส่ง จึงเปิดได้เมื่อเลือกทุกสถานะหรือพร้อมส่ง'
+                  ? 'Bulk send ส่งเฉพาะเอกสารสถานะพร้อมส่ง จึงเปิดได้เมื่อเลือกทุกสถานะหรือสถานะพร้อมส่ง'
                 : counts.needs_review > 0
-                  ? `มีรายการต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ปุ่มนี้ส่งเฉพาะสถานะพร้อมส่ง`
+                  ? `มีรายการต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ปุ่มนี้ส่งเฉพาะเอกสารสถานะพร้อมส่ง`
                   : undefined
             }
           >
@@ -535,7 +535,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
         {counts.needs_review > 0 && archiveMode === 'active' && (
           <div className="mt-2 text-[11px] text-muted-foreground">
-            รายการต้องตรวจสินค้า {counts.needs_review.toLocaleString()} รายการจะไม่ถูกรวมในปุ่มส่ง SML
+            รายการต้องตรวจสินค้า {counts.needs_review.toLocaleString()} รายการจะไม่ถูกรวมในปุ่มส่ง SML เอกสารสถานะพร้อมส่ง
           </div>
         )}
       </div>

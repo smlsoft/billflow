@@ -821,7 +821,8 @@ export default function ShopeeImport() {
   const apiReadiness = apiStatus ? shopeeAPIReadiness(apiStatus) : null
   const apiLive = apiStatus ? isLiveAPI(apiStatus) : false
   const apiDateError = apiRangeError(apiFrom, apiTo)
-  const activeConnections = apiConnections.filter((c) => !c.disabled_at)
+  const apiEnabled = apiStatus?.enabled !== false
+  const activeConnections = apiEnabled ? apiConnections.filter((c) => !c.disabled_at) : []
   const selectedConnection = activeConnections.find((c) => c.id === selectedConnectionID) ?? null
   const needsShopSelection = activeConnections.length > 1 && !selectedConnection
   const selectedShopHint = selectedConnection
@@ -867,8 +868,8 @@ export default function ShopeeImport() {
     }
     if (!apiStatus.enabled || !apiStatus.configured) {
       return {
-        title: 'ต้องให้แอดมินตั้งค่า',
-        description: apiStatus.blocking_reason || 'ยังไม่พร้อมเชื่อมต่อ Shopee API',
+        title: !apiStatus.enabled ? 'Shopee API ปิดใช้งาน' : 'ต้องให้แอดมินตั้งค่า',
+        description: apiStatus.blocking_reason || (!apiStatus.enabled ? 'เปิด SHOPEE_OPEN_API_ENABLED=true ก่อนใช้งาน Shopee API' : 'ยังไม่พร้อมเชื่อมต่อ Shopee API'),
         tone: 'warning' as const,
       }
     }
@@ -1115,7 +1116,12 @@ export default function ShopeeImport() {
                           <Store className="h-4 w-4 text-primary" />
                           ร้าน Shopee ที่เชื่อมต่อ
                         </div>
-                        {apiConnections.length === 0 ? (
+                        {apiStatus && !apiStatus.enabled ? (
+                          <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
+                            Shopee API ปิดใช้งานใน instance นี้ จึงซ่อนร้านที่เคยเชื่อมต่อไว้ก่อน
+                            เพื่อไม่ให้เข้าใจผิดว่าสามารถดึง order ได้
+                          </div>
+                        ) : apiConnections.length === 0 ? (
                           <p className="text-xs text-muted-foreground">ยังไม่มีร้านที่เชื่อมต่อ</p>
                         ) : (
                           <div className="space-y-2">
@@ -1204,7 +1210,9 @@ export default function ShopeeImport() {
                         </div>
                         <div className="rounded-md border border-border bg-background p-3">
                           <p className="font-medium text-foreground">Selected shop</p>
-                          <p className="mt-1 truncate font-mono" title={selectedShopHint}>{selectedConnection?.shop_id || '—'}</p>
+                          <p className="mt-1 truncate font-mono" title={apiEnabled ? selectedShopHint : 'Shopee API ปิดใช้งาน'}>
+                            {apiEnabled ? selectedConnection?.shop_id || '—' : 'ปิดใช้งาน'}
+                          </p>
                         </div>
                         <div className="rounded-md border border-border bg-background p-3">
                           <p className="font-medium text-foreground">Base URL</p>

@@ -50,6 +50,12 @@ type ShopeeConnection = {
   token_state: string
 }
 
+type ShopeeAPIStatus = {
+  enabled: boolean
+  configured: boolean
+  blocking_reason?: string
+}
+
 type SettlementDefaults = {
   doc_format_code: string
   passbook_code: string
@@ -284,6 +290,7 @@ export default function ShopeeSettlement() {
 function ShopeeSettlementContent() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [connections, setConnections] = useState<ShopeeConnection[]>([])
+  const [apiStatus, setApiStatus] = useState<ShopeeAPIStatus | null>(null)
   const [defaults, setDefaults] = useState<SettlementDefaults | null>(null)
   const [runs, setRuns] = useState<SettlementRun[]>([])
   const [totalRuns, setTotalRuns] = useState(0)
@@ -313,6 +320,8 @@ function ShopeeSettlementContent() {
   const totalPages = Math.max(1, Math.ceil(totalRuns / perPage))
 
   const settingsReady = Boolean(defaults?.doc_format_code && defaults?.passbook_code)
+  const shopeeAPIEnabled = apiStatus?.enabled !== false
+  const visibleConnections = shopeeAPIEnabled ? connections : []
   const selectedItems = settlementItems(selectedRun)
   const readyItems = selectedItems.filter((i) => i.status === 'ready')
   const readyTotals = {
@@ -342,13 +351,19 @@ function ShopeeSettlementContent() {
   }
 
   const loadBasics = async () => {
-    const [connRes, defaultRes] = await Promise.all([
+    const [connRes, defaultRes, statusRes] = await Promise.all([
       client.get<{ data: ShopeeConnection[] }>('/api/shopee-api/connections'),
       client.get<{ data: SettlementDefaults }>('/api/settings/shopee-settlement-defaults'),
+      client.get<ShopeeAPIStatus>('/api/settings/shopee-api/status'),
     ])
     const conns = connRes.data.data ?? []
     setConnections(conns)
-    if (!pullConnectionID && conns.length > 0) setPullConnectionID(conns[0].id)
+    setApiStatus(statusRes.data)
+    if (!statusRes.data.enabled) {
+      setPullConnectionID('')
+    } else if (!pullConnectionID && conns.length > 0) {
+      setPullConnectionID(conns[0].id)
+    }
     setDefaults(defaultRes.data.data ?? null)
   }
 
@@ -592,7 +607,12 @@ function ShopeeSettlementContent() {
         title="รับชำระ Shopee"
         description="ดึงรายการ Shopee ที่ release เงินแล้ว จับคู่กับใบขาย SML และส่งเข้าเมนูรับชำระหนี้"
         actions={
-          <Button className="gap-2" onClick={() => setPullOpen(true)}>
+          <Button
+            className="gap-2"
+            onClick={() => setPullOpen(true)}
+            disabled={!shopeeAPIEnabled}
+            title={!shopeeAPIEnabled ? 'Shopee API ปิดใช้งานใน instance นี้' : undefined}
+          >
             <RefreshCw className="h-4 w-4" />
             ดึงรอบถอนเงิน
           </Button>
@@ -633,6 +653,16 @@ function ShopeeSettlementContent() {
                 เส้นทางเอกสาร SML
               </Link>{' '}
               ก่อนส่งเข้า SML
+            </AlertDescription>
+          </Alert>
+        )}
+        {apiStatus && !apiStatus.enabled && (
+          <Alert className="mb-3 border-warning/40 bg-warning/10 text-warning">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Shopee API ปิดใช้งานใน instance นี้</AlertTitle>
+            <AlertDescription>
+              ระบบซ่อนร้าน Shopee ที่เคยเชื่อมต่อไว้ก่อน เพื่อไม่ให้เข้าใจผิดว่าสามารถดึงรอบถอนเงินได้.
+              {apiStatus.blocking_reason ? ` ${apiStatus.blocking_reason}` : ' ให้เปิดใช้งาน Shopee API ใน server ก่อนใช้เมนูนี้'}
             </AlertDescription>
           </Alert>
         )}
@@ -683,7 +713,7 @@ function ShopeeSettlementContent() {
               aria-label="กรองตามร้าน Shopee"
             >
               <option value={ALL}>ทุกร้าน Shopee</option>
-              {connections.map((shop) => (
+              {visibleConnections.map((shop) => (
                 <option key={shop.id} value={String(shop.shop_id)}>
                   {shop.label || shop.shop_name || 'Shopee shop'} · {shop.shop_id}
                 </option>
@@ -745,7 +775,8 @@ function ShopeeSettlementContent() {
       <PullDialog
         open={pullOpen}
         onOpenChange={setPullOpen}
-        connections={connections}
+        connections={visibleConnections}
+        apiEnabled={shopeeAPIEnabled}
         connectionID={pullConnectionID}
         setConnectionID={setPullConnectionID}
         from={pullFrom}
@@ -809,6 +840,7 @@ function PullDialog(props: {
   open: boolean
   onOpenChange: (v: boolean) => void
   connections: ShopeeConnection[]
+  apiEnabled: boolean
   connectionID: string
   setConnectionID: (v: string) => void
   from: string
@@ -837,12 +869,19 @@ function PullDialog(props: {
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
               value={props.connectionID}
               onChange={(e) => props.setConnectionID(e.target.value)}
+              disabled={!props.apiEnabled || props.connections.length === 0}
             >
-              {props.connections.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label || c.shop_name || c.shop_id}
-                </option>
-              ))}
+              {!props.apiEnabled ? (
+                <option value="">Shopee API ปิดใช้งาน</option>
+              ) : props.connections.length === 0 ? (
+                <option value="">ยังไม่มีร้านที่เชื่อมต่อ</option>
+              ) : (
+                props.connections.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label || c.shop_name || c.shop_id}
+                  </option>
+                ))
+              )}
             </select>
           </Field>
           <Field label="ช่วงวันที่ Shopee release เงิน">
@@ -862,7 +901,7 @@ function PullDialog(props: {
           <Button variant="outline" onClick={() => props.onOpenChange(false)} disabled={props.loading}>
             ยกเลิก
           </Button>
-          <Button className="gap-2" onClick={props.onSubmit} disabled={props.loading || !props.connectionID}>
+          <Button className="gap-2" onClick={props.onSubmit} disabled={props.loading || !props.connectionID || !props.apiEnabled}>
             {props.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             ดึงรายการ
           </Button>

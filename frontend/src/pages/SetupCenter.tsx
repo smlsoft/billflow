@@ -300,7 +300,7 @@ export default function SetupCenter() {
                 )}
                 {(docs?.pending ?? 0) > 0 && (
                   <Button asChild variant="outline" size="sm">
-                    <Link to="/bills?status=pending">ดูเอกสารพร้อมส่ง</Link>
+                    <Link to="/bills?status=pending">ดูเอกสารสถานะพร้อมส่ง</Link>
                   </Button>
                 )}
                 {(docs?.failed ?? 0) > 0 && (
@@ -336,7 +336,7 @@ export default function SetupCenter() {
 
       <div className="grid gap-3 lg:grid-cols-3">
         <StatTile label="เอกสารทั้งหมด" value={n(docs?.total)} />
-        <StatTile label="พร้อมส่ง/รอตรวจ" value={`${n(docs?.pending)} / ${n(docs?.needs_review)}`} tone={docs?.needs_review ? 'warn' : 'ok'} />
+        <StatTile label="สถานะพร้อมส่ง/รอตรวจ" value={`${n(docs?.pending)} / ${n(docs?.needs_review)}`} tone={docs?.needs_review ? 'warn' : 'ok'} />
         <StatTile label="ส่งไม่สำเร็จ" value={n(docs?.failed)} tone={docs?.failed ? 'danger' : 'ok'} />
       </div>
 

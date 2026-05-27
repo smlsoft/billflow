@@ -309,8 +309,8 @@ function ActionCenter({
   }
   if (purchasePending + salesPending > 0) {
     actions.push({
-      title: 'มีเอกสารพร้อมส่งเข้า SML',
-      desc: `${purchasePending} ใบสั่งซื้อ · ${salesPending} งานขาย ตรวจ preflight แล้วใช้ส่ง SML ทั้งหมดได้`,
+      title: 'มีเอกสารสถานะพร้อมส่งเข้า SML',
+      desc: `${purchasePending} ใบสั่งซื้อ · ${salesPending} งานขาย ต้องตรวจ preflight ใน dialog ส่งก่อนยืนยัน`,
       to: salesPending > 0 && ENABLE_SALES_ORDERS ? '/sale-invoices?status=pending' : '/bills?status=pending',
       cta: 'ไปส่ง SML',
       tone: 'primary',
@@ -447,7 +447,7 @@ function PilotResultCard({
           <PilotMetric
             label="ยังต้องจัดการ"
             value={remaining}
-            sub={`ตรวจ ${needsReview} · พร้อมส่ง ${pending} · fail ${failed}`}
+            sub={`ตรวจ ${needsReview} · สถานะพร้อมส่ง ${pending} · fail ${failed}`}
             icon={AlertTriangle}
             tone={remaining > 0 ? 'warning' : 'success'}
             loading={loading}
@@ -564,7 +564,7 @@ function buildPilotSummaryMarkdown(stats: DashboardStats | null) {
     '',
     '## งานที่ยังต้องจูนต่อ',
     `- รอตรวจ mapping / ข้อมูลสินค้า: ${needsReview.toLocaleString()} ใบ`,
-    `- พร้อมส่ง SML แต่ยังไม่ได้ส่ง: ${pending.toLocaleString()} ใบ`,
+    `- เอกสารสถานะพร้อมส่ง SML แต่ยังไม่ได้ส่ง: ${pending.toLocaleString()} ใบ`,
     `- ส่ง SML ไม่สำเร็จและต้องแก้ error: ${failed.toLocaleString()} ใบ`,
     '',
     '## หมายเหตุ',
