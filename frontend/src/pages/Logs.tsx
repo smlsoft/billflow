@@ -77,6 +77,7 @@ interface LogsResponse {
 const ALL = '__all__'
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 type QuickView = 'all' | 'actionable' | 'sml_failed' | 'imports' | 'mapping' | 'data_quality'
+  | 'shopee_settlement'
 
 const LEVEL_LABELS: Record<string, string> = {
   info: 'ข้อมูล',
@@ -101,6 +102,15 @@ function viaLabel(value: unknown): string {
     import: 'ส่งตอนนำเข้า',
   }
   return map[text] ?? text
+}
+
+function isShopeeSettlementLog(log: AuditLog): boolean {
+  return log.action.startsWith('shopee_settlement_')
+}
+
+function displaySourceKey(log: AuditLog): string {
+  if (isShopeeSettlementLog(log)) return 'shopee_settlement'
+  return log.source ?? ''
 }
 
 // Action keys that belong to Phase 2+ (LINE chat, chat tags, etc.)
@@ -180,6 +190,42 @@ function guidanceFor(log: AuditLog): LogGuidance | null {
       title: 'ไม่ใช่ error: มีการล้างข้อมูลทดสอบ',
       description:
         'รายการนี้เกิดจากผู้ดูแลกดล้างข้อมูลทดสอบในหน้าเริ่มต้นใช้งาน ระบบลบเฉพาะบิล/import/log เดิม และเก็บการตั้งค่า สินค้า SML ตารางจับคู่ และประวัติ AI ไว้ตามค่าเริ่มต้น',
+      tone: 'info',
+    }
+  }
+
+  if (isShopeeSettlementLog(log)) {
+    if (log.action === 'shopee_settlement_preview_failed') {
+      return {
+        title: 'ดึงรอบถอนเงิน Shopee ไม่สำเร็จ',
+        description: 'ตรวจช่วงวันที่ release เงิน, token Shopee, และการเชื่อมต่อ SML แล้วลองดึงใหม่อีกครั้ง',
+        tone: 'danger',
+      }
+    }
+    if (log.action === 'shopee_settlement_send_blocked') {
+      return {
+        title: 'ระบบบล็อกการส่งรับชำระ',
+        description: 'ระบบยังไม่สร้าง RC เพราะรายการหรือค่าตั้งต้นไม่พร้อม ให้เปิดหน้า รับชำระ Shopee เพื่อตรวจ run แล้วแก้ตามเหตุผลที่แสดง',
+        tone: 'warning',
+      }
+    }
+    if (log.action === 'shopee_settlement_sent') {
+      return {
+        title: 'รับชำระ Shopee ถูกส่งเข้า SML แล้ว',
+        description: 'ตรวจเลข RC, จำนวนรายการ, บัญชีรับเงิน และค่าใช้จ่ายส่วนต่างได้จากรายละเอียดด้านล่างหรือเปิดหน้า รับชำระ Shopee เพื่อตรวจ run',
+        tone: 'info',
+      }
+    }
+    if (log.action === 'shopee_settlement_defaults_updated') {
+      return {
+        title: 'มีการแก้ไขค่าตั้งต้นรับชำระ Shopee',
+        description: 'ค่าตั้งต้นนี้จะถูกใช้ตอนส่งรับชำระ Shopee รอบถัดไป หากมีส่วนต่างต้องตรวจ expense code ก่อนส่งจริง',
+        tone: 'info',
+      }
+    }
+    return {
+      title: 'งานรับชำระ Shopee',
+      description: 'เปิดหน้า รับชำระ Shopee เพื่อตรวจรายการ, สถานะ run, และเหตุผลที่พร้อมส่งหรือถูกข้าม',
       tone: 'info',
     }
   }
@@ -302,6 +348,8 @@ function docNoCandidates(log: AuditLog): string[] {
   const payload = (d.sml_payload && typeof d.sml_payload === 'object') ? d.sml_payload : {}
   return [
     d.doc_no,
+    d.rc_doc_no,
+    d.receipt_doc_no,
     parsedError.doc_no_attempted,
     parsedError.doc_no,
     payload.doc_no,
@@ -358,7 +406,21 @@ function makeFacts(log: AuditLog): LogFact[] {
   const parsedError = parseDetailError(log)
   const facts: LogFact[] = []
 
-  if (log.target_id) {
+  if (log.target_id && isShopeeSettlementLog(log)) {
+    facts.push({
+      label: 'Settlement run',
+      value: (
+        <Link
+          to="/shopee-settlements"
+          className="font-mono text-primary hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {log.target_id.slice(0, 8)}…
+        </Link>
+      ),
+      copyValue: log.target_id,
+    })
+  } else if (log.target_id) {
     facts.push({
       label: 'บิล',
       value: (
@@ -380,7 +442,7 @@ function makeFacts(log: AuditLog): LogFact[] {
     tone: log.actor?.type === 'user' ? 'normal' : 'muted',
   })
 
-  const docNo = d.doc_no ?? parsedError.doc_no_attempted
+  const docNo = d.doc_no ?? d.rc_doc_no ?? d.receipt_doc_no ?? parsedError.doc_no_attempted
   if (docNo) facts.push({ label: 'เลขเอกสาร SML', value: docNo, mono: true, copyValue: String(docNo) })
   if (d.route ?? parsedError.route) {
     const route = d.route ?? parsedError.route
@@ -423,6 +485,35 @@ function makeFacts(log: AuditLog): LogFact[] {
     facts.push({ label: 'เลขรันเอกสาร', value: d.reset_doc_counter ? 'รีเซ็ตแล้ว' : 'ไม่ได้รีเซ็ต' })
     facts.push({ label: 'ประวัติอีเมลซ้ำ', value: d.reset_email_dedup ? 'ล้างแล้ว' : 'ไม่ได้ล้าง' })
     facts.push({ label: 'ตำแหน่งอ่านอีเมล', value: d.reset_email_cursor ? 'ย้อนกลับไปอ่านเมลเก่าได้' : 'ไม่ได้รีเซ็ต' })
+  }
+
+  if (isShopeeSettlementLog(log)) {
+    if (d.run_id && !log.target_id) facts.push({ label: 'Settlement run', value: String(d.run_id).slice(0, 8) + '…', mono: true, copyValue: String(d.run_id) })
+    if (d.shop_label || d.shop_id) facts.push({ label: 'ร้าน Shopee', value: [d.shop_label, d.shop_id ? `ร้าน ${d.shop_id}` : ''].filter(Boolean).join(' · ') })
+    if (d.release_date_from || d.release_date_to) {
+      facts.push({
+        label: 'ช่วง release เงิน',
+        value: [d.release_date_from, d.release_date_to].filter(Boolean).join(' - '),
+        mono: true,
+      })
+    }
+    if (d.total_count != null) facts.push({ label: 'รายการทั้งหมด', value: `${Number(d.total_count).toLocaleString('th-TH')} รายการ` })
+    if (d.ready_count != null) facts.push({ label: 'พร้อมส่ง', value: `${Number(d.ready_count).toLocaleString('th-TH')} รายการ` })
+    if (d.blocked_count != null) facts.push({ label: 'ต้องตรวจ/ถูกข้าม', value: `${Number(d.blocked_count).toLocaleString('th-TH')} รายการ`, tone: Number(d.blocked_count) > 0 ? 'muted' : 'normal' })
+    if (d.sent_count != null) facts.push({ label: 'ส่งรับชำระ', value: `${Number(d.sent_count).toLocaleString('th-TH')} รายการ` })
+    if (d.newly_blocked != null) facts.push({ label: 'Block เพิ่ม', value: `${Number(d.newly_blocked).toLocaleString('th-TH')} รายการ`, tone: Number(d.newly_blocked) > 0 ? 'muted' : 'normal' })
+    if (d.blocked_after_reconcile_count != null) {
+      facts.push({
+        label: 'ถูก block หลังตรวจซ้ำ',
+        value: `${Number(d.blocked_after_reconcile_count).toLocaleString('th-TH')} รายการ`,
+        tone: Number(d.blocked_after_reconcile_count) > 0 ? 'muted' : 'normal',
+      })
+    }
+    if (d.doc_format_code) facts.push({ label: 'รูปแบบเอกสาร', value: d.doc_format_code, mono: true })
+    if (d.passbook_code) facts.push({ label: 'บัญชีรับเงิน', value: [d.passbook_code, d.passbook_name].filter(Boolean).join(' · ') })
+    if (d.expense_code) facts.push({ label: 'ค่าใช้จ่ายส่วนต่าง', value: [d.expense_code, d.expense_name].filter(Boolean).join(' · ') })
+    if (d.message) facts.push({ label: 'ข้อความ', value: compact(humanizeAuditError(d.message), 180) })
+    if (d.error) facts.push({ label: 'ข้อผิดพลาด', value: compact(humanizeAuditError(d.error), 180), tone: 'danger' })
   }
 
   return facts.filter((fact) => fact.value != null && fact.value !== '')
@@ -634,7 +725,7 @@ function LogExpandedSummary({
           <Bug className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">ข้อมูลเทคนิค:</span>
           {log.trace_id && <CopyChip value={log.trace_id} label="trace" />}
-          {log.target_id && <CopyChip value={log.target_id} label="bill" />}
+          {log.target_id && <CopyChip value={log.target_id} label={isShopeeSettlementLog(log) ? 'run' : 'bill'} />}
           {originalDocNo && <CopyChip value={originalDocNo} label="doc" />}
           <Button variant="ghost" size="sm" onClick={copyDevInfo} className="h-6 gap-1 px-2 text-[11px]">
             <Copy className="h-3 w-3" />
@@ -658,7 +749,7 @@ function LogRow({ log, onRetried, devMode }: { log: AuditLog; onRetried: () => v
   }
   const summary = summarize(log)
   const isError = log.level === 'error'
-  const source = log.source ?? ''
+  const source = displaySourceKey(log)
   const docNo = primaryDocNo(log)
   const docNoIssue = hasDocNoQualityIssue(log)
   // Inline retry available only on sml_failed rows that have a bill target.
@@ -1080,6 +1171,8 @@ function quickViewMatch(log: AuditLog, quickView: QuickView): boolean {
       return log.action === 'sml_failed'
     case 'imports':
       return isImportLog(log)
+    case 'shopee_settlement':
+      return isShopeeSettlementLog(log)
     case 'mapping':
       return log.action === 'mapping_feedback'
     case 'data_quality':
@@ -1230,6 +1323,7 @@ export default function Logs() {
     all: logs.length,
     actionable: logs.filter((l) => quickViewMatch(l, 'actionable')).length,
     smlFailed: logs.filter((l) => l.action === 'sml_failed').length,
+    shopeeSettlement: logs.filter(isShopeeSettlementLog).length,
     imports: logs.filter(isImportLog).length,
     mapping: logs.filter((l) => l.action === 'mapping_feedback').length,
     dataQuality: logs.filter(hasDocNoQualityIssue).length,
@@ -1279,7 +1373,7 @@ export default function Logs() {
           }
         />
 
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-7">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-8">
           <SummaryButton
             label="ทั้งหมดในหน้านี้"
             value={pageStats.all}
@@ -1313,6 +1407,18 @@ export default function Logs() {
             onClick={() => {
               setQuickView('all')
               setAction('sml_sent')
+            }}
+          />
+          <SummaryButton
+            label="รับชำระ Shopee"
+            value={pageStats.shopeeSettlement}
+            icon={ScrollText}
+            tone="success"
+            active={quickView === 'shopee_settlement'}
+            onClick={() => {
+              setQuickView('shopee_settlement')
+              setSource(ALL)
+              setAction(ALL)
             }}
           />
           <SummaryButton
@@ -1356,6 +1462,7 @@ export default function Logs() {
                   <SelectItem value="shopee_email">Shopee Email</SelectItem>
 	                  <SelectItem value="shopee_shipped">Shopee Shipped</SelectItem>
 	                  {PHASE >= 2 && <SelectItem value="shopee_excel">Shopee Excel</SelectItem>}
+                  <SelectItem value="shopee_settlement">รับชำระ Shopee</SelectItem>
 	                  {PHASE >= 2 && <SelectItem value="lazada">Lazada</SelectItem>}
 	                  {PHASE >= 2 && <SelectItem value="tiktok">TikTok Excel</SelectItem>}
 	                  <SelectItem value="sml">SML</SelectItem>

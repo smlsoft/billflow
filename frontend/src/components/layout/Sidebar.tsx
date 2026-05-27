@@ -14,6 +14,7 @@ import {
   Mail,
   MessageSquare,
   MessageSquareQuote,
+  ReceiptText,
   ScrollText,
   Send,
   Settings2,
@@ -149,6 +150,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/sales-orders', label: 'ใบสั่งขาย', icon: ShoppingBag, hasBadge: 'saleorder', hint: 'Marketplace Excel → ขาย -> ใบสั่งขาย', enabled: ENABLE_SALES_ORDERS },
       { to: '/sale-invoices', label: 'ขายสินค้าและบริการ', icon: ShoppingBag, hasBadge: 'saleinvoice', hint: 'Marketplace Excel → ขาย -> ขายสินค้าและบริการ', enabled: ENABLE_SALES_ORDERS },
+      { to: '/shopee-settlements', label: 'รับชำระ Shopee', icon: ReceiptText, hint: 'Shopee payout -> SML รับชำระ', enabled: ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS },
     ],
   },
   {

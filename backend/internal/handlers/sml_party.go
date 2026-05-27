@@ -304,8 +304,11 @@ type DocFormatItem struct {
 }
 
 type SMLMasterItem struct {
-	Code  string `json:"code"`
-	Name1 string `json:"name_1"`
+	Code       string `json:"code"`
+	Name1      string `json:"name_1"`
+	BankCode   string `json:"bank_code,omitempty"`
+	BankBranch string `json:"bank_branch,omitempty"`
+	BookNumber string `json:"book_number,omitempty"`
 }
 
 type smlProxyErrorBody struct {
@@ -383,6 +386,21 @@ func (h *SMLPartyHandler) Branches(c *gin.Context) {
 // GET /api/sml/sales?search=&limit=
 func (h *SMLPartyHandler) Sales(c *gin.Context) {
 	h.proxyERPMaster(c, "/api/v1/erp/users")
+}
+
+// GET /api/sml/expenses?search=&limit=
+func (h *SMLPartyHandler) Expenses(c *gin.Context) {
+	h.proxyERPMaster(c, "/api/v1/erp/expenses")
+}
+
+// GET /api/sml/incomes?search=&limit=
+func (h *SMLPartyHandler) Incomes(c *gin.Context) {
+	h.proxyERPMaster(c, "/api/v1/erp/incomes")
+}
+
+// GET /api/sml/passbooks?search=&limit=
+func (h *SMLPartyHandler) Passbooks(c *gin.Context) {
+	h.proxyERPMaster(c, "/api/v1/erp/passbooks")
 }
 
 func (h *SMLPartyHandler) proxyERPMaster(c *gin.Context, upstreamPath string) {

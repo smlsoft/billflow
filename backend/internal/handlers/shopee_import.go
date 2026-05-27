@@ -34,6 +34,7 @@ import (
 // which routes through bills.go retrySaleInvoice (same path as Shopee
 // email orders). This unifies all manual-confirm flows.
 type ShopeeImportHandler struct {
+	db              *sql.DB
 	billRepo        *repository.BillRepo
 	mappingRepo     *repository.MappingRepo
 	auditRepo       *repository.AuditLogRepo
@@ -62,6 +63,7 @@ type pendingUpload struct {
 const pendingUploadTTL = 30 * time.Minute
 
 func NewShopeeImportHandler(
+	db *sql.DB,
 	billRepo *repository.BillRepo,
 	mappingRepo *repository.MappingRepo,
 	auditRepo *repository.AuditLogRepo,
@@ -74,6 +76,7 @@ func NewShopeeImportHandler(
 	logger *zap.Logger,
 ) *ShopeeImportHandler {
 	h := &ShopeeImportHandler{
+		db:              db,
 		billRepo:        billRepo,
 		mappingRepo:     mappingRepo,
 		auditRepo:       auditRepo,

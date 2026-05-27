@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import dayjs from 'dayjs'
 import { CalendarDays } from 'lucide-react'
 
@@ -13,9 +14,18 @@ interface DateRangePickerProps {
   onFromChange: (value: string) => void
   onToChange: (value: string) => void
   className?: string
+  title?: string
+  description?: string
+  presets?: DateRangePreset[]
+  clearLabel?: string
 }
 
-const presets = [
+export type DateRangePreset = {
+  label: string
+  getRange: () => { from: string; to: string }
+}
+
+const defaultPresets: DateRangePreset[] = [
   {
     label: 'วันนี้',
     getRange: () => {
@@ -49,7 +59,12 @@ export function DateRangePicker({
   onFromChange,
   onToChange,
   className,
+  title = 'ช่วงวันที่',
+  description = 'ใช้กรองประวัติการทำงานตามวันที่เกิดรายการ',
+  presets = defaultPresets,
+  clearLabel = 'ล้างช่วงวันที่',
 }: DateRangePickerProps) {
+  const id = useId()
   const label = from || to
     ? `${displayDate(from) || 'เริ่มต้น'} - ${displayDate(to) || 'วันนี้'}`
     : 'เลือกช่วงวันที่'
@@ -71,9 +86,9 @@ export function DateRangePicker({
       <PopoverContent align="start" className="w-[min(300px,calc(100vw-2rem))] p-2.5">
         <div className="space-y-2.5">
           <div>
-            <div className="text-sm font-medium">ช่วงวันที่</div>
+            <div className="text-sm font-medium">{title}</div>
             <div className="mt-0.5 text-xs text-muted-foreground">
-              ใช้กรองประวัติการทำงานตามวันที่เกิดรายการ
+              {description}
             </div>
           </div>
 
@@ -98,11 +113,11 @@ export function DateRangePicker({
 
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
-              <Label htmlFor="date-range-from" className="text-xs text-muted-foreground">
+              <Label htmlFor={`${id}-date-range-from`} className="text-xs text-muted-foreground">
                 ตั้งแต่
               </Label>
               <Input
-                id="date-range-from"
+                id={`${id}-date-range-from`}
                 value={from}
                 onChange={(e) => onFromChange(e.target.value)}
                 placeholder="YYYY-MM-DD"
@@ -110,11 +125,11 @@ export function DateRangePicker({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="date-range-to" className="text-xs text-muted-foreground">
+              <Label htmlFor={`${id}-date-range-to`} className="text-xs text-muted-foreground">
                 ถึง
               </Label>
               <Input
-                id="date-range-to"
+                id={`${id}-date-range-to`}
                 value={to}
                 onChange={(e) => onToChange(e.target.value)}
                 placeholder="YYYY-MM-DD"
@@ -134,7 +149,7 @@ export function DateRangePicker({
                 onToChange('')
               }}
             >
-              ล้างช่วงวันที่
+              {clearLabel}
             </Button>
           )}
         </div>

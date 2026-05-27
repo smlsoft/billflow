@@ -27,6 +27,12 @@ type ChannelDefault struct {
 	ShippingItemEnabled  bool   `json:"shipping_item_enabled"`
 	ShippingItemCode     string `json:"shipping_item_code"`
 	ShippingItemUnitCode string `json:"shipping_item_unit_code"`
+	PassbookCode         string `json:"passbook_code"`
+	PassbookName         string `json:"passbook_name"`
+	BankCode             string `json:"bank_code"`
+	BankBranch           string `json:"bank_branch"`
+	ExpenseCode          string `json:"expense_code"`
+	ExpenseName          string `json:"expense_name"`
 	// Inventory + VAT overrides (sentinel: empty / -1 = "use server default")
 	WHCode    string    `json:"wh_code"`
 	ShelfCode string    `json:"shelf_code"`
@@ -41,8 +47,8 @@ type ChannelDefault struct {
 // save time) so the table can render code+name without a second SML lookup.
 // Endpoint blank = auto-resolve by (channel, bill_type) in bills.go.
 type ChannelDefaultUpsert struct {
-	Channel              string `json:"channel" binding:"required,oneof=line email shopee shopee_email shopee_shipped lazada tiktok manual"`
-	BillType             string `json:"bill_type" binding:"required,oneof=sale purchase"`
+	Channel              string `json:"channel" binding:"required,oneof=line email shopee shopee_email shopee_shipped lazada tiktok manual shopee_settlement"`
+	BillType             string `json:"bill_type" binding:"required,oneof=sale purchase ar_receipt"`
 	PartyCode            string `json:"party_code"`
 	PartyName            string `json:"party_name"`
 	PartyPhone           string `json:"party_phone"`
@@ -59,6 +65,12 @@ type ChannelDefaultUpsert struct {
 	ShippingItemEnabled  bool   `json:"shipping_item_enabled"`
 	ShippingItemCode     string `json:"shipping_item_code"`
 	ShippingItemUnitCode string `json:"shipping_item_unit_code"`
+	PassbookCode         string `json:"passbook_code"`
+	PassbookName         string `json:"passbook_name"`
+	BankCode             string `json:"bank_code"`
+	BankBranch           string `json:"bank_branch"`
+	ExpenseCode          string `json:"expense_code"`
+	ExpenseName          string `json:"expense_name"`
 	// Inventory + VAT overrides; empty / -1 = "use server default"
 	WHCode    string  `json:"wh_code"`
 	ShelfCode string  `json:"shelf_code"`

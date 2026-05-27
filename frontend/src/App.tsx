@@ -7,6 +7,7 @@ import Bills from './pages/Bills'
 import BillDetail from './pages/BillDetail'
 import Import from './pages/Import'
 import ShopeeImport from './pages/ShopeeImport'
+import ShopeeSettlement from './pages/ShopeeSettlement'
 import LazadaImport from './pages/LazadaImport'
 import TikTokImport from './pages/TikTokImport'
 import Mappings from './pages/Mappings'
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="messages" element={ENABLE_CHAT ? <Messages /> : <Navigate to="/dashboard" replace />} />
           <Route path="import" element={<Import />} />
           <Route path="import/shopee" element={ENABLE_SHOPEE_EXCEL ? <ShopeeImport /> : <Navigate to="/dashboard" replace />} />
+          <Route path="shopee-settlements" element={ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <ShopeeSettlement /> : <Navigate to="/dashboard" replace />} />
           <Route path="import/lazada" element={ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <LazadaImport /> : <Navigate to="/dashboard" replace />} />
           <Route path="import/tiktok" element={ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? <TikTokImport /> : <Navigate to="/dashboard" replace />} />
           <Route path="mappings" element={<Mappings />} />

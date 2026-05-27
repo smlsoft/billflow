@@ -21,6 +21,7 @@ const channelDefaultCols = `
   doc_prefix, doc_running_format,
   branch_code, sale_code, unit_code, doc_time,
   shipping_item_enabled, shipping_item_code, shipping_item_unit_code,
+  passbook_code, passbook_name, bank_code, bank_branch, expense_code, expense_name,
   wh_code, shelf_code, vat_type, vat_rate,
   updated_by, updated_at
 `
@@ -34,6 +35,7 @@ func scanChannelDefault(s interface{ Scan(...any) error }) (*models.ChannelDefau
 		&d.DocPrefix, &d.DocRunningFormat,
 		&d.BranchCode, &d.SaleCode, &d.UnitCode, &d.DocTime,
 		&d.ShippingItemEnabled, &d.ShippingItemCode, &d.ShippingItemUnitCode,
+		&d.PassbookCode, &d.PassbookName, &d.BankCode, &d.BankBranch, &d.ExpenseCode, &d.ExpenseName,
 		&d.WHCode, &d.ShelfCode, &d.VATType, &d.VATRate,
 		&updatedBy, &d.UpdatedAt,
 	)
@@ -97,9 +99,10 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   doc_prefix, doc_running_format,
 		   branch_code, sale_code, unit_code, doc_time,
 		   shipping_item_enabled, shipping_item_code, shipping_item_unit_code,
+		   passbook_code, passbook_name, bank_code, bank_branch, expense_code, expense_name,
 		   wh_code, shelf_code, vat_type, vat_rate,
 		   updated_by, updated_at
-		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23, NOW())
+		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29, NOW())
 		 ON CONFLICT (channel, bill_type) DO UPDATE SET
 		   party_code = EXCLUDED.party_code,
 		   party_name = EXCLUDED.party_name,
@@ -117,6 +120,12 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   shipping_item_enabled = EXCLUDED.shipping_item_enabled,
 		   shipping_item_code = EXCLUDED.shipping_item_code,
 		   shipping_item_unit_code = EXCLUDED.shipping_item_unit_code,
+		   passbook_code = EXCLUDED.passbook_code,
+		   passbook_name = EXCLUDED.passbook_name,
+		   bank_code = EXCLUDED.bank_code,
+		   bank_branch = EXCLUDED.bank_branch,
+		   expense_code = EXCLUDED.expense_code,
+		   expense_name = EXCLUDED.expense_name,
 		   wh_code = EXCLUDED.wh_code,
 		   shelf_code = EXCLUDED.shelf_code,
 		   vat_type = EXCLUDED.vat_type,
@@ -128,6 +137,7 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		d.DocPrefix, d.DocRunningFormat,
 		d.BranchCode, d.SaleCode, d.UnitCode, d.DocTime,
 		d.ShippingItemEnabled, d.ShippingItemCode, d.ShippingItemUnitCode,
+		d.PassbookCode, d.PassbookName, d.BankCode, d.BankBranch, d.ExpenseCode, d.ExpenseName,
 		d.WHCode, d.ShelfCode, d.VATType, d.VATRate,
 		ub,
 	)

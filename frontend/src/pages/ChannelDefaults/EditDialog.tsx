@@ -34,6 +34,13 @@ interface SmlDocFormat {
   screen_code: string
 }
 
+interface SMLMasterOption {
+  code: string
+  name_1: string
+  bank_code?: string
+  bank_branch?: string
+}
+
 import {
   CHANNEL_LABELS,
   destinationFor,
@@ -80,6 +87,11 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const [manualWarehouse, setManualWarehouse] = useState(false)
   const [vatTypeStr, setVatTypeStr] = useState('')
   const [vatRate, setVatRate] = useState('')
+  const [passbookCode, setPassbookCode] = useState('')
+  const [expenseCode, setExpenseCode] = useState('')
+  const [passbooks, setPassbooks] = useState<SMLMasterOption[]>([])
+  const [expenses, setExpenses] = useState<SMLMasterOption[]>([])
+  const [settlementMastersLoading, setSettlementMastersLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -110,6 +122,8 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     setManualWarehouse(false)
     setVatTypeStr(typeof row.vat_type === 'number' && row.vat_type >= 0 ? String(row.vat_type) : '')
     setVatRate(typeof row.vat_rate === 'number' && row.vat_rate >= 0 ? String(row.vat_rate) : '')
+    setPassbookCode(row.passbook_code || '')
+    setExpenseCode(row.expense_code || '')
   }, [open, row])
 
   // Fetch doc formats from SML when destination changes; auto-fill prefix + running format from selected format
@@ -120,6 +134,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
       saleorder: 'SR',
       saleinvoice: 'SI',
       purchaseorder: 'PO',
+      arreceipt: 'EE',
     }
     const screenCode = screenCodeMap[selectedDestination]
     if (!screenCode) return
@@ -150,14 +165,41 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     }
   }, [open, selectedDestination, selectedDocFormatCode])
 
+  useEffect(() => {
+    if (!open || !row || row.channel !== 'shopee_settlement' || row.bill_type !== 'ar_receipt') return
+    let cancelled = false
+    setSettlementMastersLoading(true)
+    Promise.all([
+      client.get<{ data: SMLMasterOption[] }>('/api/sml/passbooks?limit=100'),
+      client.get<{ data: SMLMasterOption[] }>('/api/sml/expenses?limit=100'),
+    ])
+      .then(([passbookRes, expenseRes]) => {
+        if (cancelled) return
+        setPassbooks(passbookRes.data.data ?? [])
+        setExpenses(expenseRes.data.data ?? [])
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPassbooks([])
+        setExpenses([])
+      })
+      .finally(() => {
+        if (!cancelled) setSettlementMastersLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, row])
+
   if (!row) return null
 
   const isPurchase = row.bill_type === 'purchase'
+  const isSettlement = row.channel === 'shopee_settlement' && row.bill_type === 'ar_receipt'
   const isShopeePurchase = row.channel === 'shopee_shipped' && row.bill_type === 'purchase'
   const channelLabel = isShopeePurchase
     ? 'Email บิลซื้อ Shopee'
     : CHANNEL_LABELS[row.channel as ChannelKey] ?? row.channel
-  const billTypeLabel = isPurchase ? 'บิลซื้อ' : 'บิลขาย'
+  const billTypeLabel = isPurchase ? 'บิลซื้อ' : isSettlement ? 'ลูกหนี้' : 'บิลขาย'
   const destinationOptions = destinationOptionsFor(row.bill_type)
   const selectedDestinationMeta =
     destinationOptions.find((option) => option.value === selectedDestination) ??
@@ -173,17 +215,24 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const docTimeTrimmed = docTime.trim()
   const whCodeTrimmed = whCode.trim()
   const shelfCodeTrimmed = shelfCode.trim()
+  const passbookCodeTrimmed = passbookCode.trim()
+  const expenseCodeTrimmed = expenseCode.trim()
   const vatTypeValue = vatTypeStr === '' ? -1 : Number(vatTypeStr)
   const parsedVatRate = Number(vatRate)
   const vatRateValue = vatRate.trim() === '' || !Number.isFinite(parsedVatRate) ? -1 : parsedVatRate
   const docWarning = docNoPatternWarning(docPrefixTrimmed, docRunningFormatTrimmed)
+  const selectedPassbook = passbooks.find((p) => p.code === passbookCodeTrimmed)
+  const selectedExpense = expenses.find((p) => p.code === expenseCodeTrimmed)
   const canSave =
     !!selectedDestinationMeta &&
-    docPrefixTrimmed !== '' &&
-    docRunningFormatTrimmed !== '' &&
-    docRunningFormatTrimmed.includes('#') &&
+    (isSettlement || (
+      docPrefixTrimmed !== '' &&
+      docRunningFormatTrimmed !== '' &&
+      docRunningFormatTrimmed.includes('#')
+    )) &&
+    (!isSettlement || (selectedDocFormatCode !== '' && passbookCodeTrimmed !== '')) &&
     (!isShopeePurchase || !shippingEnabled || shippingItemCodeTrimmed !== '') &&
-    !docWarning &&
+    (isSettlement || !docWarning) &&
     !saving
 
   const handleDestinationChange = (value: EndpointKind) => {
@@ -201,11 +250,15 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
       toast.error('กรุณาเลือกปลายทาง SML ก่อน')
       return
     }
-    if (!docPrefixTrimmed || !docRunningFormatTrimmed || !docRunningFormatTrimmed.includes('#')) {
+    if (isSettlement && (!selectedDocFormatCode || !passbookCodeTrimmed)) {
+      toast.error('กรุณาเลือกรูปแบบเอกสารรับชำระและบัญชีรับเงิน')
+      return
+    }
+    if (!isSettlement && (!docPrefixTrimmed || !docRunningFormatTrimmed || !docRunningFormatTrimmed.includes('#'))) {
       toast.error('เลือกรูปแบบเอกสารก่อน ระบบจะดึง prefix และรูปแบบเลขรันจาก SML ให้อัตโนมัติ')
       return
     }
-    if (docWarning) {
+    if (!isSettlement && docWarning) {
       toast.error('แก้รูปแบบเลขเอกสารตามคำเตือนก่อนบันทึก')
       return
     }
@@ -225,19 +278,25 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         party_tax_id: row.party_tax_id ?? '',
         doc_format_code: selectedDocFormatCode || selectedDestinationMeta.docFormatCode,
         endpoint: selectedDestinationMeta.apiPath,
-        doc_prefix: docPrefixTrimmed,
-        doc_running_format: docRunningFormatTrimmed,
-        branch_code: branchCodeTrimmed,
-        sale_code: saleCodeTrimmed,
-        unit_code: unitCodeTrimmed,
-        doc_time: docTimeTrimmed,
+        doc_prefix: isSettlement ? (selectedDocFormatCode || selectedDestinationMeta.docPrefix) : docPrefixTrimmed,
+        doc_running_format: isSettlement ? '@YYMM####' : docRunningFormatTrimmed,
+        branch_code: isSettlement ? '' : branchCodeTrimmed,
+        sale_code: isSettlement ? '' : saleCodeTrimmed,
+        unit_code: isSettlement ? '' : unitCodeTrimmed,
+        doc_time: isSettlement ? '' : docTimeTrimmed,
         shipping_item_enabled: isShopeePurchase ? shippingEnabled : false,
         shipping_item_code: isShopeePurchase ? shippingItemCodeTrimmed : '',
         shipping_item_unit_code: isShopeePurchase ? shippingItemUnitCodeTrimmed : '',
-        wh_code: whCodeTrimmed,
-        shelf_code: shelfCodeTrimmed,
-        vat_type: vatTypeValue,
-        vat_rate: vatRateValue,
+        passbook_code: isSettlement ? passbookCodeTrimmed : '',
+        passbook_name: isSettlement ? (selectedPassbook?.name_1 ?? row.passbook_name ?? '') : '',
+        bank_code: isSettlement ? (selectedPassbook?.bank_code ?? row.bank_code ?? '') : '',
+        bank_branch: isSettlement ? (selectedPassbook?.bank_branch ?? row.bank_branch ?? '') : '',
+        expense_code: isSettlement ? expenseCodeTrimmed : '',
+        expense_name: isSettlement ? (selectedExpense?.name_1 ?? row.expense_name ?? '') : '',
+        wh_code: isSettlement ? '' : whCodeTrimmed,
+        shelf_code: isSettlement ? '' : shelfCodeTrimmed,
+        vat_type: isSettlement ? -1 : vatTypeValue,
+        vat_rate: isSettlement ? -1 : vatRateValue,
       })
       toast.success('บันทึกสำเร็จ')
       onSaved()
@@ -350,6 +409,61 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
               </p>
             </div>
 
+            {isSettlement && (
+              <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    ตั้งค่ารับชำระ Shopee
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    ใช้ค่าจาก SML master จริงสำหรับเมนูรับชำระหนี้. ส่วนต่าง Shopee เว้นว่างได้ตอนตั้งค่า
+                    แต่ถ้ารอบส่งมีส่วนต่าง ระบบจะบังคับเลือกก่อนส่งจริง
+                  </p>
+                </div>
+                <div className="grid gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">บัญชีรับเงิน</Label>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={passbookCode}
+                      disabled={settlementMastersLoading}
+                      onChange={(e) => setPassbookCode(e.target.value)}
+                    >
+                      <option value="">เลือกบัญชีรับเงินจาก SML</option>
+                      {passbooks.map((p) => (
+                        <option key={p.code} value={p.code}>
+                          {p.code} · {p.name_1}{p.bank_code ? ` · ${p.bank_code}` : ''}{p.bank_branch ? ` ${p.bank_branch}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">ส่วนต่าง Shopee</Label>
+                    <select
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={expenseCode}
+                      disabled={settlementMastersLoading}
+                      onChange={(e) => setExpenseCode(e.target.value)}
+                    >
+                      <option value="">ยังไม่กำหนดค่าใช้จ่ายส่วนต่าง</option>
+                      {expenses.map((p) => (
+                        <option key={p.code} value={p.code}>
+                          {p.code} · {p.name_1}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {!expenseCodeTrimmed && (
+                  <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
+                    ยังไม่ได้ตั้งค่าใช้จ่ายส่วนต่าง Shopee บันทึกได้ แต่ถ้ารอบส่งมีส่วนต่าง
+                    ระบบจะให้เลือกค่าใช้จ่ายก่อนส่งเข้า SML
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isSettlement && (
             <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
               <div className="flex items-center justify-between">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -378,7 +492,9 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                 </code>
               </div>
             </div>
+            )}
 
+            {!isSettlement && (
             <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -502,6 +618,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                 </div>
               )}
             </div>
+            )}
 
             {isShopeePurchase && (
               <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">

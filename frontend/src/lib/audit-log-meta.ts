@@ -63,6 +63,15 @@ export const ACTION_META: Record<string, ActionMeta> = {
   shopee_duplicate_merged: { label: 'รวมรายการ Shopee ซ้ำ', emoji: '🔁', tone: 'muted' },
   shopee_api_connection_updated: { label: 'แก้ไขการเชื่อมต่อ Shopee API', emoji: '🔌', tone: 'info' },
   shopee_api_preview_requested: { label: 'พรีวิว Shopee API', emoji: '👁️', tone: 'info' },
+  shopee_settlement_preview_started: { label: 'เริ่มดึงรอบถอนเงิน Shopee', emoji: '📥', tone: 'info' },
+  shopee_settlement_preview_completed: { label: 'ดึงรอบถอนเงิน Shopee เสร็จ', emoji: '✅', tone: 'success' },
+  shopee_settlement_preview_failed: { label: 'ดึงรอบถอนเงิน Shopee ไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
+  shopee_settlement_reconciled: { label: 'รีเฟรชผลรับชำระ Shopee', emoji: '🔄', tone: 'info' },
+  shopee_settlement_send_blocked: { label: 'ส่งรับชำระ Shopee ถูกบล็อก', emoji: '⛔', tone: 'warning' },
+  shopee_settlement_hidden: { label: 'ซ่อนงานรับชำระ Shopee', emoji: '🙈', tone: 'muted' },
+  shopee_settlement_restored: { label: 'กู้คืนงานรับชำระ Shopee', emoji: '↩️', tone: 'info' },
+  shopee_settlement_sent: { label: 'ส่งรับชำระ Shopee เข้า SML สำเร็จ', emoji: '🧾', tone: 'success' },
+  shopee_settlement_defaults_updated: { label: 'แก้ไขค่ารับชำระ Shopee', emoji: '⚙️', tone: 'info' },
   lazada_import_preview: { label: 'พรีวิวไฟล์ Lazada Excel', emoji: '👁️', tone: 'muted' },
   lazada_import_done: { label: 'นำเข้า Lazada สำเร็จ', emoji: '📊', tone: 'success' },
   tiktok_import_preview: { label: 'พรีวิวไฟล์ TikTok Excel', emoji: '👁️', tone: 'muted' },
@@ -126,6 +135,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   channel_defaults: 'ตั้งค่าเอกสาร',
   catalog: 'สินค้า SML',
   shopee_api: 'Shopee API',
+  shopee_settlement: 'รับชำระ Shopee',
 }
 
 export const SOURCE_TONE: Record<string, string> = {
@@ -145,6 +155,7 @@ export const SOURCE_TONE: Record<string, string> = {
   settings: 'bg-muted text-muted-foreground',
   ui: 'bg-primary/10 text-primary',
   shopee_api: 'bg-warning/10 text-warning',
+  shopee_settlement: 'bg-success/10 text-success',
 }
 
 export const TONE_DOT: Record<Tone, string> = {
@@ -300,6 +311,67 @@ export function summarize(log: AuditLog): string {
       return [d.shop_id ? `ร้าน ${d.shop_id}` : '', d.label, d.disabled ? 'ปิดใช้งาน' : 'เปิดใช้งาน'].filter(Boolean).join(' · ')
     case 'shopee_api_preview_requested':
       return [d.shop_id ? `ร้าน ${d.shop_id}` : '', d.order_count != null ? `${d.order_count} ออเดอร์` : ''].filter(Boolean).join(' · ')
+    case 'shopee_settlement_preview_started':
+      return [
+        settlementShopLabel(d),
+        settlementReleaseRange(d),
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_preview_completed':
+      return [
+        settlementShopLabel(d),
+        settlementReleaseRange(d),
+        settlementCountSummary(d),
+        d.message,
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_preview_failed':
+      return [
+        settlementShopLabel(d),
+        settlementReleaseRange(d),
+        humanizeAuditError(d.error ?? d.message),
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_reconciled':
+      return [
+        d.newly_blocked != null ? `block เพิ่ม ${Number(d.newly_blocked).toLocaleString('th-TH')} รายการ` : '',
+        settlementCountSummary(d),
+        d.message,
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_send_blocked':
+      return [
+        humanizeAuditError(d.error ?? d.message),
+        settlementCountSummary(d),
+        d.doc_format_code ? `ฟอร์ม ${d.doc_format_code}` : '',
+        d.passbook_code ? `บัญชี ${d.passbook_code}` : '',
+        d.expense_code ? `ค่าใช้จ่าย ${d.expense_code}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_hidden':
+      return [
+        settlementShopLabel(d),
+        settlementReleaseRange(d),
+        d.hidden_reason ? `เหตุผล: ${d.hidden_reason}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_restored':
+      return [
+        settlementShopLabel(d),
+        settlementReleaseRange(d),
+        'กลับมาแสดงในรายการปกติ',
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_sent':
+      return [
+        d.rc_doc_no,
+        d.sent_count != null ? `ส่ง ${Number(d.sent_count).toLocaleString('th-TH')} รายการ` : '',
+        d.blocked_after_reconcile_count != null && Number(d.blocked_after_reconcile_count) > 0
+          ? `ข้ามหลังตรวจซ้ำ ${Number(d.blocked_after_reconcile_count).toLocaleString('th-TH')}`
+          : '',
+        d.doc_format_code ? `ฟอร์ม ${d.doc_format_code}` : '',
+        d.passbook_code ? `บัญชี ${d.passbook_code}` : '',
+        d.expense_code ? `ค่าใช้จ่าย ${d.expense_code}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'shopee_settlement_defaults_updated':
+      return [
+        d.doc_format_code ? `ฟอร์ม ${d.doc_format_code}` : '',
+        d.passbook_code ? `บัญชี ${d.passbook_code}` : '',
+        d.expense_code ? `ค่าใช้จ่าย ${d.expense_code}` : 'ยังไม่ตั้งค่าใช้จ่าย',
+      ].filter(Boolean).join(' · ')
     case 'shopee_duplicate_merged':
       return [d.order_id ?? d.shopee_order_id, d.bill_id ? `รวมเข้าบิล ${String(d.bill_id).slice(0, 8)}…` : ''].filter(Boolean).join(' · ')
     case 'demo_test_data_reset': {
@@ -385,6 +457,32 @@ export function summarize(log: AuditLog): string {
     default:
       return ''
   }
+}
+
+function settlementShopLabel(d: Record<string, any>): string {
+  return [d.shop_label, d.shop_id ? `ร้าน ${d.shop_id}` : ''].filter(Boolean).join(' · ')
+}
+
+function settlementReleaseRange(d: Record<string, any>): string {
+  const from = d.release_date_from || datePart(d.release_time_from)
+  const to = d.release_date_to || datePart(d.release_time_to)
+  if (!from && !to) return ''
+  return `release ${[from, to].filter(Boolean).join(' - ')}`
+}
+
+function settlementCountSummary(d: Record<string, any>): string {
+  const parts = [
+    d.total_count != null ? `รวม ${Number(d.total_count).toLocaleString('th-TH')}` : '',
+    d.ready_count != null ? `พร้อมส่ง ${Number(d.ready_count).toLocaleString('th-TH')}` : '',
+    d.blocked_count != null ? `ต้องตรวจ ${Number(d.blocked_count).toLocaleString('th-TH')}` : '',
+    d.sent_count != null ? `ส่งแล้ว ${Number(d.sent_count).toLocaleString('th-TH')}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
+function datePart(value: unknown): string {
+  const text = String(value ?? '')
+  return text.includes('T') ? text.slice(0, 10) : text
 }
 
 function parseMaybeJSON(value: unknown): Record<string, any> {

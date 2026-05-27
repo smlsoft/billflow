@@ -28,6 +28,12 @@ func marshalASCII(v any) ([]byte, error) {
 	return asciiEscapeJSON(raw), nil
 }
 
+// MarshalASCII is the exported form for handlers that post directly to
+// sml-api-bybos endpoints outside the dedicated SML clients.
+func MarshalASCII(v any) ([]byte, error) {
+	return marshalASCII(v)
+}
+
 // asciiEscapeJSON walks an already-marshalled JSON byte slice and rewrites
 // every non-ASCII byte sequence inside string literals as \uXXXX.
 // Bytes outside string literals (numbers, structural chars, whitespace) are

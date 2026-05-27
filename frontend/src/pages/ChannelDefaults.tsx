@@ -26,6 +26,7 @@ import { EditDialog } from './ChannelDefaults/EditDialog'
 import {
   CHANNEL_LABELS,
   destinationFor,
+  type ChannelBillType,
   type ChannelDefaultRow,
   type ChannelKey,
 } from './ChannelDefaults/labels'
@@ -34,14 +35,14 @@ const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
 const PHASE1_CHANNEL_SLOTS: Array<{
   channel: ChannelKey
-  bill_type: 'sale' | 'purchase'
+  bill_type: ChannelBillType
 }> = [
   { channel: 'shopee_shipped', bill_type: 'purchase' },
 ]
 
 const PHASE_PLUS_CHANNEL_SLOTS: Array<{
   channel: ChannelKey
-  bill_type: 'sale' | 'purchase'
+  bill_type: ChannelBillType
 }> = [
   ...(ENABLE_CHAT
     ? [{ channel: 'line' as ChannelKey, bill_type: 'sale' as const }]
@@ -55,6 +56,9 @@ const PHASE_PLUS_CHANNEL_SLOTS: Array<{
     : []),
   ...(ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS
     ? [{ channel: 'tiktok' as ChannelKey, bill_type: 'sale' as const }]
+    : []),
+  ...(ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
+    ? [{ channel: 'shopee_settlement' as ChannelKey, bill_type: 'ar_receipt' as const }]
     : []),
 ]
 
@@ -70,6 +74,9 @@ function displayChannelLabel(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type
 }
 
 function workMenuFor(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type' | 'endpoint' | 'doc_format_code'>) {
+  if (row.channel === 'shopee_settlement' && row.bill_type === 'ar_receipt') {
+    return { label: 'รับชำระหนี้', to: '/shopee-settlements' }
+  }
   if (ENABLE_SALES_ORDERS && (row.channel === 'shopee' || row.channel === 'lazada' || row.channel === 'tiktok') && row.bill_type === 'sale') {
     const route = `${row.endpoint ?? ''} ${row.doc_format_code ?? ''}`.toLowerCase()
     if (route.includes('saleinvoice') || route.includes('sale-invoices') || row.doc_format_code?.toUpperCase() === 'SI') {
@@ -260,6 +267,12 @@ export default function ChannelDefaults() {
         shipping_item_enabled: false,
         shipping_item_code: '',
         shipping_item_unit_code: '',
+        passbook_code: '',
+        passbook_name: '',
+        bank_code: '',
+        bank_branch: '',
+        expense_code: '',
+        expense_name: '',
         wh_code: '',
         shelf_code: '',
         vat_type: -1,
@@ -269,6 +282,9 @@ export default function ChannelDefaults() {
   }, [rows])
 
   const isRouteUnset = (r: ChannelDefaultRow) => {
+    if (r.channel === 'shopee_settlement' && r.bill_type === 'ar_receipt') {
+      return !r.endpoint || !r.doc_format_code || !r.passbook_code
+    }
     return !r.endpoint || !r.doc_format_code || !r.doc_prefix || !r.doc_running_format
   }
 
@@ -311,10 +327,12 @@ export default function ChannelDefaults() {
                   'h-5 px-1.5 text-[10px] font-medium',
                   r.bill_type === 'purchase'
                     ? 'bg-warning/15 text-warning hover:bg-warning/20'
+                    : r.bill_type === 'ar_receipt'
+                      ? 'bg-success/15 text-success hover:bg-success/20'
                     : 'bg-info/15 text-info hover:bg-info/20',
                 )}
               >
-                {r.bill_type === 'purchase' ? 'บิลซื้อ' : 'บิลขาย'}
+                {r.bill_type === 'purchase' ? 'บิลซื้อ' : r.bill_type === 'ar_receipt' ? 'ลูกหนี้' : 'บิลขาย'}
               </Badge>
             ),
           },

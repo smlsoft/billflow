@@ -17,15 +17,17 @@ import (
 )
 
 const (
-	PathAuthPartner       = "/api/v2/shop/auth_partner"
-	PathTokenGet          = "/api/v2/auth/token/get"
-	PathAccessTokenGet    = "/api/v2/auth/access_token/get"
-	PathShopInfo          = "/api/v2/shop/get_shop_info"
-	PathShopProfile       = "/api/v2/shop/get_profile"
-	PathOrderList         = "/api/v2/order/get_order_list"
-	PathOrderDetail       = "/api/v2/order/get_order_detail"
-	DefaultSandboxBaseURL = "https://openplatform.sandbox.test-stable.shopee.sg"
-	DefaultLiveBaseURL    = "https://partner.shopeemobile.com"
+	PathAuthPartner         = "/api/v2/shop/auth_partner"
+	PathTokenGet            = "/api/v2/auth/token/get"
+	PathAccessTokenGet      = "/api/v2/auth/access_token/get"
+	PathShopInfo            = "/api/v2/shop/get_shop_info"
+	PathShopProfile         = "/api/v2/shop/get_profile"
+	PathOrderList           = "/api/v2/order/get_order_list"
+	PathOrderDetail         = "/api/v2/order/get_order_detail"
+	PathPaymentEscrowList   = "/api/v2/payment/get_escrow_list"
+	PathPaymentEscrowDetail = "/api/v2/payment/get_escrow_detail"
+	DefaultSandboxBaseURL   = "https://openplatform.sandbox.test-stable.shopee.sg"
+	DefaultLiveBaseURL      = "https://partner.shopeemobile.com"
 )
 
 type Config struct {
@@ -138,6 +140,13 @@ type OrderListRequest struct {
 	ResponseOptionalFields string
 }
 
+type EscrowListRequest struct {
+	ReleaseTimeFrom int64
+	ReleaseTimeTo   int64
+	PageNo          int
+	PageSize        int
+}
+
 type ShopInfoResponse struct {
 	Error     string `json:"error"`
 	Message   string `json:"message"`
@@ -221,6 +230,94 @@ func (c *Client) GetOrderList(ctx context.Context, accessToken string, shopID in
 	}
 	if out.Error != "" {
 		return nil, fmt.Errorf("shopee get_order_list: %s %s", out.Error, out.Message)
+	}
+	return &out, nil
+}
+
+type EscrowListResponse struct {
+	Error     string `json:"error"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+	Response  struct {
+		More       bool             `json:"more"`
+		EscrowList []EscrowListItem `json:"escrow_list"`
+	} `json:"response"`
+}
+
+type EscrowListItem struct {
+	OrderSN           string  `json:"order_sn"`
+	PayoutAmount      float64 `json:"payout_amount"`
+	EscrowReleaseTime int64   `json:"escrow_release_time"`
+}
+
+func (c *Client) GetEscrowList(ctx context.Context, accessToken string, shopID int64, req EscrowListRequest) (*EscrowListResponse, error) {
+	q := url.Values{}
+	q.Set("release_time_from", strconv.FormatInt(req.ReleaseTimeFrom, 10))
+	q.Set("release_time_to", strconv.FormatInt(req.ReleaseTimeTo, 10))
+	pageNo := req.PageNo
+	if pageNo <= 0 {
+		pageNo = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 50
+	}
+	q.Set("page_no", strconv.Itoa(pageNo))
+	q.Set("page_size", strconv.Itoa(pageSize))
+	var out EscrowListResponse
+	if err := c.getShop(ctx, PathPaymentEscrowList, accessToken, shopID, q, &out); err != nil {
+		return nil, err
+	}
+	if out.Error != "" {
+		return nil, fmt.Errorf("shopee get_escrow_list: %s %s", out.Error, out.Message)
+	}
+	return &out, nil
+}
+
+type EscrowDetailResponse struct {
+	Error     string `json:"error"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+	Response  struct {
+		OrderSN     string            `json:"order_sn"`
+		OrderIncome EscrowOrderIncome `json:"order_income"`
+	} `json:"response"`
+}
+
+type EscrowOrderIncome struct {
+	EscrowAmount           float64 `json:"escrow_amount"`
+	BuyerTotalAmount       float64 `json:"buyer_total_amount"`
+	OriginalPrice          float64 `json:"original_price"`
+	SellerDiscount         float64 `json:"seller_discount"`
+	ShopeeDiscount         float64 `json:"shopee_discount"`
+	CommissionFee          float64 `json:"commission_fee"`
+	ServiceFee             float64 `json:"service_fee"`
+	SellerTransactionFee   float64 `json:"seller_transaction_fee"`
+	FinalShippingFee       float64 `json:"final_shipping_fee"`
+	ActualShippingFee      float64 `json:"actual_shipping_fee"`
+	EscrowTax              float64 `json:"escrow_tax"`
+	WithholdingTax         float64 `json:"withholding_tax"`
+	VoucherFromSeller      float64 `json:"voucher_from_seller"`
+	VoucherFromShopee      float64 `json:"voucher_from_shopee"`
+	ReverseShippingFee     float64 `json:"reverse_shipping_fee"`
+	BuyerPaidShippingFee   float64 `json:"buyer_paid_shipping_fee"`
+	ShopeeShippingRebate   float64 `json:"shopee_shipping_rebate"`
+	SellerShippingDiscount float64 `json:"seller_shipping_discount"`
+	Coin                   float64 `json:"coin"`
+}
+
+func (c *Client) GetEscrowDetail(ctx context.Context, accessToken string, shopID int64, orderSN string) (*EscrowDetailResponse, error) {
+	q := url.Values{}
+	q.Set("order_sn", strings.TrimSpace(orderSN))
+	var out EscrowDetailResponse
+	if err := c.getShop(ctx, PathPaymentEscrowDetail, accessToken, shopID, q, &out); err != nil {
+		return nil, err
+	}
+	if out.Error != "" {
+		return nil, fmt.Errorf("shopee get_escrow_detail: %s %s", out.Error, out.Message)
+	}
+	if out.Response.OrderSN == "" {
+		out.Response.OrderSN = strings.TrimSpace(orderSN)
 	}
 	return &out, nil
 }

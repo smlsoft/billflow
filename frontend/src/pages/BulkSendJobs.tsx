@@ -5,6 +5,7 @@ import {
   Clock,
   Eye,
   RefreshCw,
+  ReceiptText,
   Send,
   XCircle,
 } from 'lucide-react'
@@ -250,6 +251,23 @@ export default function BulkSendJobs() {
         <StatCard label="ไม่สำเร็จในหน้านี้" value={pageStats.failed} tone={pageStats.failed > 0 ? 'danger' : undefined} />
         <StatCard label="ข้ามในหน้านี้" value={pageStats.skipped} tone={pageStats.skipped > 0 ? 'warning' : undefined} />
       </div>
+
+      <Card className="border-primary/20 bg-primary/5 shadow-none">
+        <CardContent className="flex flex-col gap-2 p-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2">
+            <ReceiptText className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <span>
+              หน้านี้เป็นประวัติส่ง “บิล” เข้า SML แบบกลุ่มเท่านั้น ส่วนงานรับชำระ Shopee และเลข RC ดูแยกที่หน้า{' '}
+              <Link to="/shopee-settlements" className="font-medium text-primary hover:underline">
+                รับชำระ Shopee
+              </Link>
+            </span>
+          </div>
+          <Button asChild variant="outline" size="sm" className="shrink-0">
+            <Link to="/shopee-settlements">เปิดหน้ารับชำระ</Link>
+          </Button>
+        </CardContent>
+      </Card>
 
       <Card className="shadow-none">
         <CardContent className="space-y-3 p-4">

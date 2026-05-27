@@ -11,10 +11,13 @@ export type ChannelKey =
   | 'lazada'
   | 'tiktok'
   | 'manual'
+  | 'shopee_settlement'
+
+export type ChannelBillType = 'sale' | 'purchase' | 'ar_receipt'
 
 export interface ChannelDefaultRow {
   channel: string
-  bill_type: 'sale' | 'purchase'
+  bill_type: ChannelBillType
   party_code: string
   party_name: string
   party_phone: string
@@ -31,6 +34,12 @@ export interface ChannelDefaultRow {
   shipping_item_enabled?: boolean
   shipping_item_code?: string
   shipping_item_unit_code?: string
+  passbook_code?: string
+  passbook_name?: string
+  bank_code?: string
+  bank_branch?: string
+  expense_code?: string
+  expense_name?: string
   // Inventory + VAT overrides (sentinel: '' / -1 = "use server default")
   wh_code: string
   shelf_code: string
@@ -74,10 +83,11 @@ export type EndpointKind =
   | 'saleorder'
   | 'saleinvoice'
   | 'purchaseorder'
+  | 'arreceipt'
 
 export interface SmlDestinationOption {
   value: EndpointKind
-  billType: 'sale' | 'purchase'
+  billType: ChannelBillType
   label: string
   apiPath: string
   docFormatCode: string
@@ -128,11 +138,23 @@ export const SML_DESTINATION_OPTIONS: SmlDestinationOption[] = [
     description: 'ส่งบิลซื้อ Shopee เข้าเมนู ซื้อ -> ใบสั่งซื้อ ใน SML',
     phase1Enabled: true,
   },
+  {
+    value: 'arreceipt',
+    billType: 'ar_receipt',
+    label: 'ลูกหนี้ -> รับชำระหนี้',
+    apiPath: '/api/v1/ar/receipts',
+    docFormatCode: 'RC',
+    docPrefix: 'RC',
+    docRunningFormat: '@YYMM####',
+    statusLabel: 'ทดสอบผ่านแล้ว',
+    description: 'ส่งรายการ Shopee payout เข้าเมนู ลูกหนี้ -> รับชำระหนี้ ใน SML',
+    phase1Enabled: true,
+  },
 ]
 
 export function destinationFor(
   channel: ChannelKey,
-  billType: 'sale' | 'purchase',
+  billType: ChannelBillType,
   endpoint = '',
   docFormatCode = '',
 ): SmlDestinationOption | undefined {
@@ -145,7 +167,7 @@ export function destinationFor(
 }
 
 export function destinationOptionsFor(
-  billType?: 'sale' | 'purchase',
+  billType?: ChannelBillType,
 ): SmlDestinationOption[] {
   return SML_DESTINATION_OPTIONS.filter((option) => (
     option.phase1Enabled && (!billType || option.billType === billType)
@@ -158,9 +180,10 @@ export function destinationOptionsFor(
 export function destinationKindFor(
   override: string,
   channel: ChannelKey,
-  billType: 'sale' | 'purchase',
+  billType: ChannelBillType,
 ): EndpointKind {
   const lower = (override || '').toLowerCase()
+  if (channel === 'shopee_settlement' || billType === 'ar_receipt' || lower.includes('ar/receipts')) return 'arreceipt'
   if (lower.includes('purchaseorder') || lower.includes('purchase-orders')) return 'purchaseorder'
   if (lower.includes('saleinvoice') || lower.includes('sale-invoices')) return 'saleinvoice'
   if (lower.includes('saleorder') || lower.includes('sale-orders')) return 'saleorder'
@@ -179,4 +202,5 @@ export const CHANNEL_LABELS: Record<ChannelKey, string> = {
   lazada: 'Lazada Excel',
   tiktok: 'TikTok Excel',
   manual: 'Manual',
+  shopee_settlement: 'Shopee รับชำระหนี้',
 }

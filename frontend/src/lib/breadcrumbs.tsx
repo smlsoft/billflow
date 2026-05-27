@@ -98,6 +98,7 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
   },
   { pattern: '/logs', crumbs: [{ label: 'ประวัติการทำงาน' }] },
   { pattern: '/bulk-send-jobs', crumbs: [{ label: 'ประวัติส่ง SML แบบกลุ่ม' }] },
+  { pattern: '/shopee-settlements', crumbs: [{ label: 'งานฝั่งขาย' }, { label: 'รับชำระ Shopee' }] },
 ]
 
 interface CtxValue {
