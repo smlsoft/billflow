@@ -49,6 +49,8 @@ export const ACTION_META: Record<string, ActionMeta> = {
   sml_failed: { label: 'ส่ง SML ล้มเหลว', emoji: '❌', tone: 'danger' },
   sml_erp_log_warning: { label: 'บันทึก Log SML ไม่ครบ', emoji: '⚠️', tone: 'warning' },
   sml_readiness_blocked: { label: 'SML ยังไม่พร้อม', emoji: '⚠️', tone: 'warning' },
+  sml_stock_recalc_ok: { label: 'คำนวณต้นทุนสต๊อก', emoji: '📊', tone: 'success' },
+  sml_stock_recalc_failed: { label: 'คำนวณต้นทุนสต๊อกล้มเหลว', emoji: '⚠️', tone: 'warning' },
   // Mappings
   mapping_feedback: { label: 'ยืนยัน mapping', emoji: '🎯', tone: 'primary' },
   marketplace_alias_confirmed: { label: 'ยืนยันสินค้าจาก Marketplace', emoji: '🎯', tone: 'primary' },

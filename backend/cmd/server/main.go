@@ -115,13 +115,33 @@ func main() {
 	} else if n > 0 {
 		logger.Info("startup shopee purchase payment summary backfilled", zap.Int("bills", n))
 	}
+	// dbCfgFn returns per-tenant PostgreSQL credentials as X-DB-* headers for
+	// sml-api-byboss. Cached with 30 s TTL; invalidated on /settings/instance save.
+	dbCfgFn := sml.DBHeaderFn(func() *sml.SMLDBHeaderConfig {
+		return sml.GetCachedDBConfig(func() (*sml.SMLDBHeaderConfig, error) {
+			dbCfg, err := appSettingsRepo.GetSMLDBConfig()
+			if err != nil || !dbCfg.IsSet() {
+				return nil, err
+			}
+			return &sml.SMLDBHeaderConfig{
+				Host:       dbCfg.Host,
+				Port:       dbCfg.Port,
+				User:       dbCfg.User,
+				Password:   dbCfg.Password,
+				Name:       dbCfg.Name,
+				ImagesName: dbCfg.ImagesName,
+				LogName:    dbCfg.LogName,
+			}, nil
+		})
+	})
+
 	smlReadiness := sml.NewReadinessChecker(sml.PartyConfig{
 		BaseURL:    cfg.ShopeeSMLURL,
 		GUID:       cfg.ShopeeSMLGUID,
 		Provider:   cfg.ShopeeSMLProvider,
 		ConfigFile: cfg.ShopeeSMLConfigFile,
 		Database:   cfg.ShopeeSMLDatabase,
-	}, logger)
+	}, dbCfgFn, logger)
 	setupH := handlers.NewSetupHandler(db, cfg, appSettingsRepo, auditLogRepo, smlReadiness, logger)
 
 	// Services
@@ -152,7 +172,7 @@ func main() {
 		VATType:    cfg.ShopeeSMLVATType,
 		VATRate:    cfg.ShopeeSMLVATRate,
 		DocTime:    cfg.ShopeeSMLDocTime,
-	}, logger)
+	}, dbCfgFn, logger)
 	saleOrderClient := sml.NewSaleOrderClient(sml.SaleOrderConfig{
 		BaseURL:    cfg.ShopeeSMLURL,
 		GUID:       cfg.ShopeeSMLGUID,
@@ -168,13 +188,14 @@ func main() {
 		VATType:    cfg.ShopeeSMLVATType,
 		VATRate:    cfg.ShopeeSMLVATRate,
 		DocTime:    cfg.ShopeeSMLDocTime,
-	}, logger)
+	}, dbCfgFn, logger)
 	productClient := sml.NewProductClient(
 		cfg.ShopeeSMLURL,
 		cfg.ShopeeSMLGUID,
 		cfg.ShopeeSMLProvider,
 		cfg.ShopeeSMLConfigFile,
 		cfg.ShopeeSMLDatabase,
+		dbCfgFn,
 		logger,
 	)
 	poClient := sml.NewPurchaseOrderClient(sml.PurchaseOrderConfig{
@@ -192,7 +213,7 @@ func main() {
 		VATType:    cfg.ShopeeSMLVATType,
 		VATRate:    cfg.ShopeeSMLVATRate,
 		DocTime:    cfg.ShopeeSMLDocTime,
-	}, logger)
+	}, dbCfgFn, logger)
 
 	// SML party cache — fetches all customer + supplier records from SML 248
 	// at boot, refreshes every 6 h. Powers the /settings/channels picker.
@@ -202,14 +223,14 @@ func main() {
 		Provider:   cfg.ShopeeSMLProvider,
 		ConfigFile: cfg.ShopeeSMLConfigFile,
 		Database:   cfg.ShopeeSMLDatabase,
-	}, logger)
+	}, dbCfgFn, logger)
 	partyCache := sml.NewPartyCache(partyClient, logger)
 	partyCache.Start(context.Background())
 	docNoClient := sml.NewDocNoClient(sml.PartyConfig{
 		BaseURL:  cfg.ShopeeSMLURL,
 		GUID:     cfg.ShopeeSMLGUID,
 		Database: cfg.ShopeeSMLDatabase,
-	}, logger)
+	}, dbCfgFn, logger)
 
 	// SML warehouse cache — powers the Bill Detail send dialog warehouse/shelf
 	// pickers. If the SML v4 warehouse service is not deployed yet, startup
@@ -220,7 +241,7 @@ func main() {
 		Provider:   cfg.ShopeeSMLProvider,
 		ConfigFile: cfg.ShopeeSMLConfigFile,
 		Database:   cfg.ShopeeSMLDatabase,
-	}, logger)
+	}, dbCfgFn, logger)
 	warehouseCache := sml.NewWarehouseCache(warehouseClient, logger)
 	warehouseCache.Start(context.Background())
 
@@ -348,7 +369,7 @@ func main() {
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, logger)
+	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
 	billH.RecoverInterruptedBulkSendJobs()
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, catalogRepo, auditLogRepo, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
@@ -384,7 +405,7 @@ func main() {
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetChannelDefaults(channelDefaultRepo)
 	emailH.SetArtifactService(artifactSvc)
-	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, cfg, cfg.AutoConfirmThreshold, logger)
+	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, dbCfgFn, cfg, cfg.AutoConfirmThreshold, logger)
 	go func() {
 		time.Sleep(3 * time.Second)
 		started, err := catalogH.StartEmbedAll("startup_auto_resume")
@@ -397,7 +418,7 @@ func main() {
 		}
 	}()
 	importH := handlers.NewImportHandler(platformRepo, mapperSvc, anomalySvc, saleOrderClient, billRepo, channelDefaultRepo, docCounterRepo, cfg, cfg.AutoConfirmThreshold, logger)
-	shopeeH := handlers.NewShopeeImportHandler(db, billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
+	shopeeH := handlers.NewShopeeImportHandler(db, billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, dbCfgFn, logger)
 	shopeeH.SetArtifactService(artifactSvc)
 	lazadaH := handlers.NewLazadaImportHandler(billRepo, mappingRepo, auditLogRepo, cfg, channelDefaultRepo, catalogSvc, embSvc, catalogIdx, catalogRepo, logger)
 	lazadaH.SetArtifactService(artifactSvc)
@@ -408,7 +429,7 @@ func main() {
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapPollJobRepo, imapCoordinator, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
-	smlPartyH := handlers.NewSMLPartyHandler(partyCache, partyClient, auditLogRepo, logger)
+	smlPartyH := handlers.NewSMLPartyHandler(partyCache, partyClient, auditLogRepo, dbCfgFn, logger)
 	smlPartyH.SetSMLConfig(cfg.ShopeeSMLURL, cfg.ShopeeSMLGUID, cfg.ShopeeSMLDatabase)
 	smlWarehouseH := handlers.NewSMLWarehouseHandler(warehouseCache, logger)
 	logH := handlers.NewLogHandler(auditLogRepo, logger)

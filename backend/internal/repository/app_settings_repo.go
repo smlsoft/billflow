@@ -149,6 +149,56 @@ func RuntimeSettingValues(cfg *config.Config) map[string]string {
 
 
 
+// GetValue returns the stored value for key, or "" if the key is not found.
+func (r *AppSettingsRepo) GetValue(key string) (string, error) {
+	var value string
+	err := r.db.QueryRow(
+		`SELECT COALESCE(value,'') FROM app_settings WHERE key=$1`, key,
+	).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return strings.TrimSpace(value), err
+}
+
+// SMLDBConfig holds PostgreSQL connection details read from app_settings.
+// Password is never logged.
+type SMLDBConfig struct {
+	Host       string
+	Port       string
+	User       string
+	Password   string // never log
+	Name       string
+	ImagesName string
+	LogName    string
+}
+
+// IsSet returns true when all 5 required fields are non-empty.
+// Mirrors SMLDBHeaderConfig.IsSet in the sml package.
+func (db SMLDBConfig) IsSet() bool {
+	return db.Host != "" && db.Port != "" && db.User != "" &&
+		db.Password != "" && db.Name != ""
+}
+
+// GetSMLDBConfig reads all sml_db.* keys in a single All() call and returns
+// them as a typed struct. Returns an empty struct (IsSet()=false) when not set.
+func (r *AppSettingsRepo) GetSMLDBConfig() (SMLDBConfig, error) {
+	settings, err := r.All()
+	if err != nil {
+		return SMLDBConfig{}, err
+	}
+	get := func(key string) string { return strings.TrimSpace(settings[key].Value) }
+	return SMLDBConfig{
+		Host:       get("sml_db.host"),
+		Port:       get("sml_db.port"),
+		User:       get("sml_db.user"),
+		Password:   get("sml_db.password"),
+		Name:       get("sml_db.name"),
+		ImagesName: get("sml_db.images_name"),
+		LogName:    get("sml_db.log_name"),
+	}, nil
+}
+
 func (r *AppSettingsRepo) PendingRestart(cfg *config.Config) (bool, []string, error) {
 	settings, err := r.All()
 	if err != nil {

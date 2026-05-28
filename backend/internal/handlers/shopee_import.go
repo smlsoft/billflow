@@ -24,6 +24,7 @@ import (
 	"billflow/internal/repository"
 	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
+	"billflow/internal/services/sml"
 )
 
 // ShopeeImportHandler handles Shopee Excel import.
@@ -45,6 +46,7 @@ type ShopeeImportHandler struct {
 	catalogIdx      *catalog.CatalogIndex
 	catalogRepo     *repository.SMLCatalogRepo
 	artifactSvc     *artifact.Service
+	dbCfgFn         sml.DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	logger          *zap.Logger
 
 	// Pending uploads keyed by SHA-256 — Preview stashes the raw .xlsx so
@@ -73,6 +75,7 @@ func NewShopeeImportHandler(
 	embSvc *catalog.EmbeddingService,
 	catalogIdx *catalog.CatalogIndex,
 	catalogRepo *repository.SMLCatalogRepo,
+	dbCfgFn sml.DBHeaderFn,
 	logger *zap.Logger,
 ) *ShopeeImportHandler {
 	h := &ShopeeImportHandler{
@@ -86,6 +89,7 @@ func NewShopeeImportHandler(
 		embSvc:          embSvc,
 		catalogIdx:      catalogIdx,
 		catalogRepo:     catalogRepo,
+		dbCfgFn:         dbCfgFn,
 		logger:          logger,
 	}
 	go h.gcPendingUploads()

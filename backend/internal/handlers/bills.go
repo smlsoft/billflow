@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,7 @@ type BillHandler struct {
 	artifactSvc     *artifact.Service              // source-artifact storage (PDF/HTML/etc.)
 	warehouseCache  *sml.WarehouseCache            // optional validation for wh/shelf chosen in dialog
 	smlReadiness    *sml.ReadinessChecker          // fail-closed guard for tenant DB availability
+	appSettingsRepo *repository.AppSettingsRepo    // runtime: sml.stock_request_url read per-send
 	log             *zap.Logger
 }
 
@@ -59,6 +61,7 @@ func NewBillHandler(
 	artifactSvc *artifact.Service,
 	warehouseCache *sml.WarehouseCache,
 	smlReadiness *sml.ReadinessChecker,
+	appSettingsRepo *repository.AppSettingsRepo,
 	log *zap.Logger,
 ) *BillHandler {
 	return &BillHandler{
@@ -78,9 +81,99 @@ func NewBillHandler(
 		artifactSvc:     artifactSvc,
 		warehouseCache:  warehouseCache,
 		smlReadiness:    smlReadiness,
+		appSettingsRepo: appSettingsRepo,
 		log:             log,
 	}
 }
+
+// ─── Stock recalculation ──────────────────────────────────────────────────────
+
+// stockRecalcSem limits concurrent processstockrequest goroutines to 3
+// to prevent overloading the SML stock server during bulk sends.
+var stockRecalcSem = make(chan struct{}, 3)
+
+// stockWarnedJobs tracks which bulk jobs have already emitted a stock-recalc
+// warning to the application log — audit entries are still written for every
+// bill regardless.
+var (
+	stockWarnOnceMu sync.Mutex
+	stockWarnedJobs = make(map[string]struct{})
+)
+
+// triggerStockRecalculation fires a background goroutine that calls
+// processstockrequest after a bill is successfully sent to SML.
+// It is best-effort: failure does NOT roll back the bill's "sent" status.
+// bulkJobID is "" for single-bill retries; for bulk jobs it suppresses
+// duplicate application log warnings (audit entries are always written).
+func (h *BillHandler) triggerStockRecalculation(billID, docNo, route, bulkJobID string, itemCodes []string) {
+	if h.appSettingsRepo == nil || len(itemCodes) == 0 {
+		return
+	}
+	stockURL, _ := h.appSettingsRepo.GetValue("sml.stock_request_url")
+	if strings.TrimSpace(stockURL) == "" {
+		return // not configured — skip silently
+	}
+
+	go func() {
+		stockRecalcSem <- struct{}{}
+		defer func() { <-stockRecalcSem }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		c := sml.NewStockRequestClient(stockURL, h.cfg.ShopeeSMLProvider, h.cfg.ShopeeSMLDatabase, h.log)
+		if err := c.ProcessStockRequest(ctx, itemCodes); err != nil {
+			// Audit every bill regardless of bulk suppression
+			_ = h.auditRepo.Log(models.AuditEntry{
+				Action:   "sml_stock_recalc_failed",
+				TargetID: &billID,
+				Source:   "sml",
+				Level:    "warn",
+				Detail: map[string]any{
+					"error":       err.Error(),
+					"doc_no":      docNo,
+					"route":       route,
+					"item_count":  len(itemCodes),
+					"bulk_job_id": bulkJobID,
+				},
+			})
+			// Suppress duplicate app.Warn() in bulk — only log the first failure per job
+			logApp := true
+			if bulkJobID != "" {
+				stockWarnOnceMu.Lock()
+				if _, warned := stockWarnedJobs[bulkJobID]; warned {
+					logApp = false
+				} else {
+					stockWarnedJobs[bulkJobID] = struct{}{}
+				}
+				stockWarnOnceMu.Unlock()
+			}
+			if logApp {
+				h.log.Warn("stock recalc failed (best-effort, bill still sent)",
+					zap.String("bill_id", billID),
+					zap.String("doc_no", docNo),
+					zap.String("bulk_job_id", bulkJobID),
+					zap.Error(err),
+				)
+			}
+			return
+		}
+
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "sml_stock_recalc_ok",
+			TargetID: &billID,
+			Source:   "sml",
+			Level:    "info",
+			Detail: map[string]any{
+				"doc_no":     docNo,
+				"route":      route,
+				"item_count": len(itemCodes),
+			},
+		})
+	}()
+}
+
+// ─── Doc no ───────────────────────────────────────────────────────────────────
 
 // resolveDocNo returns the doc_no to use for sending bill to SML. Reuses the
 // existing bill.sml_doc_no when set (so re-retry of a failed bill doesn't
@@ -1289,11 +1382,13 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 		return retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "saleorder client not configured", Route: route}
 	}
 
+	sentItemCodes := make([]string, 0, len(bill.Items))
 	items := make([]sml.SOItem, 0, len(bill.Items))
 	for _, it := range bill.Items {
 		if it.ItemCode == nil {
 			continue
 		}
+		sentItemCodes = append(sentItemCodes, *it.ItemCode)
 		price := 0.0
 		if it.Price != nil {
 			price = *it.Price
@@ -1363,6 +1458,7 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	h.triggerStockRecalculation(id, docNo, route, opts.BulkJobID, sentItemCodes)
 	logWarning := extractSMLERPLogWarning(respJSON)
 	return retrySendResult{
 		HTTPStatus:     http.StatusOK,
@@ -1381,11 +1477,13 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 		return retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "saleinvoice client not configured", Route: route}
 	}
 
+	sentItemCodesInv := make([]string, 0, len(bill.Items))
 	items := make([]sml.ShopeeOrderItem, 0, len(bill.Items))
 	for _, it := range bill.Items {
 		if it.ItemCode == nil {
 			continue
 		}
+		sentItemCodesInv = append(sentItemCodesInv, *it.ItemCode)
 		price := 0.0
 		if it.Price != nil {
 			price = *it.Price
@@ -1460,6 +1558,7 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	h.triggerStockRecalculation(id, docNo, route, opts.BulkJobID, sentItemCodesInv)
 	logWarning := extractSMLERPLogWarning(respJSON)
 	return retrySendResult{
 		HTTPStatus:     http.StatusOK,
@@ -1478,11 +1577,13 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 		return retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "purchaseorder client not configured", Route: route}
 	}
 
+	sentItemCodesPO := make([]string, 0, len(bill.Items))
 	items := make([]sml.POItem, 0, len(bill.Items))
 	for _, it := range bill.Items {
 		if it.ItemCode == nil {
 			continue
 		}
+		sentItemCodesPO = append(sentItemCodesPO, *it.ItemCode)
 		price := 0.0
 		if it.Price != nil {
 			price = *it.Price
@@ -1572,6 +1673,7 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	_ = h.billRepo.UpdateStatus(id, "sent", &docNo, respJSON, nil)
 	_ = h.billRepo.UpdateSMLPayload(id, reqJSON)
 	h.recordSuccessForSend(id, bill.Source, respJSON, docNo, route, start, opts)
+	h.triggerStockRecalculation(id, docNo, route, opts.BulkJobID, sentItemCodesPO)
 	logWarning := extractSMLERPLogWarning(respJSON)
 	return retrySendResult{
 		HTTPStatus:     http.StatusOK,
@@ -1982,6 +2084,13 @@ func (h *BillHandler) runBulkSendJob(jobID string) {
 	if h.bulkJobRepo == nil {
 		return
 	}
+	// Clean up warn-once tracker when the job finishes (success or failure)
+	defer func() {
+		stockWarnOnceMu.Lock()
+		delete(stockWarnedJobs, jobID)
+		stockWarnOnceMu.Unlock()
+	}()
+
 	if err := h.bulkJobRepo.StartJob(jobID); err != nil {
 		h.log.Error("start bulk send job", zap.String("job_id", jobID), zap.Error(err))
 		_ = h.bulkJobRepo.MarkJobFailed(jobID, err.Error())

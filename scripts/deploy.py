@@ -1,9 +1,16 @@
 """Deploy committed BillFlow code to server (sync + restart + verify).
 
 Auth: BF_PASS env var (no hardcoded password). Run from project root:
-  BF_PASS=xxx python scripts/deploy.py
+  BF_PASS=xxx python scripts/deploy.py                # deploy main
+  BF_PASS=xxx python scripts/deploy.py --instance henna
+  BF_PASS=xxx python scripts/deploy.py --instance thaisunsport
+
+Instances:
+  main         /home/bosscatdog/billflow          backend:8090  frontend:3010
+  henna        /home/bosscatdog/billflow-henna    backend:8110  frontend:3030
+  thaisunsport /home/bosscatdog/billflow-thaisun… backend:8100  frontend:3020
 """
-import paramiko, sys, io, os, time, tarfile
+import paramiko, sys, io, os, time, tarfile, argparse
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
@@ -11,16 +18,25 @@ HOST = "192.168.2.109"
 USER = "bosscatdog"
 PASS = os.environ.get("BF_PASS")
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-REMOTE = "/home/bosscatdog/billflow"
 
-if not PASS:
-    print("ERROR: BF_PASS env var required", file=sys.stderr)
-    sys.exit(1)
+INSTANCES = {
+    "main": {
+        "remote":       "/home/bosscatdog/billflow",
+        "backend_port": 8090,
+        "container":    "billflow",
+    },
+    "henna": {
+        "remote":       "/home/bosscatdog/billflow-henna",
+        "backend_port": 8110,
+        "container":    "billflow-henna",
+    },
+    "thaisunsport": {
+        "remote":       "/home/bosscatdog/billflow-thaisunsport",
+        "backend_port": 8100,
+        "container":    "billflow-thaisunsport",
+    },
+}
 
-# Files to sync (matches the commit)
-# Sync the entire frontend + backend trees (excludes node_modules / dist /
-# .git via tar_filter below). Triggers Docker rebuild for whichever side
-# changed since the last build.
 FILES = ["frontend", "backend"]
 
 
@@ -39,7 +55,30 @@ def run(client, cmd, label=None, timeout=900):
 
 
 def main():
-    print(f"Connecting to {USER}@{HOST}...")
+    parser = argparse.ArgumentParser(description="Deploy BillFlow to server")
+    parser.add_argument(
+        "--instance", "-i",
+        choices=list(INSTANCES.keys()),
+        default="main",
+        help="Which instance to deploy (default: main)",
+    )
+    args = parser.parse_args()
+
+    if not PASS:
+        print("ERROR: BF_PASS env var required", file=sys.stderr)
+        sys.exit(1)
+
+    inst = INSTANCES[args.instance]
+    REMOTE       = inst["remote"]
+    BACKEND_PORT = inst["backend_port"]
+    CONTAINER    = inst["container"]
+
+    print(f"Instance  : {args.instance}")
+    print(f"Remote    : {REMOTE}")
+    print(f"Health    : http://localhost:{BACKEND_PORT}/health")
+    print(f"Container : {CONTAINER}-backend")
+
+    print(f"\nConnecting to {USER}@{HOST}...")
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     c.connect(HOST, username=USER, password=PASS, timeout=10,
@@ -47,7 +86,6 @@ def main():
     print("✓ connected")
 
     # Build tar of changed files in memory.
-    # Exclude heavyweight dirs that the Docker build can regenerate.
     SKIP = {"node_modules", "dist", ".git", "backups", "artifacts", "__pycache__"}
 
     def tar_filter(info):
@@ -65,17 +103,13 @@ def main():
     buf.seek(0)
     print(f"\ntar: {len(buf.getvalue()):,} bytes")
 
-    # Upload + extract
     sftp = c.open_sftp()
     sftp.putfo(buf, "/tmp/billflow-deploy.tar.gz")
     sftp.close()
     print("✓ uploaded")
 
-    # Remove legacy CSS files that have been deleted locally — the tar only
-    # adds files, never removes. Matches every page+component .css that the
-    # redesign retired so orphans don't get bundled by Vite.
+    # Remove legacy files that have been deleted locally (tar only adds, never removes)
     LEGACY_FILES = [
-        # Old per-page/per-component CSS files retired in Phase 3
         "frontend/src/components/Layout.css",
         "frontend/src/components/StatsCard.css",
         "frontend/src/components/InsightCard.css",
@@ -91,12 +125,8 @@ def main():
         "frontend/src/pages/ShopeeImport.css",
         "frontend/src/pages/Settings.css",
         "frontend/src/pages/CatalogSettings.css",
-        # Old monolithic BillDetail.tsx + .css — replaced by BillDetail/ dir.
-        # Without removing the .tsx, the stale file keeps importing
-        # uninstalled deps (react-hot-toast) and breaks the Docker build.
         "frontend/src/pages/BillDetail.tsx",
         "frontend/src/pages/BillDetail.css",
-        # Phase 1 of multi-account IMAP deleted the old singleton poller.
         "backend/internal/jobs/email_poller.go",
     ]
     rm_cmd = " && ".join(f"rm -f {REMOTE}/{p}" for p in LEGACY_FILES)
@@ -104,16 +134,14 @@ def main():
 
     run(c, f"cd {REMOTE} && tar -xzf /tmp/billflow-deploy.tar.gz && rm /tmp/billflow-deploy.tar.gz",
         label="extract")
-    run(c, f"mkdir -p {REMOTE}/backups {REMOTE}/artifacts", label="ensure backups + artifacts dirs")
+    run(c, f"mkdir -p {REMOTE}/backups {REMOTE}/artifacts", label="ensure dirs")
 
-    # Rebuild only what's needed based on file paths
-    has_backend_change = any(f == "backend" or f.startswith("backend/") for f in FILES)
-    has_frontend_change = any(f == "frontend" or f.startswith("frontend/") for f in FILES)
+    has_backend  = any(f == "backend"  or f.startswith("backend/")  for f in FILES)
+    has_frontend = any(f == "frontend" or f.startswith("frontend/") for f in FILES)
     services = []
-    if has_backend_change: services.append("backend")
-    if has_frontend_change: services.append("frontend")
-    if not services:
-        services = ["backend", "frontend"]
+    if has_backend:  services.append("backend")
+    if has_frontend: services.append("frontend")
+    if not services: services = ["backend", "frontend"]
 
     rc = run(c, f"cd {REMOTE} && docker compose build {' '.join(services)}",
              timeout=900, label=f"build {' '.join(services)}")
@@ -126,27 +154,27 @@ def main():
     print("\n... waiting 8s ...")
     time.sleep(8)
 
-    # Verify
-    run(c, "docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'billflow|NAME'", label="containers")
+    run(c, "docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'billflow|NAME'",
+        label="containers")
 
-    # Health check — must return non-empty body containing "ok", else fail loud.
-    si, so, se = c.exec_command("curl -s -m 5 http://localhost:8090/health", timeout=15)
+    si, so, se = c.exec_command(f"curl -s -m 5 http://localhost:{BACKEND_PORT}/health", timeout=15)
     health = so.read().decode("utf-8", errors="replace").strip()
     print(f"\n========== health ==========\n{health!r}")
     if '"status":"ok"' not in health:
         print("❌ health check failed — backend may be crashing. Recent fatal logs:")
         si, so, se = c.exec_command(
-            "docker logs billflow-backend 2>&1 | grep -i 'fatal\\|panic\\|error.:\\|migration' | tail -20",
+            f"docker logs {CONTAINER}-backend 2>&1 | grep -i 'fatal\\|panic\\|error.:\\|migration' | tail -20",
             timeout=15,
         )
         print(so.read().decode("utf-8", errors="replace"))
         c.close()
         sys.exit(2)
 
-    run(c, "docker logs billflow-backend 2>&1 | grep -i 'migration applied' | tail -10", label="migrations applied")
+    run(c, f"docker logs {CONTAINER}-backend 2>&1 | grep -i 'migration applied' | tail -10",
+        label="migrations applied")
 
     c.close()
-    print("\n✅ deploy complete")
+    print(f"\n✅ deploy complete → {args.instance} ({REMOTE})")
 
 
 if __name__ == "__main__":

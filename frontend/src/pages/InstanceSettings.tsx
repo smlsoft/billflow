@@ -12,7 +12,7 @@ import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { PageHeader } from '@/components/common/PageHeader'
 import { cn } from '@/lib/utils'
 
-type SettingGroup = 'instance' | 'sml' | 'line' | 'ai' | 'automation'
+type SettingGroup = 'instance' | 'sml' | 'sml_db' | 'line' | 'ai' | 'automation'
 
 type InstanceSetting = {
   key: string
@@ -42,7 +42,7 @@ type Response = {
 }
 
 type TestResult = { ok: boolean; error?: string; detail?: string }
-type TestResults = { sml?: TestResult; line?: TestResult; openrouter?: TestResult }
+type TestResults = { sml?: TestResult; line?: TestResult; openrouter?: TestResult; db?: TestResult }
 type ShopeeAPIStatus = {
   enabled: boolean
   connected: boolean
@@ -60,7 +60,12 @@ const GROUP_META: Record<SettingGroup, { title: string; description: string; ico
   },
   sml: {
     title: 'SML ERP',
-    description: 'ข้อมูลเชื่อมต่อ SML ของร้านนี้',
+    description: 'ข้อมูลเชื่อมต่อ SML REST API — SML REST URL คือ sml-api-byboss ใช้ร่วมกันทุกร้าน',
+    icon: Database,
+  },
+  sml_db: {
+    title: 'SML Database Connection',
+    description: 'ข้อมูลเชื่อมต่อ PostgreSQL ของร้านค้านี้ — ส่งเป็น X-DB-* headers ไปยัง sml-api-byboss ทุก request ไม่ต้อง restart',
     icon: Database,
   },
   line: {
@@ -80,7 +85,7 @@ const GROUP_META: Record<SettingGroup, { title: string; description: string; ico
   },
 }
 
-const GROUP_ORDER: SettingGroup[] = ['instance', 'sml', 'line', 'ai', 'automation']
+const GROUP_ORDER: SettingGroup[] = ['instance', 'sml', 'sml_db', 'line', 'ai', 'automation']
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 
 const PHASE1_HIDDEN_KEYS = new Set([
@@ -93,6 +98,7 @@ const TEST_SERVICE_LABEL: Record<string, string> = {
   sml: 'SML ERP',
   line: 'LINE แจ้งเตือน',
   openrouter: 'OpenRouter AI',
+  db: 'SML Database',
 }
 
 function sourceLabel(s: InstanceSetting) {
@@ -350,7 +356,7 @@ export default function InstanceSettings() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {(['sml', 'line', 'openrouter'] as const).map((svc) => {
+              {(['sml', 'line', 'openrouter', 'db'] as const).map((svc) => {
                 const r = testResults[svc]
                 if (!r) return null
                 return (

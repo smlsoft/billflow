@@ -35,20 +35,22 @@ type InvoiceConfig struct {
 // InvoiceClient is the REST client for SML saleinvoice API.
 type InvoiceClient struct {
 	cfg        InvoiceConfig
+	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	logger     *zap.Logger
 }
 
-func NewInvoiceClient(cfg InvoiceConfig, logger *zap.Logger) *InvoiceClient {
+func NewInvoiceClient(cfg InvoiceConfig, dbCfgFn DBHeaderFn, logger *zap.Logger) *InvoiceClient {
 	return &InvoiceClient{
 		cfg:        cfg,
+		dbCfgFn:    dbCfgFn,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		logger:     logger,
 	}
 }
 
 func (c *InvoiceClient) headers() map[string]string {
-	return map[string]string{
+	h := map[string]string{
 		"guid":           c.cfg.GUID,
 		"provider":       c.cfg.Provider,
 		"configFileName": c.cfg.ConfigFile,
@@ -56,6 +58,12 @@ func (c *InvoiceClient) headers() map[string]string {
 		// charset=utf-8 — see saleorder_client.go for the SML mojibake background
 		"Content-Type": "application/json; charset=utf-8",
 	}
+	if c.dbCfgFn != nil {
+		if db := c.dbCfgFn(); db != nil {
+			db.ApplyToHeaders(h)
+		}
+	}
+	return h
 }
 
 // ─── Product ──────────────────────────────────────────────────────────────────

@@ -15,15 +15,16 @@ import (
 // Reuses the same Shopee SML config (URL, GUID, provider, configFileName, databaseName).
 type ProductClient struct {
 	baseURL    string
-	headers    map[string]string
+	baseHeaders map[string]string
+	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	logger     *zap.Logger
 }
 
-func NewProductClient(baseURL, guid, provider, configFile, database string, logger *zap.Logger) *ProductClient {
+func NewProductClient(baseURL, guid, provider, configFile, database string, dbCfgFn DBHeaderFn, logger *zap.Logger) *ProductClient {
 	return &ProductClient{
 		baseURL: baseURL,
-		headers: map[string]string{
+		baseHeaders: map[string]string{
 			"guid":           guid,
 			"provider":       provider,
 			"configFileName": configFile,
@@ -32,9 +33,23 @@ func NewProductClient(baseURL, guid, provider, configFile, database string, logg
 			// stores mojibake (e.g. "ที่วาง" → "à¸—à¸µà¹ˆà¸§à¸²à¸‡")
 			"Content-Type": "application/json; charset=utf-8",
 		},
+		dbCfgFn:    dbCfgFn,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		logger:     logger,
 	}
+}
+
+func (c *ProductClient) headers() map[string]string {
+	h := make(map[string]string, len(c.baseHeaders)+7)
+	for k, v := range c.baseHeaders {
+		h[k] = v
+	}
+	if c.dbCfgFn != nil {
+		if db := c.dbCfgFn(); db != nil {
+			db.ApplyToHeaders(h)
+		}
+	}
+	return h
 }
 
 // ─── Payload ──────────────────────────────────────────────────────────────────
@@ -111,7 +126,7 @@ func (c *ProductClient) CreateProduct(req CreateProductRequest) (int, *CreatePro
 	if err != nil {
 		return 0, nil, err
 	}
-	for k, v := range c.headers {
+	for k, v := range c.headers() {
 		httpReq.Header.Set(k, v)
 	}
 

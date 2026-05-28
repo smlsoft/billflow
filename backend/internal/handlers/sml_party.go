@@ -25,22 +25,37 @@ type SMLPartyHandler struct {
 	cache      *sml.PartyCache
 	client     *sml.PartyClient
 	auditRepo  *repository.AuditLogRepo
-	smlBaseURL string // sml-api-bybos base URL (e.g. http://192.168.2.109:8200)
-	smlGUID    string // API key for sml-api-bybos (used as guid header)
-	smlTenant  string // database/tenant name for sml-api-bybos (X-Tenant header)
+	dbCfgFn    sml.DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
+	smlBaseURL string         // sml-api-byboss base URL (e.g. http://172.24.0.1:8200)
+	smlGUID    string         // API key for sml-api-byboss (used as guid header)
+	smlTenant  string         // database/tenant name for sml-api-byboss (X-Tenant header)
 	logger     *zap.Logger
 }
 
-func NewSMLPartyHandler(cache *sml.PartyCache, client *sml.PartyClient, auditRepo *repository.AuditLogRepo, logger *zap.Logger) *SMLPartyHandler {
-	return &SMLPartyHandler{cache: cache, client: client, auditRepo: auditRepo, logger: logger}
+func NewSMLPartyHandler(cache *sml.PartyCache, client *sml.PartyClient, auditRepo *repository.AuditLogRepo, dbCfgFn sml.DBHeaderFn, logger *zap.Logger) *SMLPartyHandler {
+	return &SMLPartyHandler{cache: cache, client: client, auditRepo: auditRepo, dbCfgFn: dbCfgFn, logger: logger}
 }
 
-// SetSMLConfig injects the sml-api-bybos connection details needed for
-// endpoints that call sml-api-bybos directly (e.g. doc-formats).
+// SetSMLConfig injects the sml-api-byboss connection details needed for
+// endpoints that call sml-api-byboss directly (e.g. doc-formats).
 func (h *SMLPartyHandler) SetSMLConfig(baseURL, guid, tenant string) {
 	h.smlBaseURL = strings.TrimRight(baseURL, "/")
 	h.smlGUID = guid
 	h.smlTenant = tenant
+}
+
+// applyDBHeaders adds X-DB-* headers to req when dbCfgFn is configured.
+func (h *SMLPartyHandler) applyDBHeaders(req *http.Request) {
+	if h.dbCfgFn == nil {
+		return
+	}
+	if db := h.dbCfgFn(); db != nil {
+		hdrs := make(map[string]string)
+		db.ApplyToHeaders(hdrs)
+		for k, v := range hdrs {
+			req.Header.Set(k, v)
+		}
+	}
 }
 
 // GET /api/sml/customers?search=&limit=20
@@ -350,6 +365,7 @@ func (h *SMLPartyHandler) DocFormats(c *gin.Context) {
 	if h.smlTenant != "" {
 		req.Header.Set("x-tenant", h.smlTenant)
 	}
+	h.applyDBHeaders(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -429,6 +445,7 @@ func (h *SMLPartyHandler) proxyERPMaster(c *gin.Context, upstreamPath string) {
 	if h.smlTenant != "" {
 		req.Header.Set("x-tenant", h.smlTenant)
 	}
+	h.applyDBHeaders(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

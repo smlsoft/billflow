@@ -35,20 +35,22 @@ type SaleOrderConfig struct {
 // SaleOrderClient is the REST client for SML saleorder API (ใบสั่งขาย).
 type SaleOrderClient struct {
 	cfg        SaleOrderConfig
+	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	logger     *zap.Logger
 }
 
-func NewSaleOrderClient(cfg SaleOrderConfig, logger *zap.Logger) *SaleOrderClient {
+func NewSaleOrderClient(cfg SaleOrderConfig, dbCfgFn DBHeaderFn, logger *zap.Logger) *SaleOrderClient {
 	return &SaleOrderClient{
 		cfg:        cfg,
+		dbCfgFn:    dbCfgFn,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		logger:     logger,
 	}
 }
 
 func (c *SaleOrderClient) headers() map[string]string {
-	return map[string]string{
+	h := map[string]string{
 		"guid":           c.cfg.GUID,
 		"provider":       c.cfg.Provider,
 		"configFileName": c.cfg.ConfigFile,
@@ -57,6 +59,12 @@ func (c *SaleOrderClient) headers() map[string]string {
 		// Latin-1 and Thai text comes out mojibake'd (e.g. "สี" → "à¸ªà¸µ").
 		"Content-Type": "application/json; charset=utf-8",
 	}
+	if c.dbCfgFn != nil {
+		if db := c.dbCfgFn(); db != nil {
+			db.ApplyToHeaders(h)
+		}
+	}
+	return h
 }
 
 // ─── Payload ──────────────────────────────────────────────────────────────────

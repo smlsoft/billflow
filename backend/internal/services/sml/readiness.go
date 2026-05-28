@@ -31,6 +31,7 @@ type ReadinessStatus struct {
 
 type ReadinessChecker struct {
 	cfg        PartyConfig
+	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	ttl        time.Duration
 	log        *zap.Logger
@@ -40,9 +41,10 @@ type ReadinessChecker struct {
 	cachedAt time.Time
 }
 
-func NewReadinessChecker(cfg PartyConfig, log *zap.Logger) *ReadinessChecker {
+func NewReadinessChecker(cfg PartyConfig, dbCfgFn DBHeaderFn, log *zap.Logger) *ReadinessChecker {
 	return &ReadinessChecker{
-		cfg: cfg,
+		cfg:     cfg,
+		dbCfgFn: dbCfgFn,
 		httpClient: &http.Client{
 			Timeout: defaultReadinessTimeout,
 		},
@@ -127,6 +129,15 @@ func (c *ReadinessChecker) checkLive(ctx context.Context) ReadinessStatus {
 	req.Header.Set("configFileName", c.cfg.ConfigFile)
 	req.Header.Set("databaseName", tenant)
 	req.Header.Set("Accept", "application/json")
+	if c.dbCfgFn != nil {
+		if db := c.dbCfgFn(); db != nil {
+			dbHdrs := make(map[string]string)
+			db.ApplyToHeaders(dbHdrs)
+			for k, v := range dbHdrs {
+				req.Header.Set(k, v)
+			}
+		}
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

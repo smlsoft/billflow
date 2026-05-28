@@ -1790,6 +1790,15 @@ func (h *ShopeeImportHandler) callSMLAPI(ctx context.Context, method, path strin
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	}
 	req.Header.Set("Accept", "application/json")
+	if h.dbCfgFn != nil {
+		if db := h.dbCfgFn(); db != nil {
+			hdrs := make(map[string]string)
+			db.ApplyToHeaders(hdrs)
+			for k, v := range hdrs {
+				req.Header.Set(k, v)
+			}
+		}
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("เรียก SML ไม่สำเร็จ: %w", err)

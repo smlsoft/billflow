@@ -59,26 +59,34 @@ type Party struct {
 // Admin must create parties in SML manually then click "refresh" in BillFlow.
 type PartyClient struct {
 	cfg        PartyConfig
+	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	log        *zap.Logger
 }
 
-func NewPartyClient(cfg PartyConfig, log *zap.Logger) *PartyClient {
+func NewPartyClient(cfg PartyConfig, dbCfgFn DBHeaderFn, log *zap.Logger) *PartyClient {
 	return &PartyClient{
 		cfg:        cfg,
+		dbCfgFn:    dbCfgFn,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		log:        log,
 	}
 }
 
 func (c *PartyClient) headers() map[string]string {
-	return map[string]string{
+	h := map[string]string{
 		"guid":           c.cfg.GUID,
 		"provider":       c.cfg.Provider,
 		"configFileName": c.cfg.ConfigFile,
 		"databaseName":   c.cfg.Database,
 		"Accept":         "application/json",
 	}
+	if c.dbCfgFn != nil {
+		if db := c.dbCfgFn(); db != nil {
+			db.ApplyToHeaders(h)
+		}
+	}
+	return h
 }
 
 type partyListResponse struct {
