@@ -25,6 +25,7 @@ import client from '@/api/client'
 import type { CatalogMatch } from '@/types'
 import { SMLMasterCodePicker } from '../BillDetail/components/SMLMasterCodePicker'
 import { ShelfPicker, WarehousePicker } from '../BillDetail/components/WarehousePicker'
+import { PartyPicker, type Party } from './PartyPicker'
 
 interface SmlDocFormat {
   code: string
@@ -51,6 +52,7 @@ import {
   type ChannelKey,
   type EndpointKind,
 } from './labels'
+import { REMARK2_NONE, SML_REMARK2_OPTIONS, normalizeRemark2 } from '@/lib/smlRemark2'
 import { MapItemModal } from '../BillDetail/components/MapItemModal'
 
 interface Props {
@@ -78,15 +80,16 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const [shippingItemUnitCode, setShippingItemUnitCode] = useState('')
   const [shippingItemName, setShippingItemName] = useState('')
   const [shippingPickerOpen, setShippingPickerOpen] = useState(false)
+  const [party, setParty] = useState<Party | null>(null)
   const [branchCode, setBranchCode] = useState('')
   const [saleCode, setSaleCode] = useState('')
-  const [unitCode, setUnitCode] = useState('')
-  const [docTime, setDocTime] = useState('')
   const [whCode, setWhCode] = useState('')
   const [shelfCode, setShelfCode] = useState('')
   const [manualWarehouse, setManualWarehouse] = useState(false)
   const [vatTypeStr, setVatTypeStr] = useState('')
   const [vatRate, setVatRate] = useState('')
+  const [inquiryTypeStr, setInquiryTypeStr] = useState('')
+  const [remark2Str, setRemark2Str] = useState(REMARK2_NONE)
   const [passbookCode, setPassbookCode] = useState('')
   const [expenseCode, setExpenseCode] = useState('')
   const [passbooks, setPassbooks] = useState<SMLMasterOption[]>([])
@@ -113,15 +116,16 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     setShippingItemCode(row.shipping_item_code || '')
     setShippingItemUnitCode(row.shipping_item_unit_code || '')
     setShippingItemName('')
+    setParty(row.party_code ? { code: row.party_code, name: row.party_name || row.party_code } : null)
     setBranchCode(row.branch_code || '')
     setSaleCode(row.sale_code || '')
-    setUnitCode(row.unit_code || '')
-    setDocTime(row.doc_time || '')
     setWhCode(row.wh_code || '')
     setShelfCode(row.shelf_code || '')
     setManualWarehouse(false)
     setVatTypeStr(typeof row.vat_type === 'number' && row.vat_type >= 0 ? String(row.vat_type) : '')
     setVatRate(typeof row.vat_rate === 'number' && row.vat_rate >= 0 ? String(row.vat_rate) : '')
+    setInquiryTypeStr(typeof row.inquiry_type === 'number' && row.inquiry_type >= 0 ? String(row.inquiry_type) : '')
+    setRemark2Str(normalizeRemark2(row.remark_2 || ''))
     setPassbookCode(row.passbook_code || '')
     setExpenseCode(row.expense_code || '')
   }, [open, row])
@@ -196,6 +200,11 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const isPurchase = row.bill_type === 'purchase'
   const isSettlement = row.channel === 'shopee_settlement' && row.bill_type === 'ar_receipt'
   const isShopeePurchase = row.channel === 'shopee_shipped' && row.bill_type === 'purchase'
+  const showPartyPicker =
+    (row.channel === 'shopee_shipped' && row.bill_type === 'purchase') ||
+    (row.channel === 'shopee' && row.bill_type === 'sale') ||
+    (row.channel === 'lazada' && row.bill_type === 'sale') ||
+    (row.channel === 'tiktok' && row.bill_type === 'sale')
   const channelLabel = isShopeePurchase
     ? 'Email บิลซื้อ Shopee'
     : CHANNEL_LABELS[row.channel as ChannelKey] ?? row.channel
@@ -211,8 +220,6 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const shippingItemUnitCodeTrimmed = shippingItemUnitCode.trim()
   const branchCodeTrimmed = branchCode.trim()
   const saleCodeTrimmed = saleCode.trim()
-  const unitCodeTrimmed = unitCode.trim()
-  const docTimeTrimmed = docTime.trim()
   const whCodeTrimmed = whCode.trim()
   const shelfCodeTrimmed = shelfCode.trim()
   const passbookCodeTrimmed = passbookCode.trim()
@@ -220,6 +227,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const vatTypeValue = vatTypeStr === '' ? -1 : Number(vatTypeStr)
   const parsedVatRate = Number(vatRate)
   const vatRateValue = vatRate.trim() === '' || !Number.isFinite(parsedVatRate) ? -1 : parsedVatRate
+  const inquiryTypeValue = inquiryTypeStr === '' ? -1 : Number(inquiryTypeStr)
   const docWarning = docNoPatternWarning(docPrefixTrimmed, docRunningFormatTrimmed)
   const selectedPassbook = passbooks.find((p) => p.code === passbookCodeTrimmed)
   const selectedExpense = expenses.find((p) => p.code === expenseCodeTrimmed)
@@ -271,8 +279,8 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
       await client.put('/api/settings/channel-defaults', {
         channel: row.channel,
         bill_type: row.bill_type,
-        party_code: row.party_code ?? '',
-        party_name: row.party_name ?? '',
+        party_code: showPartyPicker ? (party?.code ?? '') : (row.party_code ?? ''),
+        party_name: showPartyPicker ? (party?.name ?? '') : (row.party_name ?? ''),
         party_phone: row.party_phone ?? '',
         party_address: row.party_address ?? '',
         party_tax_id: row.party_tax_id ?? '',
@@ -282,8 +290,8 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         doc_running_format: isSettlement ? '@YYMM####' : docRunningFormatTrimmed,
         branch_code: isSettlement ? '' : branchCodeTrimmed,
         sale_code: isSettlement ? '' : saleCodeTrimmed,
-        unit_code: isSettlement ? '' : unitCodeTrimmed,
-        doc_time: isSettlement ? '' : docTimeTrimmed,
+        unit_code: '',
+        doc_time: '',
         shipping_item_enabled: isShopeePurchase ? shippingEnabled : false,
         shipping_item_code: isShopeePurchase ? shippingItemCodeTrimmed : '',
         shipping_item_unit_code: isShopeePurchase ? shippingItemUnitCodeTrimmed : '',
@@ -297,6 +305,8 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         shelf_code: isSettlement ? '' : shelfCodeTrimmed,
         vat_type: isSettlement ? -1 : vatTypeValue,
         vat_rate: isSettlement ? -1 : vatRateValue,
+        inquiry_type: isSettlement ? -1 : inquiryTypeValue,
+        remark_2: isSettlement ? '' : (remark2Str === REMARK2_NONE ? '' : remark2Str),
       })
       toast.success('บันทึกสำเร็จ')
       onSaved()
@@ -515,39 +525,18 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                 </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">เวลาเอกสาร (doc_time)</Label>
-                  <Input
-                    value={docTime}
-                    onChange={(e) => setDocTime(e.target.value)}
-                    placeholder="เช่น 09:00"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">หน่วย fallback (unit_code)</Label>
-                  <UnitSelect
-                    value={unitCode}
-                    onValueChange={setUnitCode}
-                    placeholder="ไม่ระบุหน่วย fallback"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">สาขา (branch_code)</Label>
-                  <SMLMasterCodePicker
-                    kind="branch"
-                    value={branchCode}
-                    onChange={setBranchCode}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">พนักงานขาย (sale_code)</Label>
-                  <SMLMasterCodePicker
-                    kind="sale"
-                    value={saleCode}
-                    onChange={setSaleCode}
-                  />
-                </div>
+                {showPartyPicker && (
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label className="text-xs">
+                      {isPurchase ? 'ผู้ขาย (cust_code, cust_name)' : 'ลูกค้า (cust_code, cust_name)'}
+                    </Label>
+                    <PartyPicker
+                      billType={isPurchase ? 'purchase' : 'sale'}
+                      value={party}
+                      onChange={setParty}
+                    />
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <Label className="text-xs">คลัง (wh_code)</Label>
@@ -621,8 +610,63 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                     className="font-mono"
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">ประเภทรายการ (inquiry_type)</Label>
+                  <Select value={inquiryTypeStr} onValueChange={setInquiryTypeStr}>
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="ไม่ระบุ (กรอกตอนส่ง)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {isPurchase ? (
+                        <>
+                          <SelectItem value="0">0 — ซื้อเงินเชื่อ</SelectItem>
+                          <SelectItem value="1">1 — ซื้อเงินสด</SelectItem>
+                          <SelectItem value="2">2 — ซื้อเงินเชื่อ (สินค้าบริการ)</SelectItem>
+                          <SelectItem value="3">3 — ซื้อเงินสด (สินค้าบริการ)</SelectItem>
+                        </>
+                      ) : (
+                        <>
+                          <SelectItem value="0">0 — ขายเงินเชื่อ</SelectItem>
+                          <SelectItem value="1">1 — ขายเงินสด</SelectItem>
+                          <SelectItem value="2">2 — ขายเงินเชื่อ (สินค้าบริการ)</SelectItem>
+                          <SelectItem value="3">3 — ขายเงินสด (สินค้าบริการ)</SelectItem>
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">สถานะเอกสาร (remark_2)</Label>
+                  <Select value={remark2Str} onValueChange={setRemark2Str}>
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="ไม่ระบุ (กรอกตอนส่ง)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={REMARK2_NONE}>ไม่ระบุ</SelectItem>
+                      {SML_REMARK2_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">สาขา (branch_code)</Label>
+                  <SMLMasterCodePicker
+                    kind="branch"
+                    value={branchCode}
+                    onChange={setBranchCode}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">พนักงานขาย (sale_code)</Label>
+                  <SMLMasterCodePicker
+                    kind="sale"
+                    value={saleCode}
+                    onChange={setSaleCode}
+                  />
+                </div>
               </div>
-              {(!docTimeTrimmed || !whCodeTrimmed || !shelfCodeTrimmed || vatTypeStr === '' || vatRateValue < 0) && (
+              {(!whCodeTrimmed || !shelfCodeTrimmed || vatTypeStr === '' || vatRateValue < 0) && (
                 <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
                   ยังตั้งค่า default สำหรับส่ง SML ไม่ครบ บันทึกได้ แต่ตอนส่งบิล user ต้องเลือกค่าที่ขาดก่อนยืนยัน
                 </div>

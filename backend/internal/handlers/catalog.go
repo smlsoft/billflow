@@ -33,7 +33,6 @@ type CatalogHandler struct {
 	productClient *sml.ProductClient
 	auditRepo     *repository.AuditLogRepo
 	appSettings   *repository.AppSettingsRepo
-	dbCfgFn       sml.DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	cfg           *config.Config
 	logger        *zap.Logger
 	threshold     float64 // auto-confirm threshold
@@ -99,7 +98,6 @@ func NewCatalogHandler(
 	productClient *sml.ProductClient,
 	auditRepo *repository.AuditLogRepo,
 	appSettings *repository.AppSettingsRepo,
-	dbCfgFn sml.DBHeaderFn,
 	cfg *config.Config,
 	threshold float64,
 	logger *zap.Logger,
@@ -112,7 +110,6 @@ func NewCatalogHandler(
 		productClient: productClient,
 		auditRepo:     auditRepo,
 		appSettings:   appSettings,
-		dbCfgFn:       dbCfgFn,
 		cfg:           cfg,
 		threshold:     threshold,
 		logger:        logger,
@@ -1046,11 +1043,6 @@ func (h *CatalogHandler) smlHeaders() map[string]string {
 		"configFileName": h.cfg.ShopeeSMLConfigFile,
 		"databaseName":   h.cfg.ShopeeSMLDatabase,
 		"X-Tenant":       h.cfg.ShopeeSMLDatabase,
-	}
-	if h.dbCfgFn != nil {
-		if db := h.dbCfgFn(); db != nil {
-			db.ApplyToHeaders(hdrs)
-		}
 	}
 	return hdrs
 }

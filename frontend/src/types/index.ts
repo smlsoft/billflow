@@ -123,6 +123,8 @@ export interface BillRoutePreview {
   party_code?: string        // legacy channel value; purchase flow now selects seller in the send dialog
   party_name?: string
   sml_defaults?: {
+    party_code?: string
+    party_name?: string
     branch_code?: string
     sale_code?: string
     wh_code?: string
@@ -130,6 +132,8 @@ export interface BillRoutePreview {
     unit_code?: string
     vat_type?: number
     vat_rate?: number
+    inquiry_type?: number
+    remark_2?: string
     doc_time?: string
     doc_format?: string
     database?: string

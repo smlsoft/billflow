@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,12 +12,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	_ "github.com/lib/pq" // PostgreSQL driver for DB ping in TestConnection
 	"go.uber.org/zap"
 
 	"billflow/internal/config"
 	"billflow/internal/repository"
-	"billflow/internal/services/sml"
 )
 
 type InstanceSettingsHandler struct {
@@ -52,20 +48,8 @@ var instanceSettingDefs = []settingDef{
 	{Key: "instance.support_contact", Label: "ผู้ดูแลระบบ", Group: "instance", Type: "text", DefaultValue: "", Description: "ไม่บังคับ เบอร์หรือชื่อคนที่ดูแลระบบชุดนี้"},
 
 	{Key: "sml.rest_base_url", Label: "SML REST URL", Group: "sml", Type: "url", Restart: true, Required: true, Description: "URL ของ sml-api-byboss เช่น http://172.24.0.1:8200 (ใช้ร่วมกันทุกร้าน)"},
-	{Key: "sml.guid", Label: "API Key (guid)", Group: "sml", Type: "text", Restart: true, Required: true, Locked: true, Description: "ค่านี้ตายตัว ต้องตรงกับ API key ที่ตั้งใน sml-api-byboss"},
-	{Key: "sml.database", Label: "Database (tenant)", Group: "sml", Type: "text", Restart: true, Required: true, Description: "ชื่อ database SML ของร้านนี้ เช่น SML1_2026"},
+	{Key: "sml.database", Label: "Database (tenant)", Group: "sml", Type: "text", Restart: true, Required: true, Description: "ชื่อ database SML ของร้านนี้ ต้องเป็น lowercase เช่น sml1_2026 (sml-api-byboss แปลงเป็น lowercase เสมอ ห้ามใช้ตัวพิมพ์ใหญ่)"},
 	{Key: "sml.stock_request_url", Label: "Stock Request URL", Group: "sml", Type: "url", Restart: false, Required: false, Description: "URL ของ SML server คำนวณต้นทุนสต๊อก (ไม่ใช่ sml-api-byboss) — path /SMLJavaWebService/rest/v1/processstockrequest จะถูกเติมอัตโนมัติ เช่น http://192.168.2.248:8080 (ว่าง = ข้ามการคำนวณ)"},
-
-	// sml_db group — PostgreSQL credentials ของร้านค้า ส่งเป็น X-DB-* headers ไปยัง sml-api-byboss
-	// Required: false ทั้งหมด — ใช้ custom validation ใน Update() แทน
-	// เพื่อไม่ให้ setup_complete=false สำหรับ instance ที่ยังไม่ได้ตั้งค่า
-	{Key: "sml_db.host", Label: "DB Host", Group: "sml_db", Type: "text", Required: false, Description: "hostname หรือ IP ของ PostgreSQL ร้านนี้ เช่น demserver.3bbddns.com"},
-	{Key: "sml_db.port", Label: "DB Port", Group: "sml_db", Type: "number", Required: false, Description: "port ของ PostgreSQL เช่น 47309 (default PostgreSQL = 5432)"},
-	{Key: "sml_db.user", Label: "DB User", Group: "sml_db", Type: "text", Required: false, Description: "เช่น postgres"},
-	{Key: "sml_db.password", Label: "DB Password", Group: "sml_db", Type: "password", Required: false, Secret: true, Description: "รหัสผ่าน PostgreSQL — ไม่แสดงใน log"},
-	{Key: "sml_db.name", Label: "DB Name", Group: "sml_db", Type: "text", Required: false, Description: "ชื่อ database หลัก เช่น aoy หรือ SML1_2026"},
-	{Key: "sml_db.images_name", Label: "DB Images Name", Group: "sml_db", Type: "text", Required: false, Description: "ชื่อ database รูปภาพ เช่น demo_images (ว่าง = sml-api-byboss ใช้ค่าเริ่มต้น)"},
-	{Key: "sml_db.log_name", Label: "DB Log Name", Group: "sml_db", Type: "text", Required: false, Description: "ชื่อ database log เช่น demo_logs (ว่าง = sml-api-byboss ใช้ค่าเริ่มต้น)"},
 
 	{Key: "line.notify_channel_secret", Label: "LINE Channel secret", Group: "line", Type: "password", Secret: true, Restart: true, Description: "ใช้กับ LINE OA ที่ส่งแจ้งเตือนระบบ"},
 	{Key: "line.notify_channel_access_token", Label: "LINE Channel access token", Group: "line", Type: "password", Secret: true, Restart: true, Description: "ใช้ส่ง Push แจ้งเตือน error และสถานะระบบไปยังแอดมิน"},
@@ -187,8 +171,6 @@ func (h *InstanceSettingsHandler) Update(c *gin.Context) {
 	// optional fields that may be explicitly cleared to empty string
 	clearableKeys := map[string]bool{
 		"sml.stock_request_url": true,
-		"sml_db.images_name":    true,
-		"sml_db.log_name":       true,
 	}
 
 	values := map[string]string{}
@@ -220,40 +202,6 @@ func (h *InstanceSettingsHandler) Update(c *gin.Context) {
 		values[key] = trimmed
 	}
 
-	// Merge existing sml_db values with incoming values before validating
-	// completeness, so that a masked password doesn't cause a false "incomplete" error.
-	existing, _ := h.repo.All()
-	smlDBAllKeys := []string{
-		"sml_db.host", "sml_db.port", "sml_db.user",
-		"sml_db.password", "sml_db.name", "sml_db.images_name", "sml_db.log_name",
-	}
-	mergedDB := map[string]string{}
-	for _, k := range smlDBAllKeys {
-		newVal := strings.TrimSpace(body.Settings[k])
-		def, _ := allowed[k]
-		if newVal == "" || (def.Secret && strings.Contains(newVal, "••••••••")) {
-			mergedDB[k] = strings.TrimSpace(existing[k].Value)
-		} else {
-			mergedDB[k] = newVal
-		}
-	}
-
-	// Custom group validation: if any required sml_db field is provided,
-	// all 5 required fields must be present (partial config is rejected).
-	smlDBRequired := []string{"sml_db.host", "sml_db.port", "sml_db.user", "sml_db.password", "sml_db.name"}
-	smlDBFilled := 0
-	for _, k := range smlDBRequired {
-		if mergedDB[k] != "" {
-			smlDBFilled++
-		}
-	}
-	if smlDBFilled > 0 && smlDBFilled < len(smlDBRequired) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "กรุณากรอกข้อมูล SML Database Connection ให้ครบ (Host, Port, User, Password, DB Name)",
-		})
-		return
-	}
-
 	if len(values) == 0 {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "updated": 0})
 		return
@@ -265,9 +213,6 @@ func (h *InstanceSettingsHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-
-	// Force fresh DB config on the next SML request — no restart needed
-	sml.InvalidateDBHeaderCache()
 
 	c.JSON(http.StatusOK, gin.H{
 		"ok":               true,
@@ -383,19 +328,16 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 	// ── SML ──────────────────────────────────────────────────────────────────
 	smlResult := checkResult{}
 	baseURL := get("sml.rest_base_url")
-	guid := get("sml.guid")
+	guid := h.cfg.ShopeeSMLGUID // ค่าตายตัวจาก .env ใช้ร่วมกันทุก instance
 	database := get("sml.database")
 	if baseURL == "" || guid == "" || database == "" {
-		smlResult.Error = "ยังไม่ได้ตั้งค่า SML REST URL, guid หรือ database"
+		smlResult.Error = "ยังไม่ได้ตั้งค่า SML REST URL หรือ database"
 	} else {
-		// Use supplier list — always exists, returns 403 on wrong tenant, 401 on bad guid.
+		// Use product list — returns 403 on wrong tenant, 401 on bad guid.
 		smlURL := strings.TrimRight(baseURL, "/") + "/api/v1/ic/products?page=1"
 		code, body, err := doGET(smlURL, map[string]string{
-			"guid":           guid,
-			"provider":       get("sml.provider"),
-			"configFileName": get("sml.config_file"),
-			"databaseName":   database,
-			"X-Tenant":       database,
+			"guid":     guid,
+			"X-Tenant": database,
 		})
 		if err != nil {
 			smlResult.Error = fmt.Sprintf("เชื่อมต่อไม่ได้: %v", err)
@@ -462,74 +404,16 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 		}
 	}
 
-	// ── SML Database Ping ────────────────────────────────────────────────────
-	dbResult := checkResult{}
-	dbHost := get("sml_db.host")
-	dbPort := get("sml_db.port")
-	dbUser := get("sml_db.user")
-	dbPass := get("sml_db.password") // never log
-	dbName := get("sml_db.name")
-	if dbHost == "" || dbPort == "" || dbUser == "" || dbPass == "" || dbName == "" {
-		dbResult.Error = "ยังไม่ได้ตั้งค่า SML Database Connection ให้ครบ"
-	} else {
-		// Build DSN — do NOT log this string (it contains password)
-		dsn := fmt.Sprintf(
-			"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
-			dbHost, dbPort, dbUser, dbPass, dbName,
-		)
-		dbConn, err := sql.Open("postgres", dsn)
-		if err != nil {
-			dbResult.Error = "ตั้งค่า connection ไม่ได้: config ไม่ถูกต้อง"
-		} else {
-			defer dbConn.Close()
-			pingCtx, pingCancel := timeoutContext(5 * time.Second)
-			defer pingCancel()
-			if err := dbConn.PingContext(pingCtx); err != nil {
-				dbResult.Error = postgresErrToThai(err)
-			} else {
-				dbResult.OK = true
-				dbResult.Detail = fmt.Sprintf("%s:%s/%s (เชื่อมต่อได้)", dbHost, dbPort, dbName)
-			}
-		}
-	}
-
 	allOK := smlResult.OK && lineResult.OK && orResult.OK
-	// db not configured is not a failure (instance may not use sml_db yet)
-	if dbResult.Error != "" && dbResult.Error != "ยังไม่ได้ตั้งค่า SML Database Connection ให้ครบ" {
-		allOK = false
-	}
 	c.JSON(http.StatusOK, gin.H{
 		"ok":         allOK,
 		"sml":        smlResult,
 		"line":       lineResult,
 		"openrouter": orResult,
-		"db":         dbResult,
 	})
 }
 
-func timeoutContext(d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), d)
-}
 
-// postgresErrToThai converts a libpq error to a safe Thai message.
-// Never include the raw error string — it may contain the DSN or password.
-func postgresErrToThai(err error) string {
-	s := err.Error()
-	switch {
-	case strings.Contains(s, "password authentication failed"):
-		return "รหัสผ่านไม่ถูกต้อง"
-	case strings.Contains(s, "does not exist"):
-		return "ไม่พบ database นี้ใน server"
-	case strings.Contains(s, "connection refused"):
-		return "server ปฏิเสธการเชื่อมต่อ — ตรวจสอบ host/port"
-	case strings.Contains(s, "no such host"):
-		return "ไม่พบ hostname — ตรวจสอบ DB Host"
-	case strings.Contains(s, "timeout"), strings.Contains(s, "i/o timeout"):
-		return "connection timeout — ตรวจสอบ firewall หรือ host"
-	default:
-		return "เชื่อมต่อไม่ได้ — ตรวจสอบ DB config"
-	}
-}
 
 func maskSecret(v string) string {
 	if len(v) <= 8 {
@@ -552,12 +436,6 @@ func normalizeInstanceSetting(def settingDef, value string) (string, string) {
 		if !smlDatabaseNamePattern.MatchString(value) {
 			return "", "Database (tenant) ใช้ได้เฉพาะตัวอักษร ตัวเลข และ _ เท่านั้น"
 		}
-	case "sml_db.port":
-		p, err := strconv.Atoi(value)
-		if err != nil || p < 1 || p > 65535 {
-			return "", "DB Port ต้องเป็นตัวเลข 1–65535"
-		}
-		return value, ""
 	case "automation.auto_confirm_threshold":
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil || f < 0 || f > 1 {

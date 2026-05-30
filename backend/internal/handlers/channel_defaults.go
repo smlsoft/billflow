@@ -88,6 +88,7 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 		in.ShelfCode = ""
 		in.VATType = -1
 		in.VATRate = -1
+		in.InquiryType = -1
 		in.ShippingItemEnabled = false
 		in.ShippingItemCode = ""
 		in.ShippingItemUnitCode = ""
@@ -128,8 +129,8 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 		DocRunningFormat:     in.DocRunningFormat,
 		BranchCode:           in.BranchCode,
 		SaleCode:             in.SaleCode,
-		UnitCode:             in.UnitCode,
-		DocTime:              in.DocTime,
+		UnitCode:             "",
+		DocTime:              "",
 		ShippingItemEnabled:  in.ShippingItemEnabled,
 		ShippingItemCode:     in.ShippingItemCode,
 		ShippingItemUnitCode: in.ShippingItemUnitCode,
@@ -143,6 +144,8 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 		ShelfCode:            in.ShelfCode,
 		VATType:              in.VATType,
 		VATRate:              in.VATRate,
+		InquiryType:          in.InquiryType,
+		Remark2:              in.Remark2,
 	}
 	if err := h.repo.Upsert(d, userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

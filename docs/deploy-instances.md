@@ -172,6 +172,12 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Latest Shared Deploy
 
+- 2026-05-29 07:55 +07: AI-based product image URL extraction deployed to all three instances.
+- Scope: Shopee shipped email handler now sends HTML to AI alongside plain text; AI returns `image_url` per item by correlating `<img>` tags with product names in HTML, replacing the previous index-based assignment that assigned wrong images when emails contained multiple orders. `ExtractedItem.ImageURL` field added; `ExtractOrdersWithHTML` function added; prompt updated with `image_url` extraction instructions.
+- Change type: Shared Phase 1 backend fix — applies to all instances processing Shopee shipped emails.
+- Local verification: `go build ./...` passed; `npm run build` passed.
+- Deploy verification: backend health ok on `8090` (main), `8110` (henna), `8100` (thaisunsport). Frontend health ok on `3010`, `3030`, `3020`. Thaisunsport flags unchanged (`VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, etc.).
+
 - 2026-05-27 13:35 +07: Main UI consistency audit fixes deployed to all three instances.
 - Scope: `/setup` email readiness now treats `no_new_mail` as successful no-new-mail state, `/settings/email` shows instance context, Shopee disabled state is no longer presented as connected, Command Palette and Sidebar share the same nav metadata, document list wording separates "เอกสารสถานะพร้อมส่ง" from dialog "พร้อมส่งจริง", and Shopee settlement/channel defaults readiness language is aligned.
 - Cleanup on BillFlow main only:

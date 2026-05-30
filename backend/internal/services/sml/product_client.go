@@ -16,12 +16,11 @@ import (
 type ProductClient struct {
 	baseURL    string
 	baseHeaders map[string]string
-	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	logger     *zap.Logger
 }
 
-func NewProductClient(baseURL, guid, provider, configFile, database string, dbCfgFn DBHeaderFn, logger *zap.Logger) *ProductClient {
+func NewProductClient(baseURL, guid, provider, configFile, database string, logger *zap.Logger) *ProductClient {
 	return &ProductClient{
 		baseURL: baseURL,
 		baseHeaders: map[string]string{
@@ -29,25 +28,17 @@ func NewProductClient(baseURL, guid, provider, configFile, database string, dbCf
 			"provider":       provider,
 			"configFileName": configFile,
 			"databaseName":   database,
-			// charset=utf-8 — without it SML decodes Thai text as Latin-1 and
-			// stores mojibake (e.g. "ที่วาง" → "à¸—à¸µà¹ˆà¸§à¸²à¸‡")
-			"Content-Type": "application/json; charset=utf-8",
+			"Content-Type":   "application/json; charset=utf-8",
 		},
-		dbCfgFn:    dbCfgFn,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		logger:     logger,
 	}
 }
 
 func (c *ProductClient) headers() map[string]string {
-	h := make(map[string]string, len(c.baseHeaders)+7)
+	h := make(map[string]string, len(c.baseHeaders))
 	for k, v := range c.baseHeaders {
 		h[k] = v
-	}
-	if c.dbCfgFn != nil {
-		if db := c.dbCfgFn(); db != nil {
-			db.ApplyToHeaders(h)
-		}
 	}
 	return h
 }

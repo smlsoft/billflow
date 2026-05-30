@@ -2721,7 +2721,7 @@ func (h *BillHandler) shopeePurchaseConfig() sml.PurchaseOrderConfig {
 func (h *BillHandler) previewSMLDefaults(def *models.ChannelDefault, billType string) gin.H {
 	if billType == "purchase" {
 		cfg := h.resolvedPurchaseConfig(def, RetryRequest{})
-		return gin.H{
+		result := gin.H{
 			"branch_code": cfg.BranchCode,
 			"sale_code":   cfg.SaleCode,
 			"wh_code":     cfg.WHCode,
@@ -2734,9 +2734,20 @@ func (h *BillHandler) previewSMLDefaults(def *models.ChannelDefault, billType st
 			"database":    cfg.Database,
 			"base_url":    cfg.BaseURL,
 		}
+		if def != nil && def.InquiryType >= 0 {
+			result["inquiry_type"] = def.InquiryType
+		}
+		if def != nil && def.Remark2 != "" {
+			result["remark_2"] = def.Remark2
+		}
+		if def != nil && def.PartyCode != "" {
+			result["party_code"] = def.PartyCode
+			result["party_name"] = def.PartyName
+		}
+		return result
 	}
 	cfg := h.resolvedSaleOrderConfig(def, RetryRequest{})
-	return gin.H{
+	result := gin.H{
 		"branch_code": cfg.BranchCode,
 		"sale_code":   cfg.SaleCode,
 		"wh_code":     cfg.WHCode,
@@ -2749,6 +2760,14 @@ func (h *BillHandler) previewSMLDefaults(def *models.ChannelDefault, billType st
 		"database":    cfg.Database,
 		"base_url":    cfg.BaseURL,
 	}
+	if def != nil && def.InquiryType >= 0 {
+		result["inquiry_type"] = def.InquiryType
+	}
+	if def != nil && def.PartyCode != "" {
+		result["party_code"] = def.PartyCode
+		result["party_name"] = def.PartyName
+	}
+	return result
 }
 
 // applyDocumentOverrides overlays per-channel document defaults. Empty means

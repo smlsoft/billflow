@@ -22,7 +22,7 @@ const channelDefaultCols = `
   branch_code, sale_code, unit_code, doc_time,
   shipping_item_enabled, shipping_item_code, shipping_item_unit_code,
   passbook_code, passbook_name, bank_code, bank_branch, expense_code, expense_name,
-  wh_code, shelf_code, vat_type, vat_rate,
+  wh_code, shelf_code, vat_type, vat_rate, inquiry_type, remark_2,
   updated_by, updated_at
 `
 
@@ -36,7 +36,7 @@ func scanChannelDefault(s interface{ Scan(...any) error }) (*models.ChannelDefau
 		&d.BranchCode, &d.SaleCode, &d.UnitCode, &d.DocTime,
 		&d.ShippingItemEnabled, &d.ShippingItemCode, &d.ShippingItemUnitCode,
 		&d.PassbookCode, &d.PassbookName, &d.BankCode, &d.BankBranch, &d.ExpenseCode, &d.ExpenseName,
-		&d.WHCode, &d.ShelfCode, &d.VATType, &d.VATRate,
+		&d.WHCode, &d.ShelfCode, &d.VATType, &d.VATRate, &d.InquiryType, &d.Remark2,
 		&updatedBy, &d.UpdatedAt,
 	)
 	if err != nil {
@@ -100,9 +100,9 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   branch_code, sale_code, unit_code, doc_time,
 		   shipping_item_enabled, shipping_item_code, shipping_item_unit_code,
 		   passbook_code, passbook_name, bank_code, bank_branch, expense_code, expense_name,
-		   wh_code, shelf_code, vat_type, vat_rate,
+		   wh_code, shelf_code, vat_type, vat_rate, inquiry_type, remark_2,
 		   updated_by, updated_at
-		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29, NOW())
+		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31, NOW())
 		 ON CONFLICT (channel, bill_type) DO UPDATE SET
 		   party_code = EXCLUDED.party_code,
 		   party_name = EXCLUDED.party_name,
@@ -130,6 +130,8 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   shelf_code = EXCLUDED.shelf_code,
 		   vat_type = EXCLUDED.vat_type,
 		   vat_rate = EXCLUDED.vat_rate,
+		   inquiry_type = EXCLUDED.inquiry_type,
+		   remark_2 = EXCLUDED.remark_2,
 		   updated_by = EXCLUDED.updated_by,
 		   updated_at = NOW()`,
 		d.Channel, d.BillType, d.PartyCode, d.PartyName, d.PartyPhone,
@@ -138,7 +140,7 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		d.BranchCode, d.SaleCode, d.UnitCode, d.DocTime,
 		d.ShippingItemEnabled, d.ShippingItemCode, d.ShippingItemUnitCode,
 		d.PassbookCode, d.PassbookName, d.BankCode, d.BankBranch, d.ExpenseCode, d.ExpenseName,
-		d.WHCode, d.ShelfCode, d.VATType, d.VATRate,
+		d.WHCode, d.ShelfCode, d.VATType, d.VATRate, d.InquiryType, d.Remark2,
 		ub,
 	)
 	if err != nil {

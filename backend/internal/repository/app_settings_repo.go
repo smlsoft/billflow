@@ -100,15 +100,6 @@ func (r *AppSettingsRepo) ApplyToConfig(cfg *config.Config) error {
 	if v := get("sml.rest_base_url"); v != "" {
 		cfg.ShopeeSMLURL = v
 	}
-	if v := get("sml.guid"); v != "" {
-		cfg.ShopeeSMLGUID = v
-	}
-	if v := get("sml.provider"); v != "" {
-		cfg.ShopeeSMLProvider = v
-	}
-	if v := get("sml.config_file"); v != "" {
-		cfg.ShopeeSMLConfigFile = v
-	}
 	if v := get("sml.database"); v != "" {
 		cfg.ShopeeSMLDatabase = v
 	}
@@ -131,10 +122,7 @@ func (r *AppSettingsRepo) ApplyToConfig(cfg *config.Config) error {
 
 func RuntimeSettingValues(cfg *config.Config) map[string]string {
 	return map[string]string{
-		"sml.rest_base_url": cfg.ShopeeSMLURL,
-		"sml.guid":                          cfg.ShopeeSMLGUID,
-		"sml.provider":                      cfg.ShopeeSMLProvider,
-		"sml.config_file":                   cfg.ShopeeSMLConfigFile,
+		"sml.rest_base_url":                 cfg.ShopeeSMLURL,
 		"sml.database":                      cfg.ShopeeSMLDatabase,
 		"line.notify_channel_secret":        cfg.LineChannelSecret,
 		"line.notify_channel_access_token":  cfg.LineChannelAccessToken,
@@ -159,44 +147,6 @@ func (r *AppSettingsRepo) GetValue(key string) (string, error) {
 		return "", nil
 	}
 	return strings.TrimSpace(value), err
-}
-
-// SMLDBConfig holds PostgreSQL connection details read from app_settings.
-// Password is never logged.
-type SMLDBConfig struct {
-	Host       string
-	Port       string
-	User       string
-	Password   string // never log
-	Name       string
-	ImagesName string
-	LogName    string
-}
-
-// IsSet returns true when all 5 required fields are non-empty.
-// Mirrors SMLDBHeaderConfig.IsSet in the sml package.
-func (db SMLDBConfig) IsSet() bool {
-	return db.Host != "" && db.Port != "" && db.User != "" &&
-		db.Password != "" && db.Name != ""
-}
-
-// GetSMLDBConfig reads all sml_db.* keys in a single All() call and returns
-// them as a typed struct. Returns an empty struct (IsSet()=false) when not set.
-func (r *AppSettingsRepo) GetSMLDBConfig() (SMLDBConfig, error) {
-	settings, err := r.All()
-	if err != nil {
-		return SMLDBConfig{}, err
-	}
-	get := func(key string) string { return strings.TrimSpace(settings[key].Value) }
-	return SMLDBConfig{
-		Host:       get("sml_db.host"),
-		Port:       get("sml_db.port"),
-		User:       get("sml_db.user"),
-		Password:   get("sml_db.password"),
-		Name:       get("sml_db.name"),
-		ImagesName: get("sml_db.images_name"),
-		LogName:    get("sml_db.log_name"),
-	}, nil
 }
 
 func (r *AppSettingsRepo) PendingRestart(cfg *config.Config) (bool, []string, error) {

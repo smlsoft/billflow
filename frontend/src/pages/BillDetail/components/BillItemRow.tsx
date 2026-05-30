@@ -211,6 +211,19 @@ export function BillItemRow({
           )}
         >
           <TableCell className="max-w-[360px] align-top">
+            <div className="flex items-start gap-2">
+            {item.source_image_url && (
+              <div className="h-12 w-12 shrink-0 overflow-hidden rounded border border-border bg-muted">
+                <img
+                  src={item.source_image_url}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2 break-words text-sm leading-6 text-foreground">
               <span>{item.raw_name}</span>
               {isShopeeShippingLine && (
@@ -226,6 +239,8 @@ export function BillItemRow({
               </div>
             )}
             <IssueBadge reason={issueReason} />
+            </div>
+            </div>
           </TableCell>
           <TableCell>
             {item.item_code ? (

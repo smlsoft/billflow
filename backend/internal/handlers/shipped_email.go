@@ -55,8 +55,9 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	// htmlToText is a no-op when input has no HTML tags, so it's safe to call.
 	plainText := htmlToText(bodyText)
 
-	// AI extracts all orders from this email.
-	orders, err := h.aiClient.ExtractOrders(plainText)
+	// AI extracts all orders from this email, including per-item image URLs
+	// resolved from the HTML (more accurate than index-based assignment).
+	orders, err := h.aiClient.ExtractOrdersWithHTML(plainText, bodyHTML)
 	if err != nil || len(orders) == 0 {
 		h.logger.Warn("shopee_shipped: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
@@ -73,17 +74,13 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 
 	// Per-item prices parsed from the email body — fallback for AI nulls.
 	fallbackPrices := extractShopeePrices(plainText)
-	sourceImages := extractShopeeImageURLs(bodyHTML)
-	if len(sourceImages) == 0 {
-		sourceImages = extractShopeeImageURLs(bodyText)
-	}
 
 	createdCount := 0
 	skippedCount := 0
 	failedCount := 0
 	for _, order := range orders {
 		created, err := h.processOneShippedOrder(
-			order, subject, from, bodyText, bodyHTML, messageID, fallbackPrices, sourceImages, traceID, startTime, source,
+			order, subject, from, bodyText, bodyHTML, messageID, fallbackPrices, traceID, startTime, source,
 		)
 		if err != nil {
 			failedCount++
@@ -118,7 +115,6 @@ func (h *EmailHandler) processOneShippedOrder(
 	order ai.ExtractedOrder,
 	subject, from, bodyText, bodyHTML, messageID string,
 	fallbackPrices []float64,
-	sourceImages []string,
 	traceID string,
 	startTime time.Time,
 	source emailservice.MailSource,
@@ -246,14 +242,14 @@ func (h *EmailHandler) processOneShippedOrder(
 			Qty:     extItem.Qty,
 			Mapped:  false,
 		}
-		if i < len(sourceImages) {
-			item.SourceImageURL = sourceImages[i]
-		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
 		} else if i < len(fallbackPrices) {
 			p := fallbackPrices[i]
 			item.Price = &p
+		}
+		if extItem.ImageURL != "" {
+			item.SourceImageURL = extItem.ImageURL
 		}
 
 		if len(matches) > 0 && matches[0].Score >= highConfThreshold {

@@ -277,6 +277,7 @@ export default function ChannelDefaults() {
         shelf_code: '',
         vat_type: -1,
         vat_rate: -1,
+        inquiry_type: -1,
       } satisfies ChannelDefaultRow
     })
   }, [rows])

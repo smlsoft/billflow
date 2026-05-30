@@ -34,12 +34,14 @@ type ChannelDefault struct {
 	ExpenseCode          string `json:"expense_code"`
 	ExpenseName          string `json:"expense_name"`
 	// Inventory + VAT overrides (sentinel: empty / -1 = "use server default")
-	WHCode    string    `json:"wh_code"`
-	ShelfCode string    `json:"shelf_code"`
-	VATType   int       `json:"vat_type"`
-	VATRate   float64   `json:"vat_rate"`
-	UpdatedBy *string   `json:"updated_by,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	WHCode      string    `json:"wh_code"`
+	ShelfCode   string    `json:"shelf_code"`
+	VATType     int       `json:"vat_type"`
+	VATRate     float64   `json:"vat_rate"`
+	InquiryType int       `json:"inquiry_type"` // -1 = ยังไม่ได้ตั้ง (กรอกตอนส่ง)
+	Remark2     string    `json:"remark_2"`     // sentinel: '' = ไม่ระบุ
+	UpdatedBy   *string   `json:"updated_by,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ChannelDefaultUpsert is the admin-supplied payload for PUT.
@@ -72,8 +74,10 @@ type ChannelDefaultUpsert struct {
 	ExpenseCode          string `json:"expense_code"`
 	ExpenseName          string `json:"expense_name"`
 	// Inventory + VAT overrides; empty / -1 = "use server default"
-	WHCode    string  `json:"wh_code"`
-	ShelfCode string  `json:"shelf_code"`
-	VATType   int     `json:"vat_type"`
-	VATRate   float64 `json:"vat_rate"`
+	WHCode      string  `json:"wh_code"`
+	ShelfCode   string  `json:"shelf_code"`
+	VATType     int     `json:"vat_type"`
+	VATRate     float64 `json:"vat_rate"`
+	InquiryType int     `json:"inquiry_type"` // -1 = ยังไม่ได้ตั้ง
+	Remark2     string  `json:"remark_2"`     // sentinel: '' = ไม่ระบุ
 }

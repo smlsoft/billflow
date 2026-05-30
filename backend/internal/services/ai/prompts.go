@@ -82,7 +82,8 @@ output format:
         "raw_name": string,
         "qty": number,
         "unit": string,
-        "price": number | null
+        "price": number | null,
+        "image_url": "https://..." | null
       }
     ],
     "total_amount": number | null,
@@ -98,4 +99,5 @@ output format:
 - doc_date ดูจากวันที่ในข้อความ รูปแบบ YYYY-MM-DD ถ้าไม่พบใส่ ""
 - price คือราคาต่อหน่วย ถ้าไม่ชัดให้ใส่ null
 - ถ้าข้อมูลไม่ชัดเจนให้ confidence ต่ำ (< 0.5)
+- image_url: ถ้ามี HTML ให้หา URL รูปภาพสินค้า (<img src="...">) ที่อยู่ใกล้รายการนั้นใน HTML เช่น cf.shopee.co.th/file/... ถ้าหาไม่พบหรือไม่แน่ใจให้ใส่ null
 `

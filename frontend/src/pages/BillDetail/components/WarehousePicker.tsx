@@ -50,7 +50,19 @@ export function WarehousePicker({ value, onChange, disabled }: WarehousePickerPr
   const [refreshing, setRefreshing] = useState(false)
   const [lastSync, setLastSync] = useState<string | null>(null)
   const [total, setTotal] = useState(0)
+  const [resolvedName, setResolvedName] = useState('')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!value) { setResolvedName(''); return }
+    client
+      .get<{ data: Warehouse[] }>(`/api/sml/warehouses?search=${encodeURIComponent(value)}&limit=5`)
+      .then((r) => {
+        const found = r.data.data?.find((w) => w.code === value)
+        setResolvedName(found?.name || found?.name_1 || found?.name_2 || '')
+      })
+      .catch(() => {})
+  }, [value])
 
   const fetchResults = useMemo(
     () => (q: string) => {
@@ -107,7 +119,7 @@ export function WarehousePicker({ value, onChange, disabled }: WarehousePickerPr
       open={open}
       onOpenChange={setOpen}
       value={value}
-      valueLabel={selectedLabel(value, results)}
+      valueLabel={value ? { code: value, name: resolvedName } : null}
       placeholder="เลือกคลัง…"
       searchPlaceholder="ค้นหาด้วยรหัส / ชื่อคลัง…"
       disabled={disabled}
@@ -142,7 +154,21 @@ export function ShelfPicker({ warehouseCode, value, onChange, disabled }: ShelfP
   const [loading, setLoading] = useState(false)
   const [lastSync, setLastSync] = useState<string | null>(null)
   const [total, setTotal] = useState(0)
+  const [resolvedName, setResolvedName] = useState('')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!value || !warehouseCode) { setResolvedName(''); return }
+    client
+      .get<{ data: Shelf[] }>(
+        `/api/sml/warehouses/${encodeURIComponent(warehouseCode)}/shelves?search=${encodeURIComponent(value)}&limit=5`,
+      )
+      .then((r) => {
+        const found = r.data.data?.find((s) => s.code === value)
+        setResolvedName(found?.name || found?.name_1 || found?.name_2 || '')
+      })
+      .catch(() => {})
+  }, [value, warehouseCode])
 
   const fetchResults = useMemo(
     () => (q: string) => {
@@ -182,7 +208,7 @@ export function ShelfPicker({ warehouseCode, value, onChange, disabled }: ShelfP
       open={open}
       onOpenChange={setOpen}
       value={value}
-      valueLabel={selectedLabel(value, results)}
+      valueLabel={value ? { code: value, name: resolvedName } : null}
       placeholder={warehouseCode ? 'เลือกพื้นที่เก็บ…' : 'เลือกคลังก่อน'}
       searchPlaceholder="ค้นหาด้วยรหัส / ชื่อพื้นที่เก็บ…"
       disabled={disabled || !warehouseCode}
@@ -206,12 +232,6 @@ export function ShelfPicker({ warehouseCode, value, onChange, disabled }: ShelfP
       ))}
     </PickerShell>
   )
-}
-
-function selectedLabel(value: string, rows: Array<{ code: string; name?: string; name_1?: string; name_2?: string }>) {
-  const selected = rows.find((r) => r.code === value)
-  const name = selected?.name || selected?.name_1 || selected?.name_2 || ''
-  return value ? { code: value, name } : null
 }
 
 function PickerShell({

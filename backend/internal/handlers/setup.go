@@ -43,9 +43,6 @@ func (h *SetupHandler) Status(c *gin.Context) {
 	runtime := repository.RuntimeSettingValues(h.cfg)
 	smlMissing := missingSettings(settings, runtime, []string{
 		"sml.rest_base_url",
-		"sml.guid",
-		"sml.provider",
-		"sml.config_file",
 		"sml.database",
 	})
 	smlReadiness := sml.ReadinessStatus{
@@ -80,7 +77,7 @@ func (h *SetupHandler) Status(c *gin.Context) {
 		{
 			"key":         "instance",
 			"title":       "ข้อมูลร้านและ SML",
-			"description": "กรอก SML REST URL, GUID, Provider, Config file และ Database ของร้านนี้",
+			"description": "กรอก SML REST URL และ Database ของร้านนี้",
 			"href":        "/settings/instance",
 			"ready":       smlReady,
 			"status":      smlStatus,

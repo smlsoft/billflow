@@ -16,7 +16,6 @@ import (
 // same REST base URL + headers as product/customer/supplier clients.
 type WarehouseClient struct {
 	cfg        PartyConfig
-	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	log        *zap.Logger
 }
@@ -41,29 +40,22 @@ type Shelf struct {
 	Remark        string `json:"remark,omitempty"`
 }
 
-func NewWarehouseClient(cfg PartyConfig, dbCfgFn DBHeaderFn, log *zap.Logger) *WarehouseClient {
+func NewWarehouseClient(cfg PartyConfig, log *zap.Logger) *WarehouseClient {
 	return &WarehouseClient{
 		cfg:        cfg,
-		dbCfgFn:    dbCfgFn,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		log:        log,
 	}
 }
 
 func (c *WarehouseClient) headers() map[string]string {
-	h := map[string]string{
+	return map[string]string{
 		"guid":           c.cfg.GUID,
 		"provider":       c.cfg.Provider,
 		"configFileName": c.cfg.ConfigFile,
 		"databaseName":   c.cfg.Database,
 		"Accept":         "application/json",
 	}
-	if c.dbCfgFn != nil {
-		if db := c.dbCfgFn(); db != nil {
-			db.ApplyToHeaders(h)
-		}
-	}
-	return h
 }
 
 type warehousePageInfo struct {

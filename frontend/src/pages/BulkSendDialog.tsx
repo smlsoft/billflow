@@ -25,7 +25,8 @@ import { PartyPicker, type Party } from '@/pages/ChannelDefaults/PartyPicker'
 import type { ChannelDefaultRow } from '@/pages/ChannelDefaults/labels'
 import { SMLMasterCodePicker } from '@/pages/BillDetail/components/SMLMasterCodePicker'
 import { ShelfPicker, WarehousePicker } from '@/pages/BillDetail/components/WarehousePicker'
-import { REMARK2_NONE, normalizeRemark2, remark2PayloadValue } from '@/lib/smlRemark2'
+import { REMARK2_NONE, SML_REMARK2_OPTIONS, normalizeRemark2, remark2PayloadValue } from '@/lib/smlRemark2'
+import { ENABLE_REMARK2 } from '@/lib/featureFlags'
 import { isSMLReady, smlBlockedMessage, humanizeSMLConnectionError } from '@/lib/sml-readiness'
 import {
   createBulkSendJob,
@@ -59,11 +60,11 @@ function channelDefaultPayload(row?: ChannelDefaultRow): RetryBillPayload | unde
     party_name: row.party_name || undefined,
     branch_code: row.branch_code || undefined,
     sale_code: row.sale_code || undefined,
-    unit_code: row.unit_code || undefined,
     wh_code: row.wh_code || undefined,
     shelf_code: row.shelf_code || undefined,
     vat_type: typeof row.vat_type === 'number' && row.vat_type >= 0 ? row.vat_type : undefined,
     vat_rate: typeof row.vat_rate === 'number' && row.vat_rate >= 0 ? row.vat_rate : undefined,
+    inquiry_type: typeof row.inquiry_type === 'number' && row.inquiry_type >= 0 ? row.inquiry_type : undefined,
   }
 }
 
@@ -144,8 +145,15 @@ function vatTypeLabel(value: string) {
 const PURCHASE_INQUIRY_TYPE_OPTIONS = [
   { value: '0', label: '0 — ซื้อสินค้าเงินเชื่อ' },
   { value: '1', label: '1 — ซื้อสินค้าเงินสด' },
+  { value: '2', label: '2 — ซื้อสินค้าเงินเชื่อ (สินค้าบริการ)' },
   { value: '3', label: '3 — ซื้อสินค้าเงินสด (สินค้าบริการ)' },
-  { value: '4', label: '4 — ซื้อสินค้าเงินเชื่อ (สินค้าบริการ)' },
+]
+
+const SALE_INQUIRY_TYPE_OPTIONS = [
+  { value: '0', label: '0 — ขายเงินเชื่อ' },
+  { value: '1', label: '1 — ขายเงินสด' },
+  { value: '2', label: '2 — ขายเงินเชื่อ (สินค้าบริการ)' },
+  { value: '3', label: '3 — ขายเงินสด (สินค้าบริการ)' },
 ]
 
 function billDetailPath(bill: Bill) {
@@ -575,7 +583,7 @@ export function BulkSendDialog({
     shelf_code: shelfCode.trim(),
     vat_type: Number(vatTypeStr),
     vat_rate: vatRateNum,
-    inquiry_type: isPurchaseOrder ? Number(inquiryTypeStr) : undefined,
+    inquiry_type: inquiryTypeStr !== '' ? Number(inquiryTypeStr) : undefined,
   })
 
   useEffect(() => {
@@ -998,13 +1006,14 @@ export function BulkSendDialog({
                 value={`${vatTypeLabel(vatTypeStr)} · ${vatRateStr || '-'}%`}
                 muted={!vatTypeStr || !vatRateStr}
               />
-              {isPurchaseOrder && (
-                <SummaryItem
-                  label="ประเภทรายการซื้อ (inquiry_type)"
-                  value={PURCHASE_INQUIRY_TYPE_OPTIONS.find((option) => option.value === inquiryTypeStr)?.label || 'ยังไม่เลือก'}
-                  muted={!inquiryTypeStr}
-                />
-              )}
+              <SummaryItem
+                label={isPurchaseOrder ? 'ประเภทรายการซื้อ (inquiry_type)' : 'ประเภทรายการขาย (inquiry_type)'}
+                value={
+                  (isPurchaseOrder ? PURCHASE_INQUIRY_TYPE_OPTIONS : SALE_INQUIRY_TYPE_OPTIONS)
+                    .find((option) => option.value === inquiryTypeStr)?.label || (isPurchaseOrder ? 'ยังไม่เลือก' : 'ไม่ระบุ')
+                }
+                muted={!inquiryTypeStr}
+              />
               <SummaryItem label="เวลาเอกสาร (doc_time)" value={docTime || 'ยังไม่ระบุ'} mono muted={!docTime} />
             </div>
           </div>
@@ -1024,10 +1033,9 @@ export function BulkSendDialog({
               <Label className="text-xs">เวลาเอกสาร (doc_time) <span className="text-destructive">*</span></Label>
               <Input
                 value={docTime}
-                onChange={(e) => setDocTime(e.target.value)}
+                readOnly
                 placeholder="เช่น 09:00"
-                className="font-mono"
-                disabled={controlsLocked}
+                className="font-mono bg-muted/50 cursor-not-allowed"
               />
             </div>
 
@@ -1100,15 +1108,36 @@ export function BulkSendDialog({
               />
             </div>
 
-            {isPurchaseOrder && (
+            <div className="space-y-1">
+              <Label className="text-xs">
+                {isPurchaseOrder ? 'ประเภทรายการซื้อ' : 'ประเภทรายการขาย'} (inquiry_type)
+                {isPurchaseOrder && <span className="text-destructive"> *</span>}
+              </Label>
+              <Select value={inquiryTypeStr} onValueChange={setInquiryTypeStr} disabled={controlsLocked}>
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder={isPurchaseOrder ? 'เลือกประเภทรายการ' : 'ไม่ระบุ (ไม่บังคับ)'}>
+                    {(isPurchaseOrder ? PURCHASE_INQUIRY_TYPE_OPTIONS : SALE_INQUIRY_TYPE_OPTIONS).find((o) => o.value === inquiryTypeStr)?.label}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {(isPurchaseOrder ? PURCHASE_INQUIRY_TYPE_OPTIONS : SALE_INQUIRY_TYPE_OPTIONS).map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {ENABLE_REMARK2 && (
               <div className="space-y-1">
-                <Label className="text-xs">ประเภทรายการซื้อ (inquiry_type) <span className="text-destructive">*</span></Label>
-                <Select value={inquiryTypeStr} onValueChange={setInquiryTypeStr} disabled={controlsLocked}>
+                <Label className="text-xs">สถานะเอกสาร (remark_2)</Label>
+                <Select value={remark2Str} onValueChange={setRemark2Str} disabled={controlsLocked}>
                   <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="เลือกประเภทรายการ" />
+                    <SelectValue placeholder="ไม่ระบุ" />
                   </SelectTrigger>
                   <SelectContent>
-                    {PURCHASE_INQUIRY_TYPE_OPTIONS.map((option) => (
+                    <SelectItem value={REMARK2_NONE}>ไม่ระบุ</SelectItem>
+                    {SML_REMARK2_OPTIONS.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}
                       </SelectItem>

@@ -70,10 +70,11 @@ type ExtractedOrder struct {
 }
 
 type ExtractedItem struct {
-	RawName string   `json:"raw_name"`
-	Qty     float64  `json:"qty"`
-	Unit    string   `json:"unit"`
-	Price   *float64 `json:"price"`
+	RawName  string   `json:"raw_name"`
+	Qty      float64  `json:"qty"`
+	Unit     string   `json:"unit"`
+	Price    *float64 `json:"price"`
+	ImageURL string   `json:"image_url,omitempty"`
 }
 
 type openRouterRequest struct {
@@ -195,6 +196,39 @@ func (c *Client) ExtractOrders(text string) ([]ExtractedOrder, error) {
 
 	if c.model != c.fallbackModel {
 		fallbackBody, fallbackErr := c.requestChat("shopee_email_parse", "extract_orders_fallback", c.fallbackModel, parts)
+		if fallbackErr == nil {
+			return parseExtractedOrders(fallbackBody)
+		}
+		return nil, fallbackErr
+	}
+	return nil, err
+}
+
+// ExtractOrdersWithHTML is like ExtractOrders but also sends the email HTML so
+// the AI can correlate each item with its product image URL.
+func (c *Client) ExtractOrdersWithHTML(text, html string) ([]ExtractedOrder, error) {
+	parts := []contentPart{
+		{Type: "text", Text: ExtractShopeeOrdersPrompt},
+		{Type: "text", Text: text},
+	}
+	if html != "" {
+		parts = append(parts, contentPart{
+			Type: "text",
+			Text: "HTML ของ email (ใช้ดึง image_url ต่อสินค้าแต่ละรายการจาก <img> ที่อยู่ใกล้ชื่อสินค้า):\n" + html,
+		})
+	}
+
+	body, err := c.requestChat("shopee_email_parse", "extract_orders_html", c.model, parts)
+	if err == nil {
+		orders, parseErr := parseExtractedOrders(body)
+		if parseErr == nil {
+			return orders, nil
+		}
+		err = parseErr
+	}
+
+	if c.model != c.fallbackModel {
+		fallbackBody, fallbackErr := c.requestChat("shopee_email_parse", "extract_orders_html_fallback", c.fallbackModel, parts)
 		if fallbackErr == nil {
 			return parseExtractedOrders(fallbackBody)
 		}

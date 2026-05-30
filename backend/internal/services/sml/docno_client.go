@@ -14,7 +14,6 @@ import (
 
 type DocNoClient struct {
 	cfg        PartyConfig
-	dbCfgFn    DBHeaderFn // per-request X-DB-* headers for sml-api-byboss
 	httpClient *http.Client
 	log        *zap.Logger
 }
@@ -48,10 +47,9 @@ type nextDocNoEnvelope struct {
 	} `json:"error"`
 }
 
-func NewDocNoClient(cfg PartyConfig, dbCfgFn DBHeaderFn, log *zap.Logger) *DocNoClient {
+func NewDocNoClient(cfg PartyConfig, log *zap.Logger) *DocNoClient {
 	return &DocNoClient{
 		cfg:        cfg,
-		dbCfgFn:    dbCfgFn,
 		httpClient: &http.Client{Timeout: 12 * time.Second},
 		log:        log,
 	}
@@ -87,16 +85,6 @@ func (c *DocNoClient) Next(ctx context.Context, req NextDocNoRequest) (*NextDocN
 	httpReq.Header.Set("databaseName", c.cfg.Database)
 	httpReq.Header.Set("X-Tenant", c.cfg.Database)
 	httpReq.Header.Set("Accept", "application/json")
-	if c.dbCfgFn != nil {
-		if db := c.dbCfgFn(); db != nil {
-			dbHdrs := make(map[string]string)
-			db.ApplyToHeaders(dbHdrs)
-			for k, v := range dbHdrs {
-				httpReq.Header.Set(k, v)
-			}
-		}
-	}
-
 	start := time.Now()
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

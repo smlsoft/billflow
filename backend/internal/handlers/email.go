@@ -602,9 +602,6 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 			Qty:     extItem.Qty,
 			Mapped:  false,
 		}
-		if i < len(sourceImages) {
-			item.SourceImageURL = sourceImages[i]
-		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
 		} else if i < len(fallbackPrices) {
