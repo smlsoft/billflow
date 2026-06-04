@@ -51,7 +51,7 @@ func (h *UserSettingsHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "hash password: " + err.Error()})
 		return
 	}
-	user, err := h.users.Create(in.Email, in.Name, in.Role, string(hash))
+	user, err := h.users.Create(in.Email, in.Name, in.Role, string(hash), strings.TrimSpace(in.SMLUserCode))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -102,7 +102,7 @@ func (h *UserSettingsHandler) Update(c *gin.Context) {
 		s := string(hash)
 		passwordHash = &s
 	}
-	user, err := h.users.Update(id, in.Email, in.Name, in.Role, passwordHash)
+	user, err := h.users.Update(id, in.Email, in.Name, in.Role, strings.TrimSpace(in.SMLUserCode), passwordHash)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

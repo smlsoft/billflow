@@ -2,7 +2,8 @@
 
 Registry สำหรับจำว่าแต่ละร้านใช้ folder, port, container และ public tunnel ไหนบน server `192.168.2.109`.
 
-> หมายเหตุ: Main/Thaisunsport ใช้ Cloudflare Quick Tunnel (`trycloudflare.com`) และ URL จะเปลี่ยนเมื่อ process `cloudflared` restart. Henna ตอนนี้มีทั้ง Cloudflare Quick Tunnel ที่ user ใช้งาน (`tops-twins-oasis-philip.trycloudflare.com`) และ ngrok domain ที่ยังตั้งใน `PUBLIC_BASE_URL`/Shopee redirect.
+> หมายเหตุ: Main/Thaisunsport ใช้ Cloudflare Quick Tunnel (`trycloudflare.com`) และ URL จะเปลี่ยนเมื่อ process `cloudflared` restart.
+> ⚠️ **`billflow-henna` ย้ายเป็น Nexflow แล้ว (2026-05-31)** — folder `~/billflow-henna` ปัจจุบันรัน Nexflow ซึ่งเป็น product แยก repo ออกจาก billflow โดยสมบูรณ์ ห้าม deploy billflow ไปที่ folder นี้
 
 ## Summary
 
@@ -10,18 +11,20 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
 | `billflow` | BillFlow ปกติ / demo หลัก | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | `https://edt-surfaces-graph-pension.trycloudflare.com` | `/tmp/billflow-tunnel.log` |
 | `billflow-thaisunsport` | Thaisunsport demo Phase 1 ฝั่งซื้อ | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | `https://pets-mini-museums-ships.trycloudflare.com` | `/tmp/billflow-thaisunsport-tunnel.log` |
-| `billflow-henna` | Henna customer trial | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5440` | `https://tops-twins-oasis-philip.trycloudflare.com` | `/tmp/billflow-henna-tunnel.log` |
+| ~~`billflow-henna`~~ → **Nexflow** | Henna — ย้ายเป็น Nexflow แล้ว | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5440` | ngrok-free.dev (ดู Nexflow .env) | `/tmp/nexflow-tunnel.log` |
+
+> **Nexflow** repo แยก: `https://github.com/bosocmputer/Nexflow.git` | local: `/Users/nontawatwongnuk/dev_bos/Nexflow` | deploy: `NX_PASS=boss123456 python scripts/deploy.py`
 
 ## Deploy Policy
 
-ใช้ codebase เดียวสำหรับทุก instance และแยกความต่างด้วย environment / feature flags / instance config เท่านั้น.
+> ⚠️ **Henna ย้ายเป็น Nexflow แล้ว** — billflow repo ใช้กับ `billflow` (main) และ `billflow-thaisunsport` เท่านั้น
 
 | Change type | Deploy targets | Notes |
 | --- | --- | --- |
 | ทดสอบงานใหม่หรือแก้เฉพาะ demo หลัก | `billflow` | ใช้ main เป็นพื้นที่ทดสอบก่อน |
-| Phase 1+ / งานฝั่งขาย / UX ที่เปิดทั้งซื้อและขาย | `billflow`, `billflow-henna` | Henna ต้องเทียบเท่า main และเปิดงานฝั่งซื้อ + งานฝั่งขาย |
-| Shared Phase 1 bug/UX/backend/email/bills/logs/settings ที่ไม่ผูกกับงานฝั่งขาย | `billflow`, `billflow-henna`, `billflow-thaisunsport` | Thaisunsport รับเฉพาะสิ่งที่ใช้ร่วมกับ Phase 1 |
+| Shared Phase 1 bug/UX/backend/email/bills/logs/settings | `billflow`, `billflow-thaisunsport` | **ไม่รวม henna** — henna ใช้ Nexflow repo แล้ว |
 | งานเฉพาะร้าน เช่น credential, SML config, tunnel URL, env เฉพาะ instance | instance นั้นเท่านั้น | ห้ามกระทบ instance อื่น |
+| แก้ไขสำหรับ henna / Nexflow | **Nexflow repo เท่านั้น** | `NX_PASS=boss123456 python scripts/deploy.py` |
 
 ก่อน deploy ทุกครั้งต้องระบุ `Change type`, `Deploy targets`, และ instance ที่ตั้งใจ skip ให้ชัดเจนในข้อความสรุป.
 
@@ -40,7 +43,7 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 | --- | --- | --- | --- |
 | `billflow` | `billflow-frontend` | `billflow-backend` | `billflow-postgres` |
 | `billflow-thaisunsport` | `billflow-thaisunsport-frontend` | `billflow-thaisunsport-backend` | `billflow-thaisunsport-postgres` |
-| `billflow-henna` | `billflow-henna-frontend` | `billflow-henna-backend` | `billflow-henna-postgres` |
+| **Nexflow** (folder: `billflow-henna`) | `nexflow-frontend` | `nexflow-backend` | `nexflow-postgres` |
 
 ## Quick Commands
 
@@ -55,7 +58,7 @@ curl http://192.168.2.109:8110/health   # henna
 ### Check running containers
 
 ```bash
-docker ps --format '{{.Names}} {{.Ports}}' | grep billflow
+docker ps --format '{{.Names}} {{.Ports}}' | grep -E 'billflow|nexflow'
 ```
 
 ### Get current Quick Tunnel URL
@@ -133,22 +136,19 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ให้ตั้งชื่อ folder/container/volume ตาม slug ร้าน เช่น `billflow-henna-*` เพื่อไม่ชน instance อื่น.
 
-## Henna Notes
+## Nexflow Notes (เดิม Henna)
 
-- Latest deploy verified: 2026-05-27 13:35 +07.
-- Created from current normal BillFlow version, not Thaisunsport branch/config.
-- Deployed as isolated Docker Compose project in `/home/bosscatdog/billflow-henna`.
-- Database is separate PostgreSQL volume `billflow-henna_billflow_henna_pgdata`.
-- `PUBLIC_BASE_URL` in `/home/bosscatdog/billflow-henna/.env` is set to `https://animal-galvanize-tameness.ngrok-free.dev`.
-- App settings seeded:
-  - `instance.name = BillFlow Henna`
-  - `instance.slug = billflowhenna`
-- Runtime parity notes (2026-05-27):
-  - Synced backend/frontend from the same local source snapshot as BillFlow main and rebuilt `billflow-henna-backend` + `billflow-henna-frontend`.
-  - Runtime SML base URL in DB: `sml.rest_base_url=http://172.24.0.1:8200`.
-  - Health checks passed: `http://192.168.2.109:8110/health`, `http://192.168.2.109:3030/shopee-settlements`, and `https://tops-twins-oasis-philip.trycloudflare.com/login`.
-  - Feature flags remain Phase 1+ (`VITE_ENABLE_SALES_ORDERS=true`, Shopee/Lazada/TikTok enabled) with `VITE_ENABLE_CHAT=false`.
-  - `SHOPEE_OPEN_API_ENABLED=true`.
+> ⚠️ **ย้ายเป็น Nexflow แล้ว (2026-05-31)** — folder `~/billflow-henna` ปัจจุบันรัน Nexflow ซึ่งเป็น product แยก repo
+
+- Nexflow repo: `https://github.com/bosocmputer/Nexflow.git`
+- Local workspace: `/Users/nontawatwongnuk/dev_bos/Nexflow`
+- Containers: `nexflow-postgres`, `nexflow-backend`, `nexflow-frontend`
+- DB: `nexflow` (user: `nexflow`, volume: `nexflow_pgdata`)
+- SML tenant: `aoy`
+- Admin login: `admin@nexflow.local` / `admin1234`
+- Deploy: `NX_PASS=boss123456 python scripts/deploy.py` (จาก Nexflow repo)
+- `PUBLIC_BASE_URL` ใน `.env`: ngrok-free.dev domain (Shopee API redirect ยังใช้ domain เดิม)
+- `SHOPEE_OPEN_API_ENABLED=true`
 
 ## Thaisunsport Notes
 

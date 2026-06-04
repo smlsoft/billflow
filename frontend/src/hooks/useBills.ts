@@ -18,6 +18,7 @@ interface BillsFilter {
   archived?: 'include' | 'only' | ''
   date_from?: string
   date_to?: string
+  sort_order?: 'asc' | 'desc'
   cursor?: string
   limit?: number
   include_total?: boolean
@@ -126,6 +127,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.archived) params.set('archived', filter.archived)
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)
+      if (filter.sort_order) params.set('sort_order', filter.sort_order)
       if (filter.cursor) params.set('cursor', filter.cursor)
       if (filter.limit) params.set('limit', String(filter.limit))
       if (filter.include_total) params.set('include_total', 'true')

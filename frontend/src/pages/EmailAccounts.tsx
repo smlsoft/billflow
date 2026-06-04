@@ -729,13 +729,15 @@ function ResetProgressDialog({
   const [lookbackDays, setLookbackDays] = useState(30)
   const [submitting, setSubmitting] = useState(false)
 
+  const MAX_LOOKBACK = 2
+
   useEffect(() => {
-    if (account) setLookbackDays(account.lookback_days || 30)
+    if (account) setLookbackDays(Math.min(account.lookback_days || MAX_LOOKBACK, MAX_LOOKBACK))
   }, [account])
 
   const submit = async (pollNow: boolean) => {
     if (!account) return
-    const nextLookback = Math.min(90, Math.max(1, Number(lookbackDays) || account.lookback_days || 30))
+    const nextLookback = Math.min(MAX_LOOKBACK, Math.max(1, Number(lookbackDays) || MAX_LOOKBACK))
     setSubmitting(true)
     try {
       await onConfirm(account, nextLookback, pollNow)
@@ -756,17 +758,20 @@ function ResetProgressDialog({
         </DialogHeader>
         <div className="space-y-3">
           <label className="space-y-1.5 text-sm font-medium">
-            <span>อ่านย้อนหลัง</span>
+            <span>{'อ่านย้อนหลัง (วัน)'}</span>
             <Input
               type="number"
               min={1}
-              max={90}
+              max={MAX_LOOKBACK}
               value={lookbackDays}
-              onChange={(e) => setLookbackDays(Number(e.target.value))}
+              onChange={(e) => setLookbackDays(Math.min(MAX_LOOKBACK, Math.max(1, Number(e.target.value))))}
             />
           </label>
+          <div className="rounded-md border border-warning/40 bg-warning/[0.07] px-3 py-2 text-xs text-warning">
+            จำกัดไว้ที่ {MAX_LOOKBACK} วัน เพื่อควบคุม AI cost — การย้อนหลังมากกว่านี้จะเรียก Gemini ทุก email ซึ่งอาจใช้ credits จำนวนมากในครั้งเดียว
+          </div>
           <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-            ถ้าเจอเมลเดิม ระบบจะแสดงเป็น “เคยประมวลผลแล้ว” และไม่สร้างบิลซ้ำ
+            ถ้าเจอเมลเดิม ระบบจะแสดงเป็น "เคยประมวลผลแล้ว" และไม่สร้างบิลซ้ำ
           </div>
         </div>
         <DialogFooter>

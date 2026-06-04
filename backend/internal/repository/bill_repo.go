@@ -180,12 +180,18 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	}
 
 	useCursor := f.CursorMode
+	sortDir := "DESC"
+	cursorOp := "<"
+	if f.SortOrder == "asc" {
+		sortDir = "ASC"
+		cursorOp = ">"
+	}
 	if f.Cursor != "" {
 		cursorTime, cursorID, err := decodeTimeIDCursor(f.Cursor)
 		if err != nil {
 			return nil, err
 		}
-		where += fmt.Sprintf(" AND (b.created_at, b.id) < ($%d::timestamptz, $%d::uuid)", argN, argN+1)
+		where += fmt.Sprintf(" AND (b.created_at, b.id) "+cursorOp+" ($%d::timestamptz, $%d::uuid)", argN, argN+1)
 		args = append(args, cursorTime, cursorID)
 		argN += 2
 	}
@@ -207,7 +213,7 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	          ` + where + `
 	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
 	                   b.anomalies, b.error_msg, b.created_at, b.sent_at, b.archived_at, b.archived_by, b.archive_reason
-	          ORDER BY b.created_at DESC, b.id DESC` +
+	          ORDER BY b.created_at ` + sortDir + `, b.id ` + sortDir +
 		fmt.Sprintf(" LIMIT $%d", argN)
 	args = append(args, queryLimit)
 	if !useCursor {
@@ -859,6 +865,19 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 		stats[q.key+"_failed"] = failedQ
 	}
 
+	// AI today stats — bills processed by AI today (Bangkok timezone)
+	var aiTodayBills int
+	var aiTodayAvgConf float64
+	_ = r.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(AVG(ai_confidence), 0)
+		  FROM bills
+		 WHERE ai_confidence IS NOT NULL
+		   AND created_at >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date`,
+	).Scan(&aiTodayBills, &aiTodayAvgConf)
+	stats["ai_today_bills"] = aiTodayBills
+	stats["ai_today_avg_confidence"] = aiTodayAvgConf
+	stats["ai_today_minutes_saved"] = aiTodayBills * 4
+
 	return stats, nil
 }
 
@@ -1176,7 +1195,11 @@ func (r *BillRepo) ApplyShopeePurchaseDiscountsToBill(billID string, summary Sho
 	if err != nil {
 		return false, err
 	}
-	ApplyShopeeDiscountsToItems(items, summary.TotalDiscountAmount)
+	effectiveDiscount := summary.TotalDiscountAmount
+	if coin := floatField(raw, "shopee_coin_amount"); coin > 0 {
+		effectiveDiscount = roundMoney(effectiveDiscount + coin)
+	}
+	ApplyShopeeDiscountsToItems(items, effectiveDiscount)
 	raw["discount_summary"] = summary
 	rawJSON, _ := json.Marshal(raw)
 

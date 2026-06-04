@@ -25,6 +25,7 @@ import (
 
 type BillHandler struct {
 	billRepo        *repository.BillRepo
+	userRepo        *repository.UserRepo
 	mapperSvc       *mapper.Service
 	invoiceClient   *sml.InvoiceClient       // SML 248 saleinvoice REST (legacy)
 	saleOrderClient *sml.SaleOrderClient     // SML 248 saleorder REST (default)
@@ -46,6 +47,7 @@ type BillHandler struct {
 
 func NewBillHandler(
 	billRepo *repository.BillRepo,
+	userRepo *repository.UserRepo,
 	mapperSvc *mapper.Service,
 	invoiceClient *sml.InvoiceClient,
 	saleOrderClient *sml.SaleOrderClient,
@@ -66,6 +68,7 @@ func NewBillHandler(
 ) *BillHandler {
 	return &BillHandler{
 		billRepo:        billRepo,
+		userRepo:        userRepo,
 		mapperSvc:       mapperSvc,
 		invoiceClient:   invoiceClient,
 		saleOrderClient: saleOrderClient,
@@ -302,7 +305,26 @@ func isDuplicateDocNoError(errMsg *string) bool {
 	s := strings.ToLower(*errMsg)
 	return strings.Contains(s, "duplicate key") ||
 		strings.Contains(s, "already exists") ||
-		strings.Contains(s, "มีอยู่")
+		strings.Contains(s, "มีอยู่") ||
+		strings.Contains(s, "log_status: skipped")
+}
+
+// isSkippedDocNoResponse detects SML's "log_status: skipped" which means the
+// doc_no already existed in SML and the document was not created. SML still
+// returns success:true, so callers must check this explicitly.
+func isSkippedDocNoResponse(respJSON []byte) bool {
+	if len(respJSON) == 0 {
+		return false
+	}
+	var raw struct {
+		Data struct {
+			LogStatus string `json:"log_status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respJSON, &raw); err != nil {
+		return false
+	}
+	return strings.EqualFold(raw.Data.LogStatus, "skipped")
 }
 
 func resolveDocCounterPattern(def *models.ChannelDefault, fallbackPrefix string) (string, string) {
@@ -1451,6 +1473,44 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 	}
 
 	respJSON, _ := json.Marshal(resp)
+
+	if isSkippedDocNoResponse(respJSON) {
+		freshBill := *bill
+		freshBill.SMLDocNo = nil
+		_ = h.billRepo.UpdateStatus(id, bill.Status, nil, nil, nil)
+		newDocNo, err2 := h.allocateFreshDocNo(&freshBill, def, "BF-SO", "saleorder")
+		if err2 != nil {
+			errMsg2 := "เลข doc_no ชนกับเอกสารใน SML และดึงเลขใหม่ไม่สำเร็จ: " + err2.Error()
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg2), start, route, reqDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusConflict, Error: storedErr2, DocNoAttempted: reqDocNo, Route: route}
+		}
+		_ = h.billRepo.UpdateStatus(id, bill.Status, &newDocNo, nil, nil)
+		payload2 := sml.BuildSaleOrderPayload(newDocNo, docDate, docRef, docRefDate, items, cfg, req.Remark, sml.SaleOrderHeaderOptions{Remark2: req.Remark2})
+		reqJSON2, _ := json.Marshal(payload2)
+		_ = h.billRepo.UpdateSMLPayload(id, reqJSON2)
+		sc2, resp2, err2 := h.saleOrderClient.CreateSaleOrder(payload2, urlOverride)
+		if err2 != nil || resp2 == nil || !resp2.IsSuccess() {
+			errMsg2 := smlSendErrorMessage(sc2, resp2, err2)
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON2, fmt.Errorf("%s", errMsg2), start, route, newDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusBadGateway, Error: "SML send failed: " + storedErr2, DocNoAttempted: newDocNo, Route: route}
+		}
+		respJSON2, _ := json.Marshal(resp2)
+		if isSkippedDocNoResponse(respJSON2) {
+			errMsg2 := "เลข doc_no ชนกับเอกสารใน SML (log_status: skipped) — ตรวจเลขเอกสารใน SML แล้วส่งใหม่"
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON2, fmt.Errorf("%s", errMsg2), start, route, newDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusConflict, Error: storedErr2, DocNoAttempted: newDocNo, Route: route}
+		}
+		docNo2 := resp2.GetDocNo()
+		if docNo2 == "" {
+			docNo2 = newDocNo
+		}
+		_ = h.billRepo.UpdateStatus(id, "sent", &docNo2, respJSON2, nil)
+		_ = h.billRepo.UpdateSMLPayload(id, reqJSON2)
+		h.recordSuccessForSend(id, bill.Source, respJSON2, docNo2, route, start, opts)
+		h.triggerStockRecalculation(id, docNo2, route, opts.BulkJobID, sentItemCodes)
+		return retrySendResult{HTTPStatus: http.StatusOK, Message: "bill sent to SML (saleorder)", DocNo: docNo2, DocNoAttempted: newDocNo, Route: route, LogWarning: extractSMLERPLogWarning(respJSON2)}
+	}
+
 	docNo := resp.GetDocNo()
 	if docNo == "" {
 		docNo = reqDocNo
@@ -1551,6 +1611,44 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 	}
 
 	respJSON, _ := json.Marshal(resp)
+
+	if isSkippedDocNoResponse(respJSON) {
+		freshBill := *bill
+		freshBill.SMLDocNo = nil
+		_ = h.billRepo.UpdateStatus(id, bill.Status, nil, nil, nil)
+		newDocNo, err2 := h.allocateFreshDocNo(&freshBill, def, "BF-INV", "saleinvoice")
+		if err2 != nil {
+			errMsg2 := "เลข doc_no ชนกับเอกสารใน SML และดึงเลขใหม่ไม่สำเร็จ: " + err2.Error()
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg2), start, route, reqDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusConflict, Error: storedErr2, DocNoAttempted: reqDocNo, Route: route}
+		}
+		_ = h.billRepo.UpdateStatus(id, bill.Status, &newDocNo, nil, nil)
+		payload2 := sml.BuildInvoicePayload(newDocNo, docDate, docRef, docRefDate, items, cfg, productCache, req.Remark, sml.InvoiceHeaderOptions{Remark2: req.Remark2})
+		reqJSON2, _ := json.Marshal(payload2)
+		_ = h.billRepo.UpdateSMLPayload(id, reqJSON2)
+		sc2, resp2, err2 := h.invoiceClient.CreateInvoice(payload2, urlOverride)
+		if err2 != nil || resp2 == nil || !resp2.IsSuccess() {
+			errMsg2 := smlSendErrorMessage(sc2, resp2, err2)
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON2, fmt.Errorf("%s", errMsg2), start, route, newDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusBadGateway, Error: "SML send failed: " + storedErr2, DocNoAttempted: newDocNo, Route: route}
+		}
+		respJSON2, _ := json.Marshal(resp2)
+		if isSkippedDocNoResponse(respJSON2) {
+			errMsg2 := "เลข doc_no ชนกับเอกสารใน SML (log_status: skipped) — ตรวจเลขเอกสารใน SML แล้วส่งใหม่"
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON2, fmt.Errorf("%s", errMsg2), start, route, newDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusConflict, Error: storedErr2, DocNoAttempted: newDocNo, Route: route}
+		}
+		docNo2 := resp2.GetDocNo()
+		if docNo2 == "" {
+			docNo2 = newDocNo
+		}
+		_ = h.billRepo.UpdateStatus(id, "sent", &docNo2, respJSON2, nil)
+		_ = h.billRepo.UpdateSMLPayload(id, reqJSON2)
+		h.recordSuccessForSend(id, bill.Source, respJSON2, docNo2, route, start, opts)
+		h.triggerStockRecalculation(id, docNo2, route, opts.BulkJobID, sentItemCodesInv)
+		return retrySendResult{HTTPStatus: http.StatusOK, Message: "bill sent to SML (saleinvoice)", DocNo: docNo2, DocNoAttempted: newDocNo, Route: route, LogWarning: extractSMLERPLogWarning(respJSON2)}
+	}
+
 	docNo := resp.GetDocNo()
 	if docNo == "" {
 		docNo = reqDocNo
@@ -1643,12 +1741,19 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	if req.Remark != "" && !isShopeePurchaseEmailBill(bill) {
 		_ = h.billRepo.UpdateRemark(id, req.Remark)
 	}
+	smlUserCode := ""
+	if h.userRepo != nil && opts.UserID != "" {
+		if u, err2 := h.userRepo.FindByID(opts.UserID); err2 == nil && u != nil {
+			smlUserCode = u.SMLUserCode
+		}
+	}
 	_ = h.billRepo.UpdateStatus(id, bill.Status, &reqDocNo, nil, nil)
 	payload := sml.BuildPurchaseOrderPayload(reqDocNo, docDate, docRef, docRefDate, items, cfg, remark, sml.PurchaseOrderHeaderOptions{
 		Remark:      remark,
 		Remark2:     req.Remark2,
 		Remark5:     remark5,
 		InquiryType: inquiryType,
+		UserRequest: smlUserCode,
 	})
 	reqJSON, _ := json.Marshal(payload)
 
@@ -1666,6 +1771,46 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	}
 
 	respJSON, _ := json.Marshal(resp)
+
+	if isSkippedDocNoResponse(respJSON) {
+		freshBill := *bill
+		freshBill.SMLDocNo = nil
+		_ = h.billRepo.UpdateStatus(id, bill.Status, nil, nil, nil)
+		newDocNo, err2 := h.allocateFreshDocNo(&freshBill, def, "BF-PO", "purchaseorder")
+		if err2 != nil {
+			errMsg2 := "เลข doc_no ชนกับเอกสารใน SML และดึงเลขใหม่ไม่สำเร็จ: " + err2.Error()
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON, fmt.Errorf("%s", errMsg2), start, route, reqDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusConflict, Error: storedErr2, DocNoAttempted: reqDocNo, Route: route}
+		}
+		_ = h.billRepo.UpdateStatus(id, bill.Status, &newDocNo, nil, nil)
+		payload2 := sml.BuildPurchaseOrderPayload(newDocNo, docDate, docRef, docRefDate, items, cfg, remark, sml.PurchaseOrderHeaderOptions{
+			Remark: remark, Remark2: req.Remark2, Remark5: remark5, InquiryType: inquiryType,
+		})
+		reqJSON2, _ := json.Marshal(payload2)
+		_ = h.billRepo.UpdateSMLPayload(id, reqJSON2)
+		sc2, resp2, err2 := h.poClient.CreatePurchaseOrder(payload2, urlOverride)
+		if err2 != nil || resp2 == nil || !resp2.IsSuccess() {
+			errMsg2 := smlSendErrorMessage(sc2, resp2, err2)
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON2, fmt.Errorf("%s", errMsg2), start, route, newDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusBadGateway, Error: "SML send failed: " + storedErr2, DocNoAttempted: newDocNo, Route: route}
+		}
+		respJSON2, _ := json.Marshal(resp2)
+		if isSkippedDocNoResponse(respJSON2) {
+			errMsg2 := "เลข doc_no ชนกับเอกสารใน SML (log_status: skipped) — ตรวจเลขเอกสารใน SML แล้วส่งใหม่"
+			storedErr2 := h.recordFailureForSend(id, bill.Source, reqJSON2, fmt.Errorf("%s", errMsg2), start, route, newDocNo, opts)
+			return retrySendResult{HTTPStatus: http.StatusConflict, Error: storedErr2, DocNoAttempted: newDocNo, Route: route}
+		}
+		docNo2 := resp2.GetDocNo()
+		if docNo2 == "" {
+			docNo2 = newDocNo
+		}
+		_ = h.billRepo.UpdateStatus(id, "sent", &docNo2, respJSON2, nil)
+		_ = h.billRepo.UpdateSMLPayload(id, reqJSON2)
+		h.recordSuccessForSend(id, bill.Source, respJSON2, docNo2, route, start, opts)
+		h.triggerStockRecalculation(id, docNo2, route, opts.BulkJobID, sentItemCodesPO)
+		return retrySendResult{HTTPStatus: http.StatusOK, Message: "bill sent to SML (purchaseorder)", DocNo: docNo2, DocNoAttempted: newDocNo, Route: route, LogWarning: extractSMLERPLogWarning(respJSON2)}
+	}
+
 	docNo := resp.GetDocNo()
 	if docNo == "" {
 		docNo = reqDocNo

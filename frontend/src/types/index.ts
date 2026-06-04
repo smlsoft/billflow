@@ -5,6 +5,7 @@ export interface User {
   name: string
   role: 'admin' | 'staff' | 'viewer'
   created_at: string
+  sml_user_code?: string
 }
 
 // Live SML tenant DB readiness from sml-api-bybos /health/ready.
@@ -305,6 +306,9 @@ export interface DashboardStats {
   sales_failed?: number
   unread_messages?: number
   email_inbox_errors?: number
+  ai_today_bills?: number
+  ai_today_avg_confidence?: number
+  ai_today_minutes_saved?: number
 }
 
 export interface DailyInsight {

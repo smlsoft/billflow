@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/table'
 import { useAuth } from '@/hooks/useAuth'
 import type { User } from '@/types'
+import { SMLMasterCodePicker } from './BillDetail/components/SMLMasterCodePicker'
 
 interface FormState {
   id?: string
@@ -34,6 +35,7 @@ interface FormState {
   name: string
   role: User['role']
   password: string
+  sml_user_code: string
 }
 
 const EMPTY_FORM: FormState = {
@@ -41,6 +43,7 @@ const EMPTY_FORM: FormState = {
   name: '',
   role: 'staff',
   password: '',
+  sml_user_code: '',
 }
 
 const ROLE_LABEL: Record<User['role'], string> = {
@@ -87,6 +90,7 @@ export default function UserSettings() {
         name: form.name.trim(),
         role: form.role,
         password: form.password.trim(),
+        sml_user_code: form.sml_user_code.trim(),
       }
       if (editing) {
         await client.put(`/api/settings/users/${form.id}`, payload)
@@ -111,6 +115,7 @@ export default function UserSettings() {
       name: u.name,
       role: u.role,
       password: '',
+      sml_user_code: u.sml_user_code ?? '',
     })
   }
 
@@ -154,6 +159,7 @@ export default function UserSettings() {
               <TableRow className="bg-muted/40">
                 <TableHead>ผู้ใช้</TableHead>
                 <TableHead>สิทธิ์</TableHead>
+                <TableHead>SML User</TableHead>
                 <TableHead className="w-[160px] text-right">จัดการ</TableHead>
               </TableRow>
             </TableHeader>
@@ -182,6 +188,11 @@ export default function UserSettings() {
                         {u.role === 'admin' && <ShieldCheck className="h-3 w-3" />}
                         {ROLE_LABEL[u.role]}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {u.sml_user_code || '-'}
+                      </span>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
@@ -247,6 +258,17 @@ export default function UserSettings() {
                     <SelectItem value="viewer">ดูข้อมูลอย่างเดียว</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>SML User Code (user_request)</Label>
+                <SMLMasterCodePicker
+                  kind="sml-user"
+                  value={form.sml_user_code}
+                  onChange={(code) => setForm((s) => ({ ...s, sml_user_code: code }))}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  รหัสพนักงานใน SML ที่จะส่งเป็น user_request ในใบสั่งซื้อ
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="user-password">{editing ? 'รหัสผ่านใหม่' : 'รหัสผ่าน'}</Label>

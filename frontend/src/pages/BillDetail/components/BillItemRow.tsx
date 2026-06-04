@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, AlertTriangle, Check, CheckCircle2, Edit, Trash2, X } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Check, CheckCircle2, Edit, Info, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { TableRow, TableCell } from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { UnitSelect } from '@/components/common/UnitSelect'
 import { cn } from '@/lib/utils'
@@ -13,6 +19,13 @@ import { useMatchInfo } from '../hooks/useMatchInfo'
 import { scoreStyle } from '../utils/formatters'
 import { rowIssueReason } from '../utils/validation'
 import { MapItemModal } from './MapItemModal'
+
+export interface DiscountInfo {
+  effectiveDiscount: number  // total = coupon + coin
+  couponDiscount: number
+  coinAmount: number
+  grossTotal: number         // gross ของทุก item (ไม่รวมค่าส่ง)
+}
 
 interface Props {
   item: BillItem
@@ -27,6 +40,7 @@ interface Props {
   rawNameLabel?: string
   showDiscountColumn?: boolean
   tableColumnCount?: number
+  discountInfo?: DiscountInfo
 }
 
 function MatchBadge({ score }: { score: number | null }) {
@@ -72,6 +86,7 @@ export function BillItemRow({
   rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
   showDiscountColumn = false,
   tableColumnCount = 9,
+  discountInfo,
 }: Props) {
   // When the parent flips `highlighted` true (admin clicked "ดู →" in the
   // BillTotal warning card) we scroll this row into view + add a brief tint
@@ -281,7 +296,45 @@ export function BillItemRow({
           {showDiscountColumn && (
             <TableCell className="text-right tabular-nums">
               {discountAmount > 0 ? (
-                <span className="font-medium text-success">-฿{discountAmount.toLocaleString()}</span>
+                <span className="inline-flex items-center justify-end gap-1">
+                  <span className="font-medium text-success">-฿{discountAmount.toLocaleString()}</span>
+                  {discountInfo && (
+                    <TooltipProvider delayDuration={100}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3 w-3 shrink-0 cursor-pointer text-muted-foreground/50 hover:text-info transition-colors" />
+                        </TooltipTrigger>
+                        <TooltipContent side="left" className="max-w-[260px] text-xs leading-relaxed">
+                          <p className="font-semibold mb-1">วิธีคำนวณส่วนลด row นี้</p>
+                          {(() => {
+                            const pct = discountInfo.grossTotal > 0
+                              ? (discountInfo.effectiveDiscount / discountInfo.grossTotal * 100)
+                              : 0
+                            const itemGross = grossAmount
+                            return (
+                              <>
+                                <p>ส่วนลดรวม {discountInfo.effectiveDiscount.toLocaleString()} บาท</p>
+                                <p className="text-muted-foreground">
+                                  = โค้ด ฿{discountInfo.couponDiscount.toLocaleString()}
+                                  {discountInfo.coinAmount > 0 && ` + Coin ฿${discountInfo.coinAmount.toLocaleString()}`}
+                                </p>
+                                <p className="mt-1">
+                                  อัตรา = {pct.toFixed(3)}%
+                                </p>
+                                <p>
+                                  ส่วนลด row = {discountInfo.effectiveDiscount.toLocaleString()} × ({itemGross.toLocaleString()} / {discountInfo.grossTotal.toLocaleString()})
+                                </p>
+                                <p className="font-medium text-success mt-1">
+                                  = ฿{discountAmount.toLocaleString()}
+                                </p>
+                              </>
+                            )
+                          })()}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                </span>
               ) : (
                 <span className="text-muted-foreground">—</span>
               )}

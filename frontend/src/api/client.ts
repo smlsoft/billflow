@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { toast } from 'sonner'
 import { useAuthStore } from '../store/auth'
 
 const client = axios.create({
@@ -15,13 +16,14 @@ client.interceptors.request.use((config) => {
   return config
 })
 
-// On 401, clear auth and redirect to login
+// On 401, clear auth, show toast, then redirect to login
 client.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
       useAuthStore.getState().logout()
-      window.location.href = '/login'
+      toast.error('Session หมดอายุ กรุณาเข้าสู่ระบบใหม่', { id: 'session-expired' })
+      setTimeout(() => { window.location.href = '/login' }, 1500)
     }
     return Promise.reject(err)
   },

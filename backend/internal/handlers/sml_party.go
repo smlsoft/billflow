@@ -403,6 +403,19 @@ func (h *SMLPartyHandler) Passbooks(c *gin.Context) {
 	h.proxyERPMaster(c, "/api/v1/erp/passbooks")
 }
 
+// GET /api/sml/sml-user-list?search=&limit= — queries smlerpmaindata.sml_user_list
+// Always uses tenant "smlerpmaindata" regardless of the instance's default tenant.
+func (h *SMLPartyHandler) SMLUserList(c *gin.Context) {
+	h.proxyERPMasterWithTenant(c, "/api/v1/erp/sml-user-list", "smlerpmaindata")
+}
+
+func (h *SMLPartyHandler) proxyERPMasterWithTenant(c *gin.Context, upstreamPath, tenant string) {
+	saved := h.smlTenant
+	h.smlTenant = tenant
+	h.proxyERPMaster(c, upstreamPath)
+	h.smlTenant = saved
+}
+
 func (h *SMLPartyHandler) proxyERPMaster(c *gin.Context, upstreamPath string) {
 	if h.smlBaseURL == "" || h.smlGUID == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML REST URL ยังไม่ได้ตั้งค่า"})

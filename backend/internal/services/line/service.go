@@ -12,14 +12,15 @@ import (
 )
 
 type Service struct {
-	bot           *messaging_api.MessagingApiAPI
-	channelSecret string
-	adminUserID   string
-	accessToken   string
-	httpClient    *http.Client
+	bot            *messaging_api.MessagingApiAPI
+	channelSecret  string
+	adminUserID    string
+	accessToken    string
+	notifyEnabled  bool
+	httpClient     *http.Client
 }
 
-func New(channelSecret, accessToken, adminUserID string) (*Service, error) {
+func New(channelSecret, accessToken, adminUserID string, notifyEnabled bool) (*Service, error) {
 	bot, err := messaging_api.NewMessagingApiAPI(accessToken)
 	if err != nil {
 		return nil, err
@@ -29,6 +30,7 @@ func New(channelSecret, accessToken, adminUserID string) (*Service, error) {
 		channelSecret: channelSecret,
 		adminUserID:   adminUserID,
 		accessToken:   accessToken,
+		notifyEnabled: notifyEnabled,
 		httpClient:    &http.Client{},
 	}, nil
 }
@@ -92,7 +94,7 @@ func IsReplyTokenError(err error) bool {
 
 // PushAdmin sends a push message to the admin user
 func (s *Service) PushAdmin(text string) error {
-	if s.adminUserID == "" {
+	if !s.notifyEnabled || s.adminUserID == "" {
 		return nil
 	}
 	_, err := s.bot.PushMessage(

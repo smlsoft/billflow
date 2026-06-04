@@ -47,7 +47,7 @@ func (r *Registry) Reload() error {
 	byBot := map[string]*Service{}
 	byIDOA := map[string]*models.LineOAAccount{}
 	for _, a := range rows {
-		svc, err := New(a.ChannelSecret, a.ChannelAccessToken, a.AdminUserID)
+		svc, err := New(a.ChannelSecret, a.ChannelAccessToken, a.AdminUserID, true)
 		if err != nil {
 			if r.logger != nil {
 				r.logger.Warn("line OA registry: skip invalid account",

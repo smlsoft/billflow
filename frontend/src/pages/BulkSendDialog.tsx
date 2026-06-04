@@ -65,6 +65,7 @@ function channelDefaultPayload(row?: ChannelDefaultRow): RetryBillPayload | unde
     vat_type: typeof row.vat_type === 'number' && row.vat_type >= 0 ? row.vat_type : undefined,
     vat_rate: typeof row.vat_rate === 'number' && row.vat_rate >= 0 ? row.vat_rate : undefined,
     inquiry_type: typeof row.inquiry_type === 'number' && row.inquiry_type >= 0 ? row.inquiry_type : undefined,
+    remark_2: row.remark_2 || undefined,
   }
 }
 
@@ -1146,26 +1147,19 @@ export function BulkSendDialog({
                 </Select>
               </div>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs">สาขา (branch_code)</Label>
+              <SMLMasterCodePicker kind="branch" value={branchCode} onChange={setBranchCode} disabled={controlsLocked} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">พนักงานขาย (sale_code)</Label>
+              <SMLMasterCodePicker kind="sale" value={saleCode} onChange={setSaleCode} disabled={controlsLocked} />
+            </div>
             {!vatRateValid && (
               <div className="rounded-md bg-warning/[0.08] px-2.5 py-1.5 text-[11px] text-warning sm:col-span-2">
                 ตั้งค่าอัตราภาษีใน /settings/channels หรือกรอกใน dialog นี้ก่อนส่ง
               </div>
             )}
-            <details className="space-y-2 rounded-md border border-border bg-background px-3 py-2 sm:col-span-2">
-              <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-                ตัวเลือกเพิ่มเติม: สาขา (branch_code) / พนักงานขาย (sale_code) (ไม่บังคับ)
-              </summary>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <Label className="text-xs">สาขา (branch_code)</Label>
-                  <SMLMasterCodePicker kind="branch" value={branchCode} onChange={setBranchCode} disabled={controlsLocked} />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">พนักงานขาย (sale_code)</Label>
-                  <SMLMasterCodePicker kind="sale" value={saleCode} onChange={setSaleCode} disabled={controlsLocked} />
-                </div>
-              </div>
-            </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
               เลือกคลังจาก SML หรือพิมพ์รหัสเองได้ เลขเอกสาร SML (doc_no) ด้านล่างเป็นเลขคาดการณ์จาก SML ล่าสุดและจะจองเลขจริงอีกครั้งเมื่อกดส่ง
             </div>

@@ -144,7 +144,7 @@ func extractShopeeDiscountSummaryFromBlock(block string) ShopeeDiscountSummary {
 	summary.ShopDiscountAmount = roundMoney(summary.ShopDiscountAmount)
 	summary.TotalDiscountAmount = roundMoney(summary.ShopeeDiscountAmount + summary.ShopDiscountAmount)
 	if summary.HasAny() {
-		summary.AllocationMethod = "equal_by_item_line_excluding_shipping"
+		summary.AllocationMethod = "proportional_by_gross_excluding_shipping"
 	}
 	return summary
 }
@@ -212,39 +212,79 @@ func extractShopeeDiscountParts(block, label string) (float64, []string) {
 	return total, codes
 }
 
-// AllocateShopeeDiscountsByLine splits total discount equally across item rows,
-// excluding Shopee shipping rows, while capping each line at its gross amount.
+// ExtractShopeeMoneyLabel extracts a baht amount for a given label from a
+// Shopee email block. Used by callers outside this package (e.g. handlers).
+func ExtractShopeeMoneyLabel(bodyText, bodyHTML, orderID, label string) (float64, bool) {
+	body := shopeeSummaryBody(bodyText, bodyHTML)
+	block := shopeeOrderBlock(body, strings.TrimSpace(orderID))
+	if block == "" {
+		block = body
+	}
+	return extractMoneyLabel(label, block)
+}
+
+// CalcShopeeCoinAmount คำนวณ Shopee Coin จาก:
+//   coin = gross_goods - total_coupon_discount - (paid_total - shipping)
+//   ถ้า < 0 หรือ paid_total/goods_total ไม่มีข้อมูล → คืน 0, false
+func CalcShopeeCoinAmount(goodsTotal, shippingAmount, totalCouponDiscount, paidTotal float64, hasPaidTotal bool) (float64, bool) {
+	if !hasPaidTotal || paidTotal <= 0 || goodsTotal <= 0 {
+		return 0, false
+	}
+	paidForGoods := roundMoney(paidTotal - shippingAmount)
+	coin := roundMoney(goodsTotal - totalCouponDiscount - paidForGoods)
+	if coin <= 0 {
+		return 0, false
+	}
+	return coin, true
+}
+
+// AllocateShopeeDiscountsByLine splits total discount proportionally across
+// item rows by gross amount, excluding Shopee shipping rows.
+// ใช้ proportional allocation แทน equal split เพื่อความถูกต้องทางบัญชี
 func AllocateShopeeDiscountsByLine(items []models.BillItem, totalDiscount float64) []float64 {
 	out := make([]float64, len(items))
-	remaining := roundMoney(totalDiscount)
-	if remaining <= 0 {
+	totalDiscount = roundMoney(totalDiscount)
+	if totalDiscount <= 0 {
 		return out
 	}
-	active := discountableItemIndexes(items, out)
-	for len(active) > 0 && remaining > 0 {
-		before := remaining
-		share := remaining / float64(len(active))
-		distributed := 0.0
-		for i, idx := range active {
-			portion := roundMoney(share)
-			if i == len(active)-1 {
-				portion = roundMoney(remaining - distributed)
-			}
-			capacity := roundMoney(itemGross(items[idx]) - out[idx])
-			if portion > capacity {
-				portion = capacity
-			}
-			if portion < 0 {
-				portion = 0
-			}
-			out[idx] = roundMoney(out[idx] + portion)
-			distributed = roundMoney(distributed + portion)
+
+	// คำนวณ gross รวมของ items ที่ไม่ใช่ค่าส่ง
+	totalGross := 0.0
+	for _, item := range items {
+		if item.SourceSKU == models.ShopeeShippingSourceSKU {
+			continue
 		}
-		remaining = roundMoney(remaining - distributed)
-		if remaining == before {
-			break
+		totalGross = roundMoney(totalGross + itemGross(item))
+	}
+	if totalGross <= 0 {
+		return out
+	}
+
+	distributed := 0.0
+	nonShippingIndexes := []int{}
+	for i, item := range items {
+		if item.SourceSKU != models.ShopeeShippingSourceSKU {
+			nonShippingIndexes = append(nonShippingIndexes, i)
 		}
-		active = discountableItemIndexes(items, out)
+	}
+
+	for j, idx := range nonShippingIndexes {
+		var portion float64
+		if j == len(nonShippingIndexes)-1 {
+			// last item gets remainder to avoid rounding drift
+			portion = roundMoney(totalDiscount - distributed)
+		} else {
+			portion = roundMoney(totalDiscount * itemGross(items[idx]) / totalGross)
+		}
+		capacity := roundMoney(itemGross(items[idx]))
+		if portion > capacity {
+			portion = capacity
+		}
+		if portion < 0 {
+			portion = 0
+		}
+		out[idx] = portion
+		distributed = roundMoney(distributed + portion)
 	}
 	return out
 }
@@ -349,6 +389,17 @@ func stringField(raw map[string]interface{}, key string) string {
 		return s
 	}
 	return ""
+}
+
+func floatField(raw map[string]interface{}, key string) float64 {
+	v, ok := raw[key]
+	if !ok || v == nil {
+		return 0
+	}
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	return 0
 }
 
 func setIfEmpty(raw map[string]interface{}, key, value string) {

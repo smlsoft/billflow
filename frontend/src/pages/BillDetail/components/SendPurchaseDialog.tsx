@@ -688,6 +688,22 @@ export function SendPurchaseDialog({
                 </Select>
               </div>
             )}
+            <div className="space-y-1">
+              <Label className="text-xs">สาขา (branch_code)</Label>
+              <SMLMasterCodePicker
+                kind="branch"
+                value={branchCode}
+                onChange={setBranchCode}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">พนักงานขาย (sale_code)</Label>
+              <SMLMasterCodePicker
+                kind="sale"
+                value={saleCode}
+                onChange={setSaleCode}
+              />
+            </div>
             {!vatRateValid && (
               <div className="rounded-md bg-warning/[0.08] px-2.5 py-1.5 text-[11px] text-warning sm:col-span-2">
                 ตั้งค่าอัตราภาษีใน /settings/channels หรือกรอกใน dialog
@@ -750,30 +766,6 @@ export function SendPurchaseDialog({
                   )}
               </div>
             )}
-            <details className="space-y-2 rounded-md border border-border bg-background px-3 py-2 sm:col-span-2">
-              <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-                ตัวเลือกเพิ่มเติม: สาขา (branch_code) / พนักงานขาย (sale_code)
-                (ไม่บังคับ)
-              </summary>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <Label className="text-xs">สาขา (branch_code)</Label>
-                  <SMLMasterCodePicker
-                    kind="branch"
-                    value={branchCode}
-                    onChange={setBranchCode}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">พนักงานขาย (sale_code)</Label>
-                  <SMLMasterCodePicker
-                    kind="sale"
-                    value={saleCode}
-                    onChange={setSaleCode}
-                  />
-                </div>
-              </div>
-            </details>
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
               เลขเอกสารจะใช้ค่าที่แสดงอยู่ใน dialog นี้ ถ้า SML แจ้งเลขซ้ำ
               ให้กดดึงเลขล่าสุดแล้วส่งใหม่

@@ -252,7 +252,7 @@ func main() {
 	// the right OA's access_token.
 	var lineSvc *lineservice.Service
 	if cfg.LineChannelSecret != "" && cfg.LineChannelAccessToken != "" {
-		lineSvc, err = lineservice.New(cfg.LineChannelSecret, cfg.LineChannelAccessToken, cfg.LineAdminUserID)
+		lineSvc, err = lineservice.New(cfg.LineChannelSecret, cfg.LineChannelAccessToken, cfg.LineAdminUserID, cfg.LineNotifyEnabled)
 		if err != nil {
 			logger.Warn("LINE service init failed", zap.Error(err))
 		}
@@ -348,7 +348,7 @@ func main() {
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
-	billH := handlers.NewBillHandler(billRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
+	billH := handlers.NewBillHandler(billRepo, userRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
 	billH.RecoverInterruptedBulkSendJobs()
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, catalogRepo, auditLogRepo, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
@@ -568,6 +568,7 @@ func main() {
 		api.GET("/sml/expenses", middleware.RequireRole("admin", "staff"), smlPartyH.Expenses)
 		api.GET("/sml/incomes", middleware.RequireRole("admin", "staff"), smlPartyH.Incomes)
 		api.GET("/sml/passbooks", middleware.RequireRole("admin", "staff"), smlPartyH.Passbooks)
+		api.GET("/sml/sml-user-list", middleware.RequireRole("admin"), smlPartyH.SMLUserList)
 		api.GET("/sml/units", middleware.RequireRole("admin", "staff"), catalogH.GetUnits)
 		api.GET("/sml/warehouses", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchWarehouses)
 		api.GET("/sml/warehouses/:code/shelves", middleware.RequireRole("admin", "staff"), smlWarehouseH.SearchShelves)

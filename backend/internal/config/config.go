@@ -27,6 +27,7 @@ type Config struct {
 	LineChannelSecret      string
 	LineChannelAccessToken string
 	LineAdminUserID        string
+	LineNotifyEnabled      bool
 	// LineGreeting is sent as a one-time auto-reply on a customer's FIRST
 	// LINE message. Empty string = no greeting (default). Set this to e.g.
 	// "ขอบคุณค่ะ ทางร้านจะติดต่อกลับเร็ว ๆ นี้นะคะ 🙏" if you want one.
@@ -129,6 +130,7 @@ func Load() *Config {
 		LineChannelSecret:       getEnv("LINE_CHANNEL_SECRET", ""),
 		LineChannelAccessToken:  getEnv("LINE_CHANNEL_ACCESS_TOKEN", ""),
 		LineAdminUserID:         getEnv("LINE_ADMIN_USER_ID", ""),
+		LineNotifyEnabled:       getEnvBool("LINE_NOTIFY_ENABLED", true),
 		LineGreeting:            getEnv("LINE_GREETING", ""),
 		PublicBaseURL:           getEnv("PUBLIC_BASE_URL", ""),
 		MediaSigningKey:         getEnv("MEDIA_SIGNING_KEY", ""),

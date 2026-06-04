@@ -266,7 +266,13 @@ export default function BillDetail() {
         </div>
 
         <div className="min-w-0 space-y-4">
-          <ArtifactList billId={bill.id} emailGroup={bill.email_group} />
+          <ArtifactList
+            billId={bill.id}
+            billStatus={bill.status}
+            smlDocNo={bill.sml_doc_no ?? undefined}
+            orderID={typeof bill.raw_data?.order_id === 'string' ? bill.raw_data.order_id : undefined}
+            emailGroup={bill.email_group}
+          />
           <BillTimeline billId={bill.id} shopeeEvents={bill.shopee_events ?? []} />
           <SmlPayloadSection
             smlPayload={bill.sml_payload}

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock, Info, Mail, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
+import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Mail, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import BillTable from '@/components/BillTable'
 import { EmptyState } from '@/components/common/EmptyState'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { DateRangePicker } from '@/components/common/DateRangePicker'
 import { archiveBill, deleteBill, restoreBill, useBills } from '@/hooks/useBills'
 import { useAuth } from '@/hooks/useAuth'
 import client from '@/api/client'
@@ -203,6 +204,11 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [shopeeShops, setShopeeShops] = useState<ShopeeShopOption[]>([])
   const [search, setSearch] = useState(() => searchParams.get('search') ?? '')
   const [archiveMode, setArchiveMode] = useState<ArchiveMode>(() => readURLArchive(searchParams))
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() =>
+    searchParams.get('sort_order') === 'asc' ? 'asc' : 'desc',
+  )
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get('date_from') ?? '')
+  const [dateTo, setDateTo] = useState(() => searchParams.get('date_to') ?? '')
   const [bulkOpen, setBulkOpen] = useState(false)
   const [confirmAction, setConfirmAction] = useState<{
     kind: 'archive' | 'restore' | 'delete' | 'permanent'
@@ -226,6 +232,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
     search,
     archived: archiveMode === 'active' ? '' : archiveMode,
+    sort_order: sortOrder,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
   })
   const bills = data?.data ?? []
   const total = typeof data?.total === 'number' ? data.total : counts.total
@@ -363,6 +372,12 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.set('email_account_id', emailAccountId)
     if (search.trim()) next.set('search', search)
     else next.delete('search')
+    if (sortOrder === 'asc') next.set('sort_order', 'asc')
+    else next.delete('sort_order')
+    if (dateFrom) next.set('date_from', dateFrom)
+    else next.delete('date_from')
+    if (dateTo) next.set('date_to', dateTo)
+    else next.delete('date_to')
     if (page > 1) next.set('page', String(page))
     else next.delete('page')
     if (perPage !== DEFAULT_PER_PAGE) next.set('per_page', String(perPage))
@@ -382,6 +397,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     showShopeeStatusFilter,
     showShopeeShopFilter,
     shopeeShopId,
+    sortOrder,
+    dateFrom,
+    dateTo,
     searchParams,
     setSearchParams,
   ])
@@ -396,58 +414,51 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       </div>
 
       <div className="rounded-xl border border-border/70 bg-card p-3 shadow-sm">
-        <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <Info className="h-3.5 w-3.5 shrink-0 text-primary" />
-          <Link to={config.routeTo} className="font-medium text-primary hover:underline">
-            {config.routeLabel}
-          </Link>
-          <span>→</span>
-          <span className="font-medium text-foreground">{config.destination}</span>
-          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
-            {config.docCode}
-          </code>
-          <Link
-            to="/settings/channels"
-            className="font-medium text-primary hover:underline sm:ml-auto"
-          >
-            ตั้งค่าเส้นทาง
-          </Link>
-        </div>
-
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {STATUS_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => resetPage(() => setStatus(o.value))}
-              className={[
-                'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                status === o.value
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-              ].join(' ')}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {ARCHIVE_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => resetPage(() => setArchiveMode(o.value))}
-              className={[
-                'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                archiveMode === o.value
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-              ].join(' ')}
-            >
-              {o.label}
-            </button>
-          ))}
+        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            {STATUS_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => resetPage(() => setStatus(o.value))}
+                className={[
+                  'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                  status === o.value
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
+                ].join(' ')}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <span className="hidden h-4 w-px bg-border sm:block" />
+          <div className="flex flex-wrap gap-1.5">
+            {ARCHIVE_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => resetPage(() => setArchiveMode(o.value))}
+                className={[
+                  'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                  archiveMode === o.value
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
+                ].join(' ')}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>{config.routeLabel}</span>
+            <span>→</span>
+            <span className="font-medium text-foreground">{config.destination}</span>
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground">{config.docCode}</code>
+            <Link to="/settings/channels" className="font-medium text-primary hover:underline">
+              ตั้งค่า
+            </Link>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -513,10 +524,36 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               ))}
             </select>
           )}
+          <DateRangePicker
+            from={dateFrom}
+            to={dateTo}
+            onFromChange={(v) => resetPage(() => setDateFrom(v))}
+            onToChange={(v) => resetPage(() => setDateTo(v))}
+          />
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 gap-1.5 whitespace-nowrap"
+            onClick={() => resetPage(() => setSortOrder((s) => (s === 'desc' ? 'asc' : 'desc')))}
+            title={sortOrder === 'desc' ? 'เรียงจากใหม่ → เก่า (คลิกเพื่อสลับ)' : 'เรียงจากเก่า → ใหม่ (คลิกเพื่อสลับ)'}
+          >
+            <ArrowDownUp className="h-3.5 w-3.5" />
+            {sortOrder === 'desc' ? 'ใหม่สุด' : 'เก่าสุด'}
+          </Button>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          {counts.needs_review > 0 && archiveMode === 'active' && (
+            <p className="text-[11px] text-muted-foreground">
+              รายการต้องตรวจสินค้า {counts.needs_review.toLocaleString()} รายการจะไม่ถูกรวมในปุ่มส่ง SML เอกสารสถานะพร้อมส่ง
+            </p>
+          )}
           <Button
             type="button"
             size="sm"
-            className="w-full min-w-0 justify-center gap-1.5 sm:ml-auto sm:w-auto"
+            className="ml-auto gap-1.5 whitespace-nowrap"
             disabled={bulkDisabled}
             onClick={() => setBulkOpen(true)}
             title={
@@ -533,11 +570,6 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
             <span className="truncate">{bulkButtonLabel}</span>
           </Button>
         </div>
-        {counts.needs_review > 0 && archiveMode === 'active' && (
-          <div className="mt-2 text-[11px] text-muted-foreground">
-            รายการต้องตรวจสินค้า {counts.needs_review.toLocaleString()} รายการจะไม่ถูกรวมในปุ่มส่ง SML เอกสารสถานะพร้อมส่ง
-          </div>
-        )}
       </div>
 
       {!loading && bills.length === 0 && !search && status === ALL && shopeeStatus === ALL && archiveMode === 'active' ? (

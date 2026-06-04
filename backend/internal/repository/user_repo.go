@@ -18,9 +18,9 @@ func NewUserRepo(db *sql.DB) *UserRepo {
 func (r *UserRepo) FindByEmail(email string) (*models.User, error) {
 	u := &models.User{}
 	err := r.db.QueryRow(
-		`SELECT id, email, name, role, password_hash, created_at
+		`SELECT id, email, name, role, password_hash, created_at, sml_user_code
 		 FROM users WHERE email = $1`, email,
-	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt, &u.SMLUserCode)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -33,9 +33,9 @@ func (r *UserRepo) FindByEmail(email string) (*models.User, error) {
 func (r *UserRepo) FindByID(id string) (*models.User, error) {
 	u := &models.User{}
 	err := r.db.QueryRow(
-		`SELECT id, email, name, role, password_hash, created_at
+		`SELECT id, email, name, role, password_hash, created_at, sml_user_code
 		 FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt)
+	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt, &u.SMLUserCode)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -45,14 +45,14 @@ func (r *UserRepo) FindByID(id string) (*models.User, error) {
 	return u, nil
 }
 
-func (r *UserRepo) Create(email, name, role, passwordHash string) (*models.User, error) {
+func (r *UserRepo) Create(email, name, role, passwordHash, smlUserCode string) (*models.User, error) {
 	u := &models.User{}
 	err := r.db.QueryRow(
-		`INSERT INTO users (email, name, role, password_hash)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING id, email, name, role, password_hash, created_at`,
-		email, name, role, passwordHash,
-	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt)
+		`INSERT INTO users (email, name, role, password_hash, sml_user_code)
+		 VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id, email, name, role, password_hash, created_at, sml_user_code`,
+		email, name, role, passwordHash, smlUserCode,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt, &u.SMLUserCode)
 	if err != nil {
 		return nil, fmt.Errorf("Create user: %w", err)
 	}
@@ -61,7 +61,7 @@ func (r *UserRepo) Create(email, name, role, passwordHash string) (*models.User,
 
 func (r *UserRepo) List() ([]models.User, error) {
 	rows, err := r.db.Query(
-		`SELECT id, email, name, role, created_at FROM users ORDER BY created_at`,
+		`SELECT id, email, name, role, created_at, sml_user_code FROM users ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("List users: %w", err)
@@ -71,7 +71,7 @@ func (r *UserRepo) List() ([]models.User, error) {
 	var users []models.User
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.CreatedAt, &u.SMLUserCode); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -79,16 +79,16 @@ func (r *UserRepo) List() ([]models.User, error) {
 	return users, rows.Err()
 }
 
-func (r *UserRepo) Update(id, email, name, role string, passwordHash *string) (*models.User, error) {
+func (r *UserRepo) Update(id, email, name, role, smlUserCode string, passwordHash *string) (*models.User, error) {
 	u := &models.User{}
 	if passwordHash != nil {
 		err := r.db.QueryRow(
 			`UPDATE users
-			 SET email = $2, name = $3, role = $4, password_hash = $5
+			 SET email = $2, name = $3, role = $4, password_hash = $5, sml_user_code = $6
 			 WHERE id = $1
-			 RETURNING id, email, name, role, password_hash, created_at`,
-			id, email, name, role, *passwordHash,
-		).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt)
+			 RETURNING id, email, name, role, password_hash, created_at, sml_user_code`,
+			id, email, name, role, *passwordHash, smlUserCode,
+		).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt, &u.SMLUserCode)
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -99,11 +99,11 @@ func (r *UserRepo) Update(id, email, name, role string, passwordHash *string) (*
 	}
 	err := r.db.QueryRow(
 		`UPDATE users
-		 SET email = $2, name = $3, role = $4
+		 SET email = $2, name = $3, role = $4, sml_user_code = $5
 		 WHERE id = $1
-		 RETURNING id, email, name, role, password_hash, created_at`,
-		id, email, name, role,
-	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt)
+		 RETURNING id, email, name, role, password_hash, created_at, sml_user_code`,
+		id, email, name, role, smlUserCode,
+	).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.PasswordHash, &u.CreatedAt, &u.SMLUserCode)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

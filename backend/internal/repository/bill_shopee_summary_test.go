@@ -244,7 +244,7 @@ func TestExtractShopeePaymentSummaryMissingBlockIsTolerant(t *testing.T) {
 	}
 }
 
-func TestAllocateShopeeDiscountsByLineEqualExcludesShippingAndRounds(t *testing.T) {
+func TestAllocateShopeeDiscountsByLineProportionalExcludesShipping(t *testing.T) {
 	p100 := 100.0
 	p200 := 200.0
 	p38 := 38.0
@@ -253,9 +253,9 @@ func TestAllocateShopeeDiscountsByLineEqualExcludesShippingAndRounds(t *testing.
 		{Qty: 1, Price: &p200},
 		{SourceSKU: models.ShopeeShippingSourceSKU, Qty: 1, Price: &p38},
 	}
-
+	// proportional: item0 = 10.01 * 100/300 = 3.34, item1 = remainder = 6.67
 	got := AllocateShopeeDiscountsByLine(items, 10.01)
-	want := []float64{5.01, 5, 0}
+	want := []float64{3.34, 6.67, 0}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("discount[%d] = %v, want %v (all=%v)", i, got[i], want[i], got)
@@ -263,16 +263,63 @@ func TestAllocateShopeeDiscountsByLineEqualExcludesShippingAndRounds(t *testing.
 	}
 }
 
-func TestAllocateShopeeDiscountsByLineCapsAndRedistributes(t *testing.T) {
+func TestAllocateShopeeDiscountsByLineCapsAtGross(t *testing.T) {
 	p2 := 2.0
 	p100 := 100.0
 	items := []models.BillItem{
 		{Qty: 1, Price: &p2},
 		{Qty: 1, Price: &p100},
 	}
-
+	// proportional: item0 = 20 * 2/102 = 0.39, item1 = remainder = 19.61
 	got := AllocateShopeeDiscountsByLine(items, 20)
-	if got[0] != 2 || got[1] != 18 {
-		t.Fatalf("discounts = %v, want [2 18]", got)
+	if got[0] != 0.39 || got[1] != 19.61 {
+		t.Fatalf("discounts = %v, want [0.39 19.61]", got)
+	}
+}
+
+func TestCalcShopeeCoinAmountPositive(t *testing.T) {
+	// goods=542, shipping=40, coupons=117, paid=451
+	// paidForGoods = 451-40 = 411; coin = 542-117-411 = 14
+	coin, ok := CalcShopeeCoinAmount(542, 40, 117, 451, true)
+	if !ok {
+		t.Fatal("expected coin ok=true")
+	}
+	if coin != 14 {
+		t.Fatalf("coin = %v, want 14", coin)
+	}
+}
+
+func TestCalcShopeeCoinAmountNoPaidTotal(t *testing.T) {
+	coin, ok := CalcShopeeCoinAmount(542, 40, 117, 0, false)
+	if ok || coin != 0 {
+		t.Fatalf("expected (0, false), got (%v, %v)", coin, ok)
+	}
+}
+
+func TestCalcShopeeCoinAmountZeroCoin(t *testing.T) {
+	// paid covers all goods exactly — coin = 542-117-(465-40) = 0
+	coin, ok := CalcShopeeCoinAmount(542, 40, 117, 465, true)
+	if ok || coin != 0 {
+		t.Fatalf("expected (0, false), got (%v, %v)", coin, ok)
+	}
+}
+
+func TestApplyShopeeDiscountsIncludesCoin(t *testing.T) {
+	// บิลตัวอย่าง: 1 item, gross=542, coupon=117, coin=14 → total discount=131
+	p542 := 542.0
+	items := []models.BillItem{{Qty: 1, Price: &p542}}
+	ApplyShopeeDiscountsToItems(items, 131)
+	if items[0].DiscountAmount != 131 {
+		t.Fatalf("discount = %v, want 131", items[0].DiscountAmount)
+	}
+}
+
+func TestFloatFieldReturnsStoredValue(t *testing.T) {
+	raw := map[string]interface{}{"shopee_coin_amount": float64(14)}
+	if got := floatField(raw, "shopee_coin_amount"); got != 14 {
+		t.Fatalf("floatField = %v, want 14", got)
+	}
+	if got := floatField(raw, "missing"); got != 0 {
+		t.Fatalf("floatField missing = %v, want 0", got)
 	}
 }

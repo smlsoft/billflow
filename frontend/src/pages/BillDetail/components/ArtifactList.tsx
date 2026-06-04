@@ -6,6 +6,12 @@ import { toast } from 'sonner'
 import dayjs from 'dayjs'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { useArtifacts, openArtifact, printArtifact, recordArtifactPrint } from '../hooks/useArtifacts'
 import type { BillArtifact } from '../hooks/useArtifacts'
 import { KIND_META, fmtSize, isUserVisibleArtifact } from '../utils/formatters'
@@ -14,6 +20,9 @@ import type { BillEmailGroup, BillEmailRelatedBill, EmailPrintEvent } from '@/ty
 
 interface Props {
   billId: string
+  billStatus?: string
+  smlDocNo?: string
+  orderID?: string
   emailGroup?: BillEmailGroup | null
 }
 
@@ -26,6 +35,7 @@ function EmailPreviewModal({
   filename,
   displayName,
   emailGroup,
+  billStatus,
   onPrinted,
   onClose,
 }: {
@@ -34,6 +44,7 @@ function EmailPreviewModal({
   filename: string
   displayName: string
   emailGroup?: BillEmailGroup | null
+  billStatus?: string
   onPrinted: (artId: string, filename: string) => Promise<void>
   onClose: () => void
 }) {
@@ -102,16 +113,40 @@ function EmailPreviewModal({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5"
-              onClick={handlePrint}
-            >
-              <Printer className="h-3.5 w-3.5" />
-              พิมพ์
-            </Button>
+            {billStatus === 'sent' ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5"
+                onClick={handlePrint}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                พิมพ์
+              </Button>
+            ) : (
+              <TooltipProvider delayDuration={100}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-not-allowed">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 pointer-events-none opacity-40"
+                        disabled
+                      >
+                        <Printer className="h-3.5 w-3.5" />
+                        พิมพ์
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">
+                    ส่งเอกสารเข้า SML ก่อนถึงจะพิมพ์ได้
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
             <button
               type="button"
               onClick={handleClose}
@@ -144,7 +179,7 @@ function EmailPreviewModal({
   )
 }
 
-export function ArtifactList({ billId, emailGroup }: Props) {
+export function ArtifactList({ billId, billStatus, smlDocNo, orderID, emailGroup }: Props) {
   const { items, loading } = useArtifacts(billId)
   const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string; displayName: string } | null>(null)
   const [printEvents, setPrintEvents] = useState<EmailPrintEvent[]>(emailGroup?.print_events ?? [])
@@ -153,9 +188,15 @@ export function ArtifactList({ billId, emailGroup }: Props) {
     setPrintEvents(emailGroup?.print_events ?? [])
   }, [emailGroup?.message_id, emailGroup?.print_events])
 
+  const orderDocMap: Record<string, string> = {}
+  if (orderID && smlDocNo) orderDocMap[orderID] = smlDocNo
+  for (const b of emailGroup?.related_bills ?? []) {
+    if (b.order_id && b.sml_doc_no) orderDocMap[b.order_id] = b.sml_doc_no
+  }
+
   const handlePrintArtifact = async (artId: string, filename: string) => {
     try {
-      await printArtifact(billId, artId, filename)
+      await printArtifact(billId, artId, filename, smlDocNo, orderID, orderDocMap)
     } catch (err) {
       console.error('artifact print failed', err)
       toast.error('พิมพ์อีเมลไม่สำเร็จ')
@@ -274,17 +315,41 @@ export function ArtifactList({ billId, emailGroup }: Props) {
                       </Button>
                     )}
                     {isPrintableEmail && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 gap-1.5"
-                        title={a.sha256 ? `SHA256: ${a.sha256.slice(0, 16)}…` : ''}
-                        onClick={() => handlePrintArtifact(a.id, a.filename)}
-                      >
-                        <Printer className="h-3.5 w-3.5" />
-                        พิมพ์
-                      </Button>
+                      billStatus === 'sent' ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          title={a.sha256 ? `SHA256: ${a.sha256.slice(0, 16)}…` : ''}
+                          onClick={() => handlePrintArtifact(a.id, a.filename)}
+                        >
+                          <Printer className="h-3.5 w-3.5" />
+                          พิมพ์
+                        </Button>
+                      ) : (
+                        <TooltipProvider delayDuration={100}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="cursor-not-allowed">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 gap-1.5 pointer-events-none opacity-40"
+                                  disabled
+                                >
+                                  <Printer className="h-3.5 w-3.5" />
+                                  พิมพ์
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="text-xs">
+                              ส่งเอกสารเข้า SML ก่อนถึงจะพิมพ์ได้
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )
                     )}
                     <Button
                       type="button"
@@ -312,6 +377,7 @@ export function ArtifactList({ billId, emailGroup }: Props) {
           filename={previewArt.filename}
           displayName={previewArt.displayName}
           emailGroup={emailGroup}
+          billStatus={billStatus}
           onPrinted={handlePrintArtifact}
           onClose={() => setPreviewArt(null)}
         />
@@ -390,7 +456,10 @@ function EmailGroupContext({
               >
                 <span className="min-w-0 truncate">
                   <span className="font-mono text-foreground">{b.order_id || b.id.slice(0, 8)}</span>
-                  {b.party_name && <span> · {b.party_name}</span>}
+                  {b.sml_doc_no && (
+                    <span className="ml-1 font-mono text-[11px] text-muted-foreground">→ {b.sml_doc_no}</span>
+                  )}
+                  {b.party_name && <span className="text-muted-foreground"> · {b.party_name}</span>}
                   {b.id === billId && <span className="ml-1 font-medium">(บิลนี้)</span>}
                 </span>
                 <span className="flex shrink-0 items-center gap-2">

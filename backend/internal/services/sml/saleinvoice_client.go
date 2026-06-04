@@ -234,6 +234,10 @@ func (r *InvoiceResponse) IsSuccess() bool {
 	return r.Success || r.Status == "success"
 }
 
+func (r *InvoiceResponse) IsSkipped() bool {
+	return strings.EqualFold(r.Data.LogStatus, "skipped")
+}
+
 // GetDocNo returns the doc_no from either old or v3 response format.
 func (r *InvoiceResponse) GetDocNo() string {
 	if r.Data.DocNo != "" {

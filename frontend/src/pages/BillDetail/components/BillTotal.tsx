@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { isSMLReady, smlBlockedMessage } from '@/lib/sml-readiness'
-import { isShopeePurchaseBill, isShopeeSalesBill, money, shopeeGoodsTotal, shopeePayableTotal } from '@/lib/shopeeBill'
+import { isShopeePurchaseBill, isShopeeSalesBill, money, shopeeGoodsTotal, shopeeCoinAmount, shopeePayableTotal } from '@/lib/shopeeBill'
 import type { Bill, SMLReadiness } from '@/types'
 import { issueLabel, type ValidationResult } from '../utils/validation'
 
@@ -41,6 +41,13 @@ const ROUTE_LABEL: Record<string, string> = {
   purchaseorder: 'ซื้อ -> ใบสั่งซื้อ',
 }
 
+const ROUTE_SHORT_LABEL: Record<string, string> = {
+  sale_reserve: 'ใบสั่งจอง',
+  saleorder: 'ใบสั่งขาย',
+  saleinvoice: 'ใบขาย',
+  purchaseorder: 'ใบสั่งซื้อ',
+}
+
 export function BillTotal({
   bill,
   total,
@@ -64,11 +71,16 @@ export function BillTotal({
   const isFailed = bill.status === 'failed'
   const goodsTotal = shopeeGoodsTotal(bill) ?? total
   const payableTotal = shopeePayableTotal(bill)
+  const coinAmount = shopeeCoinAmount(bill)
 
   // Send is enabled only when validation passes AND we're not mid-retry.
   // The disabled state is communicated by both the button's :disabled state
   // and the warning card above (which is the "why" — the button alone
   // wouldn't tell the admin what to fix).
+  const totalDiscount = isShopeePurchase
+    ? (bill.items ?? []).reduce((s, i) => s + (i.discount_amount ?? 0), 0)
+    : 0
+
   const smlReady = isSMLReady(smlReadiness)
   const enabled = validation.canSend && smlReady && !retrying
   const readyText = !smlReady
@@ -77,11 +89,12 @@ export function BillTotal({
     ? 'รายการครบแล้ว พร้อมเลือกผู้ขาย/คลัง/ภาษีและส่งเข้า SML'
     : `ยังต้องแก้ ${validation.issues.length} จุดก่อนส่งเข้า SML`
 
+  const routeShortLabel = expectedRoute ? (ROUTE_SHORT_LABEL[expectedRoute] ?? expectedRoute) : (isPurchase ? 'ใบสั่งซื้อ' : '')
   const buttonLabel = retrying
     ? 'กำลังส่ง...'
     : isFailed
-      ? `ลองส่งใหม่${isPurchase ? 'ไป SML' : ''}`
-      : `ส่งเข้า SML${isPurchase ? ' (บิลซื้อ)' : ''}`
+      ? `ลองส่งใหม่${routeShortLabel ? ` (${routeShortLabel})` : ''}`
+      : `ส่งเข้า SML${routeShortLabel ? ` (${routeShortLabel})` : ''}`
 
   return (
     <Card className="rounded-xl border-border/70 shadow-sm">
@@ -98,8 +111,16 @@ export function BillTotal({
             {isShopeePurchase && (
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
                 <span>ยอดสินค้า {money(goodsTotal)}</span>
+                {totalDiscount > 0 && (
+                  <span className="text-success">
+                    ส่วนลด -{money(totalDiscount)}
+                    {coinAmount != null && coinAmount > 0 && (
+                      <span className="text-info"> (รวม Coin {money(coinAmount)})</span>
+                    )}
+                  </span>
+                )}
                 {payableTotal != null && payableTotal !== goodsTotal && (
-                  <span>รวมส่วนลด/ค่าส่งแล้ว</span>
+                  <span>รวมค่าส่งแล้ว</span>
                 )}
               </div>
             )}

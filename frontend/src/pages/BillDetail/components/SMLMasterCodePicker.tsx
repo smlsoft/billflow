@@ -11,7 +11,7 @@ import {
 import { humanizeSMLConnectionError } from '@/lib/sml-readiness'
 import { cn } from '@/lib/utils'
 
-type MasterKind = 'branch' | 'sale'
+type MasterKind = 'branch' | 'sale' | 'sml-user'
 
 type SMLMasterOption = {
   code: string
@@ -45,6 +45,13 @@ const MASTER_CONFIG: Record<MasterKind, {
     searchPlaceholder: 'ค้นหารหัส / ชื่อพนักงานขาย…',
     emptyText: 'ไม่พบพนักงานขายใน SML',
     missingText: 'รหัสพนักงานขายเดิมไม่พบใน SML',
+  },
+  'sml-user': {
+    endpoint: '/api/sml/sml-user-list',
+    placeholder: 'ไม่ระบุ SML User',
+    searchPlaceholder: 'ค้นหารหัส / ชื่อผู้ใช้…',
+    emptyText: 'ไม่พบผู้ใช้ใน SML',
+    missingText: 'รหัสผู้ใช้เดิมไม่พบใน SML',
   },
 }
 

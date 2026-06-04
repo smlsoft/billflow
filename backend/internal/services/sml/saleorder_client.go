@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -129,6 +130,10 @@ type SaleOrderResponse struct {
 
 func (r *SaleOrderResponse) IsSuccess() bool {
 	return r.Success || r.Status == "success"
+}
+
+func (r *SaleOrderResponse) IsSkipped() bool {
+	return strings.EqualFold(r.Data.LogStatus, "skipped")
 }
 
 func (r *SaleOrderResponse) GetDocNo() string {

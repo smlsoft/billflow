@@ -30,8 +30,13 @@ Deploy:    Docker Compose + Cloudflare Tunnel
 | Instance | Folder | Backend | Frontend | PostgreSQL | Tunnel log |
 |---|---|---|---|---|---|
 | `billflow` (main/demo) | `~/billflow` | 8090 | 3010 | 5438 | `/tmp/billflow-tunnel.log` |
-| `billflow-henna` | `~/billflow-henna` | 8110 | 3030 | 5440 | `/tmp/billflow-henna-tunnel.log` |
 | `billflow-thaisunsport` | `~/billflow-thaisunsport` | 8100 | 3020 | 5448 | `/tmp/billflow-thaisunsport-tunnel.log` |
+
+> ⚠️ **`billflow-henna` ย้ายเป็น Nexflow แล้ว (2026-05-31)**
+> folder `~/billflow-henna` บน server ปัจจุบันรัน **Nexflow** ไม่ใช่ billflow
+> repo แยก: `https://github.com/bosocmputer/Nexflow.git` | local: `/Users/nontawatwongnuk/dev_bos/Nexflow`
+> containers: `nexflow-postgres`, `nexflow-backend`, `nexflow-frontend`
+> **ห้าม deploy billflow ไปที่ `~/billflow-henna`** — ต้อง deploy จาก Nexflow repo เท่านั้น
 
 **ห้ามกระทบ projects อื่นบน server:**
 | Project | Ports |
@@ -45,8 +50,8 @@ Deploy:    Docker Compose + Cloudflare Tunnel
 **Quick health check:**
 ```bash
 curl http://192.168.2.109:8090/health   # main
-curl http://192.168.2.109:8110/health   # henna
 curl http://192.168.2.109:8100/health   # thaisunsport
+# port 8110 = Nexflow (ไม่ใช่ billflow แล้ว)
 ```
 
 ---
@@ -54,9 +59,9 @@ curl http://192.168.2.109:8100/health   # thaisunsport
 ## 3. Deploy Policy
 
 - ดู `docs/deploy-instances.md` สำหรับ full policy
-- **shared backend/logic fix** → deploy ทั้ง 3 instances
+- **shared backend/logic fix** → deploy เฉพาะ `billflow` (main) + `billflow-thaisunsport` เท่านั้น
 - **Thaisunsport** = Phase 1 purchase-only: `VITE_PHASE=1`, sales/Shopee/Lazada/TikTok/chat disabled
-- **Henna** = full Phase 1+ พร้อม Shopee Open API จริง (`SHOPEE_OPEN_API_ENABLED=true`)
+- ⚠️ **Henna ย้ายเป็น Nexflow แล้ว** — ถ้าต้องแก้ henna ต้อง deploy จาก repo Nexflow เท่านั้น
 - deploy: `rsync` backend/ + frontend/ → `docker compose build + up -d` บน server
 
 ---
@@ -116,9 +121,11 @@ x-tenant header: sml1_2026 (main) | aoy (henna) | data1_test (thaisunsport)
 
 ---
 
-## 7. Shopee Open API (Henna เท่านั้น)
+## 7. Shopee Open API (Nexflow เท่านั้น — ไม่ใช่ billflow แล้ว)
 
-- `SHOPEE_OPEN_API_ENABLED=true` ใน henna .env เท่านั้น; main/thaisunsport = false
+> ⚠️ Henna ย้ายเป็น Nexflow แล้ว — Shopee Open API config อยู่ใน Nexflow repo
+
+- `SHOPEE_OPEN_API_ENABLED=true` ใน Nexflow .env; main/thaisunsport = false
 - OAuth callback `/api/shopee-api/callback` — state token auth
 - connections ใน `shopee_api_connections` table (multi-shop)
 - import flow: Shopee API → local bills → review/mapping → retry/bulk SML (เหมือน Excel flow)

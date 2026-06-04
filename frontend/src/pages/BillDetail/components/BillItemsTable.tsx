@@ -1,3 +1,4 @@
+import { Info } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -6,10 +7,16 @@ import {
   TableBody,
   TableRow,
 } from '@/components/ui/table'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { Bill, BillItem } from '@/types'
-import { isShopeePurchaseBill, isShopeeSalesBill, money } from '@/lib/shopeeBill'
+import { isShopeePurchaseBill, isShopeeSalesBill, money, shopeeCoinAmount } from '@/lib/shopeeBill'
 import { hasInvalidPrice } from '../utils/validation'
-import { BillItemRow } from './BillItemRow'
+import { BillItemRow, type DiscountInfo } from './BillItemRow'
 
 interface Props {
   bill: Bill
@@ -52,7 +59,22 @@ export function BillItemsTable({
   const showDiscountColumn = isShopeePurchaseBill(bill)
   const discountSummary = showDiscountColumn ? discountSummaryFromBill(bill) : null
   const totalDiscount = discountSummary?.total_discount_amount ?? 0
+  const coinAmt = showDiscountColumn ? (shopeeCoinAmount(bill) ?? 0) : 0
+  const effectiveDiscount = totalDiscount + coinAmt
   const itemDiscountTotal = items.reduce((sum, item) => sum + (item.discount_amount ?? 0), 0)
+
+  // gross รวม ทุก item ยกเว้น shipping — ใช้แสดงใน tooltip ของแต่ละ row
+  const grossTotal = items
+    .filter((item) => item.source_sku !== '__shopee_shipping__')
+    .reduce((sum, item) => sum + (item.qty ?? 0) * (item.price ?? 0), 0)
+  const rowDiscountInfo: DiscountInfo | undefined = showDiscountColumn && effectiveDiscount > 0
+    ? {
+        effectiveDiscount,
+        couponDiscount: totalDiscount,
+        coinAmount: coinAmt,
+        grossTotal,
+      }
+    : undefined
   const parsedDiscountNotApplied = bill.status === 'sent' && totalDiscount > 0 && itemDiscountTotal <= 0
   const discountCodes = [
     ...(discountSummary?.shopee_discount_codes ?? []),
@@ -84,16 +106,44 @@ export function BillItemsTable({
           </p>
           {showDiscountColumn && (
             <div className="mt-2 max-w-3xl rounded-md border border-info/20 bg-info/5 px-3 py-2 text-xs leading-5 text-muted-foreground">
-              <span className="font-medium text-foreground">ส่วนลด:</span>{' '}
-              {parsedDiscountNotApplied
-                ? `${money(totalDiscount)} พบในอีเมล แต่บิลนี้ส่ง SML แล้ว ระบบไม่แก้ย้อนหลัง`
-                : totalDiscount > 0
-                ? `${money(totalDiscount)} จากโค้ด Shopee ${money(discountSummary?.shopee_discount_amount ?? 0)} + ร้านค้า ${money(discountSummary?.shop_discount_amount ?? 0)}`
-                : 'ไม่พบส่วนลดในอีเมลนี้'}
-              {!parsedDiscountNotApplied && ' · หารเท่ากันตามจำนวนรายการสินค้า ไม่รวมค่าขนส่ง'}
-              {discountCodes.length > 0 && (
-                <span className="ml-1">· โค้ด: {discountCodes.join(', ')}</span>
-              )}
+              <div className="flex items-start gap-1.5">
+                <div className="flex-1">
+                  <span className="font-medium text-foreground">ส่วนลด:</span>{' '}
+                  {parsedDiscountNotApplied
+                    ? `${money(totalDiscount)} พบในอีเมล แต่บิลนี้ส่ง SML แล้ว ระบบไม่แก้ย้อนหลัง`
+                    : effectiveDiscount > 0
+                    ? <>
+                        {money(effectiveDiscount)} รวมทั้งหมด
+                        {' ('}โค้ด Shopee {money(discountSummary?.shopee_discount_amount ?? 0)}
+                        {(discountSummary?.shop_discount_amount ?? 0) > 0 && <> + ร้านค้า {money(discountSummary?.shop_discount_amount ?? 0)}</>}
+                        {coinAmt > 0 && <> + Shopee Coin <span className="text-info font-medium">{money(coinAmt)}</span></>}
+                        {')'}
+                      </>
+                    : 'ไม่พบส่วนลดในอีเมลนี้'}
+                  {!parsedDiscountNotApplied && effectiveDiscount > 0 && ' · กระจายตาม % มูลค่าสินค้าแต่ละรายการ ไม่รวมค่าขนส่ง'}
+                  {discountCodes.length > 0 && (
+                    <span className="ml-1">· โค้ด: {discountCodes.join(', ')}</span>
+                  )}
+                </div>
+                {!parsedDiscountNotApplied && effectiveDiscount > 0 && (
+                  <TooltipProvider delayDuration={100}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer text-info/70 hover:text-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+                        <p className="font-semibold mb-1">วิธีคำนวณส่วนลด</p>
+                        <p>1. Coin = ยอดสินค้า − โค้ดส่วนลด − (ยอดชำระ − ค่าส่ง)</p>
+                        <p>2. ส่วนลดรวม = โค้ดส่วนลด + Coin</p>
+                        <p>3. ส่วนลดต่อ item = ส่วนลดรวม × (ราคา item / ราคารวมทุก item)</p>
+                        {coinAmt > 0 && (
+                          <p className="mt-1 text-info">Shopee Coin {money(coinAmt)} ถูกรวมในส่วนลดแล้ว</p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -140,6 +190,7 @@ export function BillItemsTable({
                   rawNameLabel={rawNameLabel}
                   showDiscountColumn={showDiscountColumn}
                   tableColumnCount={visibleColumnCount}
+                  discountInfo={rowDiscountInfo}
                 />
               ))}
               {items.length === 0 && (

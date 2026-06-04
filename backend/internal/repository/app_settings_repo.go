@@ -112,6 +112,9 @@ func (r *AppSettingsRepo) ApplyToConfig(cfg *config.Config) error {
 	if v := get("line.notify_admin_user_id"); v != "" {
 		cfg.LineAdminUserID = v
 	}
+	if v := get("line.notify_enabled"); v != "" {
+		cfg.LineNotifyEnabled = v == "true"
+	}
 	if v := get("automation.auto_confirm_threshold"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.AutoConfirmThreshold = f
@@ -127,6 +130,7 @@ func RuntimeSettingValues(cfg *config.Config) map[string]string {
 		"line.notify_channel_secret":        cfg.LineChannelSecret,
 		"line.notify_channel_access_token":  cfg.LineChannelAccessToken,
 		"line.notify_admin_user_id":         cfg.LineAdminUserID,
+		"line.notify_enabled":               strconv.FormatBool(cfg.LineNotifyEnabled),
 		"ai.openrouter_api_key":             cfg.OpenRouterAPIKey,
 		"ai.openrouter_model":               cfg.OpenRouterModel,
 		"ai.openrouter_fallback_model":      cfg.OpenRouterFallback,

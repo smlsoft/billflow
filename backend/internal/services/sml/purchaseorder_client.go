@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -149,6 +150,10 @@ func (r *PurchaseOrderResponse) IsSuccess() bool {
 	return r.Success || r.Status == "success"
 }
 
+func (r *PurchaseOrderResponse) IsSkipped() bool {
+	return strings.EqualFold(r.Data.LogStatus, "skipped")
+}
+
 func (r *PurchaseOrderResponse) GetDocNo() string {
 	if r.Data.DocNo != "" {
 		return r.Data.DocNo
@@ -274,6 +279,7 @@ type PurchaseOrderHeaderOptions struct {
 	Remark2     string
 	Remark5     string
 	InquiryType int
+	UserRequest string
 }
 
 func clampLineDiscount(discount, grossAmount float64) float64 {
@@ -388,7 +394,7 @@ func BuildPurchaseOrderPayload(
 		ApproveStatus:  0,
 		NotApprove1:    0,
 		UserApprove:    "",
-		UserRequest:    "",
+		UserRequest:    header.UserRequest,
 		DocDate:        docDate,
 		DocTime:        cfg.DocTime,
 		DocRef:         docRef,

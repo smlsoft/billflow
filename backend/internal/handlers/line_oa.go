@@ -172,7 +172,7 @@ func (h *LineOAHandler) Test(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	svc, err := lineservice.New(a.ChannelSecret, a.ChannelAccessToken, a.AdminUserID)
+	svc, err := lineservice.New(a.ChannelSecret, a.ChannelAccessToken, a.AdminUserID, true)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "service init failed: " + err.Error()})
 		return
@@ -199,7 +199,7 @@ func (h *LineOAHandler) Test(c *gin.Context) {
 // after Create/Update. Non-fatal if it fails — webhook routing falls back to
 // URL :oaId or registry.Any().
 func (h *LineOAHandler) tryFillBotUserID(a *models.LineOAAccount) {
-	svc, err := lineservice.New(a.ChannelSecret, a.ChannelAccessToken, a.AdminUserID)
+	svc, err := lineservice.New(a.ChannelSecret, a.ChannelAccessToken, a.AdminUserID, true)
 	if err != nil {
 		return
 	}

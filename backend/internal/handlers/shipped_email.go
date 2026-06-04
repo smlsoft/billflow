@@ -276,12 +276,34 @@ func (h *EmailHandler) processOneShippedOrder(
 		}
 	}
 	discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID)
-	if discountSummary.HasAny() {
+
+	// คำนวณ Shopee Coin = gross_goods - coupon_discount - (paid_total - shipping)
+	// ใช้ bodyHTML เป็น primary เพราะ Shopee email มักไม่มี text/plain part
+	paidTotal, hasPaidTotal := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, "ยอดที่ต้องชำระทั้งหมด")
+	if !hasPaidTotal {
+		paidTotal, hasPaidTotal = repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, "ยอดที่ต้องชำระทั้งหมด")
+	}
+	goodsTotalForCoin, hasGoodsTotal := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, "ยอดรวมค่าสินค้า")
+	if !hasGoodsTotal {
+		goodsTotalForCoin, hasGoodsTotal = repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, "ยอดรวมค่าสินค้า")
+	}
+	var coinAmount float64
+	var hasCoin bool
+	if hasGoodsTotal {
+		coinAmount, hasCoin = repository.CalcShopeeCoinAmount(goodsTotalForCoin, shippingAmount, discountSummary.TotalDiscountAmount, paidTotal, hasPaidTotal)
+	}
+
+	effectiveDiscount := discountSummary.TotalDiscountAmount
+	if hasCoin {
+		effectiveDiscount = discountSummary.TotalDiscountAmount + coinAmount
+	}
+
+	if discountSummary.HasAny() || hasCoin {
 		itemCopies := make([]models.BillItem, len(itemsWithCandidates))
 		for i := range itemsWithCandidates {
 			itemCopies[i] = itemsWithCandidates[i].item
 		}
-		repository.ApplyShopeeDiscountsToItems(itemCopies, discountSummary.TotalDiscountAmount)
+		repository.ApplyShopeeDiscountsToItems(itemCopies, effectiveDiscount)
 		for i := range itemsWithCandidates {
 			itemsWithCandidates[i].item.DiscountAmount = itemCopies[i].DiscountAmount
 		}
@@ -311,6 +333,9 @@ func (h *EmailHandler) processOneShippedOrder(
 	}
 	if discountSummary.HasAny() {
 		rawDataMap["discount_summary"] = discountSummary
+	}
+	if hasCoin {
+		rawDataMap["shopee_coin_amount"] = coinAmount
 	}
 	if paymentSummary := repository.ExtractShopeePaymentSummary(bodyText, bodyHTML, orderID); paymentSummary.HasAny() {
 		rawDataMap["payment_summary"] = paymentSummary

@@ -146,6 +146,8 @@ export default function Dashboard() {
 
       <ActionCenter stats={stats} setupStatus={setupStatus} loading={loading} />
 
+      <AITodayCard stats={stats} loading={loading} />
+
       <PilotResultCard stats={stats} loading={loading} />
 
       <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
@@ -363,6 +365,53 @@ function ActionCenter({
   )
 }
 
+function AITodayCard({
+  stats,
+  loading,
+}: {
+  stats: DashboardStats | null
+  loading: boolean
+}) {
+  const bills = stats?.ai_today_bills ?? 0
+  const avgConf = stats?.ai_today_avg_confidence ?? 0
+  const minutes = stats?.ai_today_minutes_saved ?? 0
+
+  if (loading || bills === 0) return null
+
+  return (
+    <Card className="overflow-hidden rounded-2xl border-primary/20 bg-gradient-to-br from-primary/[0.04] to-background shadow-sm">
+      <CardContent className="p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <span className="text-sm font-semibold">AI ทำงานวันนี้</span>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <div className="text-xl font-bold tabular-nums text-foreground">{bills.toLocaleString('th-TH')} ใบ</div>
+            <div className="text-xs text-muted-foreground">อ่านบิลอัตโนมัติ</div>
+          </div>
+          <div>
+            <div className="text-xl font-bold tabular-nums text-foreground">{Math.round(avgConf * 100)}%</div>
+            <div className="text-xs text-muted-foreground">ความมั่นใจเฉลี่ย</div>
+          </div>
+          <div>
+            <div className="text-xl font-bold tabular-nums text-foreground">~{minutes} นาที</div>
+            <div
+              className="text-xs text-muted-foreground"
+              title="ประมาณ 4 นาที/บิล เทียบกับการคีย์ข้อมูลด้วยมือ"
+            >
+              เวลาที่ประหยัดได้
+            </div>
+          </div>
+        </div>
+        <p className="mt-3 text-[11px] text-muted-foreground">
+          AI อ่านและดึงข้อมูลจากอีเมล/ไฟล์อัตโนมัติ ลดการคีย์ข้อมูลด้วยมือ
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 function PilotResultCard({
   stats,
   loading,
@@ -386,7 +435,7 @@ function PilotResultCard({
     if (!canExport) return
     try {
       await navigator.clipboard.writeText(summaryMarkdown)
-      toast.success('คัดลอกสรุป Pilot แล้ว')
+      toast.success('คัดลอกสรุปแล้ว')
     } catch {
       downloadPilotSummary(summaryMarkdown)
       toast.success('คัดลอกไม่ได้ จึงดาวน์โหลดไฟล์แทน')
@@ -396,7 +445,7 @@ function PilotResultCard({
   const handleDownloadSummary = () => {
     if (!canExport) return
     downloadPilotSummary(summaryMarkdown)
-    toast.success('ดาวน์โหลดสรุป Pilot แล้ว')
+    toast.success('ดาวน์โหลดสรุปแล้ว')
   }
 
   return (
@@ -406,10 +455,10 @@ function PilotResultCard({
           <div>
             <CardTitle className="flex items-center gap-2 text-sm font-semibold">
               <TrendingUp className="h-4 w-4 text-primary" />
-              ผลลัพธ์ Pilot 30 วัน
+              สรุปผลการทำงาน 30 วัน
             </CardTitle>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              ตัวเลขสำหรับคุยกับลูกค้า: ระบบรับบิลได้กี่ใบ ส่ง SML สำเร็จกี่ใบ และยังเหลืองานที่ต้องช่วยจูนตรงไหน
+              ประสิทธิภาพการดำเนินงาน 30 วันล่าสุด
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -463,7 +512,7 @@ function PilotResultCard({
         </div>
         <div className="space-y-2 p-4">
           <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="font-medium text-foreground">อัตราส่ง SML สำเร็จในช่วง Pilot</span>
+            <span className="font-medium text-foreground">อัตราส่ง SML สำเร็จ</span>
             <span className="tabular-nums text-muted-foreground">
               {loading ? '—' : `${successPct.toFixed(total > 0 ? 1 : 0)}%`}
             </span>
@@ -551,7 +600,7 @@ function buildPilotSummaryMarkdown(stats: DashboardStats | null) {
   })
 
   return [
-    '# BillFlow Pilot Summary',
+    '# BillFlow Performance Summary',
     '',
     `วันที่สรุป: ${generatedAt}`,
     'ช่วงข้อมูล: 30 วันล่าสุด',
@@ -562,7 +611,7 @@ function buildPilotSummaryMarkdown(stats: DashboardStats | null) {
     `- เวลาที่ประหยัดได้โดยประมาณ: ${formatPilotHours(hoursSaved)}`,
     `- งานที่ยังต้องจัดการ: ${remaining.toLocaleString()} ใบ`,
     '',
-    '## งานที่ยังต้องจูนต่อ',
+    '## รายการที่ต้องดำเนินการต่อ',
     `- รอตรวจ mapping / ข้อมูลสินค้า: ${needsReview.toLocaleString()} ใบ`,
     `- เอกสารสถานะพร้อมส่ง SML แต่ยังไม่ได้ส่ง: ${pending.toLocaleString()} ใบ`,
     `- ส่ง SML ไม่สำเร็จและต้องแก้ error: ${failed.toLocaleString()} ใบ`,
@@ -578,7 +627,7 @@ function downloadPilotSummary(markdown: string) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `billflow-pilot-summary-${new Date().toISOString().slice(0, 10)}.md`
+  link.download = `billflow-performance-summary-${new Date().toISOString().slice(0, 10)}.md`
   document.body.appendChild(link)
   link.click()
   link.remove()

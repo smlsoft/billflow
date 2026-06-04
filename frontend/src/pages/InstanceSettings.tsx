@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { PageHeader } from '@/components/common/PageHeader'
 import { cn } from '@/lib/utils'
@@ -18,7 +19,7 @@ type InstanceSetting = {
   key: string
   label: string
   group: SettingGroup
-  type: 'text' | 'url' | 'number' | 'password'
+  type: 'text' | 'url' | 'number' | 'password' | 'boolean'
   value: string
   source: 'database' | 'env' | 'default' | 'unset'
   env_key?: string
@@ -434,19 +435,35 @@ export default function InstanceSettings() {
                           )}
                         </div>
                       </div>
-                      <Input
-                        id={s.key}
-                        type={s.type === 'password' ? 'password' : s.type}
-                        value={draftVal}
-                        placeholder={s.locked ? undefined : s.source === 'database' ? undefined : 'กรอกค่าของร้านนี้'}
-                        disabled={s.locked}
-                        onChange={(e) => setDraft((d) => ({ ...d, [s.key]: e.target.value }))}
-                        className={cn(
-                          s.key.includes('url') || s.key.includes('model') || s.key.includes('database') ? 'font-mono text-xs' : undefined,
-                          s.locked && 'cursor-not-allowed bg-muted opacity-60',
-                          isMissing && 'border-destructive focus-visible:ring-destructive',
-                        )}
-                      />
+                      {s.type === 'boolean' ? (
+                        <div className="flex items-center gap-2 py-1">
+                          <Switch
+                            id={s.key}
+                            checked={draftVal === 'true'}
+                            disabled={s.locked}
+                            onCheckedChange={(checked) =>
+                              setDraft((d) => ({ ...d, [s.key]: checked ? 'true' : 'false' }))
+                            }
+                          />
+                          <span className="text-sm text-muted-foreground">
+                            {draftVal === 'true' ? 'เปิดอยู่' : 'ปิดอยู่'}
+                          </span>
+                        </div>
+                      ) : (
+                        <Input
+                          id={s.key}
+                          type={s.type === 'password' ? 'password' : s.type}
+                          value={draftVal}
+                          placeholder={s.locked ? undefined : s.source === 'database' ? undefined : 'กรอกค่าของร้านนี้'}
+                          disabled={s.locked}
+                          onChange={(e) => setDraft((d) => ({ ...d, [s.key]: e.target.value }))}
+                          className={cn(
+                            s.key.includes('url') || s.key.includes('model') || s.key.includes('database') ? 'font-mono text-xs' : undefined,
+                            s.locked && 'cursor-not-allowed bg-muted opacity-60',
+                            isMissing && 'border-destructive focus-visible:ring-destructive',
+                          )}
+                        />
+                      )}
                       {isMissing && (
                         <p className="text-[11px] text-destructive">จำเป็นต้องกรอกก่อนบันทึก</p>
                       )}

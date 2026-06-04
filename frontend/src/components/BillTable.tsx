@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import type { MouseEvent } from 'react'
-import { Archive, Mail, Printer, RotateCcw, Store, Trash2 } from 'lucide-react'
+import { Archive, Mail, Printer, RotateCcw, Sparkles, Store, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import BillStatusBadge from '@/components/BillStatusBadge'
@@ -15,6 +15,7 @@ import {
   shopeeOrderID,
   shopeePayableTotal,
 } from '@/lib/shopeeBill'
+import { cn } from '@/lib/utils'
 import type { Bill, ShopeeOrderEvent } from '@/types'
 
 interface Props {
@@ -100,6 +101,22 @@ export default function BillTable({
                     )}
                     {displayDate.short}
                   </span>
+                  {b.ai_confidence != null && b.ai_confidence > 0 && (
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                        b.ai_confidence >= 0.9
+                          ? 'bg-success/15 text-success'
+                          : b.ai_confidence >= 0.7
+                          ? 'bg-primary/10 text-primary'
+                          : 'bg-warning/15 text-warning',
+                      )}
+                      title={`AI อ่านข้อมูลด้วยความมั่นใจ ${Math.round(b.ai_confidence * 100)}%`}
+                    >
+                      <Sparkles className="h-2.5 w-2.5" />
+                      {Math.round(b.ai_confidence * 100)}%
+                    </span>
+                  )}
                 </div>
                 <span className="block h-px w-0 overflow-hidden">
                   {displayDate.long}
@@ -206,8 +223,10 @@ export default function BillTable({
           : b.status === 'needs_review'
           ? 'bg-warning/[0.025]'
           : b.status === 'failed'
-            ? 'bg-destructive/[0.025]'
-            : ''
+          ? 'bg-destructive/[0.025]'
+          : (b.email_group?.print_count ?? 0) > 0
+          ? 'bg-emerald-50/70 dark:bg-emerald-950/20'
+          : ''
       }
     />
   )
@@ -374,7 +393,9 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
   const group = bill.email_group
   if (!group?.message_id || !group.group_key) return null
 
-  const isMultiOrder = (group.order_count ?? 0) > 1
+  const orderCount = group.order_count ?? 0
+  const isMultiOrder = orderCount > 1
+  const hasOrderCount = orderCount >= 1
   const printCount = group.print_count ?? 0
   const hasPrintHistory = printCount > 0
   const printedAt = group.last_printed_at ? dayjs(group.last_printed_at) : null
@@ -405,9 +426,9 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
     >
       <Mail className="h-3 w-3 shrink-0" />
       <span className="shrink-0 font-mono">Email #{group.group_key}</span>
-      {isMultiOrder && (
-        <span className="shrink-0 font-medium">
-          · {group.order_count.toLocaleString('th-TH')} คำสั่งซื้อ
+      {hasOrderCount && (
+        <span className={`shrink-0 ${isMultiOrder ? 'font-medium' : 'font-normal'}`}>
+          · {orderCount.toLocaleString('th-TH')} คำสั่งซื้อ
         </span>
       )}
       {hasPrintHistory && (

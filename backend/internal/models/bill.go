@@ -130,6 +130,7 @@ type BillListFilter struct {
 	Archived       string `form:"archived"` // ""/"active" | "include" | "only"
 	DateFrom       string `form:"date_from"`
 	DateTo         string `form:"date_to"`
+	SortOrder      string `form:"sort_order"` // "asc" | "desc" (default "desc")
 	Cursor         string `form:"cursor"`
 	Limit          int    `form:"limit"`
 	CursorMode     bool   `form:"-"`

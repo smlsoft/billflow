@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/auth'
 import Layout from './components/Layout'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Bills from './pages/Bills'
@@ -47,7 +48,9 @@ export default function App() {
           path="/"
           element={
             <RequireAuth>
-              <Layout />
+              <ErrorBoundary>
+                <Layout />
+              </ErrorBoundary>
             </RequireAuth>
           }
         >
@@ -81,6 +84,7 @@ export default function App() {
           <Route path="settings/line-oa" element={ENABLE_CHAT ? <LineOA /> : <Navigate to="/settings/instance" replace />} />
           <Route path="settings/quick-replies" element={ENABLE_CHAT ? <QuickReplies /> : <Navigate to="/settings/instance" replace />} />
           <Route path="settings/chat-tags" element={ENABLE_CHAT ? <ChatTags /> : <Navigate to="/settings/instance" replace />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
