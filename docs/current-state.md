@@ -1,13 +1,69 @@
 # BillFlow — Current State
 
-> Updated: 2026-05-27 13:35 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, container asset inspection, LAN + public URL smoke checks, PostgreSQL cleanup verification on BillFlow main, and feature-flag verification for Thaisunsport.
+> Updated: 2026-06-04 12:10 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, container asset inspection, health checks, git tag `v1.0.0` (commit `ac06ac3`).
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
+- **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
+- Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
+- Migration ล่าสุด: `056_user_sml_code.sql` — เพิ่ม `sml_user_code` column ใน `users` table.
+- sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
+
+## Production Release 2026-06-04 (v1.0.0)
+
+### Features เพิ่มใหม่
+- **SML user_request in PO**: admin ตั้ง SML user_code ให้แต่ละ BillFlow user ที่ `/settings/users` → ส่ง PO เข้า SML จะมี `user_request` = รหัสพนักงาน ดูใน `ic_trans.user_request` ได้เลย
+- **AI visibility**: Dashboard card "AI ทำงานวันนี้" (บิลที่อ่าน/ความมั่นใจ/นาทีที่ประหยัด) + AI confidence badge สีต่างกันตาม % ใน bill list
+- **DateRangePicker visual calendar**: คลิกเลือกวันที่ได้โดยไม่ต้องพิมพ์ YYYY-MM-DD พร้อมชื่อเดือนภาษาไทย ปีพุทธศักราช
+- **Bills page layout redesign**: status + archive pills รวมแถวเดียว, bulk send button แยกแถวชัดเจน
+- **Print: order_id ↔ doc_no pair**: กดพิมพ์ email artifact จะแสดง `POL... → คำสั่งซื้อ #...` ทุก order ใน email
+
+### Bug fixes
+- **doc_no collision (log_status: skipped)**: SML return skipped → ระบบ clear doc_no, fetch ใหม่, retry อัตโนมัติ 1 ครั้ง ก่อน mark failed
+- **Shopee Coin discount allocation**: `shopee_coin_amount` ถูกรวมใน `discount_amount` ตอน re-apply แล้ว (เคย bug เฉพาะ existing bill update/backfill)
+- **remark_2 in bulk send**: channel default ของ `remark_2` ถูก map เข้า BulkSendDialog payload แล้ว
+- **Send button label**: ปุ่มส่งใน BillDetail แสดง route label จาก channel config แทน hardcode "(บิลซื้อ)"
+
+### Production hardening
+- **Global ErrorBoundary**: component crash จะเห็น "เกิดข้อผิดพลาด กรุณารีเฟรช" แทนหน้าขาว
+- **Session timeout toast**: แสดง "Session หมดอายุ กรุณาเข้าสู่ระบบใหม่" 1.5 วินาทีก่อน redirect `/login`
+- **404 catch-all**: URL ที่ไม่รู้จัก redirect ไป `/dashboard` แทน 404 หน้าขาว
+- **Pilot → Production language**: Dashboard card ใช้คำ production แล้ว (ไม่มี "Pilot" ในหน้าใดๆ)
+- **branch_code/sale_code visible**: ฟิลด์ในหน้าส่ง SML ไม่ซ่อนใน accordion แล้ว
+
+### Deploy verification 2026-06-04
+- `go build ./...` ✅
+- `npx tsc --noEmit` ✅
+- Backend health: main `8090` = ok, thaisunsport `8100` = ok
+- Migration `056` applied on both instances
+- sml-api-bybos `/api/v1/erp/sml-user-list` returns 18 users from `smlerpmaindata`
+- AI today stats API: `ai_today_bills=57, avg_confidence=0.92, minutes_saved=228` (thaisunsport)
+
+### Files changed (v1.0.0 commit)
+- `backend/internal/handlers/bills.go` — skipped doc_no retry, user_request lookup, branch/sale_code always visible
+- `backend/internal/repository/bill_repo.go` — ai_today stats query, shopee coin fix
+- `backend/internal/repository/bill_shopee_summary.go` — `floatField()` helper
+- `backend/internal/models/user.go` + `handlers/users.go` + `repository/user_repo.go` — SMLUserCode field
+- `backend/internal/services/sml/purchaseorder_client.go` + `saleorder_client.go` + `saleinvoice_client.go` — IsSkipped(), UserRequest field
+- `backend/internal/handlers/sml_party.go` + `main.go` — sml-user-list proxy, smlerpmaindata tenant override
+- `backend/internal/database/migrations/056_user_sml_code.sql` — NEW
+- `frontend/src/components/ErrorBoundary.tsx` — NEW
+- `frontend/src/api/client.ts` — session expiry toast
+- `frontend/src/App.tsx` — ErrorBoundary wrap, 404 catch-all
+- `frontend/src/pages/Dashboard.tsx` — AITodayCard, pilot→production wording
+- `frontend/src/components/BillTable.tsx` — AI confidence badge
+- `frontend/src/components/common/DateRangePicker.tsx` — visual calendar
+- `frontend/src/pages/Bills.tsx` — layout redesign
+- `frontend/src/pages/BillDetail/hooks/useArtifacts.ts` — print order_id/doc_no pairs
+- `frontend/src/pages/UserSettings.tsx` — SML user picker
+
+---
+
+
 - Latest deploy (ทั้ง 3 instances), 2026-05-27:
   - Commit deployed: `4e20c33 fix: align main ui readiness states`.
   - Scope: UI consistency audit fixes across Login/Setup/Dashboard/Logs/Bills/Shopee Settlement/Settings/Instance config.

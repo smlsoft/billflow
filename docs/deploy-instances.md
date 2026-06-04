@@ -152,7 +152,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Thaisunsport Notes
 
-- Latest deploy verified: 2026-05-27 13:35 +07.
+- Latest deploy verified: 2026-06-04 12:05 +07 (v1.0.0).
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
   - `VITE_PHASE=1`
@@ -171,6 +171,14 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
   - containers `billflow-thaisunsport-frontend`, `billflow-thaisunsport-backend`, and `billflow-thaisunsport-postgres` are up
 
 ## Latest Shared Deploy
+
+- 2026-06-04 12:05 +07: **Production release v1.0.0** deployed to `billflow` (main) and `billflow-thaisunsport`.
+- Scope: AI visibility (Dashboard card + bill badge), SML user_request in PO, doc_no collision auto-retry, Shopee Coin discount fix, remark_2 in bulk send, DateRangePicker calendar, Bills layout redesign, print order_id/doc_no pairs, ErrorBoundary, session expiry toast, production wording cleanup.
+- sml-api-bybos updated: `user_request` field added to `ic_trans` INSERT; `smlerpmaindata` tenant added for `sml_user_list` endpoint.
+- Migration `056_user_sml_code.sql` applied on both instances.
+- Git tag: `v1.0.0` (commit `ac06ac3`).
+- Verification: `go build ./...` ✅, `npx tsc --noEmit` ✅, backend health `8090` + `8100` ok, AI today stats API returning live data.
+- Deploy targets: `billflow` + `billflow-thaisunsport` only. Henna → Nexflow (แยก repo แล้ว).
 
 - 2026-05-29 07:55 +07: AI-based product image URL extraction deployed to all three instances.
 - Scope: Shopee shipped email handler now sends HTML to AI alongside plain text; AI returns `image_url` per item by correlating `<img>` tags with product names in HTML, replacing the previous index-based assignment that assigned wrong images when emails contained multiple orders. `ExtractedItem.ImageURL` field added; `ExtractOrdersWithHTML` function added; prompt updated with `image_url` extraction instructions.
