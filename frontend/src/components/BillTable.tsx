@@ -1,11 +1,18 @@
 import dayjs from 'dayjs'
 import type { MouseEvent } from 'react'
-import { Archive, CreditCard, Loader2, Mail, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
+import { Archive, CreditCard, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BillSourceBadge } from '@/components/BillSourceBadge'
 import BillStatusBadge from '@/components/BillStatusBadge'
 import { DataTable } from '@/components/common/DataTable'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   isShopeePurchaseBill,
   isShopeeSalesBill,
@@ -71,23 +78,23 @@ export default function BillTable({
       dense
       virtualize={virtualize}
       virtualizeThreshold={100}
-      virtualRowHeight={76}
+      virtualRowHeight={64}
       virtualMaxHeight={620}
       columns={[
         {
           key: 'doc',
           header: 'บิล / คำสั่งซื้อ',
-          className: 'py-2',
-          width: '44%',
+          className: 'px-3 py-1.5',
+          width: '42%',
           cell: (b) => {
             const displayDate = billDisplayDate(b)
             const creditor = purchaseCreditorLabel(b)
             return (
               <div className="min-w-0 space-y-1">
-                <div className="flex min-w-0 items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
                   {b.sml_doc_no ? (
                     <span
-                      className="min-w-0 max-w-[320px] truncate text-xs font-medium text-foreground"
+                      className="min-w-0 max-w-[390px] truncate text-[13px] font-semibold leading-5 text-foreground"
                       title={creditor ? `${creditor} ~ ${b.sml_doc_no}` : b.sml_doc_no}
                     >
                       {creditor && (
@@ -99,14 +106,14 @@ export default function BillTable({
                       <span className="font-mono">{b.sml_doc_no}</span>
                     </span>
                   ) : (
-                    <span className="font-mono text-xs text-foreground">
+                    <span className="font-mono text-[13px] font-semibold leading-5 text-foreground">
                       {b.id.slice(0, 8)}…
                     </span>
                   )}
                   {b.bill_type === 'purchase' && (
                     <Badge
                       variant="secondary"
-                      className="h-5 bg-warning/15 px-1.5 text-[10px] font-medium text-warning hover:bg-warning/20"
+                      className="h-4 bg-warning/15 px-1.5 text-[10px] font-medium leading-none text-warning hover:bg-warning/20"
                       title="ซื้อ -> ใบสั่งซื้อ"
                     >
                       บิลซื้อ
@@ -115,13 +122,13 @@ export default function BillTable({
                   {b.bill_type === 'sale' && (
                     <Badge
                       variant="secondary"
-                      className="h-5 bg-primary/10 px-1.5 text-[10px] font-medium text-primary hover:bg-primary/15"
+                      className="h-4 bg-primary/10 px-1.5 text-[10px] font-medium leading-none text-primary hover:bg-primary/15"
                       title={b.document_route === 'saleinvoice' ? 'ขาย -> ขายสินค้าและบริการ' : 'ขาย -> ใบสั่งขาย'}
                     >
                       {b.document_route === 'saleinvoice' ? 'ขายสินค้าฯ' : 'บิลขาย'}
                     </Badge>
                   )}
-                  <span className="text-[11px] text-muted-foreground" title={displayDate.title}>
+                  <span className="text-[11px] leading-5 text-muted-foreground" title={displayDate.title}>
                     {displayDate.prefix && (
                       <span className="mr-1 text-[10px] font-medium text-info">{displayDate.prefix}</span>
                     )}
@@ -147,15 +154,16 @@ export default function BillTable({
                 <span className="block h-px w-0 overflow-hidden">
                   {displayDate.long}
                 </span>
-                {isShopeePurchaseBill(b) && (
-                  <ShopeePurchaseSummary bill={b} />
-                )}
-                {isShopeeSalesBill(b) && (
-                  <ShopeeSalesSummary bill={b} />
-                )}
-                <ShopeeShopLine bill={b} />
-                <EmailGroupLine bill={b} />
-                <PrintPaymentMethodLine bill={b} />
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                  {isShopeePurchaseBill(b) && (
+                    <ShopeePurchaseSummary bill={b} />
+                  )}
+                  {isShopeeSalesBill(b) && (
+                    <ShopeeSalesSummary bill={b} />
+                  )}
+                  <ShopeeShopLine bill={b} />
+                  <EmailGroupLine bill={b} />
+                </div>
               </div>
             )
           },
@@ -163,12 +171,12 @@ export default function BillTable({
         {
           key: 'source',
           header: 'ช่องทาง',
-          className: 'py-2',
+          className: 'px-3 py-1.5',
           cell: (b) => {
             const inbox = emailInboxLabel(b)
             return (
-              <div className="flex min-w-0 flex-col gap-1">
-                <BillSourceBadge source={b.source} />
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <BillSourceBadge source={b.source} className="px-1.5 py-0.5 text-[11px] leading-4" />
                 {inbox && (
                   <span className="max-w-[180px] truncate text-[11px] text-muted-foreground" title={inbox}>
                     {inbox}
@@ -182,7 +190,7 @@ export default function BillTable({
           key: 'amount',
           header: 'ยอดชำระ',
           headerClassName: 'text-right',
-          className: 'py-2 text-right',
+          className: 'px-3 py-1.5 text-right',
           cell: (b) => {
             const payable = shopeePayableTotal(b)
             const fallback = b.total_amount ?? 0
@@ -196,6 +204,7 @@ export default function BillTable({
                     สินค้า {money(b.total_amount)}
                   </span>
                 )}
+                <PrintPaymentMethodLine bill={b} />
               </div>
             )
           },
@@ -204,9 +213,9 @@ export default function BillTable({
           key: 'status',
           header: 'สถานะบิล',
           headerClassName: 'text-center',
-          className: 'py-2 text-center',
+          className: 'px-3 py-1.5 text-center',
           cell: (b) => (
-            <div className="flex justify-center">
+            <div className="flex justify-center whitespace-nowrap">
               <BillStatusBadge status={b.status} />
             </div>
           ),
@@ -216,10 +225,14 @@ export default function BillTable({
               key: 'shopee_status',
               header: 'สถานะคำสั่งซื้อ',
               headerClassName: 'text-center',
-              className: 'py-2 text-center',
+              className: 'px-3 py-1.5 text-center',
               cell: (b: Bill) => (
                 <div className="flex justify-center">
-                  <ShopeeOrderStatusBadge event={b.shopee_status} title={shopeeStatusTitle(b)} />
+                  {b.source === 'lazada_email' && !b.shopee_status ? (
+                    <span className="text-xs text-muted-foreground/70">—</span>
+                  ) : (
+                    <ShopeeOrderStatusBadge event={b.shopee_status} title={shopeeStatusTitle(b)} />
+                  )}
                 </div>
               ),
             }]
@@ -228,7 +241,7 @@ export default function BillTable({
           key: 'actions',
           header: 'จัดการ',
           headerClassName: 'text-right',
-          className: 'py-2 text-right',
+          className: 'px-3 py-1.5 text-right',
           cell: (b) => (
             <BillRowActions
               bill={b}
@@ -257,8 +270,6 @@ export default function BillTable({
           ? 'bg-warning/[0.025]'
           : b.status === 'failed'
           ? 'bg-destructive/[0.025]'
-          : (b.email_group?.print_count ?? 0) > 0
-          ? 'bg-emerald-50/70 dark:bg-emerald-950/20'
           : ''
       }
     />
@@ -337,8 +348,9 @@ function BillRowActions({
     const printReady = Boolean(bill.email_group?.print_ready)
     const printLoading = printLoadingMessageID === bill.email_group?.message_id
     const printReason = bill.email_group?.print_block_reason || bill.email_group?.print_policy_note || 'ยังไม่พร้อมพิมพ์'
+    const hasSecondaryActions = showUpdateCreditor || showUpdatePayment || !!onArchive
     return (
-      <div className="flex justify-end gap-1.5">
+      <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
         {showPrint && (
           <Button
             type="button"
@@ -357,46 +369,58 @@ function BillRowActions({
             {printLoading ? 'กำลังพิมพ์...' : 'พิมพ์'}
           </Button>
         )}
-        {showUpdateCreditor && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 text-xs"
-            onClick={stop(onUpdatePurchaseCreditor)}
-            disabled={loadingCreditor}
-            title="แก้เจ้าหนี้ของใบสั่งซื้อเดิมใน SML"
-          >
-            {loadingCreditor ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <UserCog className="mr-1 h-3.5 w-3.5" />
-            )}
-            {loadingCreditor ? 'กำลังเปิด...' : 'แก้เจ้าหนี้'}
-          </Button>
+        {hasSecondaryActions && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                className="h-7 w-8"
+                title="จัดการเพิ่มเติม"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[180px]">
+              {showUpdateCreditor && (
+                <DropdownMenuItem
+                  disabled={loadingCreditor}
+                  onSelect={() => onUpdatePurchaseCreditor?.(bill)}
+                >
+                  {loadingCreditor ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <UserCog className="h-3.5 w-3.5" />
+                  )}
+                  {loadingCreditor ? 'กำลังเปิด...' : 'แก้เจ้าหนี้'}
+                </DropdownMenuItem>
+              )}
+              {showUpdatePayment && (
+                <DropdownMenuItem
+                  disabled={loadingPayment}
+                  onSelect={() => onUpdatePrintPaymentMethod?.(bill)}
+                >
+                  {loadingPayment ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <CreditCard className="h-3.5 w-3.5" />
+                  )}
+                  {loadingPayment ? 'กำลังเปิด...' : 'วิธีชำระ'}
+                </DropdownMenuItem>
+              )}
+              {(showUpdateCreditor || showUpdatePayment) && onArchive && (
+                <DropdownMenuSeparator />
+              )}
+              {onArchive && (
+                <DropdownMenuItem onSelect={() => onArchive(bill)}>
+                  <Archive className="h-3.5 w-3.5" />
+                  เก็บบิล
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
-        {showUpdatePayment && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 text-xs"
-            onClick={stop(onUpdatePrintPaymentMethod)}
-            disabled={loadingPayment}
-            title="เลือกวิธีชำระเงินสำหรับเงื่อนไขปริ้น"
-          >
-            {loadingPayment ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <CreditCard className="mr-1 h-3.5 w-3.5" />
-            )}
-            {loadingPayment ? 'กำลังเปิด...' : 'วิธีชำระ'}
-          </Button>
-        )}
-        <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={stop(onArchive)}>
-          <Archive className="mr-1 h-3.5 w-3.5" />
-          เก็บบิล
-        </Button>
       </div>
     )
   }
@@ -601,7 +625,7 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
 
   return (
     <div
-      className={`inline-flex max-w-full items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[11px] leading-4 ${
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-md border px-1.5 py-px text-[11px] leading-4 ${
         isMultiOrder
           ? 'border-info/30 bg-info/10 text-info'
           : 'border-border/70 bg-muted/30 text-muted-foreground'
@@ -616,7 +640,10 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
         </span>
       )}
       {hasPrintHistory && (
-        <Printer className="h-3 w-3 shrink-0" aria-label="พิมพ์แล้ว" />
+        <span className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-500/10 px-1 py-0 text-[10px] font-medium text-emerald-700 dark:text-emerald-200">
+          <Printer className="h-2.5 w-2.5" aria-hidden="true" />
+          พิมพ์แล้ว {printCount.toLocaleString('th-TH')}
+        </span>
       )}
     </div>
   )
@@ -629,7 +656,7 @@ function ShopeeShopLine({ bill }: { bill: Bill }) {
   const label = rawString(raw, 'shopee_shop_label') || 'Shopee shop'
   return (
     <div
-      className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-orange-200 bg-orange-50 px-1.5 py-0.5 text-[11px] leading-4 text-orange-700"
+      className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-orange-200 bg-orange-50 px-1.5 py-px text-[11px] leading-4 text-orange-700"
       title={`${label} · shop_id=${shopID}`}
     >
       <Store className="h-3 w-3 shrink-0" />
@@ -647,7 +674,7 @@ function ShopeeSalesSummary({ bill }: { bill: Bill }) {
   const itemCount = rawNumber(raw, 'item_count') ?? bill.items?.length ?? null
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-5 text-muted-foreground">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
       {orderID && (
         <span className="min-w-0">
           เลขคำสั่งซื้อ{' '}
@@ -681,7 +708,7 @@ function ShopeePurchaseSummary({ bill }: { bill: Bill }) {
   const itemCount = rawNumber(raw, 'item_count') ?? bill.items?.length ?? null
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] leading-5 text-muted-foreground">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
       {orderID && (
         <span className="min-w-0">
           เลขคำสั่งซื้อ{' '}

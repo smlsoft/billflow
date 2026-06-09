@@ -82,14 +82,14 @@ func TestRecordEmailPrintEventBlocksMarketplaceEmailGroupMissingSMLDoc(t *testin
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs("lazada_email", "purchase").
 		WillReturnRows(sqlmock.NewRows([]string{"print_policy"}).AddRow([]byte("{}")))
-	mock.ExpectQuery("SELECT b.id::text").
-		WithArgs(messageID).
+	mock.ExpectQuery("WITH message_ids").
+		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "order_id", "source", "bill_type", "status", "sml_doc_no", "party_code", "party_name",
+			"message_id", "id", "order_id", "source", "bill_type", "status", "sml_doc_no", "party_code", "party_name",
 			"print_payment_method", "effective_print_payment_method",
 		}).
-			AddRow("bill-1", "1107473377495692", "lazada_email", "purchase", "sent", "PO260600001", "AF00007", "TT3086", "", "TT3086").
-			AddRow("bill-2", "1107473377495693", "lazada_email", "purchase", "pending", "", "AF00007", "TT3086", "", "TT3086"))
+			AddRow(messageID, "bill-1", "1107473377495692", "lazada_email", "purchase", "sent", "PO260600001", "AF00007", "TT3086", "", "TT3086").
+			AddRow(messageID, "bill-2", "1107473377495693", "lazada_email", "purchase", "pending", "", "AF00007", "TT3086", "", "TT3086"))
 
 	event, err := repo.RecordEmailPrintEvent(billID, artifactID, "", "admin@example.test")
 	if event != nil {
@@ -135,13 +135,13 @@ func TestRecordEmailPrintEventBlocksMarketplaceEmailGroupNonMatchingPaymentMetho
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs("lazada_email", "purchase").
 		WillReturnRows(sqlmock.NewRows([]string{"print_policy"}).AddRow([]byte("{}")))
-	mock.ExpectQuery("SELECT b.id::text").
-		WithArgs(messageID).
+	mock.ExpectQuery("WITH message_ids").
+		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "order_id", "source", "bill_type", "status", "sml_doc_no", "party_code", "party_name",
+			"message_id", "id", "order_id", "source", "bill_type", "status", "sml_doc_no", "party_code", "party_name",
 			"print_payment_method", "effective_print_payment_method",
 		}).
-			AddRow("bill-1", "1107473377495692", "lazada_email", "purchase", "sent", "PO260600001", "AF00007", "ACME", "โอน Kbank", "โอน Kbank"))
+			AddRow(messageID, "bill-1", "1107473377495692", "lazada_email", "purchase", "sent", "PO260600001", "AF00007", "ACME", "โอน Kbank", "โอน Kbank"))
 
 	event, err := repo.RecordEmailPrintEvent(billID, artifactID, "", "admin@example.test")
 	if event != nil {
@@ -194,13 +194,13 @@ func TestRecordEmailPrintEventAllowsConfiguredPaymentMethodPrefix(t *testing.T) 
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs("lazada_email", "purchase").
 		WillReturnRows(sqlmock.NewRows([]string{"print_policy"}).AddRow(policyJSON))
-	mock.ExpectQuery("SELECT b.id::text").
-		WithArgs(messageID).
+	mock.ExpectQuery("WITH message_ids").
+		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "order_id", "source", "bill_type", "status", "sml_doc_no", "party_code", "party_name",
+			"message_id", "id", "order_id", "source", "bill_type", "status", "sml_doc_no", "party_code", "party_name",
 			"print_payment_method", "effective_print_payment_method",
 		}).
-			AddRow("bill-1", "1107473377495692", "lazada_email", "purchase", "sent", "PO260600001", "AF00007", "ACME", "AF00007", "AF00007"))
+			AddRow(messageID, "bill-1", "1107473377495692", "lazada_email", "purchase", "sent", "PO260600001", "AF00007", "ACME", "AF00007", "AF00007"))
 	mock.ExpectQuery("INSERT INTO email_print_events").
 		WithArgs(billID, artifactID, messageID, emailGroupKey(messageID), "Lazada order", "noreply@lazada.co.th", userID, "admin@example.test").
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -244,8 +244,8 @@ func TestAttachEmailGroupsIncludesNoPrintSummary(t *testing.T) {
 	}
 	bills := []models.Bill{{ID: "bill-1", RawData: raw}}
 
-	mock.ExpectQuery("WITH matched_bills").
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectQuery("WITH marketplace_message_ids").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"message_id", "order_count", "has_printable_email", "print_count",
 			"last_printed_at", "last_printed_by_email", "last_printed_by_name",
@@ -287,8 +287,8 @@ func TestAttachEmailGroupsIncludesPrintSummary(t *testing.T) {
 	bills := []models.Bill{{ID: "bill-1", RawData: raw}}
 	printedAt := time.Date(2026, 5, 25, 23, 10, 0, 0, time.UTC)
 
-	mock.ExpectQuery("WITH matched_bills").
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectQuery("WITH marketplace_message_ids").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"message_id", "order_count", "has_printable_email", "print_count",
 			"last_printed_at", "last_printed_by_email", "last_printed_by_name",

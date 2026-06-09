@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"billflow/internal/models"
+	"github.com/lib/pq"
 )
 
 const maxEmailPrintCandidates = 100
@@ -130,9 +131,65 @@ func (r *BillRepo) channelPrintPolicy(channel, billType string) models.Marketpla
 	return models.NormalizeMarketplacePrintPolicyFromRaw(channel, billType, raw)
 }
 
+func (r *BillRepo) channelPrintPolicyCached(cache map[string]models.MarketplacePrintPolicy, channel, billType string) models.MarketplacePrintPolicy {
+	key := channel + "/" + billType
+	if cached, ok := cache[key]; ok {
+		return cached
+	}
+	policy := r.channelPrintPolicy(channel, billType)
+	cache[key] = policy
+	return policy
+}
+
 func (r *BillRepo) listMarketplacePrintRows(messageID string) ([]marketplacePrintRow, error) {
+	rowsByMessageID, err := r.listMarketplacePrintRowsByMessageIDs([]string{messageID})
+	if err != nil {
+		return nil, err
+	}
+	return rowsByMessageID[strings.TrimSpace(messageID)], nil
+}
+
+func (r *BillRepo) listMarketplacePrintRowsByMessageIDs(messageIDs []string) (map[string][]marketplacePrintRow, error) {
+	clean := make([]string, 0, len(messageIDs))
+	seen := map[string]bool{}
+	for _, messageID := range messageIDs {
+		messageID = strings.TrimSpace(messageID)
+		if messageID == "" || seen[messageID] {
+			continue
+		}
+		seen[messageID] = true
+		clean = append(clean, messageID)
+	}
+	out := make(map[string][]marketplacePrintRow, len(clean))
+	if len(clean) == 0 {
+		return out, nil
+	}
+
 	rows, err := r.db.Query(`
-		SELECT b.id::text,
+		WITH message_ids AS (
+		  SELECT unnest($1::text[]) AS message_id
+		),
+		matched_bills AS (
+		  SELECT m.message_id,
+		         b.id::text,
+		         COALESCE(NULLIF(b.raw_data->>'order_id', ''), NULLIF(b.raw_data->>'shopee_order_id', ''), b.id::text) AS order_id,
+		         b.source,
+		         b.bill_type,
+		         b.status,
+		         COALESCE(b.sml_doc_no, '') AS sml_doc_no,
+		         COALESCE(NULLIF(b.sml_payload->>'cust_code', ''), '') AS party_code,
+		         COALESCE(NULLIF(b.sml_payload->>'supplier_name', ''), '') AS party_name,
+		         COALESCE(b.print_payment_method, '') AS print_payment_method,
+		         `+effectivePrintPaymentMethodExpr("b")+` AS effective_print_payment_method,
+		         b.created_at
+		    FROM message_ids m
+		    JOIN bills b ON b.raw_data->>'email_message_id' = m.message_id
+		   WHERE b.raw_data ? 'email_message_id'
+		     AND b.source IN ('shopee_shipped', 'lazada_email')
+		     AND b.bill_type = 'purchase'
+		  UNION ALL
+		  SELECT m.message_id,
+		         b.id::text,
 		       COALESCE(NULLIF(b.raw_data->>'order_id', ''), NULLIF(b.raw_data->>'shopee_order_id', ''), b.id::text) AS order_id,
 		       b.source,
 		       b.bill_type,
@@ -141,26 +198,33 @@ func (r *BillRepo) listMarketplacePrintRows(messageID string) ([]marketplacePrin
 		       COALESCE(NULLIF(b.sml_payload->>'cust_code', ''), '') AS party_code,
 		       COALESCE(NULLIF(b.sml_payload->>'supplier_name', ''), '') AS party_name,
 		       COALESCE(b.print_payment_method, '') AS print_payment_method,
-		       `+effectivePrintPaymentMethodExpr("b")+` AS effective_print_payment_method
-		  FROM bills b
-		 WHERE COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', ''), 'bill:' || b.id::text) = $1
-		   AND b.source IN ('shopee_shipped', 'lazada_email')
-		   AND b.bill_type = 'purchase'
-		 ORDER BY b.created_at ASC, b.id ASC`,
-		messageID,
+		       `+effectivePrintPaymentMethodExpr("b")+` AS effective_print_payment_method,
+		       b.created_at
+		    FROM message_ids m
+		    JOIN bills b ON b.raw_data->>'message_id' = m.message_id
+		   WHERE b.raw_data ? 'message_id'
+		     AND COALESCE(b.raw_data->>'email_message_id', '') = ''
+		     AND b.source IN ('shopee_shipped', 'lazada_email')
+		     AND b.bill_type = 'purchase'
+		)
+		SELECT message_id, id, order_id, source, bill_type, status, sml_doc_no,
+		       party_code, party_name, print_payment_method, effective_print_payment_method
+		  FROM matched_bills
+		 ORDER BY message_id, created_at ASC, id ASC`,
+		pq.Array(clean),
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	out := []marketplacePrintRow{}
 	for rows.Next() {
+		var messageID string
 		var row marketplacePrintRow
-		if err := rows.Scan(&row.ID, &row.OrderID, &row.Source, &row.BillType, &row.Status, &row.SMLDocNo, &row.PartyCode, &row.PartyName, &row.PrintPaymentMethod, &row.EffectivePrintPaymentMethod); err != nil {
+		if err := rows.Scan(&messageID, &row.ID, &row.OrderID, &row.Source, &row.BillType, &row.Status, &row.SMLDocNo, &row.PartyCode, &row.PartyName, &row.PrintPaymentMethod, &row.EffectivePrintPaymentMethod); err != nil {
 			return nil, err
 		}
-		out = append(out, row)
+		out[messageID] = append(out[messageID], row)
 	}
 	return out, rows.Err()
 }
@@ -208,6 +272,122 @@ func rowOrderLabel(row marketplacePrintRow) string {
 		return strings.TrimSpace(row.OrderID)
 	}
 	return row.ID
+}
+
+func marketplacePrintRowFromBill(b *models.Bill) marketplacePrintRow {
+	if b == nil {
+		return marketplacePrintRow{}
+	}
+	docNo := ""
+	if b.SMLDocNo != nil {
+		docNo = strings.TrimSpace(*b.SMLDocNo)
+	}
+	return marketplacePrintRow{
+		ID:                          b.ID,
+		OrderID:                     firstNonEmptyBillRawString(b, "order_id", "shopee_order_id"),
+		Source:                      b.Source,
+		BillType:                    b.BillType,
+		Status:                      b.Status,
+		SMLDocNo:                    docNo,
+		PartyCode:                   billJSONRawString(b.SMLPayload, "cust_code"),
+		PartyName:                   billJSONRawString(b.SMLPayload, "supplier_name"),
+		PrintPaymentMethod:          strings.TrimSpace(b.PrintPaymentMethod),
+		EffectivePrintPaymentMethod: strings.TrimSpace(b.EffectivePrintPaymentMethod),
+	}
+}
+
+func firstNonEmptyBillRawString(b *models.Bill, keys ...string) string {
+	for _, key := range keys {
+		if v := billRawString(b.RawData, key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func billJSONRawString(raw json.RawMessage, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	if v, ok := m[key].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func evaluateMarketplacePrintRows(
+	billID string,
+	current marketplacePrintRow,
+	rows []marketplacePrintRow,
+	getPolicy func(marketplacePrintRow) models.MarketplacePrintPolicy,
+) (int, int, error) {
+	if !isMarketplacePurchaseEmail(current.Source, current.BillType) {
+		return 0, 0, nil
+	}
+	if len(rows) == 0 {
+		rows = []marketplacePrintRow{current}
+	}
+
+	missing := []string{}
+	missingPayment := []string{}
+	nonMatchingPayment := []string{}
+	total := len(rows)
+	withDoc := 0
+	for _, row := range rows {
+		rowPolicy := getPolicy(row)
+		if strings.TrimSpace(row.Status) == "sent" && strings.TrimSpace(row.SMLDocNo) != "" {
+			withDoc++
+		}
+		if rowPolicy.RequiresAllOrdersSMLDoc && (strings.TrimSpace(row.Status) != "sent" || strings.TrimSpace(row.SMLDocNo) == "") {
+			missing = append(missing, rowOrderLabel(row))
+		}
+		if strings.TrimSpace(row.EffectivePrintPaymentMethod) == "" {
+			missingPayment = append(missingPayment, rowOrderLabel(row))
+		} else if !rowMatchesPaymentPolicy(row, rowPolicy) {
+			nonMatchingPayment = append(nonMatchingPayment, rowOrderLabel(row))
+		}
+	}
+
+	if strings.TrimSpace(current.Status) != "sent" || strings.TrimSpace(current.SMLDocNo) == "" {
+		currentOrderID := strings.TrimSpace(current.OrderID)
+		if currentOrderID == "" {
+			currentOrderID = billID
+		}
+		alreadyMissing := false
+		for _, orderID := range missing {
+			if orderID == currentOrderID {
+				alreadyMissing = true
+				break
+			}
+		}
+		if !alreadyMissing {
+			missing = append([]string{currentOrderID}, missing...)
+		}
+	}
+	if len(missing) > 0 || len(missingPayment) > 0 || len(nonMatchingPayment) > 0 {
+		message := ""
+		if len(missing) > 0 {
+			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ ยังขาดเลข SML %d คำสั่งซื้อ", len(missing))
+		} else if len(missingPayment) > 0 {
+			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ ยังไม่ได้เลือกวิธีการชำระเงิน %d คำสั่งซื้อ", len(missingPayment))
+		} else {
+			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ วิธีการชำระเงินไม่ตรงเงื่อนไข %d คำสั่งซื้อ", len(nonMatchingPayment))
+		}
+		return total, withDoc, &EmailPrintReadinessError{
+			Message:                        message,
+			MissingOrders:                  missing,
+			MissingPaymentMethodOrders:     missingPayment,
+			NonMatchingPaymentMethodOrders: nonMatchingPayment,
+			RelatedOrderCount:              total,
+			SMLDocCount:                    withDoc,
+			PrintPolicy:                    getPolicy(current),
+		}
+	}
+	return total, withDoc, nil
 }
 
 func (r *BillRepo) ListEmailPrintCandidates(f models.BillListFilter, limit int) ([]models.EmailPrintCandidate, bool, error) {

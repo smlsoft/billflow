@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, RefreshCw, Send } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { RetryBillPayload } from "@/hooks/useBills";
+import { updateBillPrintPaymentMethod, type RetryBillPayload } from "@/hooks/useBills";
 import type { Bill, SMLReadiness } from "@/types";
 import {
   REMARK2_NONE,
@@ -27,6 +28,7 @@ import {
 } from "@/lib/smlRemark2";
 import { ENABLE_REMARK2 } from "@/lib/featureFlags";
 import { isSMLReady, smlBlockedMessage } from "@/lib/sml-readiness";
+import { DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS, normalizeMarketplacePrintPolicy } from "@/pages/ChannelDefaults/labels";
 import { PartyPicker, type Party } from "@/pages/ChannelDefaults/PartyPicker";
 import { SMLMasterCodePicker } from "./SMLMasterCodePicker";
 import { ShelfPicker, WarehousePicker } from "./WarehousePicker";
@@ -156,6 +158,19 @@ function isCardPaymentMethod(method: string) {
   );
 }
 
+function isPaymentMethodPrintable(method: string, prefixes: string[]) {
+  const normalized = method.trim().toUpperCase();
+  return normalized !== "" && prefixes.some((prefix) => normalized.startsWith(prefix));
+}
+
+function paymentMethodFromParty(party: Party | null) {
+  const name = party?.name?.trim() ?? "";
+  const code = party?.code?.trim() ?? "";
+  if (name.toUpperCase().startsWith("TT")) return name;
+  if (code.toUpperCase().startsWith("TT")) return code;
+  return "";
+}
+
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -219,8 +234,30 @@ export function SendPurchaseDialog({
   const [vatRateStr, setVatRateStr] = useState("");
   const [inquiryTypeStr, setInquiryTypeStr] = useState("");
   const [remark2Str, setRemark2Str] = useState(REMARK2_NONE);
+  const [printPaymentMethod, setPrintPaymentMethod] = useState("");
+  const [printPaymentMethodTouched, setPrintPaymentMethodTouched] = useState(false);
+  const [savingPrintPaymentMethod, setSavingPrintPaymentMethod] = useState(false);
 
   const effectivePartyCode = party?.code ?? "";
+  const marketplacePrintPolicy = useMemo(
+    () => normalizeMarketplacePrintPolicy(bill.email_group?.print_policy),
+    [bill.email_group?.print_policy],
+  );
+  const paymentMethodOptions =
+    marketplacePrintPolicy.payment_methods.length > 0
+      ? marketplacePrintPolicy.payment_methods
+      : DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS;
+  const selectedPrintPaymentMethod = printPaymentMethod.trim();
+  const printPaymentMethodAllowed =
+    !isMarketplacePurchaseEmail ||
+    (selectedPrintPaymentMethod !== "" &&
+      paymentMethodOptions.includes(selectedPrintPaymentMethod));
+  const printPaymentMethodReadyForPrint =
+    !marketplacePrintPolicy.payment_method_prefix_enabled ||
+    isPaymentMethodPrintable(
+      selectedPrintPaymentMethod,
+      marketplacePrintPolicy.payment_method_prefixes,
+    );
   const parsedVatRate = Number(vatRateStr);
   const vatRateValid =
     vatRateStr.trim() !== "" &&
@@ -245,7 +282,9 @@ export function SendPurchaseDialog({
     vatTypeStr !== "" &&
     vatRateValid &&
     (!isPurchaseOrder || inquiryTypeStr !== "") &&
-    docTime.trim() !== "";
+    docTime.trim() !== "" &&
+    (!isMarketplacePurchaseEmail || printPaymentMethodAllowed) &&
+    !savingPrintPaymentMethod;
   const missingFields = useMemo(
     () =>
       [
@@ -261,15 +300,26 @@ export function SendPurchaseDialog({
         isPurchaseOrder && inquiryTypeStr === ""
           ? "ประเภทรายการซื้อ (inquiry_type)"
           : "",
+        isMarketplacePurchaseEmail && selectedPrintPaymentMethod === ""
+          ? "วิธีการชำระเงิน"
+          : "",
+        isMarketplacePurchaseEmail &&
+        selectedPrintPaymentMethod !== "" &&
+        !printPaymentMethodAllowed
+          ? "วิธีการชำระเงินต้องอยู่ในรายการที่ตั้งค่าไว้ใน Channels"
+          : "",
         docTime.trim() === "" ? "เวลาเอกสาร (doc_time)" : "",
       ].filter(Boolean),
     [
       docTime,
       effectivePartyCode,
       inquiryTypeStr,
+      isMarketplacePurchaseEmail,
       isPurchaseOrder,
       isSale,
+      printPaymentMethodAllowed,
       shelfCode,
+      selectedPrintPaymentMethod,
       vatRateValid,
       vatTypeStr,
       whCode,
@@ -346,13 +396,13 @@ export function SendPurchaseDialog({
     const firstLine = firstPayloadLine(payload);
     const partyCode = payloadString(payload, "cust_code");
     const partyName = payloadString(payload, "supplier_name") || partyCode;
-    setParty(
+    const initialParty =
       partyCode
         ? { code: partyCode, name: partyName }
         : defaults?.party_code
           ? { code: defaults.party_code, name: defaults.party_name || defaults.party_code }
-          : null,
-    );
+          : null;
+    setParty(initialParty);
     setDocNo(
       payloadString(payload, "doc_no") ||
         bill.sml_doc_no ||
@@ -403,10 +453,50 @@ export function SendPurchaseDialog({
           ? String(defaults.inquiry_type)
           : "",
     );
-  }, [open, bill.id, bill.remark, bill.sml_doc_no, bill.sml_payload, defaults]);
+    setPrintPaymentMethodTouched(false);
+    setSavingPrintPaymentMethod(false);
+    setPrintPaymentMethod(
+      (bill.print_payment_method || bill.effective_print_payment_method || "").trim() ||
+        paymentMethodFromParty(initialParty),
+    );
+  }, [
+    open,
+    bill.effective_print_payment_method,
+    bill.id,
+    bill.print_payment_method,
+    bill.remark,
+    bill.sml_doc_no,
+    bill.sml_payload,
+    defaults,
+  ]);
 
-  const handleConfirm = () => {
+  useEffect(() => {
+    if (!open || !isMarketplacePurchaseEmail || printPaymentMethodTouched) return;
+    if (printPaymentMethod.trim() !== "") return;
+    const next = paymentMethodFromParty(party);
+    if (next) setPrintPaymentMethod(next);
+  }, [isMarketplacePurchaseEmail, open, party, printPaymentMethod, printPaymentMethodTouched]);
+
+  const handleConfirm = async () => {
     if (!canConfirm) return;
+    if (isMarketplacePurchaseEmail) {
+      setSavingPrintPaymentMethod(true);
+      try {
+        await updateBillPrintPaymentMethod(bill.id, {
+          payment_method: selectedPrintPaymentMethod,
+          apply_to_email_group: Boolean(
+            bill.email_group?.message_id && (bill.email_group?.order_count ?? 0) > 1,
+          ),
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "อัปเดตวิธีการชำระเงินไม่สำเร็จ";
+        toast.error(message);
+        setSavingPrintPaymentMethod(false);
+        return;
+      }
+      setSavingPrintPaymentMethod(false);
+    }
     onConfirm({
       party_code: effectivePartyCode,
       party_name: party?.name,
@@ -701,6 +791,51 @@ export function SendPurchaseDialog({
                 </SelectContent>
               </Select>
             </div>
+            {isMarketplacePurchaseEmail && (
+              <div className="space-y-1 sm:col-span-2">
+                <Label className="text-xs">
+                  วิธีการชำระเงิน <span className="text-destructive">*</span>
+                </Label>
+                <Select
+                  value={printPaymentMethod}
+                  onValueChange={(value) => {
+                    setPrintPaymentMethod(value);
+                    setPrintPaymentMethodTouched(true);
+                  }}
+                >
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue placeholder="เลือกวิธีการชำระเงิน" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentMethodOptions.map((method) => (
+                      <SelectItem key={method} value={method}>
+                        {method}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="text-[10px] text-muted-foreground">
+                  เก็บไว้ใน BillFlow เพื่อใช้ตรวจเงื่อนไขปริ้น ไม่ส่งค่าเข้า SML
+                  {bill.email_group?.order_count && bill.email_group.order_count > 1
+                    ? " และจะบันทึกให้ทุกคำสั่งซื้อในอีเมลเดียวกัน"
+                    : ""}
+                </div>
+                {selectedPrintPaymentMethod &&
+                  !printPaymentMethodReadyForPrint && (
+                    <div className="text-[10px] text-warning">
+                      เลือกค่านี้ส่ง SML ได้ แต่ยังไม่พร้อมปริ้น
+                      เพราะเงื่อนไขปัจจุบันรับเฉพาะวิธีชำระเงินที่ขึ้นต้นด้วย{" "}
+                      {marketplacePrintPolicy.payment_method_prefixes.join(", ")}
+                    </div>
+                  )}
+                {selectedPrintPaymentMethod && !printPaymentMethodAllowed && (
+                  <div className="text-[10px] text-warning">
+                    วิธีชำระเงินนี้ไม่อยู่ในรายการที่ตั้งค่าไว้ใน Channels
+                    กรุณาเลือกจาก dropdown หรือแก้ config ช่องทาง
+                  </div>
+                )}
+              </div>
+            )}
             {ENABLE_REMARK2 && (
               <div className="space-y-1">
                 <Label className="text-xs">สถานะเอกสาร (remark_2)</Label>
@@ -909,7 +1044,7 @@ export function SendPurchaseDialog({
             title={!smlReady ? smlBlockedMessage(smlReadiness) : undefined}
           >
             <Send className="h-4 w-4" />
-            ส่งไปยัง SML
+            {savingPrintPaymentMethod ? "กำลังบันทึกวิธีชำระเงิน…" : "ส่งไปยัง SML"}
           </Button>
         </DialogFooter>
       </DialogContent>

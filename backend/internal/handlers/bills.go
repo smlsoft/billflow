@@ -647,14 +647,33 @@ func (h *BillHandler) List(c *gin.Context) {
 		f.IncludeTotal, _ = strconv.ParseBool(v)
 	}
 
+	started := time.Now()
 	result, err := h.billRepo.List(f)
+	duration := time.Since(started)
 	if err != nil {
-		h.log.Error("List bills", zap.Error(err))
+		h.log.Error("List bills", zap.Error(err), zap.Duration("duration", duration))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
 	if result.Bills == nil {
 		result.Bills = []models.Bill{}
+	}
+	if duration > 750*time.Millisecond {
+		h.log.Warn(
+			"slow bills list",
+			zap.Duration("duration", duration),
+			zap.Int("row_count", len(result.Bills)),
+			zap.Int("page", result.Page),
+			zap.Int("page_size", result.PageSize),
+			zap.Bool("include_total", f.IncludeTotal),
+			zap.Bool("print_ready", f.PrintReady),
+			zap.Bool("search_set", strings.TrimSpace(f.Search) != ""),
+			zap.String("status", f.Status),
+			zap.String("source", f.Source),
+			zap.String("bill_type", f.BillType),
+			zap.String("document_route", f.DocumentRoute),
+			zap.String("archived", f.Archived),
+		)
 	}
 
 	resp := gin.H{
@@ -1268,7 +1287,7 @@ func (h *BillHandler) UpdatePrintPaymentMethod(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"message": "อัปเดตวิธีการชำระเงินสำหรับปริ้นแล้ว",
+		"message": "อัปเดตวิธีการชำระเงินแล้ว",
 		"bill":    updated,
 		"result":  result,
 	})

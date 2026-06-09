@@ -64,10 +64,7 @@ func (r *BillRepo) UpdatePrintPaymentMethod(id, paymentMethod string, applyToEma
 		return nil, fmt.Errorf("แก้วิธีชำระเงินสำหรับปริ้นได้เฉพาะบิลซื้อ Shopee/Lazada email")
 	}
 	if archived {
-		return nil, fmt.Errorf("บิลนี้ถูกเก็บแล้ว ไม่สามารถแก้วิธีชำระเงินสำหรับปริ้นได้")
-	}
-	if strings.TrimSpace(status) != "sent" || strings.TrimSpace(smlDocNo) == "" {
-		return nil, fmt.Errorf("ต้องส่งเข้า SML และมีเลข POL ก่อนจึงจะแก้วิธีชำระเงินสำหรับปริ้นได้")
+		return nil, fmt.Errorf("บิลนี้ถูกเก็บแล้ว ไม่สามารถแก้วิธีการชำระเงินได้")
 	}
 
 	policy := r.channelPrintPolicy(source, billType)
@@ -78,8 +75,12 @@ func (r *BillRepo) UpdatePrintPaymentMethod(id, paymentMethod string, applyToEma
 	where := "b.id = $1"
 	args := []any{id}
 	if applyToEmailGroup {
-		where = marketplaceEmailMessageExpr("b") + " = $1 AND b.source IN ('shopee_shipped', 'lazada_email') AND b.bill_type = 'purchase' AND b.archived_at IS NULL"
-		args = []any{messageID}
+		if strings.TrimSpace(messageID) == "" {
+			applyToEmailGroup = false
+		} else {
+			where = marketplaceEmailMessageExpr("b") + " = $1 AND b.source IN ('shopee_shipped', 'lazada_email') AND b.bill_type = 'purchase' AND b.archived_at IS NULL"
+			args = []any{messageID}
+		}
 	}
 
 	rows, err := tx.Query(`

@@ -281,7 +281,7 @@ export async function updateBillPrintPaymentMethod(
       humanizeSMLConnectionError(
         res.data?.error ||
           res.data?.message ||
-          `อัปเดตวิธีการชำระเงินสำหรับปริ้นไม่สำเร็จ (HTTP ${res.status})`,
+          `อัปเดตวิธีการชำระเงินไม่สำเร็จ (HTTP ${res.status})`,
       ),
     )
   }

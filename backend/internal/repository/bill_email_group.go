@@ -43,31 +43,76 @@ func (e *EmailPrintReadinessError) Error() string {
 func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 	messageIDs := make([]string, 0, len(bills))
 	seen := make(map[string]bool, len(bills))
+	marketplaceCandidate := make(map[string]bool, len(bills))
 	for i := range bills {
 		messageID := billEmailMessageID(&bills[i])
-		if messageID == "" || seen[messageID] {
+		if messageID == "" {
 			continue
 		}
-		seen[messageID] = true
-		messageIDs = append(messageIDs, messageID)
+		isMarketplace := isMarketplacePurchaseEmail(bills[i].Source, bills[i].BillType)
+		if !seen[messageID] {
+			seen[messageID] = true
+			messageIDs = append(messageIDs, messageID)
+			marketplaceCandidate[messageID] = isMarketplace
+			continue
+		}
+		if !isMarketplace {
+			marketplaceCandidate[messageID] = false
+		}
 	}
 	if len(messageIDs) == 0 {
 		return nil
 	}
 
+	marketplaceMessageIDs := make([]string, 0, len(messageIDs))
+	generalMessageIDs := make([]string, 0, len(messageIDs))
+	for _, messageID := range messageIDs {
+		if marketplaceCandidate[messageID] {
+			marketplaceMessageIDs = append(marketplaceMessageIDs, messageID)
+		} else {
+			generalMessageIDs = append(generalMessageIDs, messageID)
+		}
+	}
+
 	stats := make(map[string]emailGroupStats, len(messageIDs))
 	rows, err := r.db.Query(`
-		WITH matched_bills AS (
-		  SELECT id, raw_data->>'email_message_id' AS message_id
-		    FROM bills
-		   WHERE raw_data ? 'email_message_id'
-		     AND raw_data->>'email_message_id' = ANY($1)
+		WITH marketplace_message_ids AS (
+		  SELECT unnest($1::text[]) AS message_id
+		),
+		general_message_ids AS (
+		  SELECT unnest($2::text[]) AS message_id
+		),
+		all_message_ids AS (
+		  SELECT message_id FROM marketplace_message_ids
 		  UNION
-		  SELECT id, raw_data->>'message_id' AS message_id
-		    FROM bills
-		   WHERE raw_data ? 'message_id'
-		     AND COALESCE(raw_data->>'email_message_id', '') = ''
-		     AND raw_data->>'message_id' = ANY($1)
+		  SELECT message_id FROM general_message_ids
+		),
+		matched_bills AS (
+		  SELECT b.id, m.message_id
+		    FROM marketplace_message_ids m
+		    JOIN bills b ON b.raw_data->>'email_message_id' = m.message_id
+		   WHERE b.raw_data ? 'email_message_id'
+		     AND b.source IN ('shopee_shipped', 'lazada_email')
+		     AND b.bill_type = 'purchase'
+		  UNION ALL
+		  SELECT b.id, m.message_id
+		    FROM marketplace_message_ids m
+		    JOIN bills b ON b.raw_data->>'message_id' = m.message_id
+		   WHERE b.raw_data ? 'message_id'
+		     AND COALESCE(b.raw_data->>'email_message_id', '') = ''
+		     AND b.source IN ('shopee_shipped', 'lazada_email')
+		     AND b.bill_type = 'purchase'
+		  UNION ALL
+		  SELECT b.id, m.message_id
+		    FROM general_message_ids m
+		    JOIN bills b ON b.raw_data->>'email_message_id' = m.message_id
+		   WHERE b.raw_data ? 'email_message_id'
+		  UNION ALL
+		  SELECT b.id, m.message_id
+		    FROM general_message_ids m
+		    JOIN bills b ON b.raw_data->>'message_id' = m.message_id
+		   WHERE b.raw_data ? 'message_id'
+		     AND COALESCE(b.raw_data->>'email_message_id', '') = ''
 		),
 		group_stats AS (
 		  SELECT message_id,
@@ -84,9 +129,9 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		         (ARRAY_AGG(e.created_at ORDER BY e.created_at DESC))[1] AS last_printed_at,
 		         (ARRAY_AGG(e.requested_by_email ORDER BY e.created_at DESC))[1] AS last_printed_by_email,
 		         (ARRAY_AGG(COALESCE(u.name, '') ORDER BY e.created_at DESC))[1] AS last_printed_by_name
-		    FROM email_print_events e
+		    FROM all_message_ids m
+		    JOIN email_print_events e ON e.email_message_id = m.message_id
 		    LEFT JOIN users u ON u.id = e.requested_by
-		   WHERE e.email_message_id = ANY($1)
 		   GROUP BY e.email_message_id
 		)
 		SELECT gs.message_id,
@@ -96,9 +141,10 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		       ps.last_printed_at,
 		       COALESCE(ps.last_printed_by_email, '') AS last_printed_by_email,
 		       COALESCE(ps.last_printed_by_name, '') AS last_printed_by_name
-		  FROM group_stats gs
-		  LEFT JOIN print_stats ps ON ps.message_id = gs.message_id`,
-		pq.Array(messageIDs),
+			  FROM group_stats gs
+			  LEFT JOIN print_stats ps ON ps.message_id = gs.message_id`,
+		pq.Array(marketplaceMessageIDs),
+		pq.Array(generalMessageIDs),
 	)
 	if err != nil {
 		return err
@@ -150,7 +196,9 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 			LastPrintedByEmail: stat.LastPrintedByEmail,
 			LastPrintedByName:  stat.LastPrintedByName,
 		}
-		r.attachPrintReadinessSummary(&bills[i])
+	}
+	if err := r.attachPrintReadinessSummaries(bills); err != nil {
+		return err
 	}
 	return nil
 }
@@ -176,6 +224,60 @@ func (r *BillRepo) attachPrintReadinessSummary(b *models.Bill) {
 		return
 	}
 	b.EmailGroup.PrintBlockReason = "ตรวจสถานะพร้อมพิมพ์ไม่ได้"
+}
+
+func (r *BillRepo) attachPrintReadinessSummaries(bills []models.Bill) error {
+	messageIDs := make([]string, 0, len(bills))
+	seenMessages := map[string]bool{}
+	for i := range bills {
+		if bills[i].EmailGroup == nil || !isMarketplacePurchaseEmail(bills[i].Source, bills[i].BillType) {
+			continue
+		}
+		messageID := strings.TrimSpace(bills[i].EmailGroup.MessageID)
+		if messageID == "" || seenMessages[messageID] {
+			continue
+		}
+		seenMessages[messageID] = true
+		messageIDs = append(messageIDs, messageID)
+	}
+	if len(messageIDs) == 0 {
+		return nil
+	}
+
+	rowsByMessageID, err := r.listMarketplacePrintRowsByMessageIDs(messageIDs)
+	if err != nil {
+		return err
+	}
+	policyCache := map[string]models.MarketplacePrintPolicy{}
+	getPolicy := func(row marketplacePrintRow) models.MarketplacePrintPolicy {
+		return r.channelPrintPolicyCached(policyCache, row.Source, row.BillType)
+	}
+
+	for i := range bills {
+		if bills[i].EmailGroup == nil || !isMarketplacePurchaseEmail(bills[i].Source, bills[i].BillType) {
+			continue
+		}
+		current := marketplacePrintRowFromBill(&bills[i])
+		policy := getPolicy(current)
+		bills[i].EmailGroup.PrintPolicy = policy
+		bills[i].EmailGroup.PrintPolicyNote = models.MarketplacePrintPolicyNote(policy)
+
+		_, _, err := evaluateMarketplacePrintRows(bills[i].ID, current, rowsByMessageID[bills[i].EmailGroup.MessageID], getPolicy)
+		if err == nil {
+			bills[i].EmailGroup.PrintReady = true
+			continue
+		}
+		var readinessErr *EmailPrintReadinessError
+		if errors.As(err, &readinessErr) {
+			bills[i].EmailGroup.PrintBlockReason = readinessErr.Message
+			bills[i].EmailGroup.MissingSMLOrders = readinessErr.MissingOrders
+			bills[i].EmailGroup.MissingPaymentMethodOrders = readinessErr.MissingPaymentMethodOrders
+			bills[i].EmailGroup.NonMatchingPaymentMethodOrders = readinessErr.NonMatchingPaymentMethodOrders
+			continue
+		}
+		bills[i].EmailGroup.PrintBlockReason = "ตรวจสถานะพร้อมพิมพ์ไม่ได้"
+	}
+	return nil
 }
 
 func (r *BillRepo) attachEmailGroupDetails(b *models.Bill) error {
@@ -385,94 +487,29 @@ func (r *BillRepo) validateMarketplaceEmailPrintReady(billID, messageID string) 
 		return 0, 0, nil
 	}
 
-	policy := r.channelPrintPolicy(source, billType)
 	policyCache := map[string]models.MarketplacePrintPolicy{
-		source + "/" + billType: policy,
+		source + "/" + billType: r.channelPrintPolicy(source, billType),
 	}
 	getPolicy := func(row marketplacePrintRow) models.MarketplacePrintPolicy {
-		key := row.Source + "/" + row.BillType
-		if cached, ok := policyCache[key]; ok {
-			return cached
-		}
-		p := r.channelPrintPolicy(row.Source, row.BillType)
-		policyCache[key] = p
-		return p
+		return r.channelPrintPolicyCached(policyCache, row.Source, row.BillType)
 	}
 	rows, err := r.listMarketplacePrintRows(messageID)
 	if err != nil {
 		return 0, 0, err
 	}
-	if len(rows) == 0 {
-		rows = []marketplacePrintRow{{
-			ID:                          billID,
-			OrderID:                     currentOrderID,
-			Source:                      source,
-			BillType:                    billType,
-			Status:                      status,
-			SMLDocNo:                    currentDocNo,
-			PartyCode:                   currentPartyCode,
-			PartyName:                   currentPartyName,
-			PrintPaymentMethod:          currentPrintPaymentMethod,
-			EffectivePrintPaymentMethod: currentEffectivePaymentMethod,
-		}}
+	current := marketplacePrintRow{
+		ID:                          billID,
+		OrderID:                     currentOrderID,
+		Source:                      source,
+		BillType:                    billType,
+		Status:                      status,
+		SMLDocNo:                    currentDocNo,
+		PartyCode:                   currentPartyCode,
+		PartyName:                   currentPartyName,
+		PrintPaymentMethod:          currentPrintPaymentMethod,
+		EffectivePrintPaymentMethod: currentEffectivePaymentMethod,
 	}
-
-	missing := []string{}
-	missingPayment := []string{}
-	nonMatchingPayment := []string{}
-	total := len(rows)
-	withDoc := 0
-	for _, row := range rows {
-		rowPolicy := getPolicy(row)
-		if strings.TrimSpace(row.Status) == "sent" && strings.TrimSpace(row.SMLDocNo) != "" {
-			withDoc++
-		}
-		if rowPolicy.RequiresAllOrdersSMLDoc && (strings.TrimSpace(row.Status) != "sent" || strings.TrimSpace(row.SMLDocNo) == "") {
-			missing = append(missing, rowOrderLabel(row))
-		}
-		if strings.TrimSpace(row.EffectivePrintPaymentMethod) == "" {
-			missingPayment = append(missingPayment, rowOrderLabel(row))
-		} else if !rowMatchesPaymentPolicy(row, rowPolicy) {
-			nonMatchingPayment = append(nonMatchingPayment, rowOrderLabel(row))
-		}
-	}
-
-	if strings.TrimSpace(status) != "sent" || strings.TrimSpace(currentDocNo) == "" {
-		currentOrderID = strings.TrimSpace(currentOrderID)
-		if currentOrderID == "" {
-			currentOrderID = billID
-		}
-		alreadyMissing := false
-		for _, orderID := range missing {
-			if orderID == currentOrderID {
-				alreadyMissing = true
-				break
-			}
-		}
-		if !alreadyMissing {
-			missing = append([]string{currentOrderID}, missing...)
-		}
-	}
-	if len(missing) > 0 || len(missingPayment) > 0 || len(nonMatchingPayment) > 0 {
-		message := ""
-		if len(missing) > 0 {
-			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ ยังขาดเลข SML %d คำสั่งซื้อ", len(missing))
-		} else if len(missingPayment) > 0 {
-			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ ยังไม่ได้เลือกวิธีการชำระเงิน %d คำสั่งซื้อ", len(missingPayment))
-		} else {
-			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ วิธีการชำระเงินไม่ตรงเงื่อนไข %d คำสั่งซื้อ", len(nonMatchingPayment))
-		}
-		return total, withDoc, &EmailPrintReadinessError{
-			Message:                        message,
-			MissingOrders:                  missing,
-			MissingPaymentMethodOrders:     missingPayment,
-			NonMatchingPaymentMethodOrders: nonMatchingPayment,
-			RelatedOrderCount:              total,
-			SMLDocCount:                    withDoc,
-			PrintPolicy:                    policy,
-		}
-	}
-	return total, withDoc, nil
+	return evaluateMarketplacePrintRows(billID, current, rows, getPolicy)
 }
 
 func isMarketplacePurchaseEmail(source, billType string) bool {
