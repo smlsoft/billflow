@@ -210,10 +210,7 @@ curl http://localhost:3010
 
 ### Default admin account
 
-```
-Email:    admin@billflow.local
-Password: admin1234
-```
+Retrieve the current local admin credentials from the deployment secret source. Do not store real passwords in tracked docs.
 
 ### Run integration tests
 

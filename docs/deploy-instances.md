@@ -13,7 +13,7 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 | `billflow-thaisunsport` | Thaisunsport demo Phase 1 ฝั่งซื้อ | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | `https://pets-mini-museums-ships.trycloudflare.com` | `/tmp/billflow-thaisunsport-tunnel.log` |
 | ~~`billflow-henna`~~ → **Nexflow** | Henna — ย้ายเป็น Nexflow แล้ว | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5440` | ngrok-free.dev (ดู Nexflow .env) | `/tmp/nexflow-tunnel.log` |
 
-> **Nexflow** repo แยก: `https://github.com/bosocmputer/Nexflow.git` | local: `/Users/nontawatwongnuk/dev_bos/Nexflow` | deploy: `NX_PASS=boss123456 python scripts/deploy.py`
+> **Nexflow** repo แยก: `https://github.com/bosocmputer/Nexflow.git` | local: `/Users/nontawatwongnuk/dev_bos/Nexflow` | deploy: `NX_PASS=<from-local-secret-source> python scripts/deploy.py`
 
 ## Deploy Policy
 
@@ -24,7 +24,7 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 | ทดสอบงานใหม่หรือแก้เฉพาะ demo หลัก | `billflow` | ใช้ main เป็นพื้นที่ทดสอบก่อน |
 | Shared Phase 1 bug/UX/backend/email/bills/logs/settings | `billflow`, `billflow-thaisunsport` | **ไม่รวม henna** — henna ใช้ Nexflow repo แล้ว |
 | งานเฉพาะร้าน เช่น credential, SML config, tunnel URL, env เฉพาะ instance | instance นั้นเท่านั้น | ห้ามกระทบ instance อื่น |
-| แก้ไขสำหรับ henna / Nexflow | **Nexflow repo เท่านั้น** | `NX_PASS=boss123456 python scripts/deploy.py` |
+| แก้ไขสำหรับ henna / Nexflow | **Nexflow repo เท่านั้น** | `NX_PASS=<from-local-secret-source> python scripts/deploy.py` |
 
 ก่อน deploy ทุกครั้งต้องระบุ `Change type`, `Deploy targets`, และ instance ที่ตั้งใจ skip ให้ชัดเจนในข้อความสรุป.
 
@@ -145,8 +145,8 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - Containers: `nexflow-postgres`, `nexflow-backend`, `nexflow-frontend`
 - DB: `nexflow` (user: `nexflow`, volume: `nexflow_pgdata`)
 - SML tenant: `aoy`
-- Admin login: `admin@nexflow.local` / `admin1234`
-- Deploy: `NX_PASS=boss123456 python scripts/deploy.py` (จาก Nexflow repo)
+- Admin login: retrieve current credentials from Nexflow local secret source.
+- Deploy: `NX_PASS=<from-local-secret-source> python scripts/deploy.py` (จาก Nexflow repo)
 - `PUBLIC_BASE_URL` ใน `.env`: ngrok-free.dev domain (Shopee API redirect ยังใช้ domain เดิม)
 - `SHOPEE_OPEN_API_ENABLED=true`
 
