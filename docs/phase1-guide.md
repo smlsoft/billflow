@@ -1,7 +1,7 @@
-# BillFlow Phase 1 — คู่มือใช้งานบิลซื้อ Shopee
+# BillFlow Phase 1 — คู่มือใช้งานบิลซื้อ Marketplace
 
-> อัปเดตล่าสุด: 2026-05-20
-> Scope ปัจจุบัน: ดึงอีเมล Shopee ฝั่งบิลซื้อ, ตรวจรายการ, จับคู่สินค้า, และส่งเข้า SML `purchaseorder`
+> อัปเดตล่าสุด: 2026-06-09
+> Scope ปัจจุบัน: ดึงอีเมล Shopee/Lazada ฝั่งบิลซื้อ, ตรวจรายการ, จับคู่สินค้า, เลือกวิธีชำระเงินใน BillFlow, และส่งเข้า SML `purchaseorder`
 
 ---
 
@@ -11,6 +11,7 @@
 |---|---:|---|
 | ดึงอีเมล Shopee ผ่าน IMAP | ✅ | ตั้งค่าที่ `/settings/email` |
 | แยกอีเมล Shopee shipped/payment เป็นบิลซื้อ | ✅ | source เป็น `shopee_shipped` |
+| ดึงอีเมล Lazada ผ่าน IMAP | ✅ | source เป็น `lazada_email`, review-first, auto poll แบบ 1-day lookback บน thaisunsport |
 | เก็บหลักฐานต้นทาง | ✅ | HTML body และ envelope JSON ดูได้จากหน้าบิล |
 | สร้างบิลซื้อและรายการสินค้า | ✅ | เปิดดูที่ `/bills` และ `/bills/:id` |
 | จับคู่สินค้า SML | ✅ | เลือกจาก catalog หรือสร้างสินค้าใหม่ |
@@ -121,17 +122,19 @@ Phase 1 ให้หน้านี้เหลือเฉพาะค่าข
 | คลัง | ✅ | user ต้องระบุเอง |
 | พื้นที่เก็บ | ✅ | user ต้องระบุเอง |
 | ประเภทภาษี | ✅ | ต้องเลือก เช่น แยกนอก/รวมใน/อัตรา 0 |
-| อัตราภาษี | ✅ | default `7` |
+| อัตราภาษี | ✅ | บิลซื้อเป็น read-only/disabled; ต้องมาจาก `/settings/channels` หรือ preview |
+| วิธีการชำระเงิน | ✅ สำหรับ Shopee/Lazada purchase email | เก็บใน BillFlow เท่านั้น ไม่ส่งเข้า SML; ใช้กับเงื่อนไขปริ้น |
 | เวลาเอกสาร | ✅ | default เป็นเวลาปัจจุบัน |
 | Branch code | ❌ | ถ้าว่าง ส่ง `""` |
 | Sale code | ❌ | ถ้าว่าง ส่ง `""` |
-| หมายเหตุ | ❌ | ส่งเข้า `remark` และเก็บในบิล |
+| หมายเหตุ | ❌ สำหรับบิลซื้อ | ไม่เปิดช่อง free-form; SML `remark` ใช้ชื่อร้านค้า/ผู้ขายจาก source email |
 
 ## ส่ง SML หลายบิล
 
 หน้า `/bills` มีปุ่ม `ส่ง SML ทั้งหมด` สำหรับบิลสถานะพร้อมส่ง (`pending`).
 
 - ระบบ preview และ validate ก่อนส่งจริง.
+- สำหรับ Shopee/Lazada purchase email ต้องเลือก `วิธีการชำระเงิน` ก่อนเริ่ม job; ระบบบันทึกใน BillFlow ก่อนส่ง SML และไม่ส่งค่านี้เข้า SML.
 - จำกัดงานละไม่เกิน 100 บิล.
 - หลังยืนยัน ระบบสร้าง async job ใน backend แล้วแสดง progress: ส่งสำเร็จ / ไม่สำเร็จ / ข้าม / คงเหลือ.
 - ปิด dialog แล้วกลับมาเปิดใหม่ได้ ระบบจะพยายาม resume job ที่ยัง active หรือ job ล่าสุด.
@@ -165,8 +168,10 @@ Payload สำคัญ:
 |---|---|
 | `doc_no` | BillFlow doc counter |
 | `doc_format_code` | `/settings/channels` |
-| `doc_ref` | เลขคำสั่งซื้อ Shopee เช่น `#2604306XDKEKW1` |
-| `doc_ref_date` | วันที่เอกสารจาก Shopee |
+| `doc_ref` | Shopee ใช้เลขอ้างอิงการชำระเงินตาม logic เดิม; Lazada ใส่ยอดรูดบัตรเฉพาะเมื่อ email เป็น Credit/Debit Card |
+| `doc_ref_date` | วันที่เอกสาร/อีเมลเมื่อ route นั้นส่งค่า |
+| `remark` | ชื่อร้านค้า/ผู้ขายจาก source email สำหรับ purchase email |
+| `remark_5` | เลขคำสั่งซื้อ Shopee/Lazada |
 | `cust_code` | ผู้ขายที่ user เลือก |
 | `supplier_name` | ชื่อผู้ขายที่ user เลือก |
 | `branch_code` | จาก dialog, ถ้าว่างส่ง `""` |
@@ -174,6 +179,7 @@ Payload สำคัญ:
 | `wh_code`, `wh_from` | คลังจาก dialog |
 | `shelf_code`, `location_from` | พื้นที่เก็บจาก dialog |
 | `vat_type`, `vat_rate` | จาก dialog |
+| `print_payment_method` | ไม่อยู่ใน SML payload; เก็บเฉพาะใน BillFlow |
 | `items[].item_code` | สินค้า SML ที่จับคู่แล้ว |
 | `items[].wh_code`, `items[].shelf_code` | คลัง/พื้นที่เก็บของ line item |
 | `items[].wh_code_2`, `items[].shelf_code_2` | ส่งตามรูปแบบที่ทดสอบกับ SML |

@@ -1,6 +1,6 @@
 # Email IMAP — การทำงานของ Email Pipeline
 
-> อัพเดตล่าสุด: 2026-06-05
+> อัพเดตล่าสุด: 2026-06-09
 > สถานะ: ✅ multi-account IMAP deployed; config อยู่ใน `/settings/email` และ `imap_accounts` table. Marketplace purchase email ใช้ manual-review flow ไม่ auto-send SML.
 
 ---
@@ -121,7 +121,7 @@ BillFlow poll Gmail/Outlook/IMAP อื่นตาม inbox ที่ admin เ
 - รับเฉพาะเมล Lazada ที่ผ่าน whitelist sender/domain + subject guard.
 - noise เช่น E-invoice, cancellation, dispute, survey/review, delivery-reschedule ไม่สร้าง bill.
 - duplicate guard ใช้ `source='lazada_email' + order_id` และ `processed_email_keys`; confirm/shipped ของ order เดียวกันต้องไม่สร้างซ้ำ.
-- Lazada IMAP accounts บน thaisunsport ยังปิด `enabled=false` หลัง rollout จนกว่าจะตรวจ 7 บิลและลองส่ง SML 1 ใบผ่าน.
+- Lazada IMAP accounts บน thaisunsport เปิดใช้งานแล้ว 3 กล่อง, `lookback_days=1`, `poll_interval_seconds=600` เพื่อคุม AI/token cost.
 
 ### Amount reconciliation
 
@@ -160,11 +160,24 @@ Fields ที่เก็บใน `bills.raw_data`:
 
 ### Current thaisunsport rollout snapshot
 
-- Backfilled 7 Lazada bills: reconciliation `ok` ทั้ง 7, status ยัง `needs_review`.
+- Backfilled 7 Lazada bills: reconciliation `ok` ทั้ง 7; customer confirmed the numbers and at least one Lazada PO sent to SML successfully.
+- Current active Lazada email purchase rows are mixed across `needs_review`, `pending`, and `sent` as customer testing continues.
 - `channel_defaults/lazada_email/purchase` ตั้ง fee item แล้ว: `SHIP_CUS`, unit `บาท`.
 - User ต้องเปิดแต่ละ Bill Detail เพื่อให้ระบบเติม `SHIP_CUS` ก่อนตรวจยอดและก่อนส่ง SML.
 
 Runbook เพิ่มเติม: [Lazada Email Purchase Intake](lazada-email-purchase.md).
+
+### Marketplace print/payment method
+
+Shopee/Lazada purchase email print is controlled by BillFlow-only payment method rules:
+
+- single and bulk SML send dialogs require choosing `วิธีการชำระเงิน`
+- value is saved in `bills.print_payment_method`
+- value is not sent to SML
+- default effective value comes from `sml_payload.supplier_name` only when it starts with `TT`
+- print readiness requires every order in the email group to have POL and effective payment method to pass the configured prefix rule, currently `TT`
+
+Runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).
 
 ---
 

@@ -18,7 +18,7 @@
 |---------|-----------|----------|-------|-------|
 | LINE OA (human chat) | text/image/file/audio → admin inbox `/messages` → reply ผ่าน Reply API/Push API | บิลขาย (sale) | Phase 3 + session 13+ | ✅ chat 2 ทาง + เปิดบิลขายจาก chat |
 | Email (IMAP) | multi-account body/attachment PDF/Excel/รูป + marketplace email routing | sale/purchase ตาม routing | Phase 5 + session 6+ | ✅ deployed |
-| Lazada Email | IMAP Lazada Thailand purchase email → `source='lazada_email'` → admin review ก่อนส่ง SML `purchaseorder` | บิลซื้อ (purchase) | Phase 5+ post-v1.0 | ✅ deployed thaisunsport; auto poll ยังปิดรอ review + SML smoke |
+| Lazada Email | IMAP Lazada Thailand purchase email → `source='lazada_email'` → admin review ก่อนส่ง SML `purchaseorder` | บิลซื้อ (purchase) | Phase 5+ post-v1.0 | ✅ deployed thaisunsport; auto poll enabled with 1-day lookback; review-first before SML |
 | Shopee Excel | Export จาก Shopee Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4a | ✅ deployed |
 | Lazada Excel | Export จาก Lazada Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4b | ✅ deployed main + Henna |
 | TikTok Excel/CSV | Export จาก TikTok Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4c | ✅ deployed main + Henna |
@@ -620,6 +620,9 @@ CREATE TABLE imap_accounts (
 > - [037_data_lifecycle.sql](backend/internal/database/migrations/037_data_lifecycle.sql) — production data lifecycle: summary tables, log/bill indexes, cursor-friendly access paths
 > - [044_sml_bulk_jobs.sql](backend/internal/database/migrations/044_sml_bulk_jobs.sql) — DB-backed async SML bulk send jobs and per-bill item progress/results
 > - [057_lazada_email_purchase.sql](backend/internal/database/migrations/057_lazada_email_purchase.sql) — extends bills/channel defaults for `lazada_email` and adds unique guard for Lazada email order id
+> - [058_channel_default_print_policy.sql](backend/internal/database/migrations/058_channel_default_print_policy.sql) — configurable marketplace email print policy per channel default
+> - [059_marketplace_print_payment_method.sql](backend/internal/database/migrations/059_marketplace_print_payment_method.sql) — BillFlow-only `bills.print_payment_method` for marketplace purchase email print readiness
+> - [060_marketplace_print_perf_indexes.sql](backend/internal/database/migrations/060_marketplace_print_perf_indexes.sql) — idempotent indexes for marketplace email group/print readiness list performance
 
 > **Production data lifecycle**
 > - `/api/logs` uses cursor pagination (`limit`, `cursor`, `has_more`, `next_cursor`) and does not run `COUNT(*)` unless `include_total=true`.
@@ -2551,7 +2554,13 @@ Bill flow → SML routing (bills.go Retry handler — 4-way dispatch):
   lazada_email             purchase    purchaseorder (248)            party_code + fee config from channel_defaults
   any                      any         endpoint URL overridable per (channel,bill_type) in /settings/channels
 
-Selected migrations from the historical session log; current code has migrations through 057:
+Marketplace purchase email print/payment rule:
+  - `bills.print_payment_method` is BillFlow-only and must not be sent to SML.
+  - Single-bill and bulk SML send dialogs save payment method before sending Shopee/Lazada purchase email bills.
+  - Current print-ready policy requires every order in the email group to have POL and effective payment method to start with `TT`.
+  - Free-form purchase `remark` input stays hidden; SML `remark` uses seller/supplier name from the source email.
+
+Selected migrations from the historical session log; current code has migrations through 060:
   001_init.sql
   002_audit_logging.sql                    (audit_logs structured columns)
   002_sml_catalog.sql                      (sml_catalog + extended CHECK)

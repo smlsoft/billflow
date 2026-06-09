@@ -11,7 +11,7 @@
 
 **BillFlow** — ระบบ AI-assisted bill entry สำหรับ SME ลดเวลาคีย์บิลจาก 100+ บิล/วัน → เกือบ 0
 
-**Input channels:** LINE OA (human chat) · Email IMAP · Shopee Open API · Shopee/Lazada/TikTok Excel
+**Input channels:** LINE OA (human chat) · Email IMAP · Lazada/Shopee purchase email · Shopee Open API · Shopee/Lazada/TikTok Excel
 **Output:** สร้าง/ส่งบิลเข้า SML ERP โดยอัตโนมัติ
 
 **Tech stack:**
@@ -80,6 +80,7 @@ x-tenant header: sml1_2026 (main) | aoy (henna) | data1_test (thaisunsport)
 | line / email / lazada / tiktok | sale | sale_reserve (JSON-RPC) |
 | shopee / shopee_email | sale | saleorder (REST v3) |
 | shopee_shipped | purchase | purchaseorder (REST v3) |
+| lazada_email | purchase | purchaseorder (REST v3) |
 | any | any | endpoint จาก channel_defaults.endpoint override ได้ |
 
 ### ⚠️ Critical bugs ที่แก้ไปแล้ว — ห้าม revert:
@@ -91,6 +92,9 @@ x-tenant header: sml1_2026 (main) | aoy (henna) | data1_test (thaisunsport)
 6. **cust_code**: ต้องมาจาก `channel_defaults` table เสมอ — ไม่ hardcode .env
 7. **doc_no reuse on retry**: `bills.go` บันทึก `sml_doc_no` ก่อน call SML → retry ใช้ doc_no เดิม (ไม่ increment counter)
 8. **Docker networking**: SML URL จาก backend container ต้องใช้ `172.24.0.1` ไม่ใช่ `localhost`
+9. **Marketplace payment method**: `bills.print_payment_method` เป็นข้อมูล BillFlow-only สำหรับ print readiness; ห้ามส่งเข้า SML payload
+10. **Marketplace print readiness**: Shopee/Lazada purchase email ต้องมี POL ครบทุก order ใน email group และ effective payment method ต้องผ่าน policy prefix ปัจจุบันคือ `TT`
+11. **Purchase remark**: purchase send dialogs ห้ามเปิด free-form `remark`; backend ใช้ seller/supplier name จาก source email เพื่อไม่ทับ SML remark ของร้านค้า
 
 ### ⚠️ channel_defaults ต้องตั้งก่อนใช้งาน:
 - ตารางว่าง → SML retry error ทันที

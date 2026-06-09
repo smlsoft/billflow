@@ -1,8 +1,8 @@
 # BillFlow Phase 1 — Test Checklist
 
 > ใช้ก่อนส่งให้ลูกค้าทดสอบ
-> อัปเดตล่าสุด: 2026-05-20
-> Scope: Shopee email purchase bill → BillFlow review → SML `purchaseorder`
+> อัปเดตล่าสุด: 2026-06-09
+> Scope: Shopee/Lazada email purchase bill → BillFlow review → SML `purchaseorder`
 
 ---
 
@@ -159,6 +159,8 @@ select * from ic_trans_detail where doc_no = '<DOC_NO>';
 - [ ] เปิด `/bills?status=pending`
 - [ ] กด `ส่ง SML ทั้งหมด`
 - [ ] ตรวจ preview ว่ารายการพร้อมส่ง/ต้องข้ามถูกต้อง
+- [ ] สำหรับ Shopee/Lazada purchase email เลือก `วิธีการชำระเงิน` ใน dialog ก่อนเริ่มส่ง
+- [ ] ตรวจว่า `วิธีการชำระเงิน` ถูกเก็บใน BillFlow เท่านั้น และไม่อยู่ใน SML payload
 - [ ] เริ่มจาก 1 บิล หรือ 5-10 บิลก่อน ไม่เริ่มที่ 100 ทันที
 - [ ] ระหว่างส่ง เห็น progress sent/failed/skipped/remaining
 - [ ] ปิด dialog แล้วเปิดใหม่ ยังเห็นสถานะ job เดิมหรือผลล่าสุด
@@ -193,6 +195,8 @@ Live smoke ล่าสุดบน BillFlow main:
 | หลายรายการ | อย่างน้อย 2-3 items | line totals ถูกทุกบรรทัด |
 | สินค้าไม่เคย map | ต้องเลือกหรือสร้างสินค้า | ส่งไม่ได้จนกว่า map ครบ |
 | ผู้ขายไม่เลือก | เปิด dialog แล้วไม่เลือก supplier | ส่งไม่ได้ |
+| วิธีชำระเงินไม่เลือก | Shopee/Lazada purchase email แล้วเปิด single/bulk send dialog | ส่งไม่ได้จนกว่าเลือกวิธีชำระเงิน |
+| วิธีชำระเงินไม่ใช่ TT | เลือก `โอน Kbank` หรือค่าไม่ขึ้นต้น TT | ส่ง SML ได้ถ้า validation อื่นครบ แต่ยังไม่พร้อมปริ้น |
 | คลัง/พื้นที่เก็บว่าง | ลองไม่กรอก | ส่งไม่ได้ |
 | SML ปิดหรือปลายทาง API ผิด | ตั้งปลายทาง API ผิดชั่วคราว | log อ่านง่าย, retry ได้หลังแก้ |
 

@@ -1,7 +1,7 @@
 # BillFlow — Current State
 
-> Updated: 2026-06-05 11:40 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`) plus post-v1.0 Lazada email purchase rollout on `billflow-thaisunsport`.
+> Updated: 2026-06-09 +07
+> Source of truth checked: local code/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow` main + `billflow-thaisunsport`.
 
 ## Latest Handoff For New Chat
 
@@ -9,33 +9,58 @@
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
-- **Post-v1.0 Lazada email purchase rollout deployed 2026-06-05 to `billflow-thaisunsport` only** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
+- **Post-v1.0 marketplace purchase work deployed through 2026-06-09** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
-- Migration ล่าสุดใน code/deployed thaisunsport: `057_lazada_email_purchase.sql` — เพิ่ม `source/channel='lazada_email'` และ unique guard สำหรับ Lazada email order id.
+- Migration ล่าสุดใน code/deployed main + thaisunsport: `060_marketplace_print_perf_indexes.sql`.
+- Lazada email purchase is live on thaisunsport with review-first flow; 3 Lazada IMAP accounts enabled, `lookback_days=1`, `poll_interval_seconds=600`.
+- Marketplace purchase print readiness now depends on POL completeness plus BillFlow-only payment method rules, not creditor prefix.
+- Single-bill and bulk SML send dialogs now require `วิธีการชำระเงิน` for Shopee/Lazada purchase email; value is stored in BillFlow only and not sent to SML.
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
 
-## Latest Thaisunsport Rollout 2026-06-05 — Lazada Email Purchase
+## Latest Marketplace Purchase Rollout 2026-06-09
 
 ### Scope
-- Deploy target: `billflow-thaisunsport` only (`/home/bosscatdog/billflow-thaisunsport`, frontend `3020`, backend `8100`, postgres `5448`).
-- Backup before deploy/backfill: `manual-backups/lazada-amount-20260605_112633` on server.
-- Lazada IMAP accounts remain disabled (`enabled=false`) until the 7 backfilled bills are reviewed and one SML smoke send passes.
+- Deploy targets: `billflow` main (`3010/8090`) and `billflow-thaisunsport` (`3020/8100`).
+- No automatic source backup was taken in this round.
+- Migrations deployed through `060_marketplace_print_perf_indexes.sql`.
+- Local verification before deploy:
+  - `npm run build`
+  - `go test ./internal/repository ./internal/handlers`
+- Post-deploy verification:
+  - main backend `8090/health` ok; frontend `3010` HTTP 200
+  - thaisunsport backend `8100/health` ok; frontend `3020` HTTP 200
+
+### Customer-facing changes
+- `/bills` list is more compact; row action noise moved into a secondary menu.
+- `/api/bills` list enrichment batches print readiness by email group instead of per-row JSON scans.
+- Single-bill send dialog and bulk send dialog include `วิธีการชำระเงิน` for Shopee/Lazada purchase email.
+- Payment method is saved in `bills.print_payment_method` before SML send.
+- Payment method is not sent to SML and is not part of `RetryBillPayload`.
+- Backend allows saving payment method before POL exists, while still restricting the endpoint to Shopee/Lazada purchase email and configured method values.
+- Print readiness uses configured policy in `/settings/channels`:
+  - every order in the same email group has POL
+  - effective payment method starts with `TT` by default
+- Row print, detail print, and bulk print still call backend guards before recording a print event.
+
+Runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).
+
+## Latest Thaisunsport Lazada Email State 2026-06-09
 
 ### Current production data
-- Manual poll previously created 7 `source='lazada_email'`, `bill_type='purchase'` bills.
-- Backfill completed for the 7 existing bills:
-  - `amount_reconciliation_status='ok'` = `7/7`
-  - status remains `needs_review` = `7/7`
-  - formula checked: `goods_total_amount + shipping_amount + service_fee_amount - coupon_discount_amount = paid_total_amount`
-  - totals: paid `5071.68`, coupon `407.32`, shipping `778.00`
+- Initial manual poll/backfill created 7 `source='lazada_email'`, `bill_type='purchase'` bills and reconciled `ok`.
+- Customer confirmed numbers were correct and one Lazada PO was sent to SML successfully.
+- As of the latest DB check, active Lazada email purchase bills exist across `needs_review`, `pending`, and `sent` statuses as testing continues.
 - Lazada fee config is now set in `channel_defaults/lazada_email/purchase`:
   - `shipping_item_enabled=true`
   - `shipping_item_code=SHIP_CUS`
   - `shipping_item_unit_code=บาท`
+- Lazada IMAP accounts:
+  - `Lazada - pd.thaisunsport@gmail.com`
+  - `Lazada - pd.thaisunsport2@gmail.com`
+  - `Lazada - pd.thaisunsport03@gmail.com`
+  - all enabled with `lookback_days=1`, `poll_interval_seconds=600`
 - Fee line behavior:
   - Bill detail auto-adds `__lazada_shipping_fee__`/`SHIP_CUS` when a user opens a Lazada bill and config is ready.
-  - At last check, fee line existed on `1/7` bills because only one bill detail had been opened after config was set.
-  - User is expected to open each of the 7 bill details so the fee line is added before checking/sending.
 
 ### Production behavior
 - Lazada email purchase uses deterministic HTML summary parsing for amounts; AI is not trusted for money totals.
@@ -373,6 +398,22 @@ Runbook: [Lazada Email Purchase Intake](lazada-email-purchase.md).
 
 ## Latest Deploy Notes
 
+### 2026-06-09 — Marketplace Purchase Payment/Print + Bills List Performance
+
+- Deploy targets: `billflow` main and `billflow-thaisunsport`.
+- Scope:
+  - Added `วิธีการชำระเงิน` dropdown to single-bill and bulk SML send dialogs for Shopee/Lazada purchase email.
+  - Payment method is persisted in BillFlow before SML send and is not sent to SML.
+  - Print readiness now uses email-group POL completeness plus payment-method prefix rule from `/settings/channels`.
+  - Bills list row layout was compacted and marketplace print readiness enrichment was batched by email group.
+  - Backend guard for payment method update now allows pre-POL updates while keeping source/type/config guards.
+- Verification:
+  - Local `npm run build` passed.
+  - Local `go test ./internal/repository ./internal/handlers` passed.
+  - Docker build/restart on both instances passed.
+  - Main backend `8090` and thaisunsport backend `8100` returned healthy JSON.
+  - Main frontend `3010` and thaisunsport frontend `3020` returned HTTP 200.
+
 ### BillFlow Main — Async Bulk SML Jobs
 
 - Change type: SML send reliability / long-running admin workflow.
@@ -630,6 +671,20 @@ Production PostgreSQL also contains `system_settings` and `sml_settings`. These 
 | ใบสั่งขาย | `/sales-orders` | source `shopee`, bill_type `sale`, document_route `saleorder` | `saleorder` |
 | ขายสินค้าและบริการ | `/sale-invoices` | source `shopee`, bill_type `sale`, document_route `saleinvoice` | `saleinvoice` v4 |
 
+## Marketplace Purchase Print/Payment Rules
+
+- Applies only to `shopee_shipped` and `lazada_email` purchase email bills.
+- `bills.print_payment_method` is BillFlow-only data and is not sent to SML.
+- If `print_payment_method` is blank and `sml_payload.supplier_name` starts with `TT`, that supplier name becomes the effective payment method.
+- Single-bill and bulk SML send dialogs require selecting `วิธีการชำระเงิน` before send.
+- Current default print policy:
+  - all active orders in the same email group must have `sml_doc_no`
+  - effective payment method must start with `TT`
+- `/bills?print_ready=1`, row print, bulk print, and Bill Detail print use backend readiness.
+- `recordArtifactPrint` rejects stale/non-ready print requests even if the frontend button looked enabled.
+
+Detailed runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).
+
 ## Phase 1 Purchase Flow
 
 Phase 1 initially focused on Shopee purchase bills from email. The same review/send pattern is now also used by Lazada email purchase bills and marketplace Excel sale documents.
@@ -639,9 +694,12 @@ Phase 1 initially focused on Shopee purchase bills from email. The same review/s
 3. Backend extracts order reference, order date, items, quantities, prices, and source artifacts. Lazada amounts are reconciled from HTML summary before send.
 4. Bill is created as purchase bill and appears in `/bills`.
 5. Admin reviews item rows, maps or creates SML products when needed.
-6. Admin clicks send from Bill Detail.
-7. Confirmation dialog requires supplier, warehouse, shelf, VAT type, and VAT rate. Branch code and sale code may be empty and are sent as empty strings.
-8. Backend posts to SML REST:
+6. Admin clicks send from Bill Detail or starts bulk send from `/bills`.
+7. Confirmation dialog requires supplier, warehouse, shelf, VAT type, VAT rate, inquiry type, and for marketplace purchase email also `วิธีการชำระเงิน`.
+8. VAT rate is locked/read-only in purchase send dialogs and must come from channel config/preview.
+9. Purchase send dialogs do not expose free-form `remark`; backend uses source seller/supplier name for SML `remark`.
+10. Payment method is saved in BillFlow before SML send and is not sent to SML.
+11. Backend posts to SML REST:
 
 ```text
 POST http://192.168.2.248:8080/SMLJavaRESTService/v3/api/purchaseorder

@@ -1,16 +1,17 @@
 # Lazada Email Purchase Intake
 
-> Updated: 2026-06-05 11:40 +07
-> Current prod scope: `billflow-thaisunsport` only.
+> Updated: 2026-06-09 +07
+> Current prod scope: `billflow-thaisunsport`; shared marketplace print/payment UI is also deployed to `billflow` main.
 
 ## Status
 
 - Deployed to thaisunsport: frontend `3020`, backend `8100`, PostgreSQL `5448`.
-- Migration deployed: `057_lazada_email_purchase.sql`.
-- Lazada IMAP accounts remain disabled until review and one SML smoke test pass.
-- Existing 7 Lazada email bills were backfilled from stored email HTML artifacts.
-- All 7 backfilled bills have `amount_reconciliation_status='ok'` and remain `needs_review`.
-- Backup before rollout/backfill: `/home/bosscatdog/billflow-thaisunsport/manual-backups/lazada-amount-20260605_112633`.
+- Migration deployed for intake: `057_lazada_email_purchase.sql`.
+- Latest deployed migrations include print/payment support through `060_marketplace_print_perf_indexes.sql`.
+- Lazada IMAP accounts are enabled on thaisunsport with `lookback_days=1` and `poll_interval_seconds=600`.
+- Initial 7 Lazada email bills were backfilled from stored email HTML artifacts; customer later confirmed the numbers were correct and one Lazada PO was sent to SML successfully.
+- Current flow remains review-first. Lazada email bills are not auto-sent to SML.
+- Historical backup before the amount backfill: `/home/bosscatdog/billflow-thaisunsport/manual-backups/lazada-amount-20260605_112633`.
 
 ## Business Rule
 
@@ -75,7 +76,27 @@ Backend blocks SML send when:
 
 This applies to normal retry and bulk send.
 
-## Current 7 Bills
+## SML Header Mapping
+
+- `remark` uses the seller/supplier name from the Lazada email, not user-entered text.
+- `remark_5` stores the Lazada order id, matching the Shopee purchase behavior.
+- `doc_ref` is normally empty for Lazada email.
+- If the Lazada email payment method is Credit/Debit Card, `doc_ref` stores the paid total amount from `ยอดรวมทั้งหมด(รวม VAT)`.
+- Purchase send dialogs do not show a free-form `remark` field, to avoid overwriting the SML remark that must carry the shop/seller name.
+
+## Print And Payment Method
+
+Lazada purchase email print readiness now uses the shared marketplace print/payment rule:
+
+- every active order in the same email group must have an SML POL number
+- effective payment method must start with `TT` by default
+- payment method is stored only in BillFlow as `bills.print_payment_method`
+- single and bulk SML send dialogs require choosing `วิธีการชำระเงิน` before send
+- the selected payment method is not sent to SML
+
+Details: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).
+
+## Initial Backfilled 7 Bills
 
 Backfilled values checked on 2026-06-05:
 
@@ -113,7 +134,7 @@ Do not send all 7 at once. After user confirms the 7 bills look right, send only
 
 ## Rollout / Rollback
 
-Rollout order:
+Original rollout order:
 
 1. Keep Lazada IMAP accounts disabled.
 2. Backfill existing Lazada bills from artifacts.
@@ -122,6 +143,13 @@ Rollout order:
 5. Send 1 bill to SML and verify PO total/doc.
 6. Poll the next mailbox manually.
 7. Enable auto poll one inbox at a time.
+
+Current thaisunsport production state:
+
+- 3 Lazada IMAP accounts are enabled.
+- Each account uses `lookback_days=1` to limit AI/token cost.
+- Poll interval is 600 seconds.
+- Rollback remains disabling the Lazada IMAP accounts in `/settings/email`.
 
 Rollback:
 
@@ -160,7 +188,11 @@ ORDER BY username, name;
 
 - `backend/internal/handlers/lazada_email.go`
 - `backend/internal/repository/bill_lazada_summary.go`
+- `backend/internal/repository/bill_print_policy.go`
+- `backend/internal/repository/bill_print_payment_method.go`
 - `backend/internal/handlers/bills.go`
 - `frontend/src/pages/BillDetail/components/BillTotal.tsx`
 - `frontend/src/pages/BillDetail/components/BillItemsTable.tsx`
+- `frontend/src/pages/BillDetail/components/SendPurchaseDialog.tsx`
+- `frontend/src/pages/BulkSendDialog.tsx`
 - `frontend/src/pages/ChannelDefaults/EditDialog.tsx`

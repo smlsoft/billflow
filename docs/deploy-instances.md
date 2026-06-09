@@ -152,7 +152,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Thaisunsport Notes
 
-- Latest deploy verified: 2026-06-05 11:34 +07 (post-v1.0 Lazada email purchase rollout).
+- Latest deploy verified: 2026-06-09 +07 (marketplace payment-method send dialogs, ready-to-print rules, bills list performance/UI).
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
   - `VITE_PHASE=1`
@@ -171,13 +171,18 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
   - containers `billflow-thaisunsport-frontend`, `billflow-thaisunsport-backend`, and `billflow-thaisunsport-postgres` are up
 - Lazada email purchase status:
   - `lazada_email` source/channel deployed via migration `057_lazada_email_purchase.sql`
-  - 7 existing Lazada email bills were backfilled: reconciliation `ok` = `7/7`, status remains `needs_review`
-  - Lazada IMAP accounts are still disabled (`enabled=false`) until review + one SML smoke send passes
+  - Marketplace print/payment migrations deployed through `060_marketplace_print_perf_indexes.sql`
+  - 7 initial Lazada email bills were backfilled: reconciliation `ok` = `7/7`; customer confirmed numbers and one Lazada PO sent to SML successfully
+  - Lazada IMAP accounts are enabled for three thaisunsport inboxes with `lookback_days=1` and `poll_interval_seconds=600`
   - Fee item config is set: `channel_defaults/lazada_email/purchase` → `SHIP_CUS`, unit `บาท`
-  - Opening each Lazada bill detail auto-adds the `SHIP_CUS` fee line; user is currently checking the 7 bills
-  - Backup before rollout/backfill: `manual-backups/lazada-amount-20260605_112633`
+  - Opening each Lazada bill detail auto-adds the `SHIP_CUS` fee line when needed
+  - Historical backup before amount backfill: `manual-backups/lazada-amount-20260605_112633`
 
 ## Latest Shared Deploy
+
+- 2026-06-09 +07: Marketplace purchase payment/print workflow and Bills list performance deployed to `billflow` (main) and `billflow-thaisunsport`.
+- Scope: (1) single-bill and bulk SML dialogs now require `วิธีการชำระเงิน` for Shopee/Lazada purchase email and save it in BillFlow only before sending SML; (2) backend allows payment method update before POL while still limiting to marketplace purchase email and channel method list; (3) print readiness uses POL completeness plus payment method prefix rule from `/settings/channels` instead of creditor prefix; (4) row/bulk print readiness batches by email group and migration `060` adds indexes; (5) Bills list rows were compacted and secondary row actions were moved into a menu.
+- Verification: local `npm run build` ✅, `go test ./internal/repository ./internal/handlers` ✅, Docker build/restart on both instances, backend health `8090` + `8100` ok, frontend `3010` + `3020` HTTP 200.
 
 - 2026-06-08 +07: Audit log UX improvements deployed to `billflow` (main) and `billflow-thaisunsport`.
 - Scope: (1) BillDetail timeline now shows copyable full Stock Request URL directly under the `sml_stock_recalc_failed` event so users can copy and send to SML dev without navigating to `/logs`. (2) Added `marketplace_fee_line_ensured` action label ("เติม Fee Marketplace" 🏷️) and summary (item_code + ราคา) to `audit-log-meta.ts` — previously rendered as raw action name.
@@ -188,7 +193,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - Scope: backend Lazada HTML summary parser, deterministic amount reconciliation, Lazada coupon allocation into `bill_items.discount_amount`, date normalization, SML send guard for mismatch/missing fee config, Bill Detail Lazada summary/warnings, and `/settings/channels` fee wording/config for Lazada.
 - Backfill: 7 existing `source='lazada_email'` purchase bills updated from stored email HTML artifacts; all reconcile `ok`; all remain `needs_review`; no auto-send performed.
 - Runtime config after user setup: Lazada fee item is `SHIP_CUS` / unit `บาท`; bill detail auto-adds fee line on open.
-- Rollback: disable Lazada IMAP accounts (already disabled), restore DB/source from `manual-backups/lazada-amount-20260605_112633` if needed.
+- Rollback: disable Lazada IMAP accounts, restore DB/source from `manual-backups/lazada-amount-20260605_112633` if needed.
 - Verification: local `go test ./...`, local `npm run build`, Docker build/restart backend+frontend on thaisunsport, backend health `8100`, frontend `3020`, DB reconciliation query `7|7|7`.
 
 - 2026-06-04 12:05 +07: **Production release v1.0.0** deployed to `billflow` (main) and `billflow-thaisunsport`.

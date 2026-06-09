@@ -1,7 +1,7 @@
 # Async SML Bulk Send Jobs
 
-> Updated: 2026-05-21 09:25 +07
-> Status: deployed on BillFlow main, smoke-tested against real SML purchaseorder and verified through the history page.
+> Updated: 2026-06-09 +07
+> Status: deployed on BillFlow main and thaisunsport; smoke-tested against real SML purchaseorder and verified through the history page.
 
 ## Summary
 
@@ -32,6 +32,7 @@ Important request behavior:
 - Bulk is capped at 100 bills per job.
 - The original dialog payload is saved as `payload_snapshot`; retry failed reuses it.
 - Historical job listing supports `status`, `source`, `bill_type`, `document_route`, `page`, and `per_page` (`max=100`).
+- For Shopee/Lazada purchase email, `วิธีการชำระเงิน` is saved separately to BillFlow before job creation. It is not included in the SML retry payload or `payload_snapshot`.
 
 ## Database
 
@@ -67,6 +68,7 @@ Startup safety:
 ## Frontend Behavior
 
 - Bulk dialog still loads and validates candidate bills before job creation.
+- For Shopee/Lazada purchase email, bulk dialog requires `วิธีการชำระเงิน`, dedupes updates by email group, and saves `bills.print_payment_method` before creating the SML job.
 - While running, config fields are disabled.
 - Progress is polled every second.
 - User can close the dialog without cancelling the job.

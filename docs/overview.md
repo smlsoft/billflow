@@ -1,6 +1,6 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-06-05 12:05 +07
+> อัพเดตล่าสุด: 2026-06-09 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
@@ -9,7 +9,7 @@
 
 BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Email, Lazada Email, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
 
-สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee/Lazada email purchase flow, marketplace Excel sale flow, และ Shopee Open API direct preview แบบ multi-shop: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Lazada email purchase ใช้ HTML summary parser ตรวจสูตรยอดจริงก่อนส่ง, กระจายคูปองเป็น line discount, และ block การส่งถ้า reconcile หรือ fee config ไม่พร้อม. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API live ใช้งานบน BillFlow main แล้ว โดยยังคง confirm แบบ review-first และไม่ auto-send เข้า SML.
+สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee/Lazada email purchase flow, marketplace Excel sale flow, และ Shopee Open API direct preview แบบ multi-shop: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Lazada email purchase ใช้ HTML summary parser ตรวจสูตรยอดจริงก่อนส่ง, กระจายคูปองเป็น line discount, และ block การส่งถ้า reconcile หรือ fee config ไม่พร้อม. Shopee/Lazada purchase email ยังมีกติกา print readiness ที่ตั้งค่าได้จาก `/settings/channels`: ต้องมี POL ครบทั้ง email group และวิธีการชำระเงินที่เก็บใน BillFlow ต้องขึ้นต้นด้วย `TT` ใน policy ปัจจุบัน. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API live ใช้งานบน BillFlow main แล้ว โดยยังคง confirm แบบ review-first และไม่ auto-send เข้า SML.
 
 ---
 
@@ -76,6 +76,8 @@ billflow/
 │   ├── handlers/shipped_email.go        Shopee purchase email → purchaseorder
 │   ├── handlers/lazada_email.go         Lazada purchase email → review-first PO
 │   ├── repository/bill_lazada_summary.go Lazada amount parser/reconciliation
+│   ├── repository/bill_print_policy.go  marketplace print readiness/payment policy
+│   ├── repository/bill_print_payment_method.go BillFlow-only payment method update
 │   └── /settings/email                  IMAP account admin UI
 │
 ├── Import
@@ -107,7 +109,7 @@ billflow/
 |---|---|
 | Health | `GET /health` |
 | Auth | `POST /api/auth/login`, `GET /api/auth/me` |
-| Bills | `GET /api/bills?limit=&cursor=`, `GET /api/bills/counts`, `GET /api/bills/:id`, `POST /api/bills/:id/retry`, async bulk send jobs, archive/restore/delete, item CRUD, timeline, artifact preview/download |
+| Bills | `GET /api/bills?limit=&cursor=`, `GET /api/bills/counts`, `GET /api/bills/:id`, `POST /api/bills/:id/retry`, `PATCH /api/bills/:id/print-payment-method`, email print candidates/events, async bulk send jobs, archive/restore/delete, item CRUD, timeline, artifact preview/download |
 | Chat inbox | `/api/admin/conversations...` |
 | LINE OA | `POST /webhook/line/:oaId`, `POST /webhook/line`, `/api/settings/line-oa...` |
 | SSE | `POST /api/admin/events/token`, `GET /api/admin/events?t=...` |
@@ -149,7 +151,7 @@ billflow/
 | Channel | สถานะ |
 |---|---|
 | Shopee purchase email | ✅ Phase 1 customer-test focus; sends SML `purchaseorder` through `192.168.2.248:8080` after review |
-| Lazada purchase email | ✅ deployed on `billflow-thaisunsport` post-v1.0; 7 bills backfilled, amount reconciliation `ok`, IMAP still disabled until review + one SML smoke |
+| Lazada purchase email | ✅ deployed on `billflow-thaisunsport` post-v1.0; amount reconciliation guard, 1-day auto poll, review-first before SML |
 | Email IMAP | ✅ multi-account DB-driven, Shopee/Lazada marketplace routing, artifacts, logs |
 | LINE OA | ✅ code exists for human chat 2 ทาง, multi-OA, media, quick replies, status, notes, tags, create bill from chat; hidden/not central in Phase 1 |
 | Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
