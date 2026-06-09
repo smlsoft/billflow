@@ -33,6 +33,18 @@ export interface ActionMeta {
   tone: Tone
 }
 
+export function stockRequestDiagnosticMessage(detail: Record<string, any> | undefined): string {
+  if (!detail) return ''
+  const url = detail.stock_request_url ? String(detail.stock_request_url) : ''
+  if (detail.message) return url ? `${String(detail.message)} → ${url}` : String(detail.message)
+  const error = String(detail.error ?? '').toLowerCase()
+  if (error.includes('http 404')) {
+    const hint = 'ไม่พบ endpoint processstockrequest: SMLJavaWebService ต้องเป็นเวอร์ชันที่รองรับ processstockrequest'
+    return url ? `${hint} → ${url}` : hint
+  }
+  return ''
+}
+
 export const ACTION_META: Record<string, ActionMeta> = {
   // Bill lifecycle
   bill_created: { label: 'สร้างบิล', emoji: '📥', tone: 'info' },
@@ -49,6 +61,8 @@ export const ACTION_META: Record<string, ActionMeta> = {
   sml_failed: { label: 'ส่ง SML ล้มเหลว', emoji: '❌', tone: 'danger' },
   sml_erp_log_warning: { label: 'บันทึก Log SML ไม่ครบ', emoji: '⚠️', tone: 'warning' },
   sml_readiness_blocked: { label: 'SML ยังไม่พร้อม', emoji: '⚠️', tone: 'warning' },
+  bill_purchase_creditor_updated: { label: 'แก้เจ้าหนี้ PO', emoji: '🧾', tone: 'success' },
+  bill_purchase_creditor_update_failed: { label: 'แก้เจ้าหนี้ PO ไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
   sml_stock_recalc_ok: { label: 'คำนวณต้นทุนสต๊อก', emoji: '📊', tone: 'success' },
   sml_stock_recalc_failed: { label: 'คำนวณต้นทุนสต๊อกล้มเหลว', emoji: '⚠️', tone: 'warning' },
   // Mappings
@@ -57,8 +71,10 @@ export const ACTION_META: Record<string, ActionMeta> = {
   // Email/Shopee receive
   shopee_email_received: { label: 'รับอีเมล Shopee Order', emoji: '📧', tone: 'info' },
   shopee_shipped_received: { label: 'รับอีเมล Shopee Shipped', emoji: '📦', tone: 'info' },
+  lazada_email_received: { label: 'รับอีเมล Lazada', emoji: '📧', tone: 'info' },
   email_print_requested: { label: 'พิมพ์อีเมลต้นทาง', emoji: '🖨️', tone: 'info' },
   shopee_shipping_line_ensured: { label: 'เติมค่าขนส่ง Shopee', emoji: '🚚', tone: 'info' },
+  marketplace_fee_line_ensured: { label: 'เติม Fee Marketplace', emoji: '🏷️', tone: 'info' },
   // Shopee Excel import
   shopee_import_preview: { label: 'พรีวิวไฟล์ Shopee Excel', emoji: '👁️', tone: 'muted' },
   shopee_import_done: { label: 'นำเข้า Shopee สำเร็จ', emoji: '📊', tone: 'success' },
@@ -123,6 +139,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   line_oa: 'LINE',
   email: 'Email',
   lazada: 'Lazada',
+  lazada_email: 'Email บิลซื้อ Lazada',
   tiktok: 'TikTok Excel',
   shopee: 'Shopee',
   shopee_email: 'Shopee Email',
@@ -148,6 +165,7 @@ export const SOURCE_TONE: Record<string, string> = {
   shopee_excel: 'bg-warning/10 text-warning',
   shopee_shipped: 'bg-warning/10 text-warning',
   lazada: 'bg-info/10 text-info',
+  lazada_email: 'bg-info/10 text-info',
   tiktok: 'bg-muted text-foreground',
   sml: 'bg-primary/10 text-primary',
   system: 'bg-muted text-muted-foreground',
@@ -256,6 +274,12 @@ export function summarize(log: AuditLog): string {
       return [d.doc_no, d.route ? smlRouteLabel(d.route) : '', d.via ? auditViaLabel(d.via) : ''].filter(Boolean).join(' · ')
     case 'sml_erp_log_warning':
       return [d.doc_no, d.route ? smlRouteLabel(d.route) : '', d.message].filter(Boolean).join(' · ')
+    case 'sml_stock_recalc_failed':
+      return [
+        d.doc_no,
+        d.route ? smlRouteLabel(d.route) : '',
+        stockRequestDiagnosticMessage(d) || humanizeAuditError(d.error),
+      ].filter(Boolean).join(' · ')
     case 'sml_failed': {
       const err = parseMaybeJSON(d.error)
       const route = err.route ?? d.route
@@ -265,6 +289,18 @@ export function summarize(log: AuditLog): string {
     }
     case 'sml_readiness_blocked':
       return [d.via ? auditViaLabel(d.via) : '', d.tenant ? `ฐานข้อมูล ${d.tenant}` : '', d.message].filter(Boolean).join(' · ')
+    case 'bill_purchase_creditor_updated':
+      return [
+        d.doc_no,
+        d.old_party_code && d.new_party_code ? `${d.old_party_code} → ${d.new_party_code}` : '',
+        d.changed === false ? 'ไม่เปลี่ยนแปลง' : '',
+      ].filter(Boolean).join(' · ')
+    case 'bill_purchase_creditor_update_failed':
+      return [
+        d.doc_no,
+        d.old_party_code && d.new_party_code ? `${d.old_party_code} → ${d.new_party_code}` : '',
+        humanizeAuditError(d.error),
+      ].filter(Boolean).join(' · ')
     case 'bill_doc_no_regenerated':
       return [d.doc_no, d.route ? smlRouteLabel(d.route) : ''].filter(Boolean).join(' · ')
     case 'bill_doc_no_regenerate_failed':
@@ -282,10 +318,12 @@ export function summarize(log: AuditLog): string {
       }`
     case 'shopee_email_received':
     case 'shopee_shipped_received':
+    case 'lazada_email_received':
       return d.subject ? String(d.subject) : ''
     case 'email_print_requested':
       return d.email_group_key ? `Email #${d.email_group_key}` : ''
     case 'shopee_shipping_line_ensured':
+    case 'marketplace_fee_line_ensured':
       return [d.item_code, d.price != null ? `ราคา ${Number(d.price).toLocaleString()}` : ''].filter(Boolean).join(' · ')
     case 'channel_default_quick_setup':
       return `ตั้งค่า ${d.applied_count ?? 0} ช่องทาง`

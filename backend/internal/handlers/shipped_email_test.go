@@ -109,7 +109,6 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 		htmlBody,
 		messageID,
 		nil,
-		nil,
 		"trace-1",
 		time.Now(),
 		mailSourceForTest(),
@@ -140,7 +139,7 @@ func TestConfiguredShopeeShippingLineDisabledDoesNothing(t *testing.T) {
 		WithArgs("shopee_shipped", "purchase").
 		WillReturnRows(channelDefaultRows().AddRow(
 			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
-			"BF-PO", "YYMM####", "", "", "", "", false, "", "", "", "", "", "", "", "", "", "", -1, -1.0, nil, time.Now(),
+			"BF-PO", "YYMM####", "", "", "", "", false, "", "", "", "", "", "", "", "", "", "", -1, -1.0, -1, "", []byte("{}"), nil, time.Now(),
 		))
 
 	item, ready := h.configuredShopeeShippingLine("#2601AAA", 38, true)
@@ -167,7 +166,7 @@ func TestConfiguredShopeeShippingLineUsesConfiguredItem(t *testing.T) {
 		WithArgs("shopee_shipped", "purchase").
 		WillReturnRows(channelDefaultRows().AddRow(
 			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
-			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_TEST", "ครั้ง", "", "", "", "", "", "", "", "", -1, -1.0, nil, time.Now(),
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_TEST", "ครั้ง", "", "", "", "", "", "", "", "", -1, -1.0, -1, "", []byte("{}"), nil, time.Now(),
 		))
 
 	item, ready := h.configuredShopeeShippingLine("#2601AAA", 38, true)
@@ -209,7 +208,7 @@ func TestConfiguredShopeeShippingLineAllowsZeroAmount(t *testing.T) {
 		WithArgs("shopee_shipped", "purchase").
 		WillReturnRows(channelDefaultRows().AddRow(
 			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
-			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_TEST", "ครั้ง", "", "", "", "", "", "", "", "", -1, -1.0, nil, time.Now(),
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_TEST", "ครั้ง", "", "", "", "", "", "", "", "", -1, -1.0, -1, "", []byte("{}"), nil, time.Now(),
 		))
 
 	item, ready := h.configuredShopeeShippingLine("#2601AAA", 0, true)
@@ -260,7 +259,7 @@ func TestEnsureShopeeShippingLineForSendAddsMissingConfiguredLine(t *testing.T) 
 		WithArgs("shopee_shipped", "purchase").
 		WillReturnRows(channelDefaultRows().AddRow(
 			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
-			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_POL", "บาท", "", "", "", "", "", "", "", "", -1, -1.0, nil, time.Now(),
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_POL", "บาท", "", "", "", "", "", "", "", "", -1, -1.0, -1, "", []byte("{}"), nil, time.Now(),
 		))
 	mock.ExpectQuery("INSERT INTO bill_items").
 		WithArgs(
@@ -327,7 +326,7 @@ func TestEnsureShopeeShippingLineForSendAddsZeroAmountLine(t *testing.T) {
 		WithArgs("shopee_shipped", "purchase").
 		WillReturnRows(channelDefaultRows().AddRow(
 			"shopee_shipped", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
-			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_POL", "บาท", "", "", "", "", "", "", "", "", -1, -1.0, nil, time.Now(),
+			"BF-PO", "YYMM####", "", "", "", "", true, "SHIP_POL", "บาท", "", "", "", "", "", "", "", "", -1, -1.0, -1, "", []byte("{}"), nil, time.Now(),
 		))
 	mock.ExpectQuery("INSERT INTO bill_items").
 		WithArgs(
@@ -398,6 +397,121 @@ func TestEnsureShopeeShippingLineForSendSkipsExistingLine(t *testing.T) {
 	}
 }
 
+func TestEnsureMarketplaceFeeLineForSendAddsLazadaConfiguredLine(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &BillHandler{
+		billRepo:        repository.NewBillRepo(db),
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		log:             zap.NewNop(),
+	}
+	raw, _ := json.Marshal(map[string]interface{}{
+		"shipping_amount":    139.0,
+		"service_fee_amount": 5.0,
+	})
+	bill := &models.Bill{
+		ID:       "ff6fb63d-ab51-4041-a943-c5a2cea6bbca",
+		Source:   "lazada_email",
+		BillType: "purchase",
+		RawData:  raw,
+		Items: []models.BillItem{{
+			ID:       "item-1",
+			RawName:  "สินค้า",
+			Qty:      1,
+			Mapped:   true,
+			ItemCode: testStringPtr("BF0004"),
+		}},
+	}
+	mock.ExpectQuery("FROM channel_defaults").
+		WithArgs("lazada_email", "purchase").
+		WillReturnRows(channelDefaultRows().AddRow(
+			"lazada_email", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
+			"BF-PO", "YYMM####", "", "", "", "", true, "FEE_LZD", "บาท", "", "", "", "", "", "", "", "", -1, -1.0, -1, "", []byte("{}"), nil, time.Now(),
+		))
+	mock.ExpectQuery("INSERT INTO bill_items").
+		WithArgs(
+			bill.ID, "ค่าจัดส่ง/ค่าธรรมเนียม Lazada", models.LazadaFeeSourceSKU, "",
+			sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("lazada-fee-item"))
+
+	inserted, err := h.ensureMarketplaceFeeLineForSend(bill)
+	if err != nil {
+		t.Fatalf("ensureMarketplaceFeeLineForSend: %v", err)
+	}
+	if inserted == nil {
+		t.Fatalf("inserted item is nil")
+	}
+	if len(bill.Items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(bill.Items))
+	}
+	fee := bill.Items[1]
+	if fee.SourceSKU != models.LazadaFeeSourceSKU {
+		t.Fatalf("source_sku = %q, want Lazada fee sentinel", fee.SourceSKU)
+	}
+	if fee.ItemCode == nil || *fee.ItemCode != "FEE_LZD" {
+		t.Fatalf("item_code = %v, want FEE_LZD", fee.ItemCode)
+	}
+	if fee.UnitCode == nil || *fee.UnitCode != "บาท" {
+		t.Fatalf("unit_code = %v, want บาท", fee.UnitCode)
+	}
+	if fee.Price == nil || *fee.Price != 144 || fee.Qty != 1 || !fee.Mapped {
+		t.Fatalf("fee item = %+v, want qty=1 price=144 mapped=true", fee)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestEnsureMarketplaceFeeLineForSendBlocksLazadaWithoutConfig(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &BillHandler{
+		billRepo:        repository.NewBillRepo(db),
+		channelDefaults: repository.NewChannelDefaultRepo(db),
+		log:             zap.NewNop(),
+	}
+	raw, _ := json.Marshal(map[string]interface{}{
+		"shipping_amount":    54.0,
+		"service_fee_amount": 0.0,
+	})
+	bill := &models.Bill{
+		ID:       "ff6fb63d-ab51-4041-a943-c5a2cea6bbca",
+		Source:   "lazada_email",
+		BillType: "purchase",
+		RawData:  raw,
+		Items:    []models.BillItem{},
+	}
+	mock.ExpectQuery("FROM channel_defaults").
+		WithArgs("lazada_email", "purchase").
+		WillReturnRows(channelDefaultRows().AddRow(
+			"lazada_email", "purchase", "", "", "", "", "", "PO", "/api/v1/ic/purchase-orders",
+			"BF-PO", "YYMM####", "", "", "", "", false, "", "", "", "", "", "", "", "", "", "", -1, -1.0, -1, "", []byte("{}"), nil, time.Now(),
+		))
+
+	inserted, err := h.ensureMarketplaceFeeLineForSend(bill)
+	if err == nil {
+		t.Fatal("expected config error")
+	}
+	if inserted != nil {
+		t.Fatalf("inserted item = %+v, want nil", inserted)
+	}
+	if !isMarketplaceFeeConfigError(err) {
+		t.Fatalf("err = %T %v, want marketplace config error", err, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
 func testStringPtr(v string) *string {
 	return &v
 }
@@ -411,6 +525,8 @@ func channelDefaultRows() *sqlmock.Rows {
 		"shipping_item_enabled", "shipping_item_code", "shipping_item_unit_code",
 		"passbook_code", "passbook_name", "bank_code", "bank_branch", "expense_code", "expense_name",
 		"wh_code", "shelf_code", "vat_type", "vat_rate",
+		"inquiry_type", "remark_2",
+		"print_policy",
 		"updated_by", "updated_at",
 	})
 }

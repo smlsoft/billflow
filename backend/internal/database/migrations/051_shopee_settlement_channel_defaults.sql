@@ -13,6 +13,7 @@ ALTER TABLE channel_defaults
     'shopee_email',
     'shopee_shipped',
     'lazada',
+    'lazada_email',
     'tiktok',
     'manual',
     'shopee_settlement'

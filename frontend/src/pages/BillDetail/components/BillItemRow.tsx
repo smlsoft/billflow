@@ -13,6 +13,7 @@ import {
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { UnitSelect } from '@/components/common/UnitSelect'
 import { cn } from '@/lib/utils'
+import { LAZADA_FEE_SOURCE_SKU, SHOPEE_SHIPPING_SOURCE_SKU, isMarketplaceFeeSourceSKU } from '@/lib/shopeeBill'
 import api from '@/api/client'
 import type { BillItem, CatalogMatch } from '@/types'
 import { useMatchInfo } from '../hooks/useMatchInfo'
@@ -23,8 +24,9 @@ import { MapItemModal } from './MapItemModal'
 export interface DiscountInfo {
   effectiveDiscount: number  // total = coupon + coin
   couponDiscount: number
-  coinAmount: number
+  coinAmount?: number
   grossTotal: number         // gross ของทุก item (ไม่รวมค่าส่ง)
+  platform?: 'shopee' | 'lazada'
 }
 
 interface Props {
@@ -202,7 +204,9 @@ export function BillItemRow({
 
   const matchInfo = useMatchInfo(item)
   const needsConfirm = Boolean(item.item_code && item.mapped !== true)
-  const isShopeeShippingLine = item.source_sku === '__shopee_shipping__'
+  const isShopeeShippingLine = item.source_sku === SHOPEE_SHIPPING_SOURCE_SKU
+  const isLazadaFeeLine = item.source_sku === LAZADA_FEE_SOURCE_SKU
+  const isMarketplaceFeeLine = isMarketplaceFeeSourceSKU(item.source_sku)
   const editMatchInfo =
     pickedMatch && pickedMatch.item_code === draft.item_code
       ? {
@@ -246,8 +250,13 @@ export function BillItemRow({
                   ค่าส่งจาก Shopee
                 </span>
               )}
+              {isLazadaFeeLine && (
+                <span className="inline-flex rounded-md border border-[#f31c9b]/30 bg-[#f31c9b]/10 px-2 py-0.5 text-[11px] font-medium text-[#9f176b] dark:text-[#ff9bd7]">
+                  ค่าส่ง/fee จาก Lazada
+                </span>
+              )}
             </div>
-            {item.source_sku && !isShopeeShippingLine && (
+            {item.source_sku && !isMarketplaceFeeLine && (
               <div className="mt-1 text-[11px] text-muted-foreground">
                 SKU ต้นทาง: <code className="font-mono">{item.source_sku}</code>
                 {!item.item_code && <span className="text-warning"> · ยังไม่พบในสินค้า SML</span>}
@@ -311,12 +320,13 @@ export function BillItemRow({
                               ? (discountInfo.effectiveDiscount / discountInfo.grossTotal * 100)
                               : 0
                             const itemGross = grossAmount
+                            const coinAmount = discountInfo.coinAmount ?? 0
                             return (
                               <>
                                 <p>ส่วนลดรวม {discountInfo.effectiveDiscount.toLocaleString()} บาท</p>
                                 <p className="text-muted-foreground">
-                                  = โค้ด ฿{discountInfo.couponDiscount.toLocaleString()}
-                                  {discountInfo.coinAmount > 0 && ` + Coin ฿${discountInfo.coinAmount.toLocaleString()}`}
+                                  = คูปอง ฿{discountInfo.couponDiscount.toLocaleString()}
+                                  {coinAmount > 0 && ` + Coin ฿${coinAmount.toLocaleString()}`}
                                 </p>
                                 <p className="mt-1">
                                   อัตรา = {pct.toFixed(3)}%

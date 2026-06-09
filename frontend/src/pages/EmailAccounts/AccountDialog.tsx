@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  AlertCircle,
   Check,
   ClipboardList,
   Clock,
@@ -100,6 +101,8 @@ const DEFAULTS: FormState = {
 
 const DEFAULT_ACCEPTED_SENDERS = ['shopee.co.th', 'mail.shopee.co.th', 'noreply.shopee.co.th']
 const SHOPEE_DEFAULT_SUBJECTS = ['ถูกจัดส่งแล้ว', 'ยืนยันการชำระเงินคำสั่งซื้อหมายเลข']
+const LAZADA_ACCEPTED_SENDERS = ['support.lazada.co.th']
+const LAZADA_DEFAULT_SUBJECTS = ['ยืนยันคำสั่งซื้อหมายเลข', 'ได้รับการจัดส่งเรียบร้อยแล้ว']
 const GMAIL_SECURITY_URL = 'https://myaccount.google.com/security'
 const GMAIL_APP_PASSWORDS_URL = 'https://myaccount.google.com/apppasswords'
 const GMAIL_IMAP_SETTINGS_URL = 'https://mail.google.com/mail/u/0/#settings/fwdandpop'
@@ -332,6 +335,25 @@ const PRESETS: Preset[] = [
     }),
   },
   {
+    id: 'gmail-lazada',
+    icon: ShoppingBag,
+    title: 'Gmail + Lazada',
+    subtitle: 'ดึงอีเมลยืนยันคำสั่งซื้อ + จัดส่งจาก Lazada',
+    apply: (c) => ({
+      ...c,
+      host: 'imap.gmail.com',
+      port: 993,
+      mailbox: 'INBOX',
+      channel: 'lazada',
+      filter_from: LAZADA_ACCEPTED_SENDERS,
+      shopee_domains: [],
+      filter_subjects: LAZADA_DEFAULT_SUBJECTS,
+      lookback_days: 7,
+      poll_interval_minutes: 10,
+      enabled: false,
+    }),
+  },
+  {
     id: 'gmail-general',
     icon: FileText,
     title: 'Gmail + PDF/Excel',
@@ -451,6 +473,20 @@ function friendlyConnectionError(message: string): string {
   return message
 }
 
+function lazadaConfigIssue(f: FormState): string {
+  if (f.channel !== 'lazada') return ''
+  if (f.filter_from.length === 0) {
+    return 'Lazada ต้องระบุผู้ส่ง เช่น support.lazada.co.th'
+  }
+  const hasSubject = f.filter_subjects.some((s) =>
+    s.includes('ยืนยันคำสั่งซื้อหมายเลข') || s.includes('ได้รับการจัดส่งเรียบร้อยแล้ว'),
+  )
+  if (!hasSubject) {
+    return 'Lazada ต้องมีหัวข้อ ยืนยันคำสั่งซื้อหมายเลข หรือ ได้รับการจัดส่งเรียบร้อยแล้ว'
+  }
+  return ''
+}
+
 function fromAccount(a: IMAPAccount | null): FormState {
   if (!a) return newAccountDefaults()
   return {
@@ -563,7 +599,42 @@ export function AccountDialog({
     setForm((c) => p.apply(c))
   }
 
+  const handleChannelChange = (channel: FormState['channel']) => {
+    setActivePreset(null)
+    setForm((current) => {
+      if (channel === 'shopee') {
+        const switching = current.channel !== channel
+        return {
+          ...current,
+          channel,
+          filter_from: [],
+          shopee_domains: !switching && current.shopee_domains.length > 0 ? current.shopee_domains : DEFAULT_ACCEPTED_SENDERS,
+          filter_subjects: !switching && current.filter_subjects.length > 0 ? current.filter_subjects : SHOPEE_DEFAULT_SUBJECTS,
+        }
+      }
+      if (channel === 'lazada') {
+        const switching = current.channel !== channel
+        return {
+          ...current,
+          channel,
+          filter_from: !switching && current.filter_from.length > 0 ? current.filter_from : LAZADA_ACCEPTED_SENDERS,
+          shopee_domains: [],
+          filter_subjects: !switching && current.filter_subjects.length > 0 ? current.filter_subjects : LAZADA_DEFAULT_SUBJECTS,
+          lookback_days: Math.min(current.lookback_days || 7, 7),
+          poll_interval_minutes: Math.max(current.poll_interval_minutes || 10, 10),
+          enabled: editing ? current.enabled : false,
+        }
+      }
+      return { ...current, channel }
+    })
+  }
+
   const handleTest = async () => {
+    const lazadaIssue = lazadaConfigIssue(form)
+    if (lazadaIssue) {
+      toast.error(lazadaIssue)
+      return
+    }
     const issue = gmailPasswordIssue(form.host, form.password)
     if (issue) {
       toast.error(`${issue} — ตัวอย่าง: qzqqvwqbzydodtsi`)
@@ -630,6 +701,11 @@ export function AccountDialog({
       toast.error('Poll interval ต้องไม่ต่ำกว่า 5 นาที')
       return
     }
+    const lazadaIssue = lazadaConfigIssue(form)
+    if (lazadaIssue) {
+      toast.error(lazadaIssue)
+      return
+    }
     setSaving(true)
     try {
       const body = toUpsert(form)
@@ -651,13 +727,15 @@ export function AccountDialog({
   }
 
   const isShopee = form.channel === 'shopee'
+  const isLazada = form.channel === 'lazada'
   const isGmail = isGmailHost(form.host)
   const normalizedPassword = normalizePasswordForHost(form.host, form.password)
   const passwordIssue = gmailPasswordIssue(form.host, form.password)
   const passwordWasNormalized = !!form.password && normalizedPassword !== form.password
   const acceptedSenders = isShopee ? form.shopee_domains : form.filter_from
+  const lazadaIssue = lazadaConfigIssue(form)
   const visiblePresets = PHASE < 2
-    ? PRESETS.filter((p) => p.id === 'gmail-shopee' || p.id === 'outlook-shopee' || p.id === 'custom')
+    ? PRESETS.filter((p) => p.id === 'gmail-shopee' || p.id === 'gmail-lazada' || p.id === 'outlook-shopee' || p.id === 'custom')
     : PRESETS
 
   return (
@@ -716,17 +794,26 @@ export function AccountDialog({
               {PHASE < 2 ? (
                 <div className="space-y-1">
                   <Label>ประเภทอีเมล</Label>
-                  <div className="flex h-10 items-center rounded-md border border-warning/30 bg-warning/5 px-3 text-sm font-medium text-foreground">
-                    Shopee — ออเดอร์และบิลซื้อ
-                  </div>
-                  <Hint>Phase 1 ใช้เฉพาะอีเมล Shopee เพื่อสร้างบิลซื้อ</Hint>
+                  <Select
+                    value={form.channel === 'general' ? 'shopee' : form.channel}
+                    onValueChange={(v) => handleChannelChange(v as FormState['channel'])}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="shopee">Shopee — ออเดอร์และบิลซื้อ</SelectItem>
+                      <SelectItem value="lazada">Lazada — บิลซื้อจากอีเมล</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Hint>Phase 1 ใช้เฉพาะอีเมล Shopee/Lazada เพื่อสร้างบิลซื้อ</Hint>
                 </div>
               ) : (
                 <div className="space-y-1">
                   <Label>ประเภทอีเมล</Label>
                   <Select
                     value={form.channel}
-                    onValueChange={(v) => set('channel', v as FormState['channel'])}
+                    onValueChange={(v) => handleChannelChange(v as FormState['channel'])}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -734,11 +821,11 @@ export function AccountDialog({
                     <SelectContent>
                       <SelectItem value="general">ไฟล์แนบทั่วไป — PDF / รูป / Excel</SelectItem>
                       <SelectItem value="shopee">Shopee — ออเดอร์และบิลซื้อ</SelectItem>
-                      <SelectItem value="lazada">Lazada — (กำลังพัฒนา)</SelectItem>
+                      <SelectItem value="lazada">Lazada — บิลซื้อจากอีเมล</SelectItem>
                     </SelectContent>
                   </Select>
                   <Hint>
-                    เลือก <b>Shopee</b> ถ้าเป็นกล่องเมลสำหรับร้านค้า Shopee, <b>ไฟล์แนบทั่วไป</b>{' '}
+                    เลือก <b>Shopee</b> หรือ <b>Lazada</b> ถ้าเป็นอีเมล Marketplace, <b>ไฟล์แนบทั่วไป</b>{' '}
                     สำหรับอีเมลที่มี PDF/Excel แนบ
                   </Hint>
                 </div>
@@ -895,10 +982,19 @@ export function AccountDialog({
                 placeholder="เช่น คำสั่งซื้อ, ถูกจัดส่งแล้ว, ยืนยันการชำระเงิน"
                 lower
               />
-      <Hint>
-                Phase 1 แนะนำให้ใช้เฉพาะ <code>ถูกจัดส่งแล้ว</code> และ{' '}
-                <code>ยืนยันการชำระเงินคำสั่งซื้อหมายเลข</code>. อย่าใส่คำกว้าง ๆ เช่น{' '}
-                <code>ใบสั่งซื้อสินค้า เลขที่</code> เพราะจะดึงอีเมล PO ทั่วไปเข้ามาแล้ว AI อ่านไม่เจอรายการสินค้า
+              <Hint>
+                {isLazada ? (
+                  <>
+                    Lazada แนะนำให้ใช้ <code>ยืนยันคำสั่งซื้อหมายเลข</code> และ{' '}
+                    <code>ได้รับการจัดส่งเรียบร้อยแล้ว</code>. ระบบจะข้าม cancellation, e-invoice, survey และเมลแจ้งเตือนอื่น.
+                  </>
+                ) : (
+                  <>
+                    Phase 1 แนะนำให้ใช้เฉพาะ <code>ถูกจัดส่งแล้ว</code> และ{' '}
+                    <code>ยืนยันการชำระเงินคำสั่งซื้อหมายเลข</code>. อย่าใส่คำกว้าง ๆ เช่น{' '}
+                    <code>ใบสั่งซื้อสินค้า เลขที่</code> เพราะจะดึงอีเมล PO ทั่วไปเข้ามาแล้ว AI อ่านไม่เจอรายการสินค้า
+                  </>
+                )}
               </Hint>
             </div>
           </details>
@@ -928,12 +1024,21 @@ export function AccountDialog({
                 lower
               />
               <Hint>
-                ใส่ได้ทั้งโดเมน เช่น <code>shopee.co.th</code> หรืออีเมลเต็ม เช่น{' '}
-                <code>billing@example.com</code>. ถ้าเว้นว่าง ระบบจะรับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ.
+                ใส่ได้ทั้งโดเมน เช่น <code>{isLazada ? 'support.lazada.co.th' : 'shopee.co.th'}</code> หรืออีเมลเต็ม เช่น{' '}
+                <code>{isLazada ? 'noreply@support.lazada.co.th' : 'billing@example.com'}</code>.
+                {isLazada ? ' สำหรับ Lazada ห้ามเว้นว่าง เพราะระบบใช้ค่านี้กันการค้นทั้งกล่องเมล.' : ' ถ้าเว้นว่าง ระบบจะรับทุกผู้ส่งที่ผ่านคำกรองหัวข้อ.'}
                 {isShopee
                   ? ' สำหรับ Shopee ระบบจะตรวจซ้ำหลังอ่านหัวอีเมลเพื่อกันเมลที่ไม่ใช่ Shopee'
-                  : ' สำหรับไฟล์แนบทั่วไป ระบบจะใช้ค่านี้เป็นตัวกรองผู้ส่งตอนดึงจาก IMAP'}
+                  : isLazada
+                    ? ' สำหรับ Lazada ระบบจะตรวจซ้ำว่าผู้ส่งเป็น support.lazada.co.th เท่านั้น'
+                    : ' สำหรับไฟล์แนบทั่วไป ระบบจะใช้ค่านี้เป็นตัวกรองผู้ส่งตอนดึงจาก IMAP'}
               </Hint>
+              {lazadaIssue && (
+                <Alert variant="destructive" className="mt-2">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{lazadaIssue}</AlertDescription>
+                </Alert>
+              )}
             </div>
           </details>
 
@@ -959,7 +1064,7 @@ export function AccountDialog({
                   onChange={(e) => set('lookback_days', Number(e.target.value))}
                 />
                 <Hint>
-                  ดึงอีเมลย้อนหลังกี่วัน — แนะนำ 30 (ตั้งสูงเกินไป Gmail จะช้า)
+                  {isLazada ? 'Lazada แนะนำเริ่ม 7 วันและปิด auto ไว้ก่อน แล้วค่อยกด manual poll ทดสอบ' : 'ดึงอีเมลย้อนหลังกี่วัน — แนะนำ 30 (ตั้งสูงเกินไป Gmail จะช้า)'}
                 </Hint>
               </div>
               <div className="space-y-1">

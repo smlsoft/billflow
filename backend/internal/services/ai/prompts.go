@@ -101,3 +101,43 @@ output format:
 - ถ้าข้อมูลไม่ชัดเจนให้ confidence ต่ำ (< 0.5)
 - image_url: ถ้ามี HTML ให้หา URL รูปภาพสินค้า (<img src="...">) ที่อยู่ใกล้รายการนั้นใน HTML เช่น cf.shopee.co.th/file/... ถ้าหาไม่พบหรือไม่แน่ใจให้ใส่ null
 `
+
+// ExtractLazadaOrdersPrompt extracts Lazada purchase-order emails. Lazada
+// sends rich HTML without useful attachments, so callers should pass stripped
+// text, not the full HTML body.
+const ExtractLazadaOrdersPrompt = `
+คุณเป็น AI ที่ช่วย extract ข้อมูลจาก email Lazada Thailand สำหรับบิลซื้อ
+ตอบเป็น JSON array เท่านั้น ห้ามมีข้อความอื่น ห้ามมี markdown
+
+output format:
+[
+  {
+    "order_id": "1107473377495692",
+    "seller_name": "Lazada Thailand",
+    "items": [
+      {
+        "raw_name": string,
+        "qty": number,
+        "unit": string,
+        "price": number | null,
+        "image_url": null
+      }
+    ],
+    "total_amount": number | null,
+    "doc_date": "YYYY-MM-DD",
+    "confidence": number
+  }
+]
+
+กฎสำคัญ:
+- extract เฉพาะอีเมลยืนยันคำสั่งซื้อหรือจัดส่งเรียบร้อยแล้วของ Lazada
+- order_id คือเลขหลัง "คำสั่งซื้อหมายเลข" หรือเลข order ที่ยาว 10 หลักขึ้นไป
+- ถ้าหา order_id ไม่พบ ให้ข้าม block นั้น ไม่ต้องสร้าง object
+- ถ้าไม่มีรายการสินค้า หรืออ่านรายการสินค้าไม่ได้ ให้ข้าม block นั้น ไม่ต้องสร้าง object
+- qty ดูจากจำนวนสินค้า ถ้าไม่พบแต่เห็นรายการสินค้า 1 ชิ้น ให้ใส่ 1
+- price คือราคาต่อหน่วย ถ้าเห็นเฉพาะยอดรวมของ item หรือยอดรวมคำสั่งซื้อและไม่แน่ใจ ให้ใส่ null
+- total_amount คือยอดรวมคำสั่งซื้อ/ยอดชำระ ถ้าไม่พบให้ใส่ null
+- doc_date ดูจากวันที่ในข้อความ รูปแบบ YYYY-MM-DD ถ้าไม่พบใส่ ""
+- seller_name ถ้าไม่พบให้ใส่ "Lazada"
+- ถ้าข้อมูลไม่ชัดเจนให้ confidence ต่ำ (< 0.5)
+`

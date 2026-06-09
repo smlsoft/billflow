@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, useRef, type ReactNode } from 'react'
 import dayjs from 'dayjs'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -185,6 +185,35 @@ export function shopeeEventLabel(event: ShopeeOrderEvent): string {
   return event.status_label || event.event_type || 'สถานะ Shopee'
 }
 
+function CopyURLChip({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function handleCopy() {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  return (
+    <div className="mt-1 flex items-center gap-1.5 rounded bg-muted/60 px-2 py-1 text-[11px]">
+      <span className="text-muted-foreground shrink-0">Stock Request URL:</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-foreground" title={url}>
+        {url}
+      </span>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="shrink-0 rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        {copied ? '✓ copied' : 'copy'}
+      </button>
+    </div>
+  )
+}
+
 function Event({ event, isLast }: { event: AuditLog; isLast: boolean }) {
   const meta = ACTION_META[event.action] ?? {
     label: event.action,
@@ -194,6 +223,7 @@ function Event({ event, isLast }: { event: AuditLog; isLast: boolean }) {
   const summary = summarize(event)
   const time = dayjs(event.created_at)
   const isError = event.level === 'error'
+  const d = event.detail ?? {}
 
   return (
     <li className="relative flex gap-3 pl-0">
@@ -239,6 +269,10 @@ function Event({ event, isLast }: { event: AuditLog; isLast: boolean }) {
           >
             {summary}
           </p>
+        )}
+        {/* Diagnostic URL for stock recalc failures — copyable for SML dev */}
+        {event.action === 'sml_stock_recalc_failed' && d.stock_request_url && (
+          <CopyURLChip url={String(d.stock_request_url)} />
         )}
       </div>
       {/* Suppress unused isLast warning — reserved for future "join line above" tweaks */}

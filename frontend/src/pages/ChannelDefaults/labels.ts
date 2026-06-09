@@ -9,11 +9,19 @@ export type ChannelKey =
   | 'shopee_email'
   | 'shopee_shipped'
   | 'lazada'
+  | 'lazada_email'
   | 'tiktok'
   | 'manual'
   | 'shopee_settlement'
 
 export type ChannelBillType = 'sale' | 'purchase' | 'ar_receipt'
+
+export interface MarketplacePrintPolicy {
+  requires_all_orders_sml_doc: boolean
+  payment_method_prefix_enabled: boolean
+  payment_method_prefixes: string[]
+  payment_methods: string[]
+}
 
 export interface ChannelDefaultRow {
   channel: string
@@ -47,8 +55,70 @@ export interface ChannelDefaultRow {
   vat_rate: number      // -1 = use default; else percent (e.g. 7)
   inquiry_type: number  // -1 = use default; 0-3 = ประเภทรายการ
   remark_2?: string     // '' = ไม่ระบุ; 'tax'|'notax'|'re'
+  print_policy?: MarketplacePrintPolicy
   updated_by?: string | null
   updated_at?: string
+}
+
+export function supportsMarketplacePrintPolicy(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type'>): boolean {
+  return row.bill_type === 'purchase' && (row.channel === 'shopee_shipped' || row.channel === 'lazada_email')
+}
+
+export const DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS = [
+  'TT2789',
+  'TT9630',
+  'TT0972',
+  'TT9628',
+  'TT5128',
+  'TT5432',
+  'TT3086',
+  'TT8456',
+  'โอน Kbank',
+  'โอน TTB5074',
+  'โอน KTB',
+  'โอน BBL',
+  'โอน TTB1135',
+]
+
+export function defaultMarketplacePrintPolicy(): MarketplacePrintPolicy {
+  return {
+    requires_all_orders_sml_doc: true,
+    payment_method_prefix_enabled: true,
+    payment_method_prefixes: ['TT'],
+    payment_methods: DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS,
+  }
+}
+
+export function normalizeMarketplacePrintPolicy(policy?: Partial<MarketplacePrintPolicy> | null): MarketplacePrintPolicy {
+  const fallback = defaultMarketplacePrintPolicy()
+  const prefixes = Array.isArray(policy?.payment_method_prefixes)
+    ? Array.from(new Set(policy.payment_method_prefixes.map((p) => String(p).trim().toUpperCase()).filter(Boolean)))
+    : fallback.payment_method_prefixes
+  const methods = Array.isArray(policy?.payment_methods)
+    ? Array.from(new Set(policy.payment_methods.map((p) => String(p).trim()).filter(Boolean)))
+    : fallback.payment_methods
+  return {
+    requires_all_orders_sml_doc: typeof policy?.requires_all_orders_sml_doc === 'boolean'
+      ? policy.requires_all_orders_sml_doc
+      : fallback.requires_all_orders_sml_doc,
+    payment_method_prefix_enabled: typeof policy?.payment_method_prefix_enabled === 'boolean'
+      ? policy.payment_method_prefix_enabled
+      : fallback.payment_method_prefix_enabled,
+    payment_method_prefixes: prefixes.length > 0 ? prefixes : fallback.payment_method_prefixes,
+    payment_methods: methods.length > 0 ? methods : fallback.payment_methods,
+  }
+}
+
+export function marketplacePrintPolicyNote(policy?: Partial<MarketplacePrintPolicy> | null): string {
+  const p = normalizeMarketplacePrintPolicy(policy)
+  const parts: string[] = []
+  if (p.requires_all_orders_sml_doc) {
+    parts.push('ส่งเข้า SML ครบทุกคำสั่งซื้อในอีเมลเดียวกัน')
+  }
+  if (p.payment_method_prefix_enabled) {
+    parts.push(`วิธีการชำระเงินขึ้นต้นด้วย ${p.payment_method_prefixes.join(', ')}`)
+  }
+  return parts.length > 0 ? `พร้อมปริ้น = ${parts.join(' และ ')}` : 'พร้อมปริ้นตามเงื่อนไขเอกสารที่ส่งเข้า SML แล้ว'
 }
 
 // previewDocNo renders a sample doc_no with seq=1 — mirrors the backend
@@ -137,7 +207,7 @@ export const SML_DESTINATION_OPTIONS: SmlDestinationOption[] = [
     docPrefix: 'BF-PO',
     docRunningFormat: 'YYMM####',
     statusLabel: 'ทดสอบผ่านแล้ว',
-    description: 'ส่งบิลซื้อ Shopee เข้าเมนู ซื้อ -> ใบสั่งซื้อ ใน SML',
+    description: 'ส่งบิลซื้อจากอีเมล Marketplace เข้าเมนู ซื้อ -> ใบสั่งซื้อ ใน SML',
     phase1Enabled: true,
   },
   {
@@ -190,7 +260,7 @@ export function destinationKindFor(
   if (lower.includes('saleinvoice') || lower.includes('sale-invoices')) return 'saleinvoice'
   if (lower.includes('saleorder') || lower.includes('sale-orders')) return 'saleorder'
   // No keyword match → default by channel+bill_type
-  if (channel === 'shopee_shipped' || billType === 'purchase') return 'purchaseorder'
+  if (channel === 'shopee_shipped' || channel === 'lazada_email' || billType === 'purchase') return 'purchaseorder'
   if (channel === 'shopee' || channel === 'shopee_email' || channel === 'lazada' || channel === 'tiktok') return 'saleorder'
   return 'saleorder'
 }
@@ -202,6 +272,7 @@ export const CHANNEL_LABELS: Record<ChannelKey, string> = {
   shopee_email: 'Shopee Order',
   shopee_shipped: 'Email บิลซื้อ Shopee',
   lazada: 'Lazada Excel',
+  lazada_email: 'Email บิลซื้อ Lazada',
   tiktok: 'TikTok Excel',
   manual: 'Manual',
   shopee_settlement: 'Shopee รับชำระหนี้',

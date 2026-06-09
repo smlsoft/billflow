@@ -1,25 +1,38 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Mail, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
+import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Filter, Mail, Printer, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import BillTable from '@/components/BillTable'
+import { BillSourceBadge } from '@/components/BillSourceBadge'
 import { EmptyState } from '@/components/common/EmptyState'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { DateRangePicker } from '@/components/common/DateRangePicker'
-import { archiveBill, deleteBill, restoreBill, useBills } from '@/hooks/useBills'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { archiveBill, deleteBill, getEmailPrintCandidates, recordBulkEmailPrintEvents, restoreBill, useBills } from '@/hooks/useBills'
+import { getBill, updateBillPrintPaymentMethod, updateBillPurchaseCreditor } from '@/hooks/useBills'
+import { printArtifact, printArtifactsBatch, recordArtifactPrint, type ArtifactPrintContext } from './BillDetail/hooks/useArtifacts'
 import { useAuth } from '@/hooks/useAuth'
 import client from '@/api/client'
 import { BulkSendDialog } from './BulkSendDialog'
+import { UpdatePurchaseCreditorDialog } from './BillDetail/components/UpdatePurchaseCreditorDialog'
+import { UpdatePrintPaymentMethodDialog } from './BillDetail/components/UpdatePrintPaymentMethodDialog'
 import {
   BILL_SOURCE_LABEL,
   BILL_STATUS_LABEL,
   BILL_TYPE_LABEL,
   PAGE_TITLE,
 } from '@/lib/labels'
-import type { Bill } from '@/types'
+import type { Bill, EmailPrintCandidate } from '@/types'
+import type { Party } from '@/pages/ChannelDefaults/PartyPicker'
 
 const DEFAULT_PER_PAGE = 20
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
@@ -67,6 +80,12 @@ const SHOPEE_STATUS_OPTIONS = [
 ]
 
 const VALID_SHOPEE_STATUSES = SHOPEE_STATUS_OPTIONS.map((o) => o.value)
+const PURCHASE_SOURCE_OPTIONS = [
+  { value: ALL, label: 'ทุกช่องทาง', description: 'รวม Email บิลซื้อ Shopee และ Lazada' },
+  { value: 'shopee_shipped', label: BILL_SOURCE_LABEL.shopee_shipped, description: 'อีเมลคำสั่งซื้อ Shopee ที่ส่งไปใบสั่งซื้อ' },
+  { value: 'lazada_email', label: BILL_SOURCE_LABEL.lazada_email, description: 'อีเมล Lazada ที่สร้างเป็นบิลซื้อรอตรวจ' },
+]
+const VALID_PURCHASE_SOURCES = PURCHASE_SOURCE_OPTIONS.map((o) => o.value)
 const ARCHIVE_OPTIONS = [
   { value: 'active', label: 'รายการปกติ' },
   { value: 'include', label: 'รวมบิลที่เก็บแล้ว' },
@@ -98,7 +117,8 @@ const MODE_CONFIG: Record<BillsMode, {
   'purchase-order': {
     title: PAGE_TITLE.bills,
     description: 'ตรวจข้อมูลจากกล่องอีเมลรับบิลที่ตั้งค่าไว้ แล้วสร้างเป็นใบสั่งซื้อเพื่อส่งเข้า SML',
-    source: 'shopee_shipped',
+    source: '',
+    sourceLabel: 'Email บิลซื้อ Shopee/Lazada',
     billType: 'purchase',
     destination: 'ซื้อ -> ใบสั่งซื้อ',
     docCode: 'PO',
@@ -191,6 +211,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     failed: 0,
     skipped: 0,
     total: 0,
+    print_ready_orders: 0,
+    print_ready_groups: 0,
   })
   const [status, setStatus] = useState<string>(() =>
     readURLFilter(searchParams, 'status', VALID_STATUSES),
@@ -198,6 +220,11 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [shopeeStatus, setShopeeStatus] = useState<string>(() =>
     readURLFilter(searchParams, 'shopee_status', VALID_SHOPEE_STATUSES),
   )
+  const [sourceFilter, setSourceFilter] = useState<string>(() =>
+    readURLFilter(searchParams, 'source', VALID_PURCHASE_SOURCES),
+  )
+  const [printReadyOnly, setPrintReadyOnly] = useState(() => searchParams.get('print_ready') === '1')
+  const [sourceFilterOpen, setSourceFilterOpen] = useState(false)
   const [shopeeShopId, setShopeeShopId] = useState(() => searchParams.get('shopee_shop_id') || ALL)
   const [emailAccountId, setEmailAccountId] = useState(() => searchParams.get('email_account_id') || ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
@@ -210,14 +237,32 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('date_from') ?? '')
   const [dateTo, setDateTo] = useState(() => searchParams.get('date_to') ?? '')
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkPrintOpen, setBulkPrintOpen] = useState(false)
+  const [bulkPrintLoading, setBulkPrintLoading] = useState(false)
+  const [bulkPrintCandidates, setBulkPrintCandidates] = useState<EmailPrintCandidate[]>([])
+  const [bulkPrintTruncated, setBulkPrintTruncated] = useState(false)
+  const [printLoadingMessageID, setPrintLoadingMessageID] = useState<string | null>(null)
+  const [creditorDialogBill, setCreditorDialogBill] = useState<Bill | null>(null)
+  const [creditorDialogLoading, setCreditorDialogLoading] = useState(false)
+  const [creditorDialogLoadingBillId, setCreditorDialogLoadingBillId] = useState<string | null>(null)
+  const [creditorUpdating, setCreditorUpdating] = useState(false)
+  const [paymentDialogBill, setPaymentDialogBill] = useState<Bill | null>(null)
+  const [paymentDialogLoading, setPaymentDialogLoading] = useState(false)
+  const [paymentDialogLoadingBillId, setPaymentDialogLoadingBillId] = useState<string | null>(null)
+  const [paymentUpdating, setPaymentUpdating] = useState(false)
   const [confirmAction, setConfirmAction] = useState<{
     kind: 'archive' | 'restore' | 'delete' | 'permanent'
     bill: Bill
   } | null>(null)
+  const showPurchaseSourceFilter = mode === 'purchase-order'
   const showShopeeStatusFilter = mode === 'purchase-order'
   const showShopeeShopFilter = mode !== 'purchase-order'
   const canManageBills = user?.role === 'admin' || user?.role === 'staff'
   const canPermanentDelete = user?.role === 'admin'
+  const canUpdatePurchaseCreditor = user?.role === 'admin'
+  const canUpdatePrintPaymentMethod = user?.role === 'admin' || user?.role === 'staff'
+  const activeSource = showPurchaseSourceFilter && sourceFilter !== ALL ? sourceFilter : config.source
+  const activeSourceOption = PURCHASE_SOURCE_OPTIONS.find((o) => o.value === sourceFilter) ?? PURCHASE_SOURCE_OPTIONS[0]
 
   const { data, loading, refetch } = useBills({
     page,
@@ -225,9 +270,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     include_total: true,
     status: status === ALL ? '' : status,
     shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
-    source: config.source,
+    source: activeSource,
     bill_type: config.billType,
     document_route: config.documentRoute,
+    print_ready: showPurchaseSourceFilter && printReadyOnly,
     email_account_id: emailAccountId === ALL ? '' : emailAccountId,
     shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
     search,
@@ -245,10 +291,13 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const hasNextPage = page < totalPages
   const bulkCandidateCount = counts.pending
   const bulkStatusAllowed = status === ALL || status === 'pending'
-  const bulkDisabled = bulkCandidateCount === 0 || archiveMode !== 'active' || !bulkStatusAllowed
+  const bulkSourceAllowed = !showPurchaseSourceFilter || sourceFilter !== ALL
+  const bulkDisabled = bulkCandidateCount === 0 || archiveMode !== 'active' || !bulkStatusAllowed || !bulkSourceAllowed
   const bulkButtonLabel =
     archiveMode !== 'active'
       ? 'ส่ง SML ใช้ได้เฉพาะรายการปกติ'
+      : !bulkSourceAllowed
+        ? 'เลือกช่องทางก่อนส่ง SML แบบกลุ่ม'
       : !bulkStatusAllowed
         ? 'ส่ง SML ใช้ได้เมื่อดูทุกสถานะ/เอกสารสถานะพร้อมส่ง'
         : bulkCandidateCount > BULK_BATCH_SIZE
@@ -256,6 +305,36 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           : `ส่ง SML เอกสารสถานะพร้อมส่ง ${bulkCandidateCount.toLocaleString()} รายการ`
   const detailBasePath =
     mode === 'sale-invoice' ? '/sale-invoices' : mode === 'sales-order' ? '/sales-orders' : '/bills'
+  const selectedInbox = inboxes.find((a) => a.id === emailAccountId)
+  const selectedShopeeShop = shopeeShops.find((shop) => String(shop.shop_id) === shopeeShopId)
+  const selectedShopeeStatus = SHOPEE_STATUS_OPTIONS.find((o) => o.value === shopeeStatus)?.label ?? SHOPEE_STATUS_OPTIONS[0].label
+  const selectedArchiveLabel = ARCHIVE_OPTIONS.find((o) => o.value === archiveMode)?.label ?? ARCHIVE_OPTIONS[0].label
+  const sourceSummary = showPurchaseSourceFilter
+    ? activeSourceOption.label
+    : (config.sourceLabel ?? BILL_SOURCE_LABEL[config.source] ?? 'ทุกช่องทาง')
+  const inboxSummary = config.routeTo === '/settings/email'
+    ? selectedInbox
+      ? selectedInbox.name
+      : 'ทุกกล่องอีเมล'
+    : showShopeeShopFilter
+      ? selectedShopeeShop?.label || selectedShopeeShop?.shop_name || (shopeeShopId !== ALL ? `Shopee ${shopeeShopId}` : 'ทุกร้าน Shopee')
+      : 'ไม่จำกัด'
+  const dateSummary =
+    dateFrom && dateTo
+      ? `${dateFrom} ถึง ${dateTo}`
+      : dateFrom
+        ? `ตั้งแต่ ${dateFrom}`
+        : dateTo
+          ? `ถึง ${dateTo}`
+          : 'ไม่จำกัด'
+  const activeFilterSummary = [
+    `ช่องทาง: ${sourceSummary}`,
+    showShopeeStatusFilter ? `สถานะคำสั่งซื้อ: ${selectedShopeeStatus}` : '',
+    showPurchaseSourceFilter && printReadyOnly ? 'พร้อมปริ้นเท่านั้น' : '',
+    `กล่อง/ร้าน: ${inboxSummary}`,
+    `วันที่: ${dateSummary}`,
+    `มุมมอง: ${selectedArchiveLabel}`,
+  ].filter(Boolean)
 
   const resetPage = (cb: () => void) => {
     cb()
@@ -288,14 +367,17 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
 
   const fetchCounts = async () => {
     const params = new URLSearchParams()
-    if (config.source) params.set('source', config.source)
+    if (activeSource) params.set('source', activeSource)
     params.set('bill_type', config.billType)
     if (config.documentRoute) params.set('document_route', config.documentRoute)
     if (emailAccountId !== ALL) params.set('email_account_id', emailAccountId)
     if (archiveMode !== 'active') params.set('archived', archiveMode)
+    if (showPurchaseSourceFilter && printReadyOnly) params.set('print_ready', '1')
     if (showShopeeStatusFilter && shopeeStatus !== ALL) params.set('shopee_status', shopeeStatus)
     if (showShopeeShopFilter && shopeeShopId !== ALL) params.set('shopee_shop_id', shopeeShopId)
     if (search) params.set('search', search)
+    if (dateFrom) params.set('date_from', dateFrom)
+    if (dateTo) params.set('date_to', dateTo)
     const res = await client.get<typeof counts>(`/api/bills/counts?${params}`)
     setCounts(res.data)
   }
@@ -322,6 +404,184 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     }
   }
 
+  const handleOpenPurchaseCreditorDialog = async (bill: Bill) => {
+    if (creditorDialogLoading) return
+    const toastID = toast.loading('กำลังโหลดรายละเอียดบิล...')
+    setCreditorDialogLoading(true)
+    setCreditorDialogLoadingBillId(bill.id)
+    try {
+      const fullBill = await getBill(bill.id)
+      setCreditorDialogBill(fullBill)
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : 'โหลดรายละเอียดบิลไม่สำเร็จ',
+      )
+    } finally {
+      toast.dismiss(toastID)
+      setCreditorDialogLoading(false)
+      setCreditorDialogLoadingBillId(null)
+    }
+  }
+
+  const handlePurchaseCreditorConfirm = async (party: Party) => {
+    if (!creditorDialogBill || creditorUpdating) return
+    setCreditorUpdating(true)
+    try {
+      const result = await updateBillPurchaseCreditor(creditorDialogBill.id, {
+        party_code: party.code,
+        party_name: party.name,
+      })
+      setCreditorDialogBill(null)
+      toast.success(result.message || 'อัปเดตเจ้าหนี้ใน SML แล้ว', {
+        description: result.warning || result.sml_update?.log_warning || undefined,
+      })
+      refreshAll()
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : 'อัปเดตเจ้าหนี้ใน SML ไม่สำเร็จ',
+      )
+    } finally {
+      setCreditorUpdating(false)
+    }
+  }
+
+  const handleOpenPrintPaymentMethodDialog = async (bill: Bill) => {
+    if (paymentDialogLoading) return
+    const toastID = toast.loading('กำลังโหลดรายละเอียดบิล...')
+    setPaymentDialogLoading(true)
+    setPaymentDialogLoadingBillId(bill.id)
+    try {
+      const fullBill = await getBill(bill.id)
+      setPaymentDialogBill(fullBill)
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : 'โหลดรายละเอียดบิลไม่สำเร็จ',
+      )
+    } finally {
+      toast.dismiss(toastID)
+      setPaymentDialogLoading(false)
+      setPaymentDialogLoadingBillId(null)
+    }
+  }
+
+  const handlePrintPaymentMethodConfirm = async (paymentMethod: string, applyToEmailGroup: boolean) => {
+    if (!paymentDialogBill || paymentUpdating) return
+    setPaymentUpdating(true)
+    try {
+      const result = await updateBillPrintPaymentMethod(paymentDialogBill.id, {
+        payment_method: paymentMethod,
+        apply_to_email_group: applyToEmailGroup,
+      })
+      setPaymentDialogBill(null)
+      toast.success(result.message || 'อัปเดตวิธีการชำระเงินสำหรับปริ้นแล้ว', {
+        description: result.result?.updated_count
+          ? `อัปเดต ${result.result.updated_count.toLocaleString('th-TH')} คำสั่งซื้อ`
+          : undefined,
+      })
+      refreshAll()
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : 'อัปเดตวิธีการชำระเงินสำหรับปริ้นไม่สำเร็จ',
+      )
+    } finally {
+      setPaymentUpdating(false)
+    }
+  }
+
+  const currentPrintFilters = () => ({
+    source: activeSource,
+    bill_type: config.billType,
+    document_route: config.documentRoute,
+    email_account_id: emailAccountId === ALL ? '' : emailAccountId,
+    shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
+    shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
+    archived: archiveMode === 'active' ? '' as const : archiveMode,
+    search,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+    sort_order: sortOrder,
+  })
+
+  const handlePrintEmailBill = async (bill: Bill) => {
+    if (!bill.email_group?.message_id || printLoadingMessageID) return
+    setPrintLoadingMessageID(bill.email_group.message_id)
+    const toastID = toast.loading('กำลังเตรียมเอกสารพิมพ์...')
+    try {
+      const fullBill = await getBill(bill.id)
+      const artifactsRes = await client.get<{ data: Array<{ id: string; kind: string; filename: string }> }>(`/api/bills/${bill.id}/artifacts`)
+      const artifact = (artifactsRes.data.data ?? []).find((a) => a.kind === 'email_html' || a.kind === 'email_text')
+      if (!artifact) throw new Error('ไม่พบไฟล์อีเมลสำหรับพิมพ์')
+      await recordArtifactPrint(bill.id, artifact.id)
+      await printArtifact(bill.id, artifact.id, artifact.filename, printContextFromBill(fullBill))
+      toast.success('เปิดหน้าพิมพ์แล้ว')
+      refreshAll()
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e?.response?.data?.error || e?.message || 'พิมพ์ไม่สำเร็จ')
+    } finally {
+      toast.dismiss(toastID)
+      setPrintLoadingMessageID(null)
+    }
+  }
+
+  const handleOpenBulkPrint = async () => {
+    if (bulkPrintLoading) return
+    setBulkPrintLoading(true)
+    setBulkPrintOpen(true)
+    setBulkPrintTruncated(false)
+    try {
+      const res = await getEmailPrintCandidates(currentPrintFilters())
+      setBulkPrintCandidates(res.data ?? [])
+      setBulkPrintTruncated(Boolean(res.truncated))
+      if (res.truncated) {
+        toast.warning(`พบรายการพร้อมพิมพ์เกิน ${res.limit.toLocaleString('th-TH')} ชุด กรุณากรองวันที่หรือช่องทางให้แคบลง`)
+      }
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e?.response?.data?.error || e?.message || 'โหลดรายการพร้อมพิมพ์ไม่สำเร็จ')
+      setBulkPrintOpen(false)
+    } finally {
+      setBulkPrintLoading(false)
+    }
+  }
+
+  const handleConfirmBulkPrint = async () => {
+    if (bulkPrintLoading || bulkPrintCandidates.length === 0 || bulkPrintTruncated) return
+    setBulkPrintLoading(true)
+    const toastID = toast.loading('กำลังบันทึกประวัติและเปิดหน้าพิมพ์...')
+    try {
+      await recordBulkEmailPrintEvents(bulkPrintCandidates.map((candidate) => ({
+        bill_id: candidate.artifact_bill_id,
+        artifact_id: candidate.artifact_id,
+      })))
+      await printArtifactsBatch(bulkPrintCandidates.map((candidate) => ({
+        billID: candidate.artifact_bill_id,
+        artID: candidate.artifact_id,
+        filename: candidate.artifact_filename,
+        printContext: printContextFromCandidate(candidate),
+      })))
+      toast.success(`เปิดหน้าพิมพ์ ${bulkPrintCandidates.length.toLocaleString('th-TH')} ชุดแล้ว`)
+      setBulkPrintOpen(false)
+      setBulkPrintCandidates([])
+      setBulkPrintTruncated(false)
+      refreshAll()
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e?.response?.data?.error || e?.message || 'พิมพ์ทั้งหมดไม่สำเร็จ')
+    } finally {
+      toast.dismiss(toastID)
+      setBulkPrintLoading(false)
+    }
+  }
+
   useEffect(() => {
     let alive = true
     client.get<{ data: InboxOption[] }>('/api/settings/imap-accounts')
@@ -343,10 +603,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
 
   useEffect(() => {
     fetchCounts().catch(() => {
-      setCounts({ needs_review: 0, pending: 0, sent: 0, failed: 0, skipped: 0, total: 0 })
+      setCounts({ needs_review: 0, pending: 0, sent: 0, failed: 0, skipped: 0, total: 0, print_ready_orders: 0, print_ready_groups: 0 })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.source, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, shopeeShopId, search])
+  }, [activeSource, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, shopeeShopId, search, printReadyOnly, dateFrom, dateTo])
 
   useEffect(() => {
     if (!loading && data && page > totalPages) {
@@ -364,6 +624,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.set('status', status)
     if (showShopeeStatusFilter && shopeeStatus !== ALL) next.set('shopee_status', shopeeStatus)
     else next.delete('shopee_status')
+    if (showPurchaseSourceFilter && sourceFilter !== ALL) next.set('source', sourceFilter)
+    else next.delete('source')
+    if (showPurchaseSourceFilter && printReadyOnly) next.set('print_ready', '1')
+    else next.delete('print_ready')
     if (showShopeeShopFilter && shopeeShopId !== ALL) next.set('shopee_shop_id', shopeeShopId)
     else next.delete('shopee_shop_id')
     if (archiveMode === 'active') next.delete('archived')
@@ -389,12 +653,15 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   }, [
     status,
     shopeeStatus,
+    sourceFilter,
+    printReadyOnly,
     archiveMode,
     emailAccountId,
     search,
     page,
     perPage,
     showShopeeStatusFilter,
+    showPurchaseSourceFilter,
     showShopeeShopFilter,
     shopeeShopId,
     sortOrder,
@@ -405,174 +672,216 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   ])
 
   return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <QueueMetric label="ต้องตรวจสินค้า" value={counts.needs_review} icon={AlertTriangle} tone="warning" />
-        <QueueMetric label="เอกสารสถานะพร้อมส่ง" value={counts.pending} icon={Clock} tone="primary" />
-        <QueueMetric label="ส่งแล้ว" value={counts.sent} icon={CheckCircle2} tone="success" />
-        <QueueMetric label="ส่งไม่สำเร็จ" value={counts.failed} icon={Send} tone="danger" />
-      </div>
-
-      <div className="rounded-xl border border-border/70 bg-card p-3 shadow-sm">
-        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <div className="flex flex-wrap gap-1.5">
-            {STATUS_OPTIONS.map((o) => (
-              <button
-                key={o.value}
-                type="button"
-                onClick={() => resetPage(() => setStatus(o.value))}
-                className={[
-                  'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                  status === o.value
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-                ].join(' ')}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-          <span className="hidden h-4 w-px bg-border sm:block" />
-          <div className="flex flex-wrap gap-1.5">
-            {ARCHIVE_OPTIONS.map((o) => (
-              <button
-                key={o.value}
-                type="button"
-                onClick={() => resetPage(() => setArchiveMode(o.value))}
-                className={[
-                  'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                  archiveMode === o.value
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-border bg-background text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-                ].join(' ')}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-          <div className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span>{config.routeLabel}</span>
-            <span>→</span>
-            <span className="font-medium text-foreground">{config.destination}</span>
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-foreground">{config.docCode}</code>
-            <Link to="/settings/channels" className="font-medium text-primary hover:underline">
-              ตั้งค่า
-            </Link>
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
+        <div className="border-b border-border/70 bg-muted/20 px-3 py-2">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+            <QueueSummaryStrip counts={counts} />
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground xl:justify-end">
+              <span>{config.routeLabel}</span>
+              <span>→</span>
+              <span className="font-medium text-foreground">{config.destination}</span>
+              <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-foreground">{config.docCode}</code>
+              <Link to="/settings/channels" className="font-medium text-primary hover:underline">
+                ตั้งค่า
+              </Link>
+            </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full max-w-sm">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder={config.searchPlaceholder}
-              value={search}
-              onChange={(e) => resetPage(() => setSearch(e.target.value))}
-              className="h-9 pl-8"
-            />
+        <div className="space-y-2.5 p-3">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0 space-y-1">
+              <div className="text-[11px] font-medium text-muted-foreground">สถานะบิล</div>
+              <SegmentedPillGroup
+                options={STATUS_OPTIONS}
+                value={status}
+                onChange={(value) => resetPage(() => setStatus(value))}
+                ariaLabel="กรองตามสถานะบิล"
+              />
+            </div>
+            <div className="min-w-0 space-y-1 xl:max-w-[420px]">
+              <div className="text-[11px] font-medium text-muted-foreground">มุมมอง</div>
+              <SegmentedPillGroup
+                options={ARCHIVE_OPTIONS}
+                value={archiveMode}
+                onChange={(value) => resetPage(() => setArchiveMode(value))}
+                ariaLabel="กรองตามมุมมองบิลที่เก็บแล้ว"
+              />
+            </div>
           </div>
 
-          {mode !== 'purchase-order' && (
-            <span className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground sm:w-auto">
-              {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
-            </span>
-          )}
-          {showShopeeStatusFilter && (
-            <select
-              value={shopeeStatus}
-              onChange={(e) => resetPage(() => setShopeeStatus(e.target.value))}
-              className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-auto"
-              aria-label="กรองตามสถานะคำสั่งซื้อ Shopee"
-            >
-              {SHOPEE_STATUS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          )}
-          {showShopeeShopFilter && shopeeShops.length > 0 && (
-            <label className="flex w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground sm:w-auto">
-              <Store className="h-3.5 w-3.5 text-primary" />
-              <select
-                value={shopeeShopId}
-                onChange={(e) => resetPage(() => setShopeeShopId(e.target.value))}
-                className="h-9 min-w-0 bg-transparent text-xs text-foreground outline-none"
-                aria-label="กรองตามร้าน Shopee"
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[240px] flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder={config.searchPlaceholder}
+                value={search}
+                onChange={(e) => resetPage(() => setSearch(e.target.value))}
+                className="h-9 pl-8"
+              />
+            </div>
+
+            {mode !== 'purchase-order' && (
+              <span className="h-9 w-full rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground sm:w-auto">
+                {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
+              </span>
+            )}
+            {showPurchaseSourceFilter && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 w-full justify-start gap-1.5 sm:w-[210px]"
+                onClick={() => setSourceFilterOpen(true)}
+                title="กรองตามช่องทางบิลซื้อ"
               >
-                <option value={ALL}>ทุกร้าน Shopee</option>
-                {shopeeShops.map((shop) => (
-                  <option key={shop.id} value={String(shop.shop_id)}>
-                    {shop.label || shop.shop_name || 'Shopee shop'} · {shop.shop_id}
+                <Filter className="h-3.5 w-3.5" />
+                <span className="truncate">{activeSourceOption.label}</span>
+              </Button>
+            )}
+            {showShopeeStatusFilter && (
+              <select
+                value={shopeeStatus}
+                onChange={(e) => resetPage(() => setShopeeStatus(e.target.value))}
+                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[210px]"
+                aria-label="กรองตามสถานะคำสั่งซื้อ Shopee"
+              >
+                {SHOPEE_STATUS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
                   </option>
                 ))}
               </select>
-            </label>
-          )}
-          {inboxes.length > 0 && config.routeTo === '/settings/email' && (
-            <select
-              value={emailAccountId}
-              onChange={(e) => resetPage(() => setEmailAccountId(e.target.value))}
-              className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-auto"
-              aria-label="กรองตามกล่องอีเมล"
+            )}
+            <div className="w-full sm:w-[250px]">
+              <DateRangePicker
+                from={dateFrom}
+                to={dateTo}
+                onFromChange={(v) => resetPage(() => setDateFrom(v))}
+                onToChange={(v) => resetPage(() => setDateTo(v))}
+                className="h-9 w-full min-w-0 text-xs"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 whitespace-nowrap"
+              onClick={() => resetPage(() => setSortOrder((s) => (s === 'desc' ? 'asc' : 'desc')))}
+              title={sortOrder === 'desc' ? 'เรียงจากใหม่ → เก่า (คลิกเพื่อสลับ)' : 'เรียงจากเก่า → ใหม่ (คลิกเพื่อสลับ)'}
             >
-              <option value={ALL}>ทุกกล่องอีเมล</option>
-              {inboxes.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} · {a.username}
-                </option>
-              ))}
-            </select>
-          )}
-          <DateRangePicker
-            from={dateFrom}
-            to={dateTo}
-            onFromChange={(v) => resetPage(() => setDateFrom(v))}
-            onToChange={(v) => resetPage(() => setDateTo(v))}
-          />
+              <ArrowDownUp className="h-3.5 w-3.5" />
+              {sortOrder === 'desc' ? 'ใหม่สุด' : 'เก่าสุด'}
+            </Button>
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-9 gap-1.5 whitespace-nowrap"
-            onClick={() => resetPage(() => setSortOrder((s) => (s === 'desc' ? 'asc' : 'desc')))}
-            title={sortOrder === 'desc' ? 'เรียงจากใหม่ → เก่า (คลิกเพื่อสลับ)' : 'เรียงจากเก่า → ใหม่ (คลิกเพื่อสลับ)'}
-          >
-            <ArrowDownUp className="h-3.5 w-3.5" />
-            {sortOrder === 'desc' ? 'ใหม่สุด' : 'เก่าสุด'}
-          </Button>
-        </div>
+            {showPurchaseSourceFilter && (
+              <Button
+                type="button"
+                variant={printReadyOnly ? 'default' : 'outline'}
+                size="sm"
+                className="h-9 gap-1.5 whitespace-nowrap"
+                onClick={() => resetPage(() => setPrintReadyOnly((v) => !v))}
+                title="แสดงเฉพาะอีเมลที่ส่ง SML ครบและผ่านเงื่อนไขเจ้าหนี้สำหรับพิมพ์"
+              >
+                <Printer className="h-3.5 w-3.5" />
+                พร้อมปริ้น
+                <span className={printReadyOnly ? 'text-primary-foreground/80' : 'text-muted-foreground'}>
+                  {counts.print_ready_groups.toLocaleString('th-TH')}
+                </span>
+              </Button>
+            )}
 
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-          {counts.needs_review > 0 && archiveMode === 'active' && (
+            {showShopeeShopFilter && shopeeShops.length > 0 && (
+              <label className="flex h-9 w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground sm:w-[260px]">
+                <Store className="h-3.5 w-3.5 text-primary" />
+                <select
+                  value={shopeeShopId}
+                  onChange={(e) => resetPage(() => setShopeeShopId(e.target.value))}
+                  className="h-full min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
+                  aria-label="กรองตามร้าน Shopee"
+                >
+                  <option value={ALL}>ทุกร้าน Shopee</option>
+                  {shopeeShops.map((shop) => (
+                    <option key={shop.id} value={String(shop.shop_id)}>
+                      {shop.label || shop.shop_name || 'Shopee shop'} · {shop.shop_id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {inboxes.length > 0 && config.routeTo === '/settings/email' && (
+              <select
+                value={emailAccountId}
+                onChange={(e) => resetPage(() => setEmailAccountId(e.target.value))}
+                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[280px]"
+                aria-label="กรองตามกล่องอีเมล"
+              >
+                <option value={ALL}>ทุกกล่องอีเมล</option>
+                {inboxes.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} · {a.username}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <div className="min-w-0 flex-1 truncate rounded-md bg-muted/45 px-2.5 py-2 text-[11px] text-muted-foreground">
+              {activeFilterSummary.join(' · ')}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 border-t border-border/70 pt-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[11px] text-muted-foreground">
-              รายการต้องตรวจสินค้า {counts.needs_review.toLocaleString()} รายการจะไม่ถูกรวมในปุ่มส่ง SML เอกสารสถานะพร้อมส่ง
+              {showPurchaseSourceFilter
+                ? `พร้อมปริ้น ${counts.print_ready_groups.toLocaleString('th-TH')} ชุดอีเมล (${counts.print_ready_orders.toLocaleString('th-TH')} คำสั่งซื้อ) · ${printReadyNoteForList(bills)}`
+                : counts.needs_review > 0 && archiveMode === 'active'
+                  ? `ต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ไม่ถูกรวมใน bulk send`
+                  : 'พร้อมทำงานจากตัวกรองปัจจุบัน'}
             </p>
-          )}
-          <Button
-            type="button"
-            size="sm"
-            className="ml-auto gap-1.5 whitespace-nowrap"
-            disabled={bulkDisabled}
-            onClick={() => setBulkOpen(true)}
-            title={
-              archiveMode !== 'active'
-                ? 'Bulk send ปิดไว้เมื่อดูบิลที่เก็บแล้ว เพื่อไม่ส่งเอกสารย้อนหลังโดยไม่ตั้งใจ'
-                : !bulkStatusAllowed
-                  ? 'Bulk send ส่งเฉพาะเอกสารสถานะพร้อมส่ง จึงเปิดได้เมื่อเลือกทุกสถานะหรือสถานะพร้อมส่ง'
-                : counts.needs_review > 0
-                  ? `มีรายการต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ปุ่มนี้ส่งเฉพาะเอกสารสถานะพร้อมส่ง`
-                  : undefined
-            }
-          >
-            <Send className="h-3.5 w-3.5" />
-            <span className="truncate">{bulkButtonLabel}</span>
-          </Button>
+            {showPurchaseSourceFilter && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full gap-1.5 whitespace-nowrap sm:ml-auto sm:w-auto"
+                disabled={archiveMode !== 'active' || counts.print_ready_groups === 0 || bulkPrintLoading}
+                onClick={handleOpenBulkPrint}
+                title="พิมพ์ทุก email group ที่ผ่านเงื่อนไขพร้อมปริ้นจาก filter ปัจจุบัน"
+              >
+                <Printer className="h-3.5 w-3.5" />
+                พิมพ์ทั้งหมดที่พร้อม
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              className="w-full gap-1.5 whitespace-nowrap sm:ml-auto sm:w-auto"
+              disabled={bulkDisabled}
+              onClick={() => setBulkOpen(true)}
+              title={
+                archiveMode !== 'active'
+                  ? 'Bulk send ปิดไว้เมื่อดูบิลที่เก็บแล้ว เพื่อไม่ส่งเอกสารย้อนหลังโดยไม่ตั้งใจ'
+                  : !bulkSourceAllowed
+                    ? 'เลือก Email บิลซื้อ Shopee หรือ Email บิลซื้อ Lazada ก่อน เพื่อไม่ส่งข้ามช่องทางโดยไม่ตั้งใจ'
+                  : !bulkStatusAllowed
+                    ? 'Bulk send ส่งเฉพาะเอกสารสถานะพร้อมส่ง จึงเปิดได้เมื่อเลือกทุกสถานะหรือสถานะพร้อมส่ง'
+                  : counts.needs_review > 0
+                    ? `มีรายการต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ปุ่มนี้ส่งเฉพาะเอกสารสถานะพร้อมส่ง`
+                    : undefined
+              }
+            >
+              <Send className="h-3.5 w-3.5" />
+              <span className="truncate">{bulkButtonLabel}</span>
+            </Button>
+          </div>
         </div>
       </div>
 
-      {!loading && bills.length === 0 && !search && status === ALL && shopeeStatus === ALL && archiveMode === 'active' ? (
+      {!loading && bills.length === 0 && !search && status === ALL && shopeeStatus === ALL && (!showPurchaseSourceFilter || sourceFilter === ALL) && archiveMode === 'active' ? (
         <EmptyState
           icon={mode === 'purchase-order' ? Mail : UploadCloud}
           title={config.emptyTitle}
@@ -600,11 +909,19 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           showShopeeStatusColumn={showShopeeStatusFilter}
           canManage={canManageBills}
           canPermanentDelete={canPermanentDelete}
+          canUpdatePurchaseCreditor={canUpdatePurchaseCreditor}
+          purchaseCreditorLoadingBillId={creditorDialogLoadingBillId}
+          canUpdatePrintPaymentMethod={canUpdatePrintPaymentMethod}
+          printPaymentMethodLoadingBillId={paymentDialogLoadingBillId}
+          printLoadingMessageID={printLoadingMessageID}
           virtualize={perPage >= 100}
           onArchive={(bill: Bill) => setConfirmAction({ kind: 'archive', bill })}
           onRestore={(bill: Bill) => setConfirmAction({ kind: 'restore', bill })}
           onDelete={(bill: Bill) => setConfirmAction({ kind: 'delete', bill })}
           onPermanentDelete={(bill: Bill) => setConfirmAction({ kind: 'permanent', bill })}
+          onUpdatePurchaseCreditor={handleOpenPurchaseCreditorDialog}
+          onUpdatePrintPaymentMethod={handleOpenPrintPaymentMethodDialog}
+          onPrintEmail={handlePrintEmailBill}
           onRowClick={(id) => navigate(`${detailBasePath}/${id}`)}
         />
       )}
@@ -685,7 +1002,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         title={config.title}
         billType={config.billType}
         filters={{
-          source: config.source,
+          source: activeSource,
           bill_type: config.billType,
           document_route: config.documentRoute,
           email_account_id: emailAccountId === ALL ? '' : emailAccountId,
@@ -699,6 +1016,160 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           fetchCounts()
         }}
       />
+
+      <UpdatePurchaseCreditorDialog
+        open={!!creditorDialogBill}
+        bill={creditorDialogBill}
+        submitting={creditorUpdating}
+        onOpenChange={(open) => !open && setCreditorDialogBill(null)}
+        onConfirm={handlePurchaseCreditorConfirm}
+      />
+
+      <UpdatePrintPaymentMethodDialog
+        open={!!paymentDialogBill}
+        bill={paymentDialogBill}
+        submitting={paymentUpdating}
+        onOpenChange={(open) => !open && setPaymentDialogBill(null)}
+        onConfirm={handlePrintPaymentMethodConfirm}
+      />
+
+      <Dialog open={bulkPrintOpen} onOpenChange={(open) => {
+        if (!open && !bulkPrintLoading) {
+          setBulkPrintOpen(false)
+          setBulkPrintCandidates([])
+          setBulkPrintTruncated(false)
+        }
+      }}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>พิมพ์ทั้งหมดที่พร้อม</DialogTitle>
+            <DialogDescription>
+              ตรวจเลข POL และวิธีการชำระเงินก่อนยืนยัน ระบบจะพิมพ์หนึ่งครั้งต่อหนึ่งอีเมล ไม่พิมพ์ซ้ำตามจำนวน order
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border border-info/30 bg-info/5 px-3 py-2 text-xs text-info">
+              {printReadyNoteForList(bills)}
+            </div>
+            {bulkPrintTruncated && (
+              <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning">
+                พบรายการพร้อมพิมพ์เกิน 100 ชุด กรุณากรองวันที่หรือช่องทางให้แคบลงก่อนพิมพ์ทั้งหมด เพื่อไม่พลาดบางชุดอีเมล
+              </div>
+            )}
+            <div className="max-h-[420px] overflow-y-auto rounded-md border border-border">
+              {bulkPrintLoading && bulkPrintCandidates.length === 0 ? (
+                <div className="p-4 text-sm text-muted-foreground">กำลังโหลดรายการพร้อมพิมพ์...</div>
+              ) : bulkPrintCandidates.length === 0 ? (
+                <div className="p-4 text-sm text-muted-foreground">ไม่มีรายการพร้อมพิมพ์จาก filter ปัจจุบัน</div>
+              ) : (
+                <div className="divide-y divide-border">
+                  {bulkPrintCandidates.map((candidate) => (
+                    <div key={candidate.message_id} className="space-y-2 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            Email #{candidate.group_key}
+                          </div>
+                          <div className="truncate text-[11px] text-muted-foreground">
+                            {candidate.subject || candidate.from || candidate.message_id}
+                          </div>
+                        </div>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {candidate.orders.length.toLocaleString('th-TH')} order
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        {candidate.orders.map((order) => (
+                          <div key={order.bill_id} className="flex flex-wrap items-center justify-between gap-2 rounded bg-muted/35 px-2 py-1 text-xs">
+                            <span className="font-mono text-foreground">{order.sml_doc_no}</span>
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {formatPrintPaymentMethod(order.effective_print_payment_method || order.print_payment_method)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={bulkPrintLoading}
+                onClick={() => {
+                  setBulkPrintOpen(false)
+                  setBulkPrintCandidates([])
+                  setBulkPrintTruncated(false)
+                }}
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                disabled={bulkPrintLoading || bulkPrintCandidates.length === 0 || bulkPrintTruncated}
+                onClick={handleConfirmBulkPrint}
+              >
+                {bulkPrintLoading ? 'กำลังพิมพ์...' : `ยืนยันพิมพ์ ${bulkPrintCandidates.length.toLocaleString('th-TH')} ชุด`}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={sourceFilterOpen} onOpenChange={setSourceFilterOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>กรองตามช่องทาง</DialogTitle>
+            <DialogDescription>
+              เลือกช่องทางของบิลซื้อที่ต้องการดูและส่งเข้า SML
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {PURCHASE_SOURCE_OPTIONS.map((option) => {
+              const selected = sourceFilter === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={[
+                    'flex w-full items-start justify-between gap-3 rounded-lg border p-3 text-left transition-colors',
+                    selected
+                      ? 'border-primary bg-primary/10 text-foreground'
+                      : 'border-border bg-background text-foreground hover:bg-accent/70',
+                  ].join(' ')}
+                  onClick={() => {
+                    resetPage(() => setSourceFilter(option.value))
+                    setSourceFilterOpen(false)
+                  }}
+                >
+                  <span className="min-w-0 space-y-1">
+                    {option.value === ALL ? (
+                      <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" aria-hidden="true" />
+                        {option.label}
+                      </span>
+                    ) : (
+                      <BillSourceBadge source={option.value} />
+                    )}
+                    <span className="block text-xs leading-snug text-muted-foreground">
+                      {option.description}
+                    </span>
+                  </span>
+                  <span
+                    className={[
+                      'mt-1 h-2.5 w-2.5 shrink-0 rounded-full border',
+                      selected ? 'border-primary bg-primary' : 'border-muted-foreground/40',
+                    ].join(' ')}
+                    aria-hidden="true"
+                  />
+                </button>
+              )
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={confirmAction !== null}
@@ -730,6 +1201,75 @@ function confirmActionDescription(action: { kind: 'archive' | 'restore' | 'delet
   return `ลบบิล ${doc} ที่ยังไม่ได้ส่งเข้า SML พร้อมรายการสินค้าและไฟล์แนบ`
 }
 
+function printContextFromBill(bill: Bill): ArtifactPrintContext {
+  const related = bill.email_group?.related_bills ?? []
+  const rows = related.length > 0
+    ? related
+    : [{
+        order_id: String(bill.raw_data?.order_id ?? bill.raw_data?.shopee_order_id ?? ''),
+        sml_doc_no: bill.sml_doc_no || '',
+        party_code: payloadString(bill.sml_payload, 'cust_code'),
+        party_name: payloadString(bill.sml_payload, 'supplier_name') || payloadString(bill.sml_payload, 'party_name'),
+        print_payment_method: bill.print_payment_method || '',
+        effective_print_payment_method: bill.effective_print_payment_method || '',
+      }]
+  return {
+    orders: rows.map((row) => ({
+      orderId: row.order_id || undefined,
+      smlDocNo: row.sml_doc_no || undefined,
+      partyCode: row.party_code || undefined,
+      partyName: row.party_name || undefined,
+      paymentMethod: row.effective_print_payment_method || row.print_payment_method || undefined,
+    })),
+  }
+}
+
+function printContextFromCandidate(candidate: EmailPrintCandidate): ArtifactPrintContext {
+  return {
+    orders: candidate.orders.map((order) => ({
+      orderId: order.order_id || undefined,
+      smlDocNo: order.sml_doc_no || undefined,
+      partyCode: order.party_code || undefined,
+      partyName: order.party_name || undefined,
+      paymentMethod: order.effective_print_payment_method || order.print_payment_method || undefined,
+    })),
+  }
+}
+
+function payloadString(payload: Record<string, unknown> | null | undefined, key: string): string {
+  const value = payload?.[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function formatPrintPaymentMethod(method?: string): string {
+  return (method ?? '').trim() || 'ยังไม่ได้เลือกวิธีชำระเงิน'
+}
+
+function printReadyNoteForList(bills: Bill[]): string {
+  return bills.find((bill) => bill.email_group?.print_policy_note)?.email_group?.print_policy_note
+    || 'พร้อมปริ้น = ส่งเข้า SML ครบทุกคำสั่งซื้อในอีเมลเดียวกัน และวิธีการชำระเงินขึ้นต้นด้วย TT'
+}
+
+function QueueSummaryStrip({
+  counts,
+}: {
+  counts: {
+    needs_review: number
+    pending: number
+    sent: number
+    failed: number
+  }
+}) {
+  return (
+    <div className="grid w-full grid-cols-2 gap-1.5 lg:grid-cols-4 xl:max-w-[720px]">
+      <QueueMetric label="ต้องตรวจสินค้า" value={counts.needs_review} icon={AlertTriangle} tone="warning" />
+      <QueueMetric label="พร้อมส่ง" value={counts.pending} icon={Clock} tone="primary" />
+      <QueueMetric label="ส่งแล้ว" value={counts.sent} icon={CheckCircle2} tone="success" />
+      <QueueMetric label="ส่งไม่สำเร็จ" value={counts.failed} icon={Send} tone="danger" />
+    </div>
+  )
+}
+
 function QueueMetric({
   label,
   value,
@@ -748,14 +1288,54 @@ function QueueMetric({
     danger: 'bg-destructive/10 text-destructive',
   }[tone]
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm">
-      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${toneCls}`}>
-        <Icon className="h-4 w-4" />
+    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 py-1.5">
+      <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${toneCls}`}>
+        <Icon className="h-3.5 w-3.5" />
       </div>
       <div className="min-w-0">
-        <p className="text-xl font-semibold leading-6 tabular-nums">{value.toLocaleString()}</p>
-        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="text-base font-semibold leading-5 tabular-nums text-foreground">{value.toLocaleString()}</p>
+        <p className="truncate text-[11px] leading-4 text-muted-foreground">{label}</p>
       </div>
+    </div>
+  )
+}
+
+function SegmentedPillGroup<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: readonly { value: T; label: string }[]
+  value: T
+  onChange: (value: T) => void
+  ariaLabel: string
+}) {
+  return (
+    <div
+      className="inline-flex max-w-full flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1"
+      role="group"
+      aria-label={ariaLabel}
+    >
+      {options.map((option) => {
+        const selected = value === option.value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={[
+              'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+              selected
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:bg-background hover:text-foreground',
+            ].join(' ')}
+            aria-pressed={selected}
+          >
+            {option.label}
+          </button>
+        )
+      })}
     </div>
   )
 }

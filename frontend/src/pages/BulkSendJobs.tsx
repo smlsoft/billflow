@@ -55,7 +55,7 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
 
 const ROUTE_OPTIONS: Array<{ value: string; label: string; source?: string; bill_type?: string; document_route?: string }> = [
   { value: 'all', label: 'ทุกปลายทาง' },
-  { value: 'purchaseorder', label: 'ใบสั่งซื้อ', source: 'shopee_shipped', bill_type: 'purchase' },
+  { value: 'purchaseorder', label: 'ใบสั่งซื้อ', bill_type: 'purchase' },
   { value: 'saleorder', label: 'ใบสั่งขาย', bill_type: 'sale', document_route: 'saleorder' },
   { value: 'saleinvoice', label: 'ขายสินค้าและบริการ', bill_type: 'sale', document_route: 'saleinvoice' },
 ]

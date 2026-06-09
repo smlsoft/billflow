@@ -5,7 +5,7 @@
 -- idempotent and can re-run after rows from newer channels already exist.
 ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_source_check;
 ALTER TABLE bills ADD CONSTRAINT bills_source_check
-  CHECK (source IN ('line','email','lazada','tiktok','shopee','shopee_email','shopee_shipped','manual'));
+  CHECK (source IN ('line','email','lazada','lazada_email','tiktok','shopee','shopee_email','shopee_shipped','manual'));
 
 -- 2. Add needs_review to bills.status
 ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_status_check;

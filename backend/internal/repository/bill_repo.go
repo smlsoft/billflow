@@ -27,12 +27,14 @@ type BillListResult struct {
 }
 
 type BillQueueCounts struct {
-	NeedsReview int `json:"needs_review"`
-	Pending     int `json:"pending"`
-	Sent        int `json:"sent"`
-	Failed      int `json:"failed"`
-	Skipped     int `json:"skipped"`
-	Total       int `json:"total"`
+	NeedsReview      int `json:"needs_review"`
+	Pending          int `json:"pending"`
+	Sent             int `json:"sent"`
+	Failed           int `json:"failed"`
+	Skipped          int `json:"skipped"`
+	Total            int `json:"total"`
+	PrintReadyOrders int `json:"print_ready_orders"`
+	PrintReadyGroups int `json:"print_ready_groups"`
 }
 
 func NewBillRepo(db *sql.DB) *BillRepo {
@@ -110,13 +112,15 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 		`SELECT id, bill_type, source, status, document_route, raw_data, sml_doc_no,
 		        sml_payload, sml_response, ai_confidence, anomalies,
 		        error_msg, created_by, created_at, sent_at, archived_at, archived_by,
-		        archive_reason, remark
+		        archive_reason, remark, COALESCE(print_payment_method, '') AS print_payment_method,
+		        `+effectivePrintPaymentMethodExpr("bills")+` AS effective_print_payment_method
 		 FROM bills WHERE id = $1`, id,
 	).Scan(
 		&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData,
 		&b.SMLDocNo, &smlPayloadRaw, &smlResponseRaw, &b.AIConfidence,
 		&anomaliesRaw, &b.ErrorMsg, &b.CreatedBy, &b.CreatedAt, &b.SentAt,
 		&b.ArchivedAt, &b.ArchivedBy, &b.ArchiveReason, &b.Remark,
+		&b.PrintPaymentMethod, &b.EffectivePrintPaymentMethod,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -203,7 +207,17 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	if useCursor {
 		queryLimit = limit + 1
 	}
-	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
+	query := `SELECT b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no,
+	                 CASE
+	                   WHEN b.sml_payload IS NULL THEN NULL
+	                   ELSE jsonb_strip_nulls(jsonb_build_object(
+	                     'cust_code', NULLIF(b.sml_payload->>'cust_code', ''),
+	                     'supplier_name', NULLIF(b.sml_payload->>'supplier_name', '')
+	                   ))
+	                 END AS sml_payload,
+	                 COALESCE(b.print_payment_method, '') AS print_payment_method,
+	                 ` + effectivePrintPaymentMethodExpr("b") + ` AS effective_print_payment_method,
+	                 b.ai_confidence,
 	                 b.anomalies, b.error_msg, b.created_at, b.sent_at,
 	                 b.archived_at, b.archived_by, b.archive_reason,
 	                 COALESCE(SUM(GREATEST(bi.qty * COALESCE(bi.price, 0) - COALESCE(bi.discount_amount, 0), 0)), 0) AS total_amount,
@@ -211,7 +225,7 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	          FROM bills b
 	          LEFT JOIN bill_items bi ON bi.bill_id = b.id
 	          ` + where + `
-	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.ai_confidence,
+	          GROUP BY b.id, b.bill_type, b.source, b.status, b.document_route, b.raw_data, b.sml_doc_no, b.sml_payload, b.print_payment_method, b.ai_confidence,
 	                   b.anomalies, b.error_msg, b.created_at, b.sent_at, b.archived_at, b.archived_by, b.archive_reason
 	          ORDER BY b.created_at ` + sortDir + `, b.id ` + sortDir +
 		fmt.Sprintf(" LIMIT $%d", argN)
@@ -230,16 +244,20 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 	var bills []models.Bill
 	for rows.Next() {
 		var b models.Bill
-		var anomaliesRaw []byte
+		var anomaliesRaw, smlPayloadRaw []byte
 		var itemCount int
 		if err := rows.Scan(
-			&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData, &b.SMLDocNo, &b.AIConfidence,
+			&b.ID, &b.BillType, &b.Source, &b.Status, &b.DocumentRoute, &b.RawData, &b.SMLDocNo, &smlPayloadRaw,
+			&b.PrintPaymentMethod, &b.EffectivePrintPaymentMethod, &b.AIConfidence,
 			&anomaliesRaw, &b.ErrorMsg, &b.CreatedAt, &b.SentAt, &b.ArchivedAt, &b.ArchivedBy, &b.ArchiveReason,
 			&b.TotalAmount, &itemCount,
 		); err != nil {
 			return nil, err
 		}
 		b.Anomalies = anomaliesRaw
+		if smlPayloadRaw != nil {
+			b.SMLPayload = json.RawMessage(smlPayloadRaw)
+		}
 		enrichShopeeBillRawData(&b, itemCount, true)
 		bills = append(bills, b)
 	}
@@ -302,6 +320,9 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 		where += fmt.Sprintf(" AND b.document_route = $%d", argN)
 		args = append(args, f.DocumentRoute)
 		argN++
+	}
+	if f.PrintReady {
+		where += " AND " + marketplacePrintReadySQL("b")
 	}
 	if f.EmailAccountID != "" {
 		where += fmt.Sprintf(" AND b.raw_data->>'imap_account_id' = $%d", argN)
@@ -407,6 +428,19 @@ func (r *BillRepo) QueueCounts(f models.BillListFilter) (BillQueueCounts, error)
 		  COUNT(*) FILTER (WHERE b.status='skipped'),
 		  COUNT(*)
 		FROM bills b `+where, args...).Scan(&c.NeedsReview, &c.Pending, &c.Sent, &c.Failed, &c.Skipped, &c.Total)
+	if err != nil {
+		return c, err
+	}
+
+	readyFilter := f
+	readyFilter.Status = ""
+	readyFilter.PrintReady = true
+	readyWhere, readyArgs, _ := billWhere(readyFilter)
+	err = r.db.QueryRow(`
+		SELECT
+		  COUNT(*)::int,
+		  COUNT(DISTINCT `+marketplaceEmailMessageExpr("b")+`)::int
+		FROM bills b `+readyWhere, readyArgs...).Scan(&c.PrintReadyOrders, &c.PrintReadyGroups)
 	return c, err
 }
 
@@ -621,7 +655,7 @@ func sortBillItemsForDisplay(items []models.BillItem) {
 }
 
 func billItemDisplayGroup(item models.BillItem) int {
-	if item.SourceSKU == models.ShopeeShippingSourceSKU {
+	if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
 		return 1
 	}
 	return 0
@@ -841,7 +875,7 @@ func (r *BillRepo) DashboardStats() (map[string]interface{}, error) {
 		billType string
 	}
 	queues := []queueStat{
-		{key: "purchase", sources: []string{"shopee_shipped"}, billType: "purchase"},
+		{key: "purchase", sources: []string{"shopee_shipped", "lazada_email"}, billType: "purchase"},
 		{key: "sales", sources: []string{"shopee", "lazada", "tiktok"}, billType: "sale"},
 	}
 	for _, q := range queues {
@@ -915,6 +949,22 @@ func (r *BillRepo) UpdateAnomalies(id string, anomalies []models.Anomaly) error 
 func (r *BillRepo) UpdateSMLPayload(id string, payload json.RawMessage) error {
 	_, err := r.db.Exec(`UPDATE bills SET sml_payload = $1 WHERE id = $2`, payload, id)
 	return err
+}
+
+func (r *BillRepo) UpdateSMLPayloadCreditor(id, partyCode, partyName string) (json.RawMessage, error) {
+	var raw []byte
+	err := r.db.QueryRow(`
+		UPDATE bills
+		   SET sml_payload = COALESCE(sml_payload, '{}'::jsonb)
+		     || jsonb_build_object('cust_code', $2::text, 'supplier_name', $3::text)
+		 WHERE id = $1
+		 RETURNING sml_payload`,
+		id, partyCode, partyName,
+	).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (r *BillRepo) UpdateRemark(id, remark string) error {

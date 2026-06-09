@@ -30,13 +30,12 @@ func SkipMessage(code, label string) error {
 	return &MessageSkipError{Code: code, Label: label}
 }
 
-// Processors bundles the three downstream message handlers that the
+// Processors bundles the downstream message handlers that the
 // coordinator dispatches to based on each account's channel + the
 // message's subject. One bundle is shared by all account pollers.
 type Processors struct {
 	// Attachment is the generic PDF/image/Excel pipeline used by
-	// channel="general" and channel="lazada" (until the dedicated
-	// Lazada handler ships).
+	// channel="general".
 	Attachment AttachmentProcessor
 
 	// ShopeeOrder handles Shopee email order confirmations (saleinvoice
@@ -48,6 +47,11 @@ type Processors struct {
 	// (purchaseorder flow). Used for channel="shopee" when the subject
 	// contains "ถูกจัดส่งแล้ว".
 	ShopeeShipped ShopeeBodyProcessor
+
+	// LazadaPurchase handles Lazada order confirmation / shipped emails
+	// (purchaseorder flow). Used for channel="lazada" after strict sender
+	// and subject checks pass.
+	LazadaPurchase ShopeeBodyProcessor
 
 	// DuplicateMessage returns true when a Message-ID has already been
 	// processed. It lets the poller avoid fetching body/AI work for old

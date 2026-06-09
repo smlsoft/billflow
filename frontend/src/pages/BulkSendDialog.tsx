@@ -324,7 +324,6 @@ export function BulkSendDialog({
   const vatRateValid = vatRateStr.trim() !== '' && Number.isFinite(parsedVatRate) && parsedVatRate >= 0
   const vatRateNum = vatRateValid ? parsedVatRate : 0
   const isPurchaseOrder = billType === 'purchase'
-  const isShopeePurchaseBulk = isPurchaseOrder && filters.source === 'shopee_shipped'
   const smlReady = isSMLReady(smlReadiness)
   const canSend =
     smlReady &&
@@ -403,7 +402,7 @@ export function BulkSendDialog({
     setShelfCode(p?.shelf_code || '')
     setManualWarehouse(false)
     setVatTypeStr(typeof p?.vat_type === 'number' ? String(p.vat_type) : '')
-    setVatRateStr(typeof p?.vat_rate === 'number' ? String(p.vat_rate) : '7')
+    setVatRateStr(typeof p?.vat_rate === 'number' ? String(p.vat_rate) : '')
     setInquiryTypeStr(typeof p?.inquiry_type === 'number' ? String(p.inquiry_type) : '')
     setRemark2Str(normalizeRemark2(p?.remark_2))
     setBranchCode(p?.branch_code || '')
@@ -575,7 +574,7 @@ export function BulkSendDialog({
   const payload = (): RetryBillPayload => ({
     party_code: party?.code,
     party_name: party?.name,
-    remark: isShopeePurchaseBulk ? undefined : remark.trim() || undefined,
+    remark: isPurchaseOrder ? undefined : remark.trim() || undefined,
     remark_2: remark2PayloadValue(remark2Str),
     branch_code: branchCode.trim() || undefined,
     sale_code: saleCode.trim() || undefined,
@@ -1101,11 +1100,14 @@ export function BulkSendDialog({
               <Label className="text-xs">อัตราภาษี (vat_rate) <span className="text-destructive">*</span></Label>
               <Input
                 value={vatRateStr}
-                onChange={(e) => setVatRateStr(e.target.value)}
+                onChange={(e) => {
+                  if (!isPurchaseOrder) setVatRateStr(e.target.value)
+                }}
                 placeholder="เช่น 7"
                 inputMode="decimal"
-                className="font-mono"
-                disabled={controlsLocked}
+                className={`font-mono ${isPurchaseOrder ? 'bg-muted/50 cursor-not-allowed' : ''}`}
+                readOnly={isPurchaseOrder}
+                disabled={controlsLocked || isPurchaseOrder}
               />
             </div>
 
@@ -1157,7 +1159,7 @@ export function BulkSendDialog({
             </div>
             {!vatRateValid && (
               <div className="rounded-md bg-warning/[0.08] px-2.5 py-1.5 text-[11px] text-warning sm:col-span-2">
-                ตั้งค่าอัตราภาษีใน /settings/channels หรือกรอกใน dialog นี้ก่อนส่ง
+                ตั้งค่าอัตราภาษีใน /settings/channels ก่อนส่ง SML
               </div>
             )}
             <div className="rounded-md bg-background/70 px-2.5 py-1.5 text-[11px] text-muted-foreground sm:col-span-2">
@@ -1165,9 +1167,9 @@ export function BulkSendDialog({
             </div>
           </div>
 
-          {isShopeePurchaseBulk ? (
+          {isPurchaseOrder ? (
             <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2 text-xs text-muted-foreground">
-              บิลซื้อ Shopee จะส่ง remark เป็นผู้ขายจากอีเมลของแต่ละบิลอัตโนมัติ และส่งเลขคำสั่งซื้อเข้า remark_5
+              ช่องหมายเหตุ SML ของบิลซื้อจะใช้ชื่อร้านค้าจากแต่ละบิล ระบบไม่เปิดให้กรอกหมายเหตุรวมก่อนส่ง
             </div>
           ) : (
             <div className="space-y-1.5">

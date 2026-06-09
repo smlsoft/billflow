@@ -63,6 +63,7 @@ export function SmlPayloadSection({ smlPayload, smlResponse }: Props) {
   const whCode = smlPayload?.wh_code ?? firstItem?.wh_code
   const shelfCode = smlPayload?.shelf_code ?? firstItem?.shelf_code
   const remark2 = typeof smlPayload?.remark_2 === 'string' ? smlPayload.remark_2 : ''
+  const hasRemark5 = smlPayload?.remark_5 != null && smlPayload.remark_5 !== ''
 
   return (
     <Card>
@@ -88,7 +89,10 @@ export function SmlPayloadSection({ smlPayload, smlResponse }: Props) {
           <div className="space-y-2">
             <div className="grid gap-2 sm:grid-cols-2">
               <SummaryCell label="เลขเอกสาร SML" value={text(smlPayload.doc_no)} mono />
-              <SummaryCell label="อ้างอิง Shopee" value={text(smlPayload.doc_ref)} mono />
+              <SummaryCell label="เลขอ้างอิง SML (doc_ref)" value={text(smlPayload.doc_ref)} mono />
+              {hasRemark5 && (
+                <SummaryCell label="หมายเหตุ 5 (remark_5)" value={text(smlPayload.remark_5)} mono />
+              )}
               <SummaryCell label="ผู้ขาย" value={text(smlPayload.supplier_name ?? smlPayload.cust_code)} />
               <SummaryCell label="คู่ค้า" value={text(smlPayload.cust_code)} mono />
               <SummaryCell label="คลัง" value={`${text(whCode)} / ${text(shelfCode)}`} mono />

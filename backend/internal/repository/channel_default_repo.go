@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"billflow/internal/models"
@@ -23,12 +24,14 @@ const channelDefaultCols = `
   shipping_item_enabled, shipping_item_code, shipping_item_unit_code,
   passbook_code, passbook_name, bank_code, bank_branch, expense_code, expense_name,
   wh_code, shelf_code, vat_type, vat_rate, inquiry_type, remark_2,
+  COALESCE(print_policy, '{}'::jsonb) AS print_policy,
   updated_by, updated_at
 `
 
 func scanChannelDefault(s interface{ Scan(...any) error }) (*models.ChannelDefault, error) {
 	d := &models.ChannelDefault{}
 	var updatedBy sql.NullString
+	var printPolicyRaw json.RawMessage
 	err := s.Scan(
 		&d.Channel, &d.BillType, &d.PartyCode, &d.PartyName, &d.PartyPhone,
 		&d.PartyAddress, &d.PartyTaxID, &d.DocFormatCode, &d.Endpoint,
@@ -37,6 +40,7 @@ func scanChannelDefault(s interface{ Scan(...any) error }) (*models.ChannelDefau
 		&d.ShippingItemEnabled, &d.ShippingItemCode, &d.ShippingItemUnitCode,
 		&d.PassbookCode, &d.PassbookName, &d.BankCode, &d.BankBranch, &d.ExpenseCode, &d.ExpenseName,
 		&d.WHCode, &d.ShelfCode, &d.VATType, &d.VATRate, &d.InquiryType, &d.Remark2,
+		&printPolicyRaw,
 		&updatedBy, &d.UpdatedAt,
 	)
 	if err != nil {
@@ -46,6 +50,7 @@ func scanChannelDefault(s interface{ Scan(...any) error }) (*models.ChannelDefau
 		s := updatedBy.String
 		d.UpdatedBy = &s
 	}
+	d.PrintPolicy = models.NormalizeMarketplacePrintPolicyFromRaw(d.Channel, d.BillType, printPolicyRaw)
 	return d, nil
 }
 
@@ -92,6 +97,25 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 	if updatedBy != "" {
 		ub = sql.NullString{String: updatedBy, Valid: true}
 	}
+	printPolicy := d.PrintPolicy
+	if !models.SupportsMarketplacePrintPolicy(d.Channel, d.BillType) {
+		printPolicyRaw, err := json.Marshal(map[string]any{})
+		if err != nil {
+			return fmt.Errorf("marshal print_policy: %w", err)
+		}
+		return r.upsertWithPrintPolicy(d, ub, printPolicyRaw)
+	}
+	if len(printPolicy.PaymentMethods) == 0 {
+		printPolicy = models.DefaultMarketplacePrintPolicy(d.Channel, d.BillType)
+	}
+	printPolicyRaw, err := json.Marshal(printPolicy)
+	if err != nil {
+		return fmt.Errorf("marshal print_policy: %w", err)
+	}
+	return r.upsertWithPrintPolicy(d, ub, printPolicyRaw)
+}
+
+func (r *ChannelDefaultRepo) upsertWithPrintPolicy(d *models.ChannelDefault, ub sql.NullString, printPolicyRaw []byte) error {
 	_, err := r.db.Exec(
 		`INSERT INTO channel_defaults (
 		   channel, bill_type, party_code, party_name, party_phone,
@@ -100,9 +124,9 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   branch_code, sale_code, unit_code, doc_time,
 		   shipping_item_enabled, shipping_item_code, shipping_item_unit_code,
 		   passbook_code, passbook_name, bank_code, bank_branch, expense_code, expense_name,
-		   wh_code, shelf_code, vat_type, vat_rate, inquiry_type, remark_2,
+		   wh_code, shelf_code, vat_type, vat_rate, inquiry_type, remark_2, print_policy,
 		   updated_by, updated_at
-		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31, NOW())
+		 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32, NOW())
 		 ON CONFLICT (channel, bill_type) DO UPDATE SET
 		   party_code = EXCLUDED.party_code,
 		   party_name = EXCLUDED.party_name,
@@ -132,6 +156,7 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		   vat_rate = EXCLUDED.vat_rate,
 		   inquiry_type = EXCLUDED.inquiry_type,
 		   remark_2 = EXCLUDED.remark_2,
+		   print_policy = EXCLUDED.print_policy,
 		   updated_by = EXCLUDED.updated_by,
 		   updated_at = NOW()`,
 		d.Channel, d.BillType, d.PartyCode, d.PartyName, d.PartyPhone,
@@ -141,7 +166,7 @@ func (r *ChannelDefaultRepo) Upsert(d *models.ChannelDefault, updatedBy string) 
 		d.ShippingItemEnabled, d.ShippingItemCode, d.ShippingItemUnitCode,
 		d.PassbookCode, d.PassbookName, d.BankCode, d.BankBranch, d.ExpenseCode, d.ExpenseName,
 		d.WHCode, d.ShelfCode, d.VATType, d.VATRate, d.InquiryType, d.Remark2,
-		ub,
+		printPolicyRaw, ub,
 	)
 	if err != nil {
 		return fmt.Errorf("Upsert channel_default: %w", err)

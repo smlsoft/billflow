@@ -2,11 +2,11 @@
 
 ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_source_check;
 ALTER TABLE bills ADD CONSTRAINT bills_source_check
-  CHECK (source IN ('line','email','lazada','tiktok','shopee','shopee_email','shopee_shipped','manual'));
+  CHECK (source IN ('line','email','lazada','lazada_email','tiktok','shopee','shopee_email','shopee_shipped','manual'));
 
 ALTER TABLE channel_defaults DROP CONSTRAINT IF EXISTS channel_defaults_channel_check;
 ALTER TABLE channel_defaults ADD CONSTRAINT channel_defaults_channel_check
-  CHECK (channel IN ('line','email','shopee','shopee_email','shopee_shipped','lazada','tiktok','manual','shopee_settlement'));
+  CHECK (channel IN ('line','email','shopee','shopee_email','shopee_shipped','lazada','lazada_email','tiktok','manual','shopee_settlement'));
 
 DO $$
 BEGIN

@@ -8,6 +8,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   shopee: 'Shopee',
   shopee_email: 'Shopee Email',
   shopee_shipped: 'Email บิลซื้อ Shopee',
+  lazada_email: 'Email บิลซื้อ Lazada',
   manual: 'เพิ่มเอง',
 }
 
@@ -32,6 +33,11 @@ export const FLOW_META: Record<
     label: 'Email บิลซื้อ Shopee',
     icon: '📦',
     variant: 'bg-amber-100 text-amber-800',
+  },
+  lazada_email_purchase: {
+    label: 'Email บิลซื้อ Lazada',
+    icon: '📧',
+    variant: 'bg-sky-100 text-sky-800',
   },
   shopee_excel: {
     label: 'Shopee',

@@ -25,7 +25,10 @@ import { cn } from '@/lib/utils'
 import { EditDialog } from './ChannelDefaults/EditDialog'
 import {
   CHANNEL_LABELS,
+  defaultMarketplacePrintPolicy,
   destinationFor,
+  marketplacePrintPolicyNote,
+  supportsMarketplacePrintPolicy,
   type ChannelBillType,
   type ChannelDefaultRow,
   type ChannelKey,
@@ -38,6 +41,7 @@ const PHASE1_CHANNEL_SLOTS: Array<{
   bill_type: ChannelBillType
 }> = [
   { channel: 'shopee_shipped', bill_type: 'purchase' },
+  { channel: 'lazada_email', bill_type: 'purchase' },
 ]
 
 const PHASE_PLUS_CHANNEL_SLOTS: Array<{
@@ -48,6 +52,7 @@ const PHASE_PLUS_CHANNEL_SLOTS: Array<{
     ? [{ channel: 'line' as ChannelKey, bill_type: 'sale' as const }]
     : []),
   { channel: 'shopee_shipped', bill_type: 'purchase' },
+  { channel: 'lazada_email', bill_type: 'purchase' },
   ...(ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
     ? [{ channel: 'shopee' as ChannelKey, bill_type: 'sale' as const }]
     : []),
@@ -70,6 +75,9 @@ function displayChannelLabel(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type
   if (row.channel === 'shopee_shipped' && row.bill_type === 'purchase') {
     return 'Email บิลซื้อ Shopee'
   }
+  if (row.channel === 'lazada_email' && row.bill_type === 'purchase') {
+    return 'Email บิลซื้อ Lazada'
+  }
   return CHANNEL_LABELS[row.channel as ChannelKey] ?? row.channel
 }
 
@@ -84,7 +92,7 @@ function workMenuFor(row: Pick<ChannelDefaultRow, 'channel' | 'bill_type' | 'end
     }
     return { label: 'ใบสั่งขาย', to: '/sales-orders' }
   }
-  if (row.channel === 'shopee_shipped' && row.bill_type === 'purchase') {
+  if ((row.channel === 'shopee_shipped' || row.channel === 'lazada_email') && row.bill_type === 'purchase') {
     return { label: 'ใบสั่งซื้อ', to: '/bills' }
   }
   return null
@@ -158,7 +166,7 @@ function HelpBanner() {
             {phase1 ? (
               <p className="text-muted-foreground">
                 ใน Phase 1 หน้านี้เปิดเฉพาะเส้นทางที่พร้อมใช้งานก่อน ได้แก่{' '}
-                <b>Email Shopee → บิลซื้อ</b>{ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Shopee → บิลขาย</b></> : null}{ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Lazada Excel → บิลขาย</b></> : null}{ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>TikTok Excel → บิลขาย</b></> : null}.
+                <b>Email Shopee → บิลซื้อ</b> และ <b>Email Lazada → บิลซื้อ</b>{ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Shopee → บิลขาย</b></> : null}{ENABLE_LAZADA_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>Lazada Excel → บิลขาย</b></> : null}{ENABLE_TIKTOK_EXCEL && ENABLE_SALES_ORDERS ? <> และ <b>TikTok Excel → บิลขาย</b></> : null}.
                 ใช้กำหนดปลายทางที่จะส่งเอกสารเข้า SML ได้แก่ เมนู SML รหัสประเภทเอกสาร
                 และรูปแบบเลขเอกสาร. ส่วนคู่ค้า คลัง พื้นที่เก็บ และภาษี จะเลือกในขั้นตอนส่งบิล.
               </p>
@@ -278,6 +286,7 @@ export default function ChannelDefaults() {
         vat_type: -1,
         vat_rate: -1,
         inquiry_type: -1,
+        print_policy: supportsMarketplacePrintPolicy(slot) ? defaultMarketplacePrintPolicy() : undefined,
       } satisfies ChannelDefaultRow
     })
   }, [rows])
@@ -303,9 +312,14 @@ export default function ChannelDefaults() {
       )
     }
     return (
-      <span className="text-xs text-muted-foreground">
-        ค่า wh/shelf/VAT เลือกใน dialog ส่ง SML
-      </span>
+      <div className="space-y-0.5 text-xs text-muted-foreground">
+        <div>ค่า wh/shelf/VAT เลือกใน dialog ส่ง SML</div>
+        {supportsMarketplacePrintPolicy(r) && (
+          <div className="text-[11px] text-foreground">
+            {marketplacePrintPolicyNote(r.print_policy)}
+          </div>
+        )}
+      </div>
     )
   }
 
@@ -316,8 +330,8 @@ export default function ChannelDefaults() {
         description={
           PHASE < 2
             ? ENABLE_SHOPEE_EXCEL && ENABLE_SALES_ORDERS
-              ? 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee และบิลขาย Marketplace Excel'
-              : 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อ Shopee'
+              ? 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อจากอีเมลและบิลขาย Marketplace Excel'
+              : 'เลือกปลายทาง SML, doc_format_code และรูปแบบเลขเอกสารสำหรับบิลซื้อจากอีเมล'
             : 'กำหนดว่าแต่ละช่องทางจะส่งบิลเข้าเมนูไหนใน SML พร้อมรหัสเอกสารและรูปแบบเลขเอกสาร'
         }
       />

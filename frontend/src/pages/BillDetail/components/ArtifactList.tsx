@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Download, ExternalLink, Eye, History, Paperclip, Printer, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import axios from 'axios'
 import { toast } from 'sonner'
 import dayjs from 'dayjs'
 import { Button } from '@/components/ui/button'
@@ -13,7 +14,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useArtifacts, openArtifact, printArtifact, recordArtifactPrint } from '../hooks/useArtifacts'
-import type { BillArtifact } from '../hooks/useArtifacts'
+import type { ArtifactPrintContext, BillArtifact } from '../hooks/useArtifacts'
 import { KIND_META, fmtSize, isUserVisibleArtifact } from '../utils/formatters'
 import api from '@/api/client'
 import type { BillEmailGroup, BillEmailRelatedBill, EmailPrintEvent } from '@/types'
@@ -21,9 +22,26 @@ import type { BillEmailGroup, BillEmailRelatedBill, EmailPrintEvent } from '@/ty
 interface Props {
   billId: string
   billStatus?: string
+  billSource?: string
   smlDocNo?: string
   orderID?: string
+  printPaymentMethod?: string
+  effectivePrintPaymentMethod?: string
   emailGroup?: BillEmailGroup | null
+  smlPayload?: Record<string, unknown> | null
+  onReload?: () => Promise<unknown>
+}
+
+type PrintReadiness = {
+  canPrint: boolean
+  reason: string
+  printContext: ArtifactPrintContext
+}
+
+type PrintAPIError = {
+  message: string
+  description?: string
+  shouldReload?: boolean
 }
 
 // EmailPreviewModal renders HTML email content in a sandboxed iframe so the
@@ -35,7 +53,7 @@ function EmailPreviewModal({
   filename,
   displayName,
   emailGroup,
-  billStatus,
+  printReadiness,
   onPrinted,
   onClose,
 }: {
@@ -44,7 +62,7 @@ function EmailPreviewModal({
   filename: string
   displayName: string
   emailGroup?: BillEmailGroup | null
-  billStatus?: string
+  printReadiness: PrintReadiness
   onPrinted: (artId: string, filename: string) => Promise<void>
   onClose: () => void
 }) {
@@ -64,7 +82,7 @@ function EmailPreviewModal({
         return res.data.text().then((html: string) => {
           // Reset body margin so the email starts at the top of the iframe,
           // and patch every <a> to open in a new tab.
-          const resetCss = `<style>*{box-sizing:border-box}html,body{margin:0!important;padding:0!important}img{display:block;max-width:100%}table{margin:0!important}</style>`
+          const resetCss = `<style>*{box-sizing:border-box}html,body{margin:0!important;padding:0!important;background:#fff!important}img{display:block;max-width:100%}table{margin:0!important}</style>`
           const patched = html
             .replace(/<head([^>]*)>/i, `<head$1>${resetCss}`)
             .replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ')
@@ -97,14 +115,14 @@ function EmailPreviewModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
       onClick={handleClose}
     >
       <div
-        className="relative flex h-[90vh] w-full max-w-4xl flex-col rounded-lg bg-white shadow-2xl"
+        className="relative flex h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b px-4 py-2">
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2">
           <div className="min-w-0">
             <span className="block truncate text-sm font-medium text-foreground">{displayName}</span>
             <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{filename}</span>
@@ -113,12 +131,12 @@ function EmailPreviewModal({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {billStatus === 'sent' ? (
+            {printReadiness.canPrint ? (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 gap-1.5"
+                className="h-8 gap-1.5 bg-background"
                 onClick={handlePrint}
               >
                 <Printer className="h-3.5 w-3.5" />
@@ -133,7 +151,7 @@ function EmailPreviewModal({
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-8 gap-1.5 pointer-events-none opacity-40"
+                        className="h-8 gap-1.5 pointer-events-none bg-background opacity-40"
                         disabled
                       >
                         <Printer className="h-3.5 w-3.5" />
@@ -142,7 +160,7 @@ function EmailPreviewModal({
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="text-xs">
-                    ส่งเอกสารเข้า SML ก่อนถึงจะพิมพ์ได้
+                    {printReadiness.reason}
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -151,13 +169,13 @@ function EmailPreviewModal({
               type="button"
               onClick={handleClose}
               title="ปิด"
-              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden bg-muted">
           {loading && (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               กำลังโหลด...
@@ -167,7 +185,7 @@ function EmailPreviewModal({
             <iframe
               src={src}
               title={filename}
-              className="h-full w-full border-0"
+              className="h-full w-full border-0 bg-white"
               sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
               referrerPolicy="no-referrer"
             />
@@ -179,7 +197,18 @@ function EmailPreviewModal({
   )
 }
 
-export function ArtifactList({ billId, billStatus, smlDocNo, orderID, emailGroup }: Props) {
+export function ArtifactList({
+  billId,
+  billStatus,
+  billSource,
+  smlDocNo,
+  orderID,
+  printPaymentMethod,
+  effectivePrintPaymentMethod,
+  emailGroup,
+  smlPayload,
+  onReload,
+}: Props) {
   const { items, loading } = useArtifacts(billId)
   const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string; displayName: string } | null>(null)
   const [printEvents, setPrintEvents] = useState<EmailPrintEvent[]>(emailGroup?.print_events ?? [])
@@ -188,28 +217,42 @@ export function ArtifactList({ billId, billStatus, smlDocNo, orderID, emailGroup
     setPrintEvents(emailGroup?.print_events ?? [])
   }, [emailGroup?.message_id, emailGroup?.print_events])
 
-  const orderDocMap: Record<string, string> = {}
-  if (orderID && smlDocNo) orderDocMap[orderID] = smlDocNo
-  for (const b of emailGroup?.related_bills ?? []) {
-    if (b.order_id && b.sml_doc_no) orderDocMap[b.order_id] = b.sml_doc_no
-  }
+  const printReadiness = buildPrintReadiness({
+    billStatus,
+    billSource,
+    smlDocNo,
+    orderID,
+    printPaymentMethod,
+    effectivePrintPaymentMethod,
+    emailGroup,
+    smlPayload,
+  })
 
   const handlePrintArtifact = async (artId: string, filename: string) => {
-    try {
-      await printArtifact(billId, artId, filename, smlDocNo, orderID, orderDocMap)
-    } catch (err) {
-      console.error('artifact print failed', err)
-      toast.error('พิมพ์อีเมลไม่สำเร็จ')
+    if (!printReadiness.canPrint) {
+      toast.warning(printReadiness.reason)
       return
     }
 
     try {
       const event = await recordArtifactPrint(billId, artId)
       setPrintEvents((prev) => [event, ...prev.filter((p) => p.id !== event.id)])
-      toast.success('บันทึกประวัติการพิมพ์แล้ว')
     } catch (err) {
       console.error('record artifact print failed', err)
-      toast.warning('เปิดหน้าพิมพ์แล้ว แต่บันทึกประวัติการพิมพ์ไม่สำเร็จ')
+      const parsed = parsePrintAPIError(err)
+      toast.error(parsed.message, parsed.description ? { description: parsed.description } : undefined)
+      if (parsed.shouldReload) {
+        void onReload?.()
+      }
+      return
+    }
+
+    try {
+      await printArtifact(billId, artId, filename, printReadiness.printContext)
+      toast.success('บันทึกประวัติการพิมพ์แล้ว')
+    } catch (err) {
+      console.error('artifact print failed', err)
+      toast.warning('บันทึกประวัติการพิมพ์แล้ว แต่เปิดหน้าพิมพ์ไม่สำเร็จ')
     }
   }
 
@@ -315,7 +358,7 @@ export function ArtifactList({ billId, billStatus, smlDocNo, orderID, emailGroup
                       </Button>
                     )}
                     {isPrintableEmail && (
-                      billStatus === 'sent' ? (
+                      printReadiness.canPrint ? (
                         <Button
                           type="button"
                           variant="outline"
@@ -345,7 +388,7 @@ export function ArtifactList({ billId, billStatus, smlDocNo, orderID, emailGroup
                               </span>
                             </TooltipTrigger>
                             <TooltipContent side="top" className="text-xs">
-                              ส่งเอกสารเข้า SML ก่อนถึงจะพิมพ์ได้
+                              {printReadiness.reason}
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -377,7 +420,7 @@ export function ArtifactList({ billId, billStatus, smlDocNo, orderID, emailGroup
           filename={previewArt.filename}
           displayName={previewArt.displayName}
           emailGroup={emailGroup}
-          billStatus={billStatus}
+          printReadiness={printReadiness}
           onPrinted={handlePrintArtifact}
           onClose={() => setPreviewArt(null)}
         />
@@ -417,6 +460,181 @@ function metaString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function buildPrintReadiness({
+  billStatus,
+  billSource,
+  smlDocNo,
+  orderID,
+  printPaymentMethod,
+  effectivePrintPaymentMethod,
+  emailGroup,
+  smlPayload,
+}: {
+  billStatus?: string
+  billSource?: string
+  smlDocNo?: string
+  orderID?: string
+  printPaymentMethod?: string
+  effectivePrintPaymentMethod?: string
+  emailGroup?: BillEmailGroup | null
+  smlPayload?: Record<string, unknown> | null
+}): PrintReadiness {
+  const currentParty = {
+    partyCode: metaString(smlPayload?.cust_code),
+    partyName: metaString(smlPayload?.supplier_name) || metaString(smlPayload?.party_name),
+  }
+  const marketplace = isMarketplaceEmailSource(billSource)
+  const related = (emailGroup?.related_bills ?? []).filter((b) =>
+    isMarketplaceEmailSource(b.source) && b.bill_type === 'purchase'
+  )
+  const printContext = buildArtifactPrintContext({
+    related,
+    orderID,
+    smlDocNo,
+    currentParty,
+    currentPaymentMethod: effectivePrintPaymentMethod || printPaymentMethod || '',
+  })
+
+  if (billStatus !== 'sent') {
+    return {
+      canPrint: false,
+      reason: 'ส่งเอกสารเข้า SML ก่อนถึงจะพิมพ์ได้',
+      printContext,
+    }
+  }
+  if (!smlDocNo) {
+    return {
+      canPrint: false,
+      reason: 'ยังไม่มีเลขเอกสาร SML',
+      printContext,
+    }
+  }
+  if (marketplace) {
+    if (emailGroup?.print_policy_note && !emailGroup.print_ready && emailGroup.print_block_reason) {
+      return {
+        canPrint: false,
+        reason: emailGroup.print_block_reason,
+        printContext,
+      }
+    }
+    const missing = related
+      .filter((b) => !metaString(b.sml_doc_no))
+      .map((b) => b.order_id || b.id.slice(0, 8))
+    if (missing.length > 0) {
+      return {
+        canPrint: false,
+        reason: formatMissingSMLDocReason(missing),
+        printContext,
+      }
+    }
+  }
+  return {
+    canPrint: true,
+    reason: 'พร้อมพิมพ์อีเมลต้นฉบับ',
+    printContext,
+  }
+}
+
+function buildArtifactPrintContext({
+  related,
+  orderID,
+  smlDocNo,
+  currentParty,
+  currentPaymentMethod,
+}: {
+  related: BillEmailRelatedBill[]
+  orderID?: string
+  smlDocNo?: string
+  currentParty: { partyCode?: string; partyName?: string }
+  currentPaymentMethod?: string
+}): ArtifactPrintContext {
+  const sourceRows = related.length > 0
+    ? related
+    : [
+        {
+          id: '',
+          order_id: orderID,
+          source: '',
+          bill_type: 'purchase',
+          status: 'sent' as const,
+          sml_doc_no: smlDocNo,
+          created_at: '',
+          is_current: true,
+          party_code: currentParty.partyCode,
+          party_name: currentParty.partyName,
+          effective_print_payment_method: currentPaymentMethod,
+        },
+      ]
+
+  return {
+    orders: sourceRows.map((b) => ({
+      orderId: b.order_id || undefined,
+      smlDocNo: b.sml_doc_no || undefined,
+      partyCode: b.party_code || (b.is_current ? currentParty.partyCode : undefined),
+      partyName: b.party_name || (b.is_current ? currentParty.partyName : undefined),
+      paymentMethod: b.effective_print_payment_method || b.print_payment_method || (b.is_current ? currentPaymentMethod : undefined),
+    })),
+  }
+}
+
+function isMarketplaceEmailSource(source?: string): boolean {
+  return source === 'shopee_shipped' || source === 'lazada_email'
+}
+
+function formatMissingSMLDocReason(missingOrders: string[]): string {
+  const visible = missingOrders.slice(0, 5)
+  const suffix = missingOrders.length > visible.length ? ' ...' : ''
+  return `ยังขาดเลข SML ${missingOrders.length.toLocaleString('th-TH')} คำสั่งซื้อ: ${visible.join(', ')}${suffix}`
+}
+
+function parsePrintAPIError(err: unknown): PrintAPIError {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as {
+      error?: string
+      missing_orders?: string[]
+      missing_count?: number
+      missing_payment_method_orders?: string[]
+      non_matching_payment_method_orders?: string[]
+    } | undefined
+    const message = data?.error || 'บันทึกประวัติการพิมพ์ไม่สำเร็จ'
+    if (err.response?.status === 400 && Array.isArray(data?.missing_orders)) {
+      return {
+        message,
+        description: formatMissingSMLDocReason(data.missing_orders),
+        shouldReload: true,
+      }
+    }
+    if (err.response?.status === 400 && Array.isArray(data?.missing_payment_method_orders)) {
+      return {
+        message,
+        description: formatPaymentMethodMissingReason(data.missing_payment_method_orders),
+        shouldReload: true,
+      }
+    }
+    if (err.response?.status === 400 && Array.isArray(data?.non_matching_payment_method_orders)) {
+      return {
+        message,
+        description: formatPaymentMethodPolicyReason(data.non_matching_payment_method_orders),
+        shouldReload: true,
+      }
+    }
+    return { message }
+  }
+  return { message: 'บันทึกประวัติการพิมพ์ไม่สำเร็จ' }
+}
+
+function formatPaymentMethodMissingReason(orderIDs: string[]): string {
+  const visible = orderIDs.slice(0, 5)
+  const suffix = orderIDs.length > visible.length ? ' ...' : ''
+  return `ยังไม่ได้เลือกวิธีการชำระเงิน ${orderIDs.length.toLocaleString('th-TH')} คำสั่งซื้อ: ${visible.join(', ')}${suffix}`
+}
+
+function formatPaymentMethodPolicyReason(orderIDs: string[]): string {
+  const visible = orderIDs.slice(0, 5)
+  const suffix = orderIDs.length > visible.length ? ' ...' : ''
+  return `วิธีการชำระเงินไม่ตรงเงื่อนไข ${orderIDs.length.toLocaleString('th-TH')} คำสั่งซื้อ: ${visible.join(', ')}${suffix}`
+}
+
 function EmailGroupContext({
   billId,
   emailGroup,
@@ -435,6 +653,16 @@ function EmailGroupContext({
 
   return (
     <div className="space-y-3 border-b border-border/50 pb-3">
+      {emailGroup.print_policy_note && (
+        <div className="rounded-md border border-info/30 bg-info/5 px-3 py-2 text-xs text-info">
+          {emailGroup.print_policy_note}
+          {!emailGroup.print_ready && emailGroup.print_block_reason && (
+            <span className="ml-1 font-medium text-warning">
+              {emailGroup.print_block_reason}
+            </span>
+          )}
+        </div>
+      )}
       {showRelated && (
         <div>
           <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -459,7 +687,7 @@ function EmailGroupContext({
                   {b.sml_doc_no && (
                     <span className="ml-1 font-mono text-[11px] text-muted-foreground">→ {b.sml_doc_no}</span>
                   )}
-                  {b.party_name && <span className="text-muted-foreground"> · {b.party_name}</span>}
+                  {formatRelatedParty(b) && <span className="text-muted-foreground"> · {formatRelatedParty(b)}</span>}
                   {b.id === billId && <span className="ml-1 font-medium">(บิลนี้)</span>}
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
@@ -512,6 +740,11 @@ function billPath(b: BillEmailRelatedBill): string {
   if (b.bill_type !== 'sale') return `/bills/${b.id}`
   if (b.document_route === 'saleinvoice') return `/sale-invoices/${b.id}`
   return `/sales-orders/${b.id}`
+}
+
+function formatRelatedParty(b: BillEmailRelatedBill): string {
+  if (b.party_code && b.party_name) return `${b.party_code} ~ ${b.party_name}`
+  return b.party_code || b.party_name || ''
 }
 
 function formatMoney(value: number): string {

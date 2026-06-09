@@ -1,4 +1,5 @@
 import type { Bill, BillItem } from '@/types'
+import { isMarketplaceFeeSourceSKU } from '@/lib/shopeeBill'
 
 export const SHOPEE_SHIPPING_SOURCE_SKU = '__shopee_shipping__'
 
@@ -57,7 +58,7 @@ export function issueLabel(kind: IssueKind): string {
 }
 
 export function allowsZeroPrice(item: BillItem): boolean {
-  return item.source_sku === SHOPEE_SHIPPING_SOURCE_SKU
+  return isMarketplaceFeeSourceSKU(item.source_sku)
 }
 
 export function hasInvalidPrice(item: BillItem): boolean {
@@ -100,8 +101,8 @@ export function rowIssueReason(item: BillItem): string {
 //   - every item must have non-empty unit_code (SML required)
 //   - every item must have qty > 0  (F2 qty_zero block-level anomaly)
 //   - every normal item must have price > 0
-//   - Shopee shipping lines may have price = 0 when the email explicitly says
-//     "ค่าจัดส่งสินค้า: ฿0"
+//   - marketplace fee/shipping lines may have price = 0 when the source email
+//     explicitly says the fee is zero.
 export function validateForSML(bill: Bill): ValidationResult {
   const items = bill.items ?? []
 

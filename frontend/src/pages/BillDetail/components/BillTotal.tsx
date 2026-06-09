@@ -9,7 +9,25 @@ import {
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { isSMLReady, smlBlockedMessage } from '@/lib/sml-readiness'
-import { isShopeePurchaseBill, isShopeeSalesBill, money, shopeeGoodsTotal, shopeeCoinAmount, shopeePayableTotal } from '@/lib/shopeeBill'
+import {
+  isLazadaEmailPurchaseBill,
+  isMarketplaceFeeSourceSKU,
+  isMarketplacePurchaseBill,
+  isShopeePurchaseBill,
+  isShopeeSalesBill,
+  marketplaceCouponDiscountAmount,
+  marketplaceFeeAmount,
+  marketplacePaymentMethod,
+  marketplaceReconciliationDelta,
+  marketplaceReconciliationStatus,
+  marketplaceServiceFeeAmount,
+  marketplaceShippingAmount,
+  marketplaceShippingMethod,
+  money,
+  shopeeCoinAmount,
+  shopeeGoodsTotal,
+  shopeePayableTotal,
+} from '@/lib/shopeeBill'
 import type { Bill, SMLReadiness } from '@/types'
 import { issueLabel, type ValidationResult } from '../utils/validation'
 
@@ -67,23 +85,40 @@ export function BillTotal({
     bill.status === 'needs_review'
   const isPurchase = bill.bill_type === 'purchase'
   const isShopeePurchase = isShopeePurchaseBill(bill)
+  const isLazadaPurchase = isLazadaEmailPurchaseBill(bill)
+  const isMarketplacePurchase = isMarketplacePurchaseBill(bill)
   const isShopeeSale = isShopeeSalesBill(bill)
   const isFailed = bill.status === 'failed'
   const goodsTotal = shopeeGoodsTotal(bill) ?? total
   const payableTotal = shopeePayableTotal(bill)
   const coinAmount = shopeeCoinAmount(bill)
+  const shippingAmount = marketplaceShippingAmount(bill)
+  const serviceFeeAmount = marketplaceServiceFeeAmount(bill)
+  const couponDiscountAmount = marketplaceCouponDiscountAmount(bill)
+  const feeAmount = marketplaceFeeAmount(bill)
+  const paymentMethod = marketplacePaymentMethod(bill)
+  const shippingMethod = marketplaceShippingMethod(bill)
+  const reconciliationStatus = marketplaceReconciliationStatus(bill)
+  const reconciliationDelta = marketplaceReconciliationDelta(bill)
+  const hasMarketplaceFeeLine = (bill.items ?? []).some((item) => isMarketplaceFeeSourceSKU(item.source_sku))
+  const missingLazadaFeeLine = isLazadaPurchase && feeAmount > 0 && !hasMarketplaceFeeLine
+  const blockedByLazadaAmount = isLazadaPurchase && reconciliationStatus !== 'ok'
 
   // Send is enabled only when validation passes AND we're not mid-retry.
   // The disabled state is communicated by both the button's :disabled state
   // and the warning card above (which is the "why" — the button alone
   // wouldn't tell the admin what to fix).
-  const totalDiscount = isShopeePurchase
+  const totalDiscount = isMarketplacePurchase
     ? (bill.items ?? []).reduce((s, i) => s + (i.discount_amount ?? 0), 0)
     : 0
 
   const smlReady = isSMLReady(smlReadiness)
-  const enabled = validation.canSend && smlReady && !retrying
-  const readyText = !smlReady
+  const enabled = validation.canSend && smlReady && !retrying && !missingLazadaFeeLine && !blockedByLazadaAmount
+  const readyText = missingLazadaFeeLine
+    ? 'ยังส่งไม่ได้ — ต้องตั้งค่าสินค้า SML สำหรับค่าจัดส่ง/fee Lazada หรือเติมรายการ fee ให้ครบก่อน'
+    : blockedByLazadaAmount
+    ? 'ยังส่งไม่ได้ — ยอด Lazada ยัง reconcile ไม่ผ่าน กรุณาตรวจสรุปยอดจากอีเมล'
+    : !smlReady
     ? (smlReadinessLoading ? 'กำลังตรวจสถานะ SML ของร้านนี้' : 'SML ของร้านนี้ยังไม่พร้อม กรุณาตรวจการเชื่อมต่อก่อนส่ง')
     : validation.canSend
     ? 'รายการครบแล้ว พร้อมเลือกผู้ขาย/คลัง/ภาษีและส่งเข้า SML'
@@ -103,10 +138,10 @@ export function BillTotal({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              {isShopeePurchase || isShopeeSale ? 'ยอดที่ต้องชำระทั้งหมด' : 'ยอดรวมทั้งหมด'}
+              {isMarketplacePurchase || isShopeeSale ? 'ยอดที่ต้องชำระทั้งหมด' : 'ยอดรวมทั้งหมด'}
             </div>
             <div className="mt-0.5 text-xl font-bold tabular-nums tracking-tight">
-              {money(isShopeePurchase || isShopeeSale ? payableTotal ?? total : total)}
+              {money(isMarketplacePurchase || isShopeeSale ? payableTotal ?? total : total)}
             </div>
             {isShopeePurchase && (
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
@@ -122,6 +157,24 @@ export function BillTotal({
                 {payableTotal != null && payableTotal !== goodsTotal && (
                   <span>รวมค่าส่งแล้ว</span>
                 )}
+              </div>
+            )}
+            {isLazadaPurchase && (
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                <span>ยอดสินค้า {money(goodsTotal)}</span>
+                <span>ค่าส่ง {money(shippingAmount)}</span>
+                {(serviceFeeAmount ?? 0) > 0 && (
+                  <span>service fee {money(serviceFeeAmount)}</span>
+                )}
+                {(couponDiscountAmount ?? 0) > 0 && (
+                  <span className="text-success">คูปอง -{money(couponDiscountAmount)}</span>
+                )}
+                <span className={reconciliationStatus === 'ok' ? 'text-success' : 'text-warning'}>
+                  reconcile {reconciliationStatus || 'missing'}
+                  {reconciliationDelta != null && reconciliationDelta !== 0 && ` (${money(reconciliationDelta)})`}
+                </span>
+                {paymentMethod && <span>ชำระเงิน: {paymentMethod}</span>}
+                {shippingMethod && <span>จัดส่ง: {shippingMethod}</span>}
               </div>
             )}
             {canShowSendButton && (
@@ -165,9 +218,11 @@ export function BillTotal({
                   {/* Tooltip only renders content when the button is disabled
                       because of validation — when retrying, the button text
                       already explains itself ("กำลังส่ง..."). */}
-                  {(!validation.canSend || !smlReady) && (
+                  {(!validation.canSend || !smlReady || missingLazadaFeeLine || blockedByLazadaAmount) && (
                     <TooltipContent side="left" className="max-w-xs">
-                      {!smlReady
+                      {missingLazadaFeeLine || blockedByLazadaAmount
+                        ? readyText
+                        : !smlReady
                         ? smlBlockedMessage(smlReadiness)
                         : `ยังส่งไม่ได้ — พบ ${validation.issues.length} ปัญหา · ตรวจรหัสสินค้า การยืนยัน หน่วย จำนวน และราคา`}
                     </TooltipContent>
@@ -267,6 +322,21 @@ export function BillTotal({
                     </li>
                   ))}
                 </ul>
+              </div>
+            </div>
+          </div>
+        )}
+        {canShowSendButton && (missingLazadaFeeLine || blockedByLazadaAmount) && (
+          <div className="rounded-md border border-warning/40 bg-warning/[0.07] px-3 py-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" strokeWidth={2.25} />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-foreground">ยังส่ง Lazada เข้า SML ไม่ได้</div>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {missingLazadaFeeLine
+                    ? `ยอดอีเมลมีค่าจัดส่ง/fee ${money(feeAmount)} แต่ยังไม่มีรายการสินค้า SML สำหรับ fee line`
+                    : `สูตรยอด Lazada ยังไม่ผ่าน (${reconciliationStatus || 'missing'}${reconciliationDelta != null ? `, delta ${money(reconciliationDelta)}` : ''})`}
+                </p>
               </div>
             </div>
           </div>

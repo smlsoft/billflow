@@ -224,8 +224,9 @@ func ExtractShopeeMoneyLabel(bodyText, bodyHTML, orderID, label string) (float64
 }
 
 // CalcShopeeCoinAmount คำนวณ Shopee Coin จาก:
-//   coin = gross_goods - total_coupon_discount - (paid_total - shipping)
-//   ถ้า < 0 หรือ paid_total/goods_total ไม่มีข้อมูล → คืน 0, false
+//
+//	coin = gross_goods - total_coupon_discount - (paid_total - shipping)
+//	ถ้า < 0 หรือ paid_total/goods_total ไม่มีข้อมูล → คืน 0, false
 func CalcShopeeCoinAmount(goodsTotal, shippingAmount, totalCouponDiscount, paidTotal float64, hasPaidTotal bool) (float64, bool) {
 	if !hasPaidTotal || paidTotal <= 0 || goodsTotal <= 0 {
 		return 0, false
@@ -239,7 +240,7 @@ func CalcShopeeCoinAmount(goodsTotal, shippingAmount, totalCouponDiscount, paidT
 }
 
 // AllocateShopeeDiscountsByLine splits total discount proportionally across
-// item rows by gross amount, excluding Shopee shipping rows.
+// item rows by gross amount, excluding marketplace fee/shipping rows.
 // ใช้ proportional allocation แทน equal split เพื่อความถูกต้องทางบัญชี
 func AllocateShopeeDiscountsByLine(items []models.BillItem, totalDiscount float64) []float64 {
 	out := make([]float64, len(items))
@@ -251,7 +252,7 @@ func AllocateShopeeDiscountsByLine(items []models.BillItem, totalDiscount float6
 	// คำนวณ gross รวมของ items ที่ไม่ใช่ค่าส่ง
 	totalGross := 0.0
 	for _, item := range items {
-		if item.SourceSKU == models.ShopeeShippingSourceSKU {
+		if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
 			continue
 		}
 		totalGross = roundMoney(totalGross + itemGross(item))
@@ -263,7 +264,7 @@ func AllocateShopeeDiscountsByLine(items []models.BillItem, totalDiscount float6
 	distributed := 0.0
 	nonShippingIndexes := []int{}
 	for i, item := range items {
-		if item.SourceSKU != models.ShopeeShippingSourceSKU {
+		if !models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
 			nonShippingIndexes = append(nonShippingIndexes, i)
 		}
 	}
@@ -299,7 +300,7 @@ func ApplyShopeeDiscountsToItems(items []models.BillItem, totalDiscount float64)
 func discountableItemIndexes(items []models.BillItem, allocated []float64) []int {
 	out := []int{}
 	for i, item := range items {
-		if item.SourceSKU == models.ShopeeShippingSourceSKU {
+		if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
 			continue
 		}
 		if roundMoney(itemGross(item)-allocated[i]) > 0 {

@@ -112,6 +112,17 @@ function rawNumber(
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function rawMoneyNumber(
+  payload: Record<string, unknown> | null | undefined,
+  key: string,
+) {
+  const value = payload?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const parsed = Number(value.replace(/[฿,\s]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function rawBool(
   payload: Record<string, unknown> | null | undefined,
   key: string,
@@ -133,6 +144,16 @@ function rawObject(
 function formatBaht(value: number | null) {
   if (value == null) return "";
   return `฿${value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function isCardPaymentMethod(method: string) {
+  const lower = method.trim().toLowerCase();
+  return (
+    lower.includes("credit") ||
+    lower.includes("debit") ||
+    method.includes("บัตรเครดิต") ||
+    method.includes("บัตรเดบิต")
+  );
 }
 
 function round2(value: number) {
@@ -173,6 +194,10 @@ export function SendPurchaseDialog({
   const isPurchaseOrder = !isSale;
   const isShopeePurchaseEmail =
     bill.source === "shopee_shipped" && bill.bill_type === "purchase";
+  const isLazadaPurchaseEmail =
+    bill.source === "lazada_email" && bill.bill_type === "purchase";
+  const isMarketplacePurchaseEmail = isShopeePurchaseEmail || isLazadaPurchaseEmail;
+  const marketplaceName = isLazadaPurchaseEmail ? "Lazada" : "Shopee";
   const destination = routeDestination(bill.preview?.route, isSale);
   const documentName =
     bill.preview?.route === "saleinvoice"
@@ -203,10 +228,12 @@ export function SendPurchaseDialog({
     parsedVatRate >= 0;
   const vatRateNum = vatRateValid ? parsedVatRate : 0;
   const paymentSummary = rawObject(bill.raw_data, "payment_summary");
-  const paymentMethod = rawString(paymentSummary, "payment_method");
+  const paymentMethod = rawString(paymentSummary, "payment_method") || rawString(bill.raw_data, "payment_method");
   const paymentPaidAmount = rawNumber(paymentSummary, "payment_paid_amount");
   const paymentDocRefAmount = rawString(paymentSummary, "doc_ref_amount");
   const paymentIsCard = rawBool(paymentSummary, "is_credit_debit_card");
+  const lazadaPaidTotal = rawMoneyNumber(bill.raw_data, "paid_total_amount");
+  const lazadaPaymentIsCard = isCardPaymentMethod(paymentMethod);
   const sellerFromEmail = rawString(bill.raw_data, "seller_name");
   const orderID = orderIDFromRaw(bill.raw_data);
   const smlReady = isSMLReady(smlReadiness);
@@ -256,7 +283,7 @@ export function SendPurchaseDialog({
     [bill.items],
   );
   const smlTotalPreview = useMemo(() => {
-    if (vatTypeStr === "") return null;
+    if (vatTypeStr === "" || !vatRateValid) return null;
     const vatType = Number(vatTypeStr);
     const vatRate = Number.isFinite(vatRateNum) ? vatRateNum : 7;
     let totalValue = 0;
@@ -311,7 +338,7 @@ export function SendPurchaseDialog({
       shopeePaidTotal,
       paidDelta,
     };
-  }, [bill.items, bill.raw_data, paymentPaidAmount, vatRateNum, vatTypeStr]);
+  }, [bill.items, bill.raw_data, paymentPaidAmount, vatRateNum, vatRateValid, vatTypeStr]);
 
   useEffect(() => {
     if (!open) return;
@@ -367,7 +394,7 @@ export function SendPurchaseDialog({
         ? String(vatRate)
         : typeof defaults?.vat_rate === "number" && defaults.vat_rate >= 0
           ? String(defaults.vat_rate)
-          : "7",
+          : "",
     );
     setInquiryTypeStr(
       inquiryType != null
@@ -384,7 +411,7 @@ export function SendPurchaseDialog({
       party_code: effectivePartyCode,
       party_name: party?.name,
       doc_no: docNo.trim() || undefined,
-      remark: isShopeePurchaseEmail ? undefined : remark.trim() || undefined,
+      remark: isPurchaseOrder ? undefined : remark.trim() || undefined,
       remark_2: remark2PayloadValue(remark2Str),
       branch_code: branchCode.trim() || undefined,
       sale_code: saleCode.trim() || undefined,
@@ -644,10 +671,14 @@ export function SendPurchaseDialog({
               </Label>
               <Input
                 value={vatRateStr}
-                onChange={(e) => setVatRateStr(e.target.value)}
+                onChange={(e) => {
+                  if (!isPurchaseOrder) setVatRateStr(e.target.value);
+                }}
                 placeholder="เช่น 7"
                 inputMode="decimal"
-                className="font-mono"
+                className={`font-mono ${isPurchaseOrder ? "bg-muted/50 cursor-not-allowed" : ""}`}
+                readOnly={isPurchaseOrder}
+                disabled={isPurchaseOrder}
               />
             </div>
             <div className="space-y-1">
@@ -706,8 +737,7 @@ export function SendPurchaseDialog({
             </div>
             {!vatRateValid && (
               <div className="rounded-md bg-warning/[0.08] px-2.5 py-1.5 text-[11px] text-warning sm:col-span-2">
-                ตั้งค่าอัตราภาษีใน /settings/channels หรือกรอกใน dialog
-                นี้ก่อนส่ง
+                ตั้งค่าอัตราภาษีใน /settings/channels ก่อนส่ง SML
               </div>
             )}
             {smlTotalPreview && (
@@ -772,10 +802,10 @@ export function SendPurchaseDialog({
             </div>
           </div>
 
-          {isShopeePurchaseEmail && (
+          {isMarketplacePurchaseEmail && (
             <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2.5 text-xs">
               <div className="font-medium text-foreground">
-                ข้อมูลที่จะส่งไปหัวเอกสาร SML จากอีเมล Shopee
+                ข้อมูลที่จะส่งไปหัวเอกสาร SML จากอีเมล {marketplaceName}
               </div>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <div>
@@ -800,29 +830,47 @@ export function SendPurchaseDialog({
                     {paymentMethod || "ไม่พบรายละเอียดการชำระเงินในอีเมล"}
                   </div>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">
-                    เลขอ้างอิง (doc_ref)
+                {isShopeePurchaseEmail && (
+                  <div>
+                    <div className="text-muted-foreground">
+                      เลขอ้างอิง (doc_ref)
+                    </div>
+                    <div className="font-medium text-foreground">
+                      {paymentIsCard
+                        ? paymentDocRefAmount
+                          ? `${paymentDocRefAmount} (${formatBaht(paymentPaidAmount)})`
+                          : "เป็นบัตรเครดิต/เดบิต แต่ไม่พบจำนวนเงินที่จ่าย"
+                        : paymentMethod
+                          ? "ไม่ใช่บัตรเครดิต/เดบิต จึงไม่ส่ง doc_ref"
+                          : "ไม่พบรายละเอียดการชำระเงินในอีเมล"}
+                    </div>
                   </div>
-                  <div className="font-medium text-foreground">
-                    {paymentIsCard
-                      ? paymentDocRefAmount
-                        ? `${paymentDocRefAmount} (${formatBaht(paymentPaidAmount)})`
-                        : "เป็นบัตรเครดิต/เดบิต แต่ไม่พบจำนวนเงินที่จ่าย"
-                      : paymentMethod
-                        ? "ไม่ใช่บัตรเครดิต/เดบิต จึงไม่ส่ง doc_ref"
-                        : "ไม่พบรายละเอียดการชำระเงินในอีเมล"}
+                )}
+                {isLazadaPurchaseEmail && (
+                  <div>
+                    <div className="text-muted-foreground">
+                      เลขอ้างอิง (doc_ref)
+                    </div>
+                    <div className="font-medium text-foreground">
+                      {lazadaPaymentIsCard
+                        ? lazadaPaidTotal != null
+                          ? `${lazadaPaidTotal.toLocaleString("th-TH", { maximumFractionDigits: 2 })} (${formatBaht(lazadaPaidTotal)})`
+                          : "เป็นบัตรเครดิต/เดบิต แต่ไม่พบยอดรวมทั้งหมดในอีเมล"
+                        : paymentMethod
+                          ? "ไม่ใช่บัตรเครดิต/เดบิต จึงไม่ส่ง doc_ref"
+                          : "ไม่พบรายละเอียดการชำระเงินในอีเมล"}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
               <div className="mt-2 text-[11px] text-muted-foreground">
-                หมายเหตุ SML ของบิล Shopee ซื้อจะใช้ผู้ขายจากอีเมลอัตโนมัติ
-                เพื่อไม่ให้ชนกับ requirement หัวเอกสาร
+                หมายเหตุ SML ของบิลซื้อจากอีเมลจะใช้ผู้ขายจากอีเมลอัตโนมัติ
+                เพื่อไม่ให้ช่องหมายเหตุถูกกรอกทับก่อนส่ง
               </div>
             </div>
           )}
 
-          {!isShopeePurchaseEmail && (
+          {isSale && (
             <div className="space-y-1.5">
               <Label htmlFor="remark">หมายเหตุ (remark)</Label>
               <textarea

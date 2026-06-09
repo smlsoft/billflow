@@ -1,11 +1,11 @@
 import dayjs from 'dayjs'
 import type { MouseEvent } from 'react'
-import { Archive, Mail, Printer, RotateCcw, Sparkles, Store, Trash2 } from 'lucide-react'
+import { Archive, CreditCard, Loader2, Mail, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { BillSourceBadge } from '@/components/BillSourceBadge'
 import BillStatusBadge from '@/components/BillStatusBadge'
 import { DataTable } from '@/components/common/DataTable'
-import { billSourceLabel } from '@/lib/labels'
 import {
   isShopeePurchaseBill,
   isShopeeSalesBill,
@@ -30,6 +30,14 @@ interface Props {
   onRestore?: (bill: Bill) => void
   onDelete?: (bill: Bill) => void
   onPermanentDelete?: (bill: Bill) => void
+  canUpdatePurchaseCreditor?: boolean
+  purchaseCreditorLoadingBillId?: string | null
+  onUpdatePurchaseCreditor?: (bill: Bill) => void
+  canUpdatePrintPaymentMethod?: boolean
+  printPaymentMethodLoadingBillId?: string | null
+  onUpdatePrintPaymentMethod?: (bill: Bill) => void
+  printLoadingMessageID?: string | null
+  onPrintEmail?: (bill: Bill) => void
 }
 
 export default function BillTable({
@@ -44,6 +52,14 @@ export default function BillTable({
   onRestore,
   onDelete,
   onPermanentDelete,
+  canUpdatePurchaseCreditor = false,
+  purchaseCreditorLoadingBillId = null,
+  onUpdatePurchaseCreditor,
+  canUpdatePrintPaymentMethod = false,
+  printPaymentMethodLoadingBillId = null,
+  onUpdatePrintPaymentMethod,
+  printLoadingMessageID = null,
+  onPrintEmail,
 }: Props) {
   return (
     <DataTable<Bill>
@@ -65,12 +81,22 @@ export default function BillTable({
           width: '44%',
           cell: (b) => {
             const displayDate = billDisplayDate(b)
+            const creditor = purchaseCreditorLabel(b)
             return (
               <div className="min-w-0 space-y-1">
-                <div className="flex items-center gap-2">
+                <div className="flex min-w-0 items-center gap-2">
                   {b.sml_doc_no ? (
-                    <span className="font-mono text-xs font-medium text-foreground">
-                      {b.sml_doc_no}
+                    <span
+                      className="min-w-0 max-w-[320px] truncate text-xs font-medium text-foreground"
+                      title={creditor ? `${creditor} ~ ${b.sml_doc_no}` : b.sml_doc_no}
+                    >
+                      {creditor && (
+                        <>
+                          <span>{creditor}</span>
+                          <span className="mx-1 text-muted-foreground">~</span>
+                        </>
+                      )}
+                      <span className="font-mono">{b.sml_doc_no}</span>
                     </span>
                   ) : (
                     <span className="font-mono text-xs text-foreground">
@@ -129,6 +155,7 @@ export default function BillTable({
                 )}
                 <ShopeeShopLine bill={b} />
                 <EmailGroupLine bill={b} />
+                <PrintPaymentMethodLine bill={b} />
               </div>
             )
           },
@@ -141,9 +168,7 @@ export default function BillTable({
             const inbox = emailInboxLabel(b)
             return (
               <div className="flex min-w-0 flex-col gap-1">
-                <span className="inline-flex w-fit rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
-                  {billSourceLabel(b.source)}
-                </span>
+                <BillSourceBadge source={b.source} />
                 {inbox && (
                   <span className="max-w-[180px] truncate text-[11px] text-muted-foreground" title={inbox}>
                     {inbox}
@@ -213,6 +238,14 @@ export default function BillTable({
               onRestore={onRestore}
               onDelete={onDelete}
               onPermanentDelete={onPermanentDelete}
+              canUpdatePurchaseCreditor={canUpdatePurchaseCreditor}
+              purchaseCreditorLoadingBillId={purchaseCreditorLoadingBillId}
+              onUpdatePurchaseCreditor={onUpdatePurchaseCreditor}
+              canUpdatePrintPaymentMethod={canUpdatePrintPaymentMethod}
+              printPaymentMethodLoadingBillId={printPaymentMethodLoadingBillId}
+              onUpdatePrintPaymentMethod={onUpdatePrintPaymentMethod}
+              printLoadingMessageID={printLoadingMessageID}
+              onPrintEmail={onPrintEmail}
             />
           ),
         },
@@ -240,6 +273,14 @@ function BillRowActions({
   onRestore,
   onDelete,
   onPermanentDelete,
+  canUpdatePurchaseCreditor,
+  purchaseCreditorLoadingBillId,
+  onUpdatePurchaseCreditor,
+  canUpdatePrintPaymentMethod,
+  printPaymentMethodLoadingBillId,
+  onUpdatePrintPaymentMethod,
+  printLoadingMessageID,
+  onPrintEmail,
 }: {
   bill: Bill
   canManage: boolean
@@ -248,6 +289,14 @@ function BillRowActions({
   onRestore?: (bill: Bill) => void
   onDelete?: (bill: Bill) => void
   onPermanentDelete?: (bill: Bill) => void
+  canUpdatePurchaseCreditor: boolean
+  purchaseCreditorLoadingBillId?: string | null
+  onUpdatePurchaseCreditor?: (bill: Bill) => void
+  canUpdatePrintPaymentMethod: boolean
+  printPaymentMethodLoadingBillId?: string | null
+  onUpdatePrintPaymentMethod?: (bill: Bill) => void
+  printLoadingMessageID?: string | null
+  onPrintEmail?: (bill: Bill) => void
 }) {
   const stop = (fn?: (bill: Bill) => void) => (e: MouseEvent) => {
     e.stopPropagation()
@@ -280,11 +329,75 @@ function BillRowActions({
   }
 
   if (bill.status === 'sent' || bill.status === 'skipped') {
+    const showUpdateCreditor = canShowPurchaseCreditorAction(bill, canUpdatePurchaseCreditor) && !!onUpdatePurchaseCreditor
+    const loadingCreditor = purchaseCreditorLoadingBillId === bill.id
+    const showUpdatePayment = canShowPrintPaymentMethodAction(bill, canUpdatePrintPaymentMethod) && !!onUpdatePrintPaymentMethod
+    const loadingPayment = printPaymentMethodLoadingBillId === bill.id
+    const showPrint = canShowEmailPrintAction(bill) && !!onPrintEmail
+    const printReady = Boolean(bill.email_group?.print_ready)
+    const printLoading = printLoadingMessageID === bill.email_group?.message_id
+    const printReason = bill.email_group?.print_block_reason || bill.email_group?.print_policy_note || 'ยังไม่พร้อมพิมพ์'
     return (
-      <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={stop(onArchive)}>
-        <Archive className="mr-1 h-3.5 w-3.5" />
-        เก็บบิล
-      </Button>
+      <div className="flex justify-end gap-1.5">
+        {showPrint && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            onClick={stop(onPrintEmail)}
+            disabled={!printReady || printLoading}
+            title={printReady ? 'พิมพ์อีเมลต้นฉบับ' : printReason}
+          >
+            {printLoading ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Printer className="mr-1 h-3.5 w-3.5" />
+            )}
+            {printLoading ? 'กำลังพิมพ์...' : 'พิมพ์'}
+          </Button>
+        )}
+        {showUpdateCreditor && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            onClick={stop(onUpdatePurchaseCreditor)}
+            disabled={loadingCreditor}
+            title="แก้เจ้าหนี้ของใบสั่งซื้อเดิมใน SML"
+          >
+            {loadingCreditor ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <UserCog className="mr-1 h-3.5 w-3.5" />
+            )}
+            {loadingCreditor ? 'กำลังเปิด...' : 'แก้เจ้าหนี้'}
+          </Button>
+        )}
+        {showUpdatePayment && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            onClick={stop(onUpdatePrintPaymentMethod)}
+            disabled={loadingPayment}
+            title="เลือกวิธีชำระเงินสำหรับเงื่อนไขปริ้น"
+          >
+            {loadingPayment ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <CreditCard className="mr-1 h-3.5 w-3.5" />
+            )}
+            {loadingPayment ? 'กำลังเปิด...' : 'วิธีชำระ'}
+          </Button>
+        )}
+        <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={stop(onArchive)}>
+          <Archive className="mr-1 h-3.5 w-3.5" />
+          เก็บบิล
+        </Button>
+      </div>
     )
   }
 
@@ -300,6 +413,77 @@ function BillRowActions({
       ลบบิล
     </Button>
   )
+}
+
+function canShowEmailPrintAction(bill: Bill) {
+  return (
+    bill.status === 'sent' &&
+    bill.bill_type === 'purchase' &&
+    (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
+    !!bill.email_group?.has_printable_email &&
+    !bill.archived_at
+  )
+}
+
+function canShowPurchaseCreditorAction(bill: Bill, enabled: boolean) {
+  return (
+    enabled &&
+    bill.status === 'sent' &&
+    bill.bill_type === 'purchase' &&
+    (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
+    !!bill.sml_doc_no &&
+    !bill.archived_at
+  )
+}
+
+function canShowPrintPaymentMethodAction(bill: Bill, enabled: boolean) {
+  return (
+    enabled &&
+    bill.status === 'sent' &&
+    bill.bill_type === 'purchase' &&
+    (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
+    !!bill.sml_doc_no &&
+    !bill.archived_at
+  )
+}
+
+function purchaseCreditorLabel(bill: Bill): string {
+  if (bill.bill_type !== 'purchase' || !bill.sml_doc_no) return ''
+  const code = payloadString(bill.sml_payload, 'cust_code')
+  const name = payloadString(bill.sml_payload, 'supplier_name') || payloadString(bill.sml_payload, 'party_name')
+  if (code && name && code !== name) return `${code} ~ ${name}`
+  return code || name || ''
+}
+
+function PrintPaymentMethodLine({ bill }: { bill: Bill }) {
+  if (
+    bill.bill_type !== 'purchase' ||
+    (bill.source !== 'shopee_shipped' && bill.source !== 'lazada_email')
+  ) {
+    return null
+  }
+  const method = (bill.effective_print_payment_method || bill.print_payment_method || '').trim()
+  if (!method) return null
+  const ready = method.toUpperCase().startsWith('TT')
+  return (
+    <span
+      className={cn(
+        'inline-flex w-fit max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]',
+        ready
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200'
+          : 'border-warning/30 bg-warning/10 text-warning',
+      )}
+      title={`วิธีชำระเงินสำหรับปริ้น: ${method}`}
+    >
+      <CreditCard className="h-3 w-3 shrink-0" />
+      <span className="truncate">{method}</span>
+    </span>
+  )
+}
+
+function payloadString(payload: Record<string, unknown> | null | undefined, key: string): string {
+  const value = payload?.[key]
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 export function ShopeeOrderStatusBadge({

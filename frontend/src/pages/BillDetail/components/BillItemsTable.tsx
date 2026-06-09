@@ -1,4 +1,4 @@
-import { Info } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Info } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -14,7 +14,17 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import type { Bill, BillItem } from '@/types'
-import { isShopeePurchaseBill, isShopeeSalesBill, money, shopeeCoinAmount } from '@/lib/shopeeBill'
+import {
+  isLazadaEmailPurchaseBill,
+  isMarketplaceFeeSourceSKU,
+  isMarketplacePurchaseBill,
+  isShopeePurchaseBill,
+  isShopeeSalesBill,
+  marketplaceFeeAmount,
+  money,
+  shopeeCoinAmount,
+  shopeePayableTotal,
+} from '@/lib/shopeeBill'
 import { hasInvalidPrice } from '../utils/validation'
 import { BillItemRow, type DiscountInfo } from './BillItemRow'
 
@@ -34,6 +44,7 @@ interface Props {
 interface DiscountSummary {
   shopee_discount_amount?: number
   shop_discount_amount?: number
+  coupon_discount_amount?: number
   total_discount_amount?: number
   shopee_discount_codes?: string[]
   shop_discount_codes?: string[]
@@ -43,6 +54,163 @@ function discountSummaryFromBill(bill: Bill): DiscountSummary | null {
   const value = bill.raw_data?.discount_summary
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as DiscountSummary
+}
+
+const MONEY_TOLERANCE = 0.01
+
+type TableTotalStatus = 'matched' | 'mismatch' | 'missing_email_total' | 'missing_fee_line'
+
+interface MarketplaceTableTotals {
+  goodsAmount: number
+  discountAmount: number
+  feeAmount: number
+  tableTotal: number
+  emailTotal: number | null
+  delta: number | null
+  rawFeeAmount: number
+  missingFeeLine: boolean
+  status: TableTotalStatus
+}
+
+function roundMoney(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.round(value * 100) / 100
+}
+
+function marketplaceTableTotals(bill: Bill, items: BillItem[]): MarketplaceTableTotals {
+  let goodsAmount = 0
+  let discountAmount = 0
+  let feeAmount = 0
+
+  for (const item of items) {
+    const gross = roundMoney((item.qty ?? 0) * (item.price ?? 0))
+    const discount = roundMoney(Math.max(item.discount_amount ?? 0, 0))
+    const net = roundMoney(Math.max(gross - discount, 0))
+
+    if (isMarketplaceFeeSourceSKU(item.source_sku)) {
+      feeAmount = roundMoney(feeAmount + net)
+      continue
+    }
+
+    goodsAmount = roundMoney(goodsAmount + gross)
+    discountAmount = roundMoney(discountAmount + discount)
+  }
+
+  const tableTotal = roundMoney(goodsAmount - discountAmount + feeAmount)
+  const emailTotal = shopeePayableTotal(bill)
+  const delta = emailTotal == null ? null : roundMoney(tableTotal - emailTotal)
+  const rawFeeAmount = marketplaceFeeAmount(bill)
+  const missingFeeLine = rawFeeAmount > MONEY_TOLERANCE && feeAmount <= MONEY_TOLERANCE
+  const status: TableTotalStatus = missingFeeLine
+    ? 'missing_fee_line'
+    : emailTotal == null
+    ? 'missing_email_total'
+    : Math.abs(delta ?? 0) <= MONEY_TOLERANCE
+    ? 'matched'
+    : 'mismatch'
+
+  return {
+    goodsAmount,
+    discountAmount,
+    feeAmount,
+    tableTotal,
+    emailTotal,
+    delta,
+    rawFeeAmount,
+    missingFeeLine,
+    status,
+  }
+}
+
+function MarketplaceTableTotalSummary({
+  bill,
+  items,
+  isLazadaPurchase,
+}: {
+  bill: Bill
+  items: BillItem[]
+  isLazadaPurchase: boolean
+}) {
+  const totals = marketplaceTableTotals(bill, items)
+  const isSent = bill.status === 'sent'
+  const discountLabel = isLazadaPurchase ? 'คูปอง' : 'ส่วนลด/coin'
+  const feeLabel = isLazadaPurchase ? 'ค่าส่ง/fee' : 'ค่าส่ง'
+  const deltaAbs = totals.delta == null ? null : Math.abs(totals.delta)
+  const statusTone = {
+    matched: 'border-success/30 bg-success/10 text-success',
+    mismatch: 'border-warning/40 bg-warning/10 text-warning',
+    missing_email_total: 'border-border bg-muted/50 text-muted-foreground',
+    missing_fee_line: 'border-warning/40 bg-warning/10 text-warning',
+  }[totals.status]
+  const statusIcon = totals.status === 'matched'
+    ? <CheckCircle2 className="h-3.5 w-3.5" />
+    : totals.status === 'missing_email_total'
+    ? <Info className="h-3.5 w-3.5" />
+    : <AlertTriangle className="h-3.5 w-3.5" />
+  const statusLabel = totals.status === 'matched'
+    ? 'ตรงกับอีเมล'
+    : totals.status === 'missing_fee_line'
+    ? `${feeLabel} ยังไม่อยู่ในตาราง`
+    : totals.status === 'missing_email_total'
+    ? 'ยังเทียบยอดอีเมลไม่ได้'
+    : `ต่างจากอีเมล ${money(deltaAbs)}`
+  const statusDetail = totals.status === 'matched'
+    ? 'รวมท้ายตารางตรงกับยอดชำระในอีเมล'
+    : totals.status === 'missing_fee_line'
+    ? `อีเมลมี${feeLabel} ${money(totals.rawFeeAmount)} แต่ตารางยังไม่มีรายการ ${feeLabel} จึงยังไม่ถือว่าตรง`
+    : totals.status === 'missing_email_total'
+    ? 'ไม่พบยอดชำระในอีเมล จึงแสดงได้เฉพาะยอดรวมจากรายการในตาราง'
+    : totals.delta != null && totals.delta > 0
+    ? `ยอดท้ายตารางมากกว่าอีเมล ${money(deltaAbs)}`
+    : `ยอดท้ายตารางน้อยกว่าอีเมล ${money(deltaAbs)}`
+
+  return (
+    <div className="border-t border-border/70 bg-muted/20 px-4 py-3 sm:px-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-sm font-semibold text-foreground">
+              {isSent ? 'ยอดที่ส่ง/ตรวจสอบแล้ว' : 'ผลรวมท้ายตาราง'}
+            </h4>
+            <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium ${statusTone}`}>
+              {statusIcon}
+              {statusLabel}
+            </span>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            สูตร: ยอดสินค้า + {feeLabel} - {discountLabel} = รวมท้ายตาราง
+            {isSent && ' · บิลนี้ส่ง SML แล้ว ตัวเลขนี้ใช้ตรวจสอบยอดที่ส่ง ไม่แก้ย้อนหลัง'}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            {statusDetail}
+          </p>
+        </div>
+
+        <div className="grid min-w-0 grid-cols-2 gap-2 text-xs sm:grid-cols-5 lg:min-w-[620px]">
+          <div className="rounded-md border border-border/70 bg-background px-3 py-2">
+            <div className="text-muted-foreground">ยอดสินค้า</div>
+            <div className="mt-1 font-semibold tabular-nums text-foreground">{money(totals.goodsAmount)}</div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-background px-3 py-2">
+            <div className="text-muted-foreground">{discountLabel}</div>
+            <div className="mt-1 font-semibold tabular-nums text-success">-{money(totals.discountAmount)}</div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-background px-3 py-2">
+            <div className="text-muted-foreground">{feeLabel}</div>
+            <div className="mt-1 font-semibold tabular-nums text-foreground">{money(totals.feeAmount)}</div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-background px-3 py-2">
+            <div className="text-muted-foreground">รวมท้ายตาราง</div>
+            <div className="mt-1 font-semibold tabular-nums text-foreground">{money(totals.tableTotal)}</div>
+          </div>
+          <div className="rounded-md border border-border/70 bg-background px-3 py-2">
+            <div className="text-muted-foreground">ยอดในอีเมล</div>
+            <div className="mt-1 font-semibold tabular-nums text-foreground">{money(totals.emailTotal)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export function BillItemsTable({
@@ -56,16 +224,18 @@ export function BillItemsTable({
 }: Props) {
   const items = bill.items ?? []
   const rawNameLabel = isShopeeSalesBill(bill) ? 'ชื่อสินค้าจาก Excel' : 'ชื่อสินค้าจากอีเมล'
-  const showDiscountColumn = isShopeePurchaseBill(bill)
+  const isShopeePurchase = isShopeePurchaseBill(bill)
+  const isLazadaPurchase = isLazadaEmailPurchaseBill(bill)
+  const showDiscountColumn = isMarketplacePurchaseBill(bill)
   const discountSummary = showDiscountColumn ? discountSummaryFromBill(bill) : null
   const totalDiscount = discountSummary?.total_discount_amount ?? 0
-  const coinAmt = showDiscountColumn ? (shopeeCoinAmount(bill) ?? 0) : 0
+  const coinAmt = isShopeePurchase ? (shopeeCoinAmount(bill) ?? 0) : 0
   const effectiveDiscount = totalDiscount + coinAmt
   const itemDiscountTotal = items.reduce((sum, item) => sum + (item.discount_amount ?? 0), 0)
 
   // gross รวม ทุก item ยกเว้น shipping — ใช้แสดงใน tooltip ของแต่ละ row
   const grossTotal = items
-    .filter((item) => item.source_sku !== '__shopee_shipping__')
+    .filter((item) => !isMarketplaceFeeSourceSKU(item.source_sku))
     .reduce((sum, item) => sum + (item.qty ?? 0) * (item.price ?? 0), 0)
   const rowDiscountInfo: DiscountInfo | undefined = showDiscountColumn && effectiveDiscount > 0
     ? {
@@ -73,6 +243,7 @@ export function BillItemsTable({
         couponDiscount: totalDiscount,
         coinAmount: coinAmt,
         grossTotal,
+        platform: isLazadaPurchase ? 'lazada' : 'shopee',
       }
     : undefined
   const parsedDiscountNotApplied = bill.status === 'sent' && totalDiscount > 0 && itemDiscountTotal <= 0
@@ -114,13 +285,19 @@ export function BillItemsTable({
                     : effectiveDiscount > 0
                     ? <>
                         {money(effectiveDiscount)} รวมทั้งหมด
-                        {' ('}โค้ด Shopee {money(discountSummary?.shopee_discount_amount ?? 0)}
-                        {(discountSummary?.shop_discount_amount ?? 0) > 0 && <> + ร้านค้า {money(discountSummary?.shop_discount_amount ?? 0)}</>}
-                        {coinAmt > 0 && <> + Shopee Coin <span className="text-info font-medium">{money(coinAmt)}</span></>}
-                        {')'}
+                        {isLazadaPurchase ? (
+                          <> (คูปอง Lazada {money(discountSummary?.coupon_discount_amount ?? totalDiscount)})</>
+                        ) : (
+                          <>
+                            {' ('}โค้ด Shopee {money(discountSummary?.shopee_discount_amount ?? 0)}
+                            {(discountSummary?.shop_discount_amount ?? 0) > 0 && <> + ร้านค้า {money(discountSummary?.shop_discount_amount ?? 0)}</>}
+                            {coinAmt > 0 && <> + Shopee Coin <span className="text-info font-medium">{money(coinAmt)}</span></>}
+                            {')'}
+                          </>
+                        )}
                       </>
                     : 'ไม่พบส่วนลดในอีเมลนี้'}
-                  {!parsedDiscountNotApplied && effectiveDiscount > 0 && ' · กระจายตาม % มูลค่าสินค้าแต่ละรายการ ไม่รวมค่าขนส่ง'}
+                  {!parsedDiscountNotApplied && effectiveDiscount > 0 && ' · กระจายตาม % มูลค่าสินค้าแต่ละรายการ ไม่รวมค่าจัดส่ง/fee'}
                   {discountCodes.length > 0 && (
                     <span className="ml-1">· โค้ด: {discountCodes.join(', ')}</span>
                   )}
@@ -133,11 +310,21 @@ export function BillItemsTable({
                       </TooltipTrigger>
                       <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
                         <p className="font-semibold mb-1">วิธีคำนวณส่วนลด</p>
-                        <p>1. Coin = ยอดสินค้า − โค้ดส่วนลด − (ยอดชำระ − ค่าส่ง)</p>
-                        <p>2. ส่วนลดรวม = โค้ดส่วนลด + Coin</p>
-                        <p>3. ส่วนลดต่อ item = ส่วนลดรวม × (ราคา item / ราคารวมทุก item)</p>
-                        {coinAmt > 0 && (
-                          <p className="mt-1 text-info">Shopee Coin {money(coinAmt)} ถูกรวมในส่วนลดแล้ว</p>
+                        {isLazadaPurchase ? (
+                          <>
+                            <p>1. ใช้คูปองส่วนลดจากสรุปยอด Lazada เท่านั้น</p>
+                            <p>2. ส่วนลดต่อ item = คูปอง × (ราคา item / ราคารวมทุก item)</p>
+                            <p>3. ไม่รวมค่าจัดส่งหรือ service fee ในฐานคำนวณส่วนลด</p>
+                          </>
+                        ) : (
+                          <>
+                            <p>1. Coin = ยอดสินค้า − โค้ดส่วนลด − (ยอดชำระ − ค่าส่ง)</p>
+                            <p>2. ส่วนลดรวม = โค้ดส่วนลด + Coin</p>
+                            <p>3. ส่วนลดต่อ item = ส่วนลดรวม × (ราคา item / ราคารวมทุก item)</p>
+                            {coinAmt > 0 && (
+                              <p className="mt-1 text-info">Shopee Coin {money(coinAmt)} ถูกรวมในส่วนลดแล้ว</p>
+                            )}
+                          </>
                         )}
                       </TooltipContent>
                     </Tooltip>
@@ -206,7 +393,13 @@ export function BillItemsTable({
             </TableBody>
           </Table>
         </div>
-
+        {showDiscountColumn && items.length > 0 && (
+          <MarketplaceTableTotalSummary
+            bill={bill}
+            items={items}
+            isLazadaPurchase={isLazadaPurchase}
+          />
+        )}
       </CardContent>
     </Card>
   )

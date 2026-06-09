@@ -237,6 +237,34 @@ func (c *Client) ExtractOrdersWithHTML(text, html string) ([]ExtractedOrder, err
 	return nil, err
 }
 
+// ExtractLazadaOrders parses stripped Lazada Thailand email text and returns
+// one purchase order per order_id found. It intentionally does not send the
+// full HTML body so mailbox noise cannot explode prompt size.
+func (c *Client) ExtractLazadaOrders(text string) ([]ExtractedOrder, error) {
+	parts := []contentPart{
+		{Type: "text", Text: ExtractLazadaOrdersPrompt},
+		{Type: "text", Text: text},
+	}
+
+	body, err := c.requestChat("lazada_email_parse", "extract_orders", c.model, parts)
+	if err == nil {
+		orders, parseErr := parseExtractedOrders(body)
+		if parseErr == nil {
+			return orders, nil
+		}
+		err = parseErr
+	}
+
+	if c.model != c.fallbackModel {
+		fallbackBody, fallbackErr := c.requestChat("lazada_email_parse", "extract_orders_fallback", c.fallbackModel, parts)
+		if fallbackErr == nil {
+			return parseExtractedOrders(fallbackBody)
+		}
+		return nil, fallbackErr
+	}
+	return nil, err
+}
+
 func parseExtractedOrders(body string) ([]ExtractedOrder, error) {
 	body = cleanJSONBody(body)
 	var orders []ExtractedOrder

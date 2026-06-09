@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -61,7 +62,21 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 	in.BankBranch = strings.TrimSpace(in.BankBranch)
 	in.ExpenseCode = strings.TrimSpace(in.ExpenseCode)
 	in.ExpenseName = strings.TrimSpace(in.ExpenseName)
-	if in.Channel != "shopee_shipped" || in.BillType != "purchase" {
+	supportsMarketplaceFeeLine := (in.Channel == "shopee_shipped" || in.Channel == "lazada_email") && in.BillType == "purchase"
+	printPolicy, err := models.NormalizeMarketplacePrintPolicy(in.Channel, in.BillType, in.PrintPolicy)
+	if err != nil {
+		message := "กรุณาตั้งค่าเงื่อนไขปริ้นให้ครบก่อนบันทึก"
+		if errors.Is(err, models.ErrPrintPolicyRequiresPrefix) {
+			message = "กรุณาระบุ prefix วิธีการชำระเงินอย่างน้อย 1 ค่า หรือปิดการตรวจวิธีการชำระเงินก่อนบันทึก"
+		} else if errors.Is(err, models.ErrPrintPolicyRequiresPaymentMethod) {
+			message = "กรุณาระบุรายการวิธีการชำระเงินอย่างน้อย 1 ค่า"
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": message,
+		})
+		return
+	}
+	if !supportsMarketplaceFeeLine {
 		in.ShippingItemEnabled = false
 		in.ShippingItemCode = ""
 		in.ShippingItemUnitCode = ""
@@ -109,7 +124,7 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 	}
 	if in.ShippingItemEnabled && in.ShippingItemCode == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "กรุณาเลือกสินค้า SML สำหรับค่าขนส่ง Shopee ก่อนเปิดใช้งาน",
+			"error": "กรุณาเลือกสินค้า SML สำหรับค่าจัดส่ง/fee ก่อนเปิดใช้งาน",
 		})
 		return
 	}
@@ -146,6 +161,7 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 		VATRate:              in.VATRate,
 		InquiryType:          in.InquiryType,
 		Remark2:              in.Remark2,
+		PrintPolicy:          printPolicy,
 	}
 	if err := h.repo.Upsert(d, userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -163,6 +179,7 @@ func (h *ChannelDefaultsHandler) Upsert(c *gin.Context) {
 		"shipping_item_code":    in.ShippingItemCode,
 		"passbook_code":         in.PassbookCode,
 		"expense_code":          in.ExpenseCode,
+		"print_policy":          printPolicy,
 	})
 	c.JSON(http.StatusOK, d)
 }
@@ -174,6 +191,8 @@ func validChannelBillTypeCombo(channel, billType string) bool {
 	case "shopee_settlement":
 		return billType == "ar_receipt"
 	case "shopee_shipped":
+		return billType == "purchase"
+	case "lazada_email":
 		return billType == "purchase"
 	case "email":
 		return billType == "sale" || billType == "purchase"

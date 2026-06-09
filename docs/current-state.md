@@ -1,7 +1,7 @@
 # BillFlow — Current State
 
-> Updated: 2026-06-04 12:10 +07
-> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, container asset inspection, health checks, git tag `v1.0.0` (commit `ac06ac3`).
+> Updated: 2026-06-05 11:40 +07
+> Source of truth checked: local code/migrations/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`) plus post-v1.0 Lazada email purchase rollout on `billflow-thaisunsport`.
 
 ## Latest Handoff For New Chat
 
@@ -9,9 +9,43 @@
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
+- **Post-v1.0 Lazada email purchase rollout deployed 2026-06-05 to `billflow-thaisunsport` only** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
-- Migration ล่าสุด: `056_user_sml_code.sql` — เพิ่ม `sml_user_code` column ใน `users` table.
+- Migration ล่าสุดใน code/deployed thaisunsport: `057_lazada_email_purchase.sql` — เพิ่ม `source/channel='lazada_email'` และ unique guard สำหรับ Lazada email order id.
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
+
+## Latest Thaisunsport Rollout 2026-06-05 — Lazada Email Purchase
+
+### Scope
+- Deploy target: `billflow-thaisunsport` only (`/home/bosscatdog/billflow-thaisunsport`, frontend `3020`, backend `8100`, postgres `5448`).
+- Backup before deploy/backfill: `manual-backups/lazada-amount-20260605_112633` on server.
+- Lazada IMAP accounts remain disabled (`enabled=false`) until the 7 backfilled bills are reviewed and one SML smoke send passes.
+
+### Current production data
+- Manual poll previously created 7 `source='lazada_email'`, `bill_type='purchase'` bills.
+- Backfill completed for the 7 existing bills:
+  - `amount_reconciliation_status='ok'` = `7/7`
+  - status remains `needs_review` = `7/7`
+  - formula checked: `goods_total_amount + shipping_amount + service_fee_amount - coupon_discount_amount = paid_total_amount`
+  - totals: paid `5071.68`, coupon `407.32`, shipping `778.00`
+- Lazada fee config is now set in `channel_defaults/lazada_email/purchase`:
+  - `shipping_item_enabled=true`
+  - `shipping_item_code=SHIP_CUS`
+  - `shipping_item_unit_code=บาท`
+- Fee line behavior:
+  - Bill detail auto-adds `__lazada_shipping_fee__`/`SHIP_CUS` when a user opens a Lazada bill and config is ready.
+  - At last check, fee line existed on `1/7` bills because only one bill detail had been opened after config was set.
+  - User is expected to open each of the 7 bill details so the fee line is added before checking/sending.
+
+### Production behavior
+- Lazada email purchase uses deterministic HTML summary parsing for amounts; AI is not trusted for money totals.
+- Raw data includes `goods_total_amount`, `shipping_amount`, `coupon_discount_amount`, `service_fee_amount`, `paid_total_amount`, `shipping_method`, `payment_method`, `amount_reconciliation_status`, and `amount_reconciliation_delta`.
+- `bill_items.discount_amount` stores Lazada coupon allocation, proportional by goods gross and excluding fee/shipping lines.
+- Sending to SML is blocked if Lazada amount reconciliation is not `ok`.
+- Sending to SML is blocked if a Lazada paid total needs shipping/fee but the fee item config is missing.
+- Admin still reviews/maps items manually; no Lazada email bill is auto-sent to SML.
+
+Runbook: [Lazada Email Purchase Intake](lazada-email-purchase.md).
 
 ## Production Release 2026-06-04 (v1.0.0)
 
@@ -193,7 +227,7 @@
   - งานฝั่งซื้อ: `ใบสั่งซื้อ`
   - งานฝั่งขาย: `ใบสั่งขาย`, `ขายสินค้าและบริการ`
 - Sidebar badge ล่าสุดนับแยกเมนู ไม่ใช้เลข pending รวมทั้งระบบ:
-  - `ใบสั่งซื้อ`: source `shopee_shipped`, bill_type `purchase`
+  - `ใบสั่งซื้อ`: source `shopee_shipped` และ `lazada_email`, bill_type `purchase`
   - `ใบสั่งขาย`: bill_type `sale`, document_route `saleorder` รวม Shopee/Lazada/TikTok Marketplace Excel
   - `ขายสินค้าและบริการ`: bill_type `sale`, document_route `saleinvoice` รวม Shopee/Lazada/TikTok Marketplace Excel
   - นับเฉพาะ `pending + needs_review + failed`
@@ -592,17 +626,17 @@ Production PostgreSQL also contains `system_settings` and `sml_settings`. These 
 
 | Menu | URL | Backend filter | SML route |
 |---|---|---|---|
-| ใบสั่งซื้อ | `/bills` | source `shopee_shipped`, bill_type `purchase` | `purchaseorder` |
+| ใบสั่งซื้อ | `/bills` | source `shopee_shipped` หรือ `lazada_email`, bill_type `purchase` | `purchaseorder` |
 | ใบสั่งขาย | `/sales-orders` | source `shopee`, bill_type `sale`, document_route `saleorder` | `saleorder` |
 | ขายสินค้าและบริการ | `/sale-invoices` | source `shopee`, bill_type `sale`, document_route `saleinvoice` | `saleinvoice` v4 |
 
 ## Phase 1 Purchase Flow
 
-Phase 1 initially focused on Shopee purchase bills from email. The same review/send pattern is now also used by Shopee Excel sale documents.
+Phase 1 initially focused on Shopee purchase bills from email. The same review/send pattern is now also used by Lazada email purchase bills and marketplace Excel sale documents.
 
-1. IMAP account receives Shopee payment/confirmation email.
-2. Email coordinator routes the message to `shopee_shipped`.
-3. Backend extracts order reference, order date, items, quantities, prices, and source artifacts.
+1. IMAP account receives Shopee or Lazada marketplace purchase email.
+2. Email coordinator routes the message to `shopee_shipped` or `lazada_email` after channel/subject/sender guards.
+3. Backend extracts order reference, order date, items, quantities, prices, and source artifacts. Lazada amounts are reconciled from HTML summary before send.
 4. Bill is created as purchase bill and appears in `/bills`.
 5. Admin reviews item rows, maps or creates SML products when needed.
 6. Admin clicks send from Bill Detail.

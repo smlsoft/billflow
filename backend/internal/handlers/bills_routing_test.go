@@ -3,9 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"billflow/internal/models"
+	"billflow/internal/services/sml"
 )
 
 func TestResolveEndpointUsesExplicitEndpointKeyword(t *testing.T) {
@@ -102,6 +105,7 @@ func TestResolveEndpointFallsBackBySourceAndBillType(t *testing.T) {
 		{name: "shopee excel sale defaults to saleorder", source: "shopee", billType: "sale", wantKind: "saleorder"},
 		{name: "shopee email sale defaults to saleorder", source: "shopee_email", billType: "sale", wantKind: "saleorder"},
 		{name: "lazada excel sale defaults to saleorder", source: "lazada", billType: "sale", wantKind: "saleorder"},
+		{name: "lazada email purchase defaults to purchaseorder", source: "lazada_email", billType: "purchase", wantKind: "purchaseorder"},
 		{name: "tiktok excel sale defaults to saleorder", source: "tiktok", billType: "sale", wantKind: "saleorder"},
 		{name: "shopee shipped defaults to purchaseorder", source: "shopee_shipped", billType: "purchase", wantKind: "purchaseorder"},
 		{name: "purchase bill defaults to purchaseorder", source: "email", billType: "purchase", wantKind: "purchaseorder"},
@@ -127,6 +131,7 @@ func TestMapSourceToChannelMatchesRetryLookupKey(t *testing.T) {
 		{source: "shopee_email", want: "shopee_email"},
 		{source: "shopee_shipped", want: "shopee_shipped"},
 		{source: "lazada", want: "lazada"},
+		{source: "lazada_email", want: "lazada_email"},
 		{source: "tiktok", want: "tiktok"},
 		{source: "email", want: "email"},
 		{source: "line", want: "line"},
@@ -233,5 +238,220 @@ func TestValidateBulkSendPayloadChecksRemark2ForSaleAndPurchase(t *testing.T) {
 		InquiryType: &inquiryType,
 	}); err != nil {
 		t.Fatalf("valid purchase bulk payload rejected: %v", err)
+	}
+}
+
+func TestPurchaseOrderHeaderFromBillUsesMarketplaceSellerRemark(t *testing.T) {
+	tests := []struct {
+		name           string
+		bill           *models.Bill
+		requestRemark  string
+		wantRemark     string
+		wantRemark5    string
+		wantDocRef     string
+		wantDocRefDate string
+	}{
+		{
+			name: "lazada non-card moves order id to remark5 and clears doc ref",
+			bill: &models.Bill{
+				Source:   "lazada_email",
+				BillType: "purchase",
+				RawData:  json.RawMessage(`{"seller_name":"Lazada Shop","order_id":"1107473377495692","payment_method":"Cash on Delivery","paid_total_amount":1015.75}`),
+			},
+			requestRemark: "user typed wrong remark",
+			wantRemark:    "Lazada Shop",
+			wantRemark5:   "1107473377495692",
+		},
+		{
+			name: "lazada card puts paid total in doc ref and order id in remark5",
+			bill: &models.Bill{
+				Source:   "lazada_email",
+				BillType: "purchase",
+				RawData: json.RawMessage(`{
+					"seller_name":"Lucky Store*",
+					"order_id":"1108153962788966",
+					"payment_method":"Credit or Debit Card",
+					"paid_total_amount":1015.75
+				}`),
+			},
+			requestRemark: "user typed wrong remark",
+			wantRemark:    "Lucky Store*",
+			wantRemark5:   "1108153962788966",
+			wantDocRef:    "1015.75",
+		},
+		{
+			name: "lazada card with string paid total formats doc ref",
+			bill: &models.Bill{
+				Source:   "lazada_email",
+				BillType: "purchase",
+				RawData: json.RawMessage(`{
+					"seller_name":"Lazada Shop",
+					"order_id":"1107000000000000",
+					"payment_method":"Credit or Debit Card",
+					"paid_total_amount":"1,015.00"
+				}`),
+			},
+			requestRemark: "user typed wrong remark",
+			wantRemark:    "Lazada Shop",
+			wantRemark5:   "1107000000000000",
+			wantDocRef:    "1015",
+		},
+		{
+			name: "lazada card without paid total keeps doc ref empty",
+			bill: &models.Bill{
+				Source:   "lazada_email",
+				BillType: "purchase",
+				RawData:  json.RawMessage(`{"seller_name":"Lazada Shop","order_id":"1107000000000001","payment_method":"Credit or Debit Card"}`),
+			},
+			requestRemark: "user typed wrong remark",
+			wantRemark:    "Lazada Shop",
+			wantRemark5:   "1107000000000001",
+		},
+		{
+			name: "shopee preserves remark5 and card doc ref behavior",
+			bill: &models.Bill{
+				Source:   "shopee_shipped",
+				BillType: "purchase",
+				RawData: json.RawMessage(`{
+					"seller_name":"Shopee Seller",
+					"order_id":"2605211KR3XK1G",
+					"payment_summary":{"is_credit_debit_card":true,"doc_ref_amount":"7275"}
+				}`),
+			},
+			requestRemark: "user typed wrong remark",
+			wantRemark:    "Shopee Seller",
+			wantRemark5:   "2605211KR3XK1G",
+			wantDocRef:    "7275",
+		},
+		{
+			name: "normal purchase still accepts manual remark",
+			bill: &models.Bill{
+				Source:   "email",
+				BillType: "purchase",
+				RawData:  json.RawMessage(`{"order_id":"PO-REF-1"}`),
+			},
+			requestRemark:  "manual remark",
+			wantRemark:     "manual remark",
+			wantDocRef:     "PO-REF-1",
+			wantDocRefDate: "2026-06-05",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docRef, docRefDate, remark, remark5 := purchaseOrderHeaderFromBill(tt.bill, RetryRequest{Remark: tt.requestRemark}, "2026-06-05")
+			if remark != tt.wantRemark || remark5 != tt.wantRemark5 || docRef != tt.wantDocRef || docRefDate != tt.wantDocRefDate {
+				t.Fatalf(
+					"header = docRef:%q docRefDate:%q remark:%q remark5:%q, want docRef:%q docRefDate:%q remark:%q remark5:%q",
+					docRef, docRefDate, remark, remark5,
+					tt.wantDocRef, tt.wantDocRefDate, tt.wantRemark, tt.wantRemark5,
+				)
+			}
+		})
+	}
+}
+
+func TestValidatePurchaseCreditorUpdateBillGuardsScope(t *testing.T) {
+	docNo := "PO26060011"
+	archivedAt := time.Now()
+	tests := []struct {
+		name       string
+		bill       *models.Bill
+		wantStatus int
+	}{
+		{
+			name: "sent lazada marketplace purchase can update",
+			bill: &models.Bill{
+				Source:   "lazada_email",
+				BillType: "purchase",
+				Status:   "sent",
+				SMLDocNo: &docNo,
+			},
+			wantStatus: 0,
+		},
+		{
+			name: "sent shopee marketplace purchase can update",
+			bill: &models.Bill{
+				Source:   "shopee_shipped",
+				BillType: "purchase",
+				Status:   "sent",
+				SMLDocNo: &docNo,
+			},
+			wantStatus: 0,
+		},
+		{
+			name: "normal purchase rejected",
+			bill: &models.Bill{
+				Source:   "email",
+				BillType: "purchase",
+				Status:   "sent",
+				SMLDocNo: &docNo,
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "pending marketplace rejected",
+			bill: &models.Bill{
+				Source:   "lazada_email",
+				BillType: "purchase",
+				Status:   "pending",
+				SMLDocNo: &docNo,
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "archived marketplace rejected",
+			bill: &models.Bill{
+				Source:     "shopee_shipped",
+				BillType:   "purchase",
+				Status:     "sent",
+				SMLDocNo:   &docNo,
+				ArchivedAt: &archivedAt,
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "missing sml doc number rejected",
+			bill: &models.Bill{
+				Source:   "lazada_email",
+				BillType: "purchase",
+				Status:   "sent",
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotStatus, _ := validatePurchaseCreditorUpdateBill(tt.bill)
+			if gotStatus != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", gotStatus, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestSMLPayloadStringTrimsKnownKeys(t *testing.T) {
+	raw := json.RawMessage(`{"cust_code":" AF00007 ","supplier_name":" TT3086 "}`)
+	if got := smlPayloadString(raw, "cust_code"); got != "AF00007" {
+		t.Fatalf("cust_code = %q", got)
+	}
+	if got := smlPayloadString(raw, "supplier_name"); got != "TT3086" {
+		t.Fatalf("supplier_name = %q", got)
+	}
+	if got := smlPayloadString(json.RawMessage(`not-json`), "cust_code"); got != "" {
+		t.Fatalf("invalid payload = %q, want empty", got)
+	}
+}
+
+func TestPurchaseCreditorUpdateErrorMessageExplainsSMLAPIVersionAndConflict(t *testing.T) {
+	got404 := purchaseCreditorUpdateErrorMessage(http.StatusNotFound, &sml.PurchaseOrderCreditorUpdateResponse{}, nil)
+	if !strings.Contains(got404, "sml-api-bybos") || !strings.Contains(got404, "PATCH /api/v1/ic/purchase-orders/:doc_no/creditor") {
+		t.Fatalf("404 message = %q", got404)
+	}
+
+	got409 := purchaseCreditorUpdateErrorMessage(http.StatusConflict, &sml.PurchaseOrderCreditorUpdateResponse{
+		Error: map[string]interface{}{"code": "creditor_changed", "message": "changed elsewhere"},
+	}, nil)
+	if !strings.Contains(got409, "reload") {
+		t.Fatalf("409 message = %q", got409)
 	}
 }

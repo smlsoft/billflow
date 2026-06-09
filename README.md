@@ -36,7 +36,8 @@
 | Input Channel | รายละเอียด | ประเภทบิล | Phase | สถานะ |
 |---|---|---|---|---|
 | LINE OA | human chat inbox: text/image/file/audio → `/messages` | บิลขาย | Phase 3 + session 13+ | ✅ chat 2 ทาง + เปิดบิลจาก chat |
-| Email IMAP | multi-account attachment/body pipeline | บิลขาย/ซื้อตาม routing | Phase 5 + session 6+ | ✅ deployed |
+| Email IMAP | multi-account attachment/body pipeline + marketplace email routing | บิลขาย/ซื้อตาม routing | Phase 5 + session 6+ | ✅ deployed |
+| Lazada Email | Lazada Thailand purchase email via IMAP, `source=lazada_email` | บิลซื้อ | Phase 5+ post-v1.0 | ✅ deployed thaisunsport; manual review; auto poll disabled until SML smoke passes |
 | Shopee Excel | Export จาก Shopee Seller Center | บิลขาย | Phase 4a | ✅ deployed; SML send via Retry route |
 | Lazada Excel | Export จาก Lazada Seller Center | บิลขาย | Phase 4b | ✅ deployed main + Henna |
 | TikTok Excel/CSV | Export จาก TikTok Seller Center | บิลขาย | Phase 4c | ✅ deployed main + Henna |
@@ -89,6 +90,7 @@ Phase 1 customer-test docs:
 
 - [docs/phase1-guide.md](docs/phase1-guide.md) — คู่มือใช้งานบิลซื้อ Shopee ล่าสุด
 - [docs/phase1-test-checklist.md](docs/phase1-test-checklist.md) — checklist ก่อน demo/customer test
+- [docs/lazada-email-purchase.md](docs/lazada-email-purchase.md) — runbook บิลซื้อ Lazada Email, reconcile ยอด, fee line, rollout/rollback
 
 ---
 
@@ -544,7 +546,9 @@ Each goroutine polls its mailbox every poll_interval_seconds (DB CHECK >= 300 s)
 
 Per-account channel routing:
   subject "ถูกจัดส่งแล้ว" or "ยืนยันการชำระเงิน"
-    → ProcessShopeeShippedEmailBody → purchaseorder (SML 248)
+    → ProcessShopeeShippedEmailBody → source=shopee_shipped, purchaseorder (SML 248)
+  channel=lazada + Lazada sender/subject guard
+    → ProcessLazadaEmailBody → source=lazada_email, purchaseorder (SML 248), admin review first
   from domain in shopee_domains && channel=shopee
     → ProcessShopeeEmailBody → create Shopee sale bill; Retry default saleorder (SML 248)
   else → download attachment → AI pipeline → pending/needs_review
@@ -554,9 +558,18 @@ AccountDialog: 4-section form, host-aware App Password popover,
 test-connection button, list-folders button.
 ```
 
+Lazada email purchase uses a deterministic HTML summary parser for money totals:
+
+```
+goods_total + shipping + service_fee - coupon_discount = paid_total
+```
+
+The parser stores the summary in `bills.raw_data`, distributes Lazada coupon discount into `bill_items.discount_amount`, and blocks SML send when reconciliation is not `ok` or when Lazada shipping/fee exists but `/settings/channels` has no fee item config. On thaisunsport, `channel_defaults/lazada_email/purchase` is set to `SHIP_CUS` / unit `บาท`; bill detail auto-adds the fee line when each Lazada bill is opened.
+
 **Production inboxes (2026-04-28):**
 - `bos.catdog@gmail.com` — channel=shopee — subjects: คำสั่งซื้อ, ถูกจัดส่งแล้ว
 - `sutee.toe@gmail.com` — channel=shopee — subject: ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #
+- Thaisunsport Lazada test inboxes were manually polled on 2026-06-05; 7 Lazada purchase bills were created/backfilled and IMAP accounts are disabled until review + one SML smoke send passes.
 
 **รองรับ email provider:**
 - Gmail (ใช้ App Password — เปิด 2-Step Verification ก่อน)
@@ -921,13 +934,42 @@ sudo systemctl start cloudflared
 | 4b | Lazada import: Excel parser + Web UI | ✅ Deployed main + Henna |
 | 4c | TikTok import: Excel/CSV parser + Web UI | ✅ Deployed main + Henna |
 | 4d | Shopee API direct: Open Platform auth/token/order preview → local bills → existing review/SML retry flow | ✅ Live OAuth + multi-shop preview hardening; SML routing still shared v1 |
-| 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped → PO) | ✅ Done |
+| 5 | Email IMAP polling + attachment pipeline (Mistral OCR + Shopee email order + Shopee shipped PO + Lazada email purchase PO with reconciliation guard) | ✅ Done; Lazada email deployed thaisunsport post-v1.0 |
 | 5+ | Manual-confirm flow — auto-send removed; user confirms in BillDetail UI | ✅ Done |
 | 6 | Web UI complete. Session 6: Tailwind/shadcn redesign + multi-account IMAP + artifacts. Session 7: channel_defaults + /settings/channels + SML party cache. Session 7-10: saleorder default + endpoint URL + doc_no generator + /logs redesign. Session 11: per-channel WH/Shelf/VAT override + ShopeeImport dialog removed + scrollable EditDialog. Session 12: marshalASCII permanent SML mojibake fix + catalog per-row Refresh/Delete. Session 13: LINE chatbot → human chat inbox + multi-OA (/messages, /settings/line-oa, webhook /webhook/line/:oaId, ~900 LOC chatbot removed) + Phase 4 quick wins (4.4 quick replies, 4.5 customer history panel, 4.11 browser notifications + chime). Session 14: composer redesign (auto-grow, paste, drag-drop) + admin send-image via Cloudflare Quick Tunnel + HMAC-signed /public/media/ URLs + conversation status (open/resolved/archived + auto-revive) + server-side inbox/thread search + CRM lite (phone detect, internal notes, tags + /settings/chat-tags). Session 15: hybrid Reply+Push API saving the 200/mo Free OA push quota (cached replyToken from inbound webhook → admin reply uses free Reply API; falls back to Push only when token expires). Session 16: closed audit log gaps for chat metadata (notes/tags/quick-reply CRUD + phone) — 17 new Thai-labeled actions in /logs; archived chats now disable composer with banner; CreateBillPanel auto-prefills phone from conversation; tag filter in inbox (multi-select with chips). Session 17: real-time inbox via Server-Sent Events (in-process broker + HMAC-signed token + EventSource singleton) — sub-second updates without WebSocket; polling kept at 30/60s safety net. Connection state indicator dot in sidebar. LINE markAsRead opt-in toggle per OA (Premium feature). Hourly stale reply-token cleanup. Server-restart pending-message recovery on boot. Self-tab dedup logic prevents duplicate bubbles when admin sends. Fixed major useEffect bug that was spamming mark-read every 30s and on every search keystroke. Session 18: 6-phase UX polish — /logs shows actual message content + Reply/Push chip; bill failures get a structured card (route badge + monospace error + copy-for-dev); sidebar reorganized into 5 domain groups (Overview / Bills / Chat / Master Data / System) with Thai labels + English tooltip hints; per-bill timeline reuses /logs ACTION_META; inline Retry button on /logs sml_failed rows; Dashboard "ต้อง action" widget with 4 click-through cards (บิลรอตรวจ / บิลล้มเหลว / ข้อความใหม่ / Email มีปัญหา) + URL-filter deep links. Session 19: heuristic evaluation pass — 16 fixes across all admin pages. Sprint A: lib/labels.ts SSOT (single status name everywhere), /settings rewrite with live multi-account status (LINE OA + IMAP counts) + Lazada column mapping moved into /import, composer disabled visual + Messages mobile responsive (back button), Catalog ↔ Mappings explainer banners, inline Retry on collapsed /logs rows. Sprint B: ShopeeImport preflight blocks file picker when channel config missing, Mappings empty-state CTA, tag-flow cross-links, Extract→CreateBill toast bridge, sidebar hints visible in expanded mode, BillDetail breathing room, Quick Setup tooltip. Sprint C: composer attachment count, catalog embedding async explainer, conversation freshness (relative time). Session 20: Send-to-SML validation guard (BillTotal disabled when items have unmapped item_code/unit_code, qty=0, or price=0; warning card lists each issue + "ดู →" jump-to-row; per-row AlertCircle icon in tiny status column). Route preview chip below Send button surfaces SML route + doc_no pattern so admins catch misconfigured channels before retry. Cloudflare Quick Tunnel drift monitor — daily 9am cron pings PUBLIC_BASE_URL/health and LINE-alerts admin (with inline recovery commands) when the tunnel URL has rolled. | ✅ Done |
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
-### Latest Production Check (2026-05-27)
+### Latest Thaisunsport Lazada Email Check (2026-06-05)
+
+```
+Server folder: /home/bosscatdog/billflow-thaisunsport
+Ports:
+  frontend :3020
+  backend  :8100
+  postgres :5448
+Migration:
+  057_lazada_email_purchase.sql deployed
+DB backup:
+  manual-backups/lazada-amount-20260605_112633
+Current Lazada email purchase rows:
+  source=lazada_email, bill_type=purchase: 7 bills
+  amount_reconciliation_status=ok: 7/7
+  status=needs_review: 7/7
+  total paid amount: 5,071.68
+  total coupon discount: 407.32
+  total shipping/fee amount: 778.00
+Runtime config:
+  channel_defaults/lazada_email/purchase fee item:
+    shipping_item_enabled=true
+    shipping_item_code=SHIP_CUS
+    shipping_item_unit_code=บาท
+Safety:
+  Lazada IMAP accounts are disabled until the 7 bills are reviewed
+  and one manual SML purchaseorder smoke send succeeds.
+```
+
+### Previous Full Production Check (2026-05-27)
 
 ```
 Server folder: /home/bosscatdog/billflow
@@ -938,7 +980,7 @@ Containers:
 Health:
   {"database":"ok","env":"production","status":"ok"}
 DB:
-  migrations through 052 present in code, including Shopee Open API,
+  migrations through 052 present in code at that time, including Shopee Open API,
   SML catalog image metadata, async SML bulk job tables, Shopee
   multi-shop metadata, Shopee settlement runs/items, and hidden settlement runs.
 Latest deployed commit:
@@ -1120,6 +1162,7 @@ docker logs billflow-backend --tail=20 2>&1 | grep coordinator
 | [docs/overview.md](docs/overview.md) | ภาพรวมการทำงานทั้งระบบ (flow diagram + component map) |
 | [docs/line-oa.md](docs/line-oa.md) | LINE OA human inbox, multi-OA, Reply/Push, media |
 | [docs/email.md](docs/email.md) | Email IMAP workflow: poll, dedup, OCR, extract, SML |
+| [docs/lazada-email-purchase.md](docs/lazada-email-purchase.md) | Lazada Email purchase runbook: amount reconciliation, discount, fee line, rollout/rollback |
 | [docs/shopee-import.md](docs/shopee-import.md) | Shopee Excel import → local bills → SML 248 Retry route |
 | [docs/sml-api-migration.md](docs/sml-api-migration.md) | BillFlow main → sml-api-bybos migration notes |
 | [docs/sml-image-db-maintenance.md](docs/sml-image-db-maintenance.md) | SML product image DB index/runbook for tenant moves |

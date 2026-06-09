@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -127,6 +128,32 @@ type PurchaseOrderPayload struct {
 	Remark         string                `json:"remark,omitempty"`
 	Remark2        string                `json:"remark_2,omitempty"`
 	Remark5        string                `json:"remark_5,omitempty"`
+}
+
+type PurchaseOrderCreditorUpdateRequest struct {
+	CustCode            string `json:"cust_code"`
+	SupplierName        string `json:"supplier_name,omitempty"`
+	ExpectedOldCustCode string `json:"expected_old_cust_code,omitempty"`
+}
+
+type PurchaseOrderCreditorUpdateResult struct {
+	DocNo             string `json:"doc_no"`
+	OldCustCode       string `json:"old_cust_code"`
+	NewCustCode       string `json:"new_cust_code"`
+	SupplierName      string `json:"supplier_name,omitempty"`
+	UpdatedDetailRows int64  `json:"updated_detail_rows"`
+	Changed           bool   `json:"changed"`
+	LogStatus         string `json:"log_status,omitempty"`
+	LogWarning        string `json:"log_warning,omitempty"`
+}
+
+type PurchaseOrderCreditorUpdateResponse struct {
+	Success bool                              `json:"success"`
+	Status  string                            `json:"status"`
+	Message string                            `json:"message"`
+	Code    string                            `json:"code,omitempty"`
+	Error   any                               `json:"error,omitempty"`
+	Data    PurchaseOrderCreditorUpdateResult `json:"data"`
 }
 
 // ─── Response ─────────────────────────────────────────────────────────────────
@@ -258,6 +285,49 @@ func (c *PurchaseOrderClient) CreatePurchaseOrder(payload PurchaseOrderPayload, 
 	}
 
 	return lastStatus, lastResp, lastErr
+}
+
+func (c *PurchaseOrderClient) UpdatePurchaseOrderCreditor(docNo string, payload PurchaseOrderCreditorUpdateRequest, urlOverride string) (int, *PurchaseOrderCreditorUpdateResponse, error) {
+	body, err := marshalASCII(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	path := "/api/v1/ic/purchase-orders/" + url.PathEscape(strings.TrimSpace(docNo)) + "/creditor"
+	targetURL := resolveSMLURL(c.cfg.BaseURL, path, urlOverride)
+	req, err := http.NewRequest(http.MethodPatch, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	for k, v := range c.headers() {
+		req.Header.Set(k, v)
+	}
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("sml purchaseorder creditor update: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var parsed PurchaseOrderCreditorUpdateResponse
+	_ = json.Unmarshal(respBody, &parsed)
+	if c.logger != nil {
+		fields := []zap.Field{
+			zap.String("url", targetURL),
+			zap.String("doc_no", docNo),
+			zap.String("new_cust_code", payload.CustCode),
+			zap.Int("status_code", resp.StatusCode),
+			zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 && parsed.Success {
+			c.logger.Info("sml_purchaseorder_creditor_update_response", fields...)
+		} else {
+			c.logger.Warn("sml_purchaseorder_creditor_update_failed", append(fields, zap.String("body", string(respBody)))...)
+		}
+	}
+	return resp.StatusCode, &parsed, nil
 }
 
 // ─── Builder ──────────────────────────────────────────────────────────────────

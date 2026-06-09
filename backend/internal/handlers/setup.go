@@ -318,6 +318,7 @@ func (h *SetupHandler) channelReady() (bool, []string) {
 		SELECT channel, bill_type, doc_format_code, endpoint, doc_prefix, doc_running_format
 		  FROM channel_defaults
 		 WHERE (channel='shopee_shipped' AND bill_type='purchase')
+		    OR (channel='lazada_email' AND bill_type='purchase')
 		    OR (channel='shopee' AND bill_type='sale')`)
 	if err != nil {
 		return false, []string{"ตั้งค่าเส้นทางเอกสาร"}
@@ -336,7 +337,9 @@ func (h *SetupHandler) channelReady() (bool, []string) {
 		}
 		label := channel
 		if channel == "shopee_shipped" {
-			label = "ใบสั่งซื้อ"
+			label = "Email บิลซื้อ Shopee"
+		} else if channel == "lazada_email" {
+			label = "Email บิลซื้อ Lazada"
 		} else if strings.Contains(strings.ToLower(endpoint), "saleinvoice") || strings.EqualFold(docFormat, "SI") {
 			label = "ขายสินค้าและบริการ"
 		} else if channel == "shopee" {
@@ -417,7 +420,7 @@ func (h *SetupHandler) documentCounts() gin.H {
 		       COUNT(*) FILTER (WHERE status='needs_review'),
 		       COUNT(*) FILTER (WHERE status='failed'),
 		       COUNT(*) FILTER (WHERE status='sent'),
-		       COUNT(*) FILTER (WHERE source='shopee_shipped' AND bill_type='purchase'),
+		       COUNT(*) FILTER (WHERE source IN ('shopee_shipped','lazada_email') AND bill_type='purchase'),
 		       COUNT(*) FILTER (WHERE source IN ('shopee','lazada','tiktok') AND bill_type='sale' AND COALESCE(document_route, 'saleorder')='saleorder'),
 		       COUNT(*) FILTER (WHERE source IN ('shopee','lazada','tiktok') AND bill_type='sale' AND document_route='saleinvoice')
 		  FROM bills`,

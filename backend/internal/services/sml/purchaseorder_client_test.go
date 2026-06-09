@@ -3,6 +3,8 @@ package sml
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -133,5 +135,68 @@ func TestRemark2IsOmittedWhenEmpty(t *testing.T) {
 	}
 	if bytes.Contains(body, []byte("remark_2")) {
 		t.Fatalf("remark_2 should be omitted when empty: %s", string(body))
+	}
+}
+
+func TestUpdatePurchaseOrderCreditorPATCHesExpectedPayload(t *testing.T) {
+	var gotMethod, gotPath, gotGUID string
+	var gotBody PurchaseOrderCreditorUpdateRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.EscapedPath()
+		gotGUID = r.Header.Get("guid")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"success": true,
+			"status": "success",
+			"message": "updated",
+			"data": {
+				"doc_no": "PO26060011",
+				"old_cust_code": "AF00001",
+				"new_cust_code": "AF00007",
+				"supplier_name": "TT3086",
+				"updated_detail_rows": 2,
+				"changed": true
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := NewPurchaseOrderClient(PurchaseOrderConfig{
+		BaseURL:    srv.URL,
+		GUID:       "tenant-guid",
+		Provider:   "provider",
+		ConfigFile: "config",
+		Database:   "data1",
+	}, nil)
+
+	status, resp, err := client.UpdatePurchaseOrderCreditor("PO26060011", PurchaseOrderCreditorUpdateRequest{
+		CustCode:            "AF00007",
+		SupplierName:        "TT3086",
+		ExpectedOldCustCode: "AF00001",
+	}, "")
+	if err != nil {
+		t.Fatalf("UpdatePurchaseOrderCreditor returned error: %v", err)
+	}
+	if status != http.StatusOK || resp == nil || !resp.Success {
+		t.Fatalf("response = status %d %#v, want success", status, resp)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Fatalf("method = %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/api/v1/ic/purchase-orders/PO26060011/creditor" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotGUID != "tenant-guid" {
+		t.Fatalf("guid header = %q", gotGUID)
+	}
+	if gotBody.CustCode != "AF00007" || gotBody.SupplierName != "TT3086" || gotBody.ExpectedOldCustCode != "AF00001" {
+		t.Fatalf("body = %#v", gotBody)
+	}
+	if !resp.Data.Changed || resp.Data.UpdatedDetailRows != 2 {
+		t.Fatalf("data = %#v", resp.Data)
 	}
 }

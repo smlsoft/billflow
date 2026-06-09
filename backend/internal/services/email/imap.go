@@ -211,7 +211,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		return res
 	}
 
-	uidCandidates := candidateUIDs(searchData.AllUIDs(), cfg.LastSeenUID, configuredMaxMessagesPerRun())
+	uidCandidates := candidateUIDs(searchData.AllUIDs(), cfg.LastSeenUID, configuredMaxMessagesPerRunForChannel(cfg.Channel))
 	uids := uidCandidates.Selected
 	res.MessagesFound = uidCandidates.Total
 	res.Limited = uidCandidates.Limited
@@ -329,6 +329,20 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				res.addDetail(summary, "skipped", "sender_not_allowed", "ผู้ส่งไม่อยู่ในรายชื่อที่ยอมรับ")
 				res.Skipped++
 				continue
+			}
+			if cfg.Channel == "lazada" {
+				if code, label, ok := classifyLazadaEnvelope(envelope.Subject, summary.FromAddr, parseCSV(cfg.FilterFrom, true)); !ok {
+					logger.Info("imap_message_skipped",
+						zap.String("trace_id", res.TraceID),
+						zap.String("from", summary.FromAddr),
+						zap.String("subject", envelope.Subject),
+						zap.String("reason", code),
+					)
+					res.Summary.SkippedUser++
+					res.addDetail(summary, "skipped", code, label)
+					res.Skipped++
+					continue
+				}
 			}
 
 			messageID := envelope.MessageID
@@ -481,6 +495,32 @@ func configuredMaxMessagesPerRun() int {
 	}
 	if n > maxMaxMessagesPerRun {
 		return maxMaxMessagesPerRun
+	}
+	return n
+}
+
+func configuredMaxMessagesPerRunForChannel(channel string) int {
+	global := configuredMaxMessagesPerRun()
+	if strings.TrimSpace(strings.ToLower(channel)) != "lazada" {
+		return global
+	}
+	const defaultLazadaMaxMessagesPerRun = 30
+	raw := strings.TrimSpace(os.Getenv("LAZADA_EMAIL_MAX_MESSAGES_PER_RUN"))
+	if raw == "" {
+		if global < defaultLazadaMaxMessagesPerRun {
+			return global
+		}
+		return defaultLazadaMaxMessagesPerRun
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		n = defaultLazadaMaxMessagesPerRun
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > global {
+		return global
 	}
 	return n
 }
@@ -716,8 +756,34 @@ func dispatch(
 		}
 		return false, ""
 
+	case "lazada":
+		if code, label, ok := classifyLazadaEnvelope(envelope.Subject, fromAddr, parseCSV(cfg.FilterFrom, true)); !ok {
+			logger.Info("imap_message_skipped",
+				zap.String("trace_id", traceID), zap.String("from", fromAddr),
+				zap.String("subject", envelope.Subject),
+				zap.String("reason", code),
+			)
+			return false, skipDispatchWarning(&MessageSkipError{Code: code, Label: label})
+		}
+		if p.LazadaPurchase == nil {
+			return false, ""
+		}
+		plainText, bodyHTML := extractBodyParts(bodyBytes)
+		if plainText == "" {
+			plainText = bodyHTML
+		}
+		if err := p.LazadaPurchase(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
+			if skip, ok := err.(*MessageSkipError); ok {
+				return false, skipDispatchWarning(skip)
+			}
+			logger.Warn("imap_lazada_purchase_failed",
+				zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
+			return false, err.Error()
+		}
+		return true, ""
+
 	default:
-		// general / lazada → attachment pipeline
+		// general → attachment pipeline
 		if p.Attachment == nil {
 			return false, ""
 		}
@@ -757,6 +823,21 @@ func classifyDispatchWarning(warning string) (code, label string, userSkipped bo
 		return "empty_orders", "อ่านเมลได้ แต่ไม่พบเลขคำสั่งซื้อหรือรายการคำสั่งซื้อ", false
 	case strings.Contains(lower, "catalog service not configured"):
 		return "catalog_not_ready", "ระบบสินค้า SML ยังไม่พร้อมสำหรับการจับคู่สินค้า", false
+	case strings.Contains(lower, "lazada_noise") ||
+		strings.Contains(lower, "lazada_sender_not_allowed") ||
+		strings.Contains(lower, "lazada_subject_not_allowed") ||
+		strings.Contains(lower, "lazada_no_new_bill"):
+		code = strings.SplitN(lower, ":", 2)[0]
+		if code == "" {
+			code = "lazada_no_new_bill"
+		}
+		if strings.Contains(warning, ":") {
+			label = strings.TrimSpace(strings.SplitN(warning, ":", 2)[1])
+		}
+		if label == "" {
+			label = "เมล Lazada นี้ไม่เข้าเงื่อนไขสร้างบิล"
+		}
+		return code, label, true
 	default:
 		return "processing_failed", warning, false
 	}
@@ -812,6 +893,81 @@ func isShippedSubject(subject string) bool {
 		strings.Contains(subject, "ยืนยันการชำระเงิน")
 }
 
+func classifyLazadaEnvelope(subject, from string, allowed []string) (code, label string, ok bool) {
+	if !isLazadaFrom(from, allowed) {
+		return "lazada_sender_not_allowed", "ผู้ส่งไม่ใช่อีเมล Lazada ที่ระบบยอมรับ", false
+	}
+	if code, label, ok := classifyLazadaSubject(subject); !ok {
+		return code, label, false
+	}
+	return "", "", true
+}
+
+func classifyLazadaSubject(subject string) (code, label string, ok bool) {
+	clean := strings.TrimSpace(subject)
+	lower := strings.ToLower(clean)
+	noise := []string{
+		"cancellation",
+		"ถูกยกเลิก",
+		"ยกเลิก",
+		"e-invoice",
+		"invoice for order",
+		"แจ้งกำหนดการจัดส่งสินค้าใหม่",
+		"dispute",
+		"security",
+		"verification",
+		"ยืนยันอีเมล",
+		"customer care",
+		"survey",
+	}
+	for _, token := range noise {
+		if strings.Contains(lower, token) {
+			return "lazada_noise", "เมล Lazada นี้เป็นสถานะ/แจ้งเตือนที่ไม่สร้างบิลซื้อ", false
+		}
+	}
+	if strings.Contains(clean, "ยืนยันคำสั่งซื้อหมายเลข") {
+		return "", "", true
+	}
+	if strings.Contains(clean, "คำสั่งซื้อหมายเลข") && strings.Contains(clean, "ได้รับการจัดส่งเรียบร้อยแล้ว") {
+		return "", "", true
+	}
+	return "lazada_subject_not_allowed", "หัวข้อ Lazada ไม่ใช่ยืนยันคำสั่งซื้อหรือจัดส่งเรียบร้อยแล้ว", false
+}
+
+func isLazadaFrom(from string, allowed []string) bool {
+	from = strings.ToLower(strings.TrimSpace(from))
+	if from == "" {
+		return false
+	}
+	hardAllowed := []string{"noreply@support.lazada.co.th", "support.lazada.co.th"}
+	matchesHardAllowed := false
+	for _, d := range hardAllowed {
+		if senderMatches(from, d) {
+			matchesHardAllowed = true
+			break
+		}
+	}
+	if !matchesHardAllowed {
+		return false
+	}
+	cleanAllowed := make([]string, 0, len(allowed))
+	for _, d := range allowed {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d != "" {
+			cleanAllowed = append(cleanAllowed, d)
+		}
+	}
+	if len(cleanAllowed) == 0 {
+		return true
+	}
+	for _, d := range cleanAllowed {
+		if senderMatches(from, d) {
+			return true
+		}
+	}
+	return false
+}
+
 // isShopeeFrom returns true if the from address matches any configured accepted
 // sender. Empty accepted-sender list means "accept every sender that passed the
 // subject filter", matching the UI copy in /settings/email. Each entry may be:
@@ -832,19 +988,23 @@ func isShopeeFrom(from string, domains []string) bool {
 		if d == "" {
 			continue
 		}
-		// Full email entry → exact match
-		if strings.Contains(d, "@") {
-			if from == d {
-				return true
-			}
-			continue
-		}
-		// Domain entry → suffix match against @<domain>
-		if strings.HasSuffix(from, "@"+d) {
+		if senderMatches(from, d) {
 			return true
 		}
 	}
 	return false
+}
+
+func senderMatches(from, pattern string) bool {
+	from = strings.ToLower(strings.TrimSpace(from))
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	if from == "" || pattern == "" {
+		return false
+	}
+	if strings.Contains(pattern, "@") {
+		return from == pattern
+	}
+	return strings.HasSuffix(from, "@"+pattern)
 }
 
 // parseAndProcess extracts qualifying attachments from raw email bytes and

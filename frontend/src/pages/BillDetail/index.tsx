@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, CreditCard, UserCog } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { DetailPageSkeleton } from '@/components/common/LoadingSkeleton'
 import type { BillItem } from '@/types'
 
 import { useBillData } from './hooks/useBillData'
+import { useAuth } from '@/hooks/useAuth'
 import { BillHeader } from './components/BillHeader'
 import { BillFailureCard } from './components/BillFailureCard'
 import { BillTotal } from './components/BillTotal'
@@ -17,10 +18,13 @@ import { ArtifactList } from './components/ArtifactList'
 import { SmlPayloadSection } from './components/SmlPayloadSection'
 import { SendPurchaseDialog } from './components/SendPurchaseDialog'
 import { SMLSendProgressDialog, type SMLSendProgressStatus } from './components/SMLSendProgressDialog'
+import { UpdatePurchaseCreditorDialog } from './components/UpdatePurchaseCreditorDialog'
+import { UpdatePrintPaymentMethodDialog } from './components/UpdatePrintPaymentMethodDialog'
 import { validateForSML } from './utils/validation'
-import type { RetryBillPayload } from '@/hooks/useBills'
+import { updateBillPrintPaymentMethod, updateBillPurchaseCreditor, type RetryBillPayload } from '@/hooks/useBills'
 import { useSMLReadiness } from '@/hooks/useSMLReadiness'
 import { humanizeSMLConnectionError, isSMLReady, smlBlockedMessage } from '@/lib/sml-readiness'
+import type { Party } from '@/pages/ChannelDefaults/PartyPicker'
 
 type SingleSMLSendResult = {
   docNo?: string | null
@@ -40,6 +44,7 @@ export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const location = useLocation()
+  const { user } = useAuth()
   const {
     bill,
     loading,
@@ -71,6 +76,10 @@ export default function BillDetail() {
   // sendDialogOpen — SML 248 documents show a dialog (party picker + WH/VAT)
   // before the retry call, so admin can override per-bill send values.
   const [sendDialogOpen, setSendDialogOpen] = useState(false)
+  const [creditorDialogOpen, setCreditorDialogOpen] = useState(false)
+  const [creditorUpdating, setCreditorUpdating] = useState(false)
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
+  const [paymentUpdating, setPaymentUpdating] = useState(false)
   const [sendProgress, setSendProgress] = useState<SendProgressState>({
     open: false,
     status: 'sending',
@@ -154,6 +163,63 @@ export default function BillDetail() {
     await runSingleSMLSend(() => handleRetryWithOverride(body))
   }
 
+  const handlePurchaseCreditorConfirm = async (party: Party) => {
+    if (!bill || creditorUpdating) return
+    setCreditorUpdating(true)
+    try {
+      const result = await updateBillPurchaseCreditor(bill.id, {
+        party_code: party.code,
+        party_name: party.name,
+      })
+      if (result.bill) {
+        setBill(result.bill)
+      } else {
+        await reloadBill()
+      }
+      setCreditorDialogOpen(false)
+      toast.success(result.message || 'อัปเดตเจ้าหนี้ใน SML แล้ว', {
+        description: result.warning || result.sml_update?.log_warning || undefined,
+      })
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : 'อัปเดตเจ้าหนี้ใน SML ไม่สำเร็จ',
+      )
+    } finally {
+      setCreditorUpdating(false)
+    }
+  }
+
+  const handlePrintPaymentMethodConfirm = async (paymentMethod: string, applyToEmailGroup: boolean) => {
+    if (!bill || paymentUpdating) return
+    setPaymentUpdating(true)
+    try {
+      const result = await updateBillPrintPaymentMethod(bill.id, {
+        payment_method: paymentMethod,
+        apply_to_email_group: applyToEmailGroup,
+      })
+      if (result.bill) {
+        setBill(result.bill)
+      }
+      await reloadBill()
+      setPaymentDialogOpen(false)
+      toast.success(result.message || 'อัปเดตวิธีการชำระเงินสำหรับปริ้นแล้ว', {
+        description: result.result?.updated_count
+          ? `อัปเดต ${result.result.updated_count.toLocaleString('th-TH')} คำสั่งซื้อ`
+          : undefined,
+      })
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : 'อัปเดตวิธีการชำระเงินสำหรับปริ้นไม่สำเร็จ',
+      )
+    } finally {
+      setPaymentUpdating(false)
+    }
+  }
+
   if (loading) {
     return <DetailPageSkeleton />
   }
@@ -187,6 +253,20 @@ export default function BillDetail() {
     bill.status === 'pending' ||
     bill.status === 'needs_review'
   const canEdit = canSend
+  const canUpdatePurchaseCreditor =
+    user?.role === 'admin' &&
+    bill.status === 'sent' &&
+    bill.bill_type === 'purchase' &&
+    (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
+    !!bill.sml_doc_no &&
+    !bill.archived_at
+  const canUpdatePrintPaymentMethod =
+    (user?.role === 'admin' || user?.role === 'staff') &&
+    bill.status === 'sent' &&
+    bill.bill_type === 'purchase' &&
+    (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
+    !!bill.sml_doc_no &&
+    !bill.archived_at
 
   const handleItemUpdated = (updated: BillItem) => {
     setBill((prev) => {
@@ -252,6 +332,35 @@ export default function BillDetail() {
         highlightItemId={highlightItemId}
       />
 
+      {(canUpdatePurchaseCreditor || canUpdatePrintPaymentMethod) && (
+        <div className="flex flex-wrap justify-end gap-2">
+          {canUpdatePrintPaymentMethod && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setPaymentDialogOpen(true)}
+            >
+              <CreditCard className="h-4 w-4" />
+              วิธีชำระเงิน
+            </Button>
+          )}
+          {canUpdatePurchaseCreditor && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setCreditorDialogOpen(true)}
+            >
+              <UserCog className="h-4 w-4" />
+              แก้เจ้าหนี้ใน SML
+            </Button>
+          )}
+        </div>
+      )}
+
       <section className="space-y-3">
         <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border/70 pb-2">
           <div>
@@ -269,9 +378,14 @@ export default function BillDetail() {
           <ArtifactList
             billId={bill.id}
             billStatus={bill.status}
+            billSource={bill.source}
             smlDocNo={bill.sml_doc_no ?? undefined}
             orderID={typeof bill.raw_data?.order_id === 'string' ? bill.raw_data.order_id : undefined}
+            printPaymentMethod={bill.print_payment_method}
+            effectivePrintPaymentMethod={bill.effective_print_payment_method}
             emailGroup={bill.email_group}
+            smlPayload={bill.sml_payload}
+            onReload={reloadBill}
           />
           <BillTimeline billId={bill.id} shopeeEvents={bill.shopee_events ?? []} />
           <SmlPayloadSection
@@ -299,6 +413,20 @@ export default function BillDetail() {
         docNo={sendProgress.docNo}
         error={sendProgress.error}
         onClose={() => setSendProgress((prev) => ({ ...prev, open: false }))}
+      />
+      <UpdatePurchaseCreditorDialog
+        open={creditorDialogOpen}
+        bill={bill}
+        submitting={creditorUpdating}
+        onOpenChange={setCreditorDialogOpen}
+        onConfirm={handlePurchaseCreditorConfirm}
+      />
+      <UpdatePrintPaymentMethodDialog
+        open={paymentDialogOpen}
+        bill={bill}
+        submitting={paymentUpdating}
+        onOpenChange={setPaymentDialogOpen}
+        onConfirm={handlePrintPaymentMethodConfirm}
       />
     </div>
   )

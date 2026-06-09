@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,23 @@ type emailGroupStats struct {
 	LastPrintedAt      sql.NullTime
 	LastPrintedByEmail string
 	LastPrintedByName  string
+}
+
+type EmailPrintReadinessError struct {
+	Message                        string
+	MissingOrders                  []string
+	MissingPaymentMethodOrders     []string
+	NonMatchingPaymentMethodOrders []string
+	RelatedOrderCount              int
+	SMLDocCount                    int
+	PrintPolicy                    models.MarketplacePrintPolicy
+}
+
+func (e *EmailPrintReadinessError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
 }
 
 func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
@@ -132,8 +150,32 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 			LastPrintedByEmail: stat.LastPrintedByEmail,
 			LastPrintedByName:  stat.LastPrintedByName,
 		}
+		r.attachPrintReadinessSummary(&bills[i])
 	}
 	return nil
+}
+
+func (r *BillRepo) attachPrintReadinessSummary(b *models.Bill) {
+	if b == nil || b.EmailGroup == nil || !isMarketplacePurchaseEmail(b.Source, b.BillType) {
+		return
+	}
+	policy := r.channelPrintPolicy(b.Source, b.BillType)
+	b.EmailGroup.PrintPolicy = policy
+	b.EmailGroup.PrintPolicyNote = models.MarketplacePrintPolicyNote(policy)
+	_, _, err := r.validateMarketplaceEmailPrintReady(b.ID, b.EmailGroup.MessageID)
+	if err == nil {
+		b.EmailGroup.PrintReady = true
+		return
+	}
+	var readinessErr *EmailPrintReadinessError
+	if errors.As(err, &readinessErr) {
+		b.EmailGroup.PrintBlockReason = readinessErr.Message
+		b.EmailGroup.MissingSMLOrders = readinessErr.MissingOrders
+		b.EmailGroup.MissingPaymentMethodOrders = readinessErr.MissingPaymentMethodOrders
+		b.EmailGroup.NonMatchingPaymentMethodOrders = readinessErr.NonMatchingPaymentMethodOrders
+		return
+	}
+	b.EmailGroup.PrintBlockReason = "ตรวจสถานะพร้อมพิมพ์ไม่ได้"
 }
 
 func (r *BillRepo) attachEmailGroupDetails(b *models.Bill) error {
@@ -164,7 +206,10 @@ func (r *BillRepo) ListBillsByEmailMessageID(messageID, currentBillID string, li
 	rows, err := r.db.Query(`
 		SELECT b.id::text,
 		       COALESCE(NULLIF(b.raw_data->>'order_id', ''), NULLIF(b.raw_data->>'shopee_order_id', ''), '') AS order_id,
-		       COALESCE(NULLIF(b.raw_data->>'seller_name', ''), NULLIF(b.raw_data->>'customer_name', ''), '') AS party_name,
+		       COALESCE(NULLIF(b.sml_payload->>'cust_code', ''), '') AS party_code,
+		       COALESCE(NULLIF(b.sml_payload->>'supplier_name', ''), '') AS party_name,
+		       COALESCE(b.print_payment_method, '') AS print_payment_method,
+		       `+effectivePrintPaymentMethodExpr("b")+` AS effective_print_payment_method,
 		       b.source,
 		       b.bill_type,
 		       b.document_route,
@@ -177,7 +222,7 @@ func (r *BillRepo) ListBillsByEmailMessageID(messageID, currentBillID string, li
 		  LEFT JOIN bill_items bi ON bi.bill_id = b.id
 		 WHERE COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) = $1
 		 GROUP BY b.id, b.raw_data, b.source, b.bill_type, b.document_route, b.status,
-		          b.sml_doc_no, b.created_at
+		          b.sml_doc_no, b.sml_payload, b.print_payment_method, b.created_at
 		 ORDER BY b.created_at DESC, b.id DESC
 		 LIMIT $3`,
 		messageID, currentBillID, limit,
@@ -191,7 +236,8 @@ func (r *BillRepo) ListBillsByEmailMessageID(messageID, currentBillID string, li
 	for rows.Next() {
 		var b models.BillEmailRelatedBill
 		if err := rows.Scan(
-			&b.ID, &b.OrderID, &b.PartyName, &b.Source, &b.BillType, &b.DocumentRoute,
+			&b.ID, &b.OrderID, &b.PartyCode, &b.PartyName, &b.PrintPaymentMethod, &b.EffectivePrintPaymentMethod,
+			&b.Source, &b.BillType, &b.DocumentRoute,
 			&b.Status, &b.SMLDocNo, &b.CreatedAt, &b.TotalAmount, &b.IsCurrent,
 		); err != nil {
 			return nil, err
@@ -249,6 +295,14 @@ func (r *BillRepo) ListEmailPrintEvents(messageID string, limit int) ([]models.E
 }
 
 func (r *BillRepo) RecordEmailPrintEvent(billID, artifactID, userID, userEmail string) (*models.EmailPrintEvent, error) {
+	return r.recordEmailPrintEventWithExecutor(r.db, billID, artifactID, userID, userEmail)
+}
+
+type emailPrintEventExecutor interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func (r *BillRepo) recordEmailPrintEventWithExecutor(exec emailPrintEventExecutor, billID, artifactID, userID, userEmail string) (*models.EmailPrintEvent, error) {
 	billID = strings.TrimSpace(billID)
 	artifactID = strings.TrimSpace(artifactID)
 	if billID == "" || artifactID == "" {
@@ -256,7 +310,7 @@ func (r *BillRepo) RecordEmailPrintEvent(billID, artifactID, userID, userEmail s
 	}
 
 	var messageID, subject, fromAddr, kind string
-	err := r.db.QueryRow(`
+	err := exec.QueryRow(`
 		SELECT COALESCE(NULLIF(ba.source_meta->>'message_id', ''), NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) AS message_id,
 		       COALESCE(NULLIF(ba.source_meta->>'subject', ''), b.raw_data->>'subject', '') AS subject,
 		       COALESCE(NULLIF(ba.source_meta->>'from', ''), NULLIF(b.raw_data->>'from', ''), NULLIF(b.raw_data->>'from_addr', ''), '') AS from_addr,
@@ -280,9 +334,14 @@ func (r *BillRepo) RecordEmailPrintEvent(billID, artifactID, userID, userEmail s
 		return nil, fmt.Errorf("bill has no email message id")
 	}
 
+	relatedOrderCount, smlDocCount, err := r.validateMarketplaceEmailPrintReady(billID, messageID)
+	if err != nil {
+		return nil, err
+	}
+
 	requestedBy := strings.TrimSpace(userID)
 	event := &models.EmailPrintEvent{}
-	err = r.db.QueryRow(`
+	err = exec.QueryRow(`
 		INSERT INTO email_print_events
 		  (bill_id, artifact_id, email_message_id, email_group_key, subject, from_addr, requested_by, requested_by_email)
 		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid, $8)
@@ -298,7 +357,134 @@ func (r *BillRepo) RecordEmailPrintEvent(billID, artifactID, userID, userEmail s
 		return nil, err
 	}
 	event.RequestedByName = ""
+	event.RelatedOrderCount = relatedOrderCount
+	event.SMLDocCount = smlDocCount
 	return event, nil
+}
+
+func (r *BillRepo) validateMarketplaceEmailPrintReady(billID, messageID string) (int, int, error) {
+	var source, billType, status, currentOrderID, currentDocNo, currentPartyCode, currentPartyName, currentPrintPaymentMethod, currentEffectivePaymentMethod string
+	err := r.db.QueryRow(`
+		SELECT source,
+		       bill_type,
+		       status,
+		       COALESCE(NULLIF(raw_data->>'order_id', ''), NULLIF(raw_data->>'shopee_order_id', ''), id::text) AS order_id,
+		       COALESCE(sml_doc_no, '') AS sml_doc_no,
+		       COALESCE(NULLIF(sml_payload->>'cust_code', ''), '') AS party_code,
+		       COALESCE(NULLIF(sml_payload->>'supplier_name', ''), '') AS party_name,
+		       COALESCE(print_payment_method, '') AS print_payment_method,
+		       `+effectivePrintPaymentMethodExpr("bills")+` AS effective_print_payment_method
+		  FROM bills
+		 WHERE id = $1`,
+		billID,
+	).Scan(&source, &billType, &status, &currentOrderID, &currentDocNo, &currentPartyCode, &currentPartyName, &currentPrintPaymentMethod, &currentEffectivePaymentMethod)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !isMarketplacePurchaseEmail(source, billType) {
+		return 0, 0, nil
+	}
+
+	policy := r.channelPrintPolicy(source, billType)
+	policyCache := map[string]models.MarketplacePrintPolicy{
+		source + "/" + billType: policy,
+	}
+	getPolicy := func(row marketplacePrintRow) models.MarketplacePrintPolicy {
+		key := row.Source + "/" + row.BillType
+		if cached, ok := policyCache[key]; ok {
+			return cached
+		}
+		p := r.channelPrintPolicy(row.Source, row.BillType)
+		policyCache[key] = p
+		return p
+	}
+	rows, err := r.listMarketplacePrintRows(messageID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(rows) == 0 {
+		rows = []marketplacePrintRow{{
+			ID:                          billID,
+			OrderID:                     currentOrderID,
+			Source:                      source,
+			BillType:                    billType,
+			Status:                      status,
+			SMLDocNo:                    currentDocNo,
+			PartyCode:                   currentPartyCode,
+			PartyName:                   currentPartyName,
+			PrintPaymentMethod:          currentPrintPaymentMethod,
+			EffectivePrintPaymentMethod: currentEffectivePaymentMethod,
+		}}
+	}
+
+	missing := []string{}
+	missingPayment := []string{}
+	nonMatchingPayment := []string{}
+	total := len(rows)
+	withDoc := 0
+	for _, row := range rows {
+		rowPolicy := getPolicy(row)
+		if strings.TrimSpace(row.Status) == "sent" && strings.TrimSpace(row.SMLDocNo) != "" {
+			withDoc++
+		}
+		if rowPolicy.RequiresAllOrdersSMLDoc && (strings.TrimSpace(row.Status) != "sent" || strings.TrimSpace(row.SMLDocNo) == "") {
+			missing = append(missing, rowOrderLabel(row))
+		}
+		if strings.TrimSpace(row.EffectivePrintPaymentMethod) == "" {
+			missingPayment = append(missingPayment, rowOrderLabel(row))
+		} else if !rowMatchesPaymentPolicy(row, rowPolicy) {
+			nonMatchingPayment = append(nonMatchingPayment, rowOrderLabel(row))
+		}
+	}
+
+	if strings.TrimSpace(status) != "sent" || strings.TrimSpace(currentDocNo) == "" {
+		currentOrderID = strings.TrimSpace(currentOrderID)
+		if currentOrderID == "" {
+			currentOrderID = billID
+		}
+		alreadyMissing := false
+		for _, orderID := range missing {
+			if orderID == currentOrderID {
+				alreadyMissing = true
+				break
+			}
+		}
+		if !alreadyMissing {
+			missing = append([]string{currentOrderID}, missing...)
+		}
+	}
+	if len(missing) > 0 || len(missingPayment) > 0 || len(nonMatchingPayment) > 0 {
+		message := ""
+		if len(missing) > 0 {
+			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ ยังขาดเลข SML %d คำสั่งซื้อ", len(missing))
+		} else if len(missingPayment) > 0 {
+			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ ยังไม่ได้เลือกวิธีการชำระเงิน %d คำสั่งซื้อ", len(missingPayment))
+		} else {
+			message = fmt.Sprintf("ยังพิมพ์ไม่ได้ วิธีการชำระเงินไม่ตรงเงื่อนไข %d คำสั่งซื้อ", len(nonMatchingPayment))
+		}
+		return total, withDoc, &EmailPrintReadinessError{
+			Message:                        message,
+			MissingOrders:                  missing,
+			MissingPaymentMethodOrders:     missingPayment,
+			NonMatchingPaymentMethodOrders: nonMatchingPayment,
+			RelatedOrderCount:              total,
+			SMLDocCount:                    withDoc,
+			PrintPolicy:                    policy,
+		}
+	}
+	return total, withDoc, nil
+}
+
+func isMarketplacePurchaseEmail(source, billType string) bool {
+	if billType != "purchase" {
+		return false
+	}
+	switch source {
+	case "shopee_shipped", "lazada_email":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPrintableEmailKind(kind string) bool {

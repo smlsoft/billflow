@@ -156,14 +156,31 @@ export interface BillEmailGroup {
   last_printed_at?: string | null
   last_printed_by_email?: string
   last_printed_by_name?: string
+  print_ready?: boolean
+  print_block_reason?: string
+  missing_sml_orders?: string[]
+  missing_payment_method_orders?: string[]
+  non_matching_payment_method_orders?: string[]
+  print_policy?: MarketplacePrintPolicy
+  print_policy_note?: string
   related_bills?: BillEmailRelatedBill[]
   print_events?: EmailPrintEvent[]
+}
+
+export interface MarketplacePrintPolicy {
+  requires_all_orders_sml_doc: boolean
+  payment_method_prefix_enabled: boolean
+  payment_method_prefixes: string[]
+  payment_methods: string[]
 }
 
 export interface BillEmailRelatedBill {
   id: string
   order_id?: string
+  party_code?: string
   party_name?: string
+  print_payment_method?: string
+  effective_print_payment_method?: string
   source: string
   bill_type: string
   document_route?: string
@@ -213,6 +230,8 @@ export interface Bill {
   // Only present in single-bill GET (not in list response).
   preview?: BillRoutePreview
   remark?: string
+  print_payment_method?: string
+  effective_print_payment_method?: string
   shopee_status?: ShopeeOrderEvent | null
   shopee_events?: ShopeeOrderEvent[]
   email_group?: BillEmailGroup | null
@@ -241,6 +260,31 @@ export interface BillListResponse {
   limit?: number
   has_more?: boolean
   next_cursor?: string
+}
+
+export interface EmailPrintCandidateOrder {
+  bill_id: string
+  order_id: string
+  sml_doc_no: string
+  party_code?: string
+  party_name?: string
+  print_payment_method?: string
+  effective_print_payment_method?: string
+  source: string
+  status: BillStatus
+}
+
+export interface EmailPrintCandidate {
+  message_id: string
+  group_key: string
+  subject?: string
+  from?: string
+  artifact_bill_id: string
+  artifact_id: string
+  artifact_filename: string
+  orders: EmailPrintCandidateOrder[]
+  print_policy?: MarketplacePrintPolicy
+  print_policy_note?: string
 }
 
 // ─── Mapping ─────────────────────────────────────────────────────────────────

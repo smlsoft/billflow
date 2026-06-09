@@ -3,8 +3,7 @@ import { toast } from 'sonner'
 import { ensureShopeeShippingLine, getBill, getLatestBillDocNo, regenerateBillDocNo, retryBill } from '@/hooks/useBills'
 import type { RetryBillPayload } from '@/hooks/useBills'
 import type { Bill } from '@/types'
-
-const SHOPEE_SHIPPING_SOURCE_SKU = '__shopee_shipping__'
+import { LAZADA_FEE_SOURCE_SKU, SHOPEE_SHIPPING_SOURCE_SKU, marketplaceFeeAmount } from '@/lib/shopeeBill'
 
 function rawNumber(payload: Record<string, unknown> | null | undefined, key: string) {
   const value = payload?.[key]
@@ -16,12 +15,25 @@ function rawNumber(payload: Record<string, unknown> | null | undefined, key: str
   return null
 }
 
-function shouldEnsureShopeeShippingLine(bill: Bill) {
-  if (bill.source !== 'shopee_shipped' || bill.bill_type !== 'purchase') return false
+function shouldEnsureMarketplaceFeeLine(bill: Bill) {
+  if (bill.bill_type !== 'purchase') return false
   if (!['failed', 'pending', 'needs_review'].includes(bill.status)) return false
-  if ((bill.items ?? []).some((item) => item.source_sku === SHOPEE_SHIPPING_SOURCE_SKU)) return false
-  const shippingAmount = rawNumber(bill.raw_data, 'shipping_amount')
-  return shippingAmount != null && shippingAmount >= 0
+  if (bill.source === 'shopee_shipped') {
+    if ((bill.items ?? []).some((item) => item.source_sku === SHOPEE_SHIPPING_SOURCE_SKU)) return false
+    const shippingAmount = rawNumber(bill.raw_data, 'shipping_amount')
+    return shippingAmount != null && shippingAmount >= 0
+  }
+  if (bill.source === 'lazada_email') {
+    if ((bill.items ?? []).some((item) => item.source_sku === LAZADA_FEE_SOURCE_SKU)) return false
+    return marketplaceFeeAmount(bill) > 0
+  }
+  return false
+}
+
+function marketplaceFeeToast(bill: Bill) {
+  return bill.source === 'lazada_email'
+    ? 'เติมรายการค่าจัดส่ง/fee Lazada แล้ว'
+    : 'เติมรายการค่าขนส่ง Shopee แล้ว'
 }
 
 function docToastDescription(docNo: string | null | undefined) {
@@ -65,10 +77,20 @@ export function useBillData(id: string | undefined): UseBillDataReturn {
   const reloadBill = useCallback(async () => {
     if (!id) return null
     let updated = await getBill(id)
-    if (shouldEnsureShopeeShippingLine(updated)) {
-      const result = await ensureShopeeShippingLine(id)
-      if (result.inserted) {
-        toast.success('เติมรายการค่าขนส่ง Shopee แล้ว')
+    if (shouldEnsureMarketplaceFeeLine(updated)) {
+      try {
+        const result = await ensureShopeeShippingLine(id)
+        if (result.inserted) {
+          toast.success(marketplaceFeeToast(updated))
+          updated = await getBill(id)
+        }
+      } catch (err) {
+        console.warn('ensure marketplace fee line skipped', err)
+        if (updated.source !== 'lazada_email') {
+          throw err
+        }
+        // Lazada deliberately blocks send when fee config is missing. Keep the
+        // bill visible so the warning card can tell the admin what to set.
         updated = await getBill(id)
       }
     }

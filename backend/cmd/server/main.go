@@ -457,6 +457,8 @@ func main() {
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)
+		api.GET("/bills/email-print-candidates", billH.EmailPrintCandidates)
+		api.POST("/bills/email-print-events/bulk", middleware.RequireRole("admin", "staff"), billH.RecordEmailPrintEventsBulk)
 		api.POST("/bills/bulk-send-jobs", middleware.RequireRole("admin", "staff"), billH.CreateBulkSendJob)
 		api.GET("/bills/bulk-send-jobs", middleware.RequireRole("admin", "staff"), billH.ListBulkSendJobs)
 		api.GET("/bills/bulk-send-jobs/active", middleware.RequireRole("admin", "staff"), billH.GetActiveBulkSendJob)
@@ -465,6 +467,8 @@ func main() {
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
 		api.POST("/bills/:id/retry", billH.Retry)
+		api.PATCH("/bills/:id/purchase-creditor", middleware.RequireRole("admin"), billH.UpdatePurchaseCreditor)
+		api.PATCH("/bills/:id/print-payment-method", middleware.RequireRole("admin", "staff"), billH.UpdatePrintPaymentMethod)
 		api.POST("/bills/:id/ensure-shopee-shipping-line", middleware.RequireRole("admin", "staff"), billH.EnsureShopeeShippingLine)
 		api.GET("/bills/:id/latest-doc-no", middleware.RequireRole("admin", "staff"), billH.LatestDocNo)
 		api.POST("/bills/:id/regenerate-doc-no", middleware.RequireRole("admin", "staff"), billH.RegenerateDocNo)
@@ -736,6 +740,7 @@ func main() {
 	imapProcessors.Attachment = emailH.ProcessAttachment
 	imapProcessors.ShopeeOrder = emailH.ProcessShopeeEmailBody
 	imapProcessors.ShopeeShipped = emailH.ProcessShopeeShippedEmailBody
+	imapProcessors.LazadaPurchase = emailH.ProcessLazadaEmailBody
 	imapProcessors.DuplicateMessage = billRepo.FindByEmailMessageID
 	imapProcessors.DuplicateMessages = billRepo.FindExistingEmailMessageIDs
 

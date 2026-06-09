@@ -44,13 +44,18 @@ interface SMLMasterOption {
 
 import {
   CHANNEL_LABELS,
+  DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS,
+  defaultMarketplacePrintPolicy,
   destinationFor,
   destinationOptionsFor,
   docNoPatternWarning,
+  marketplacePrintPolicyNote,
+  normalizeMarketplacePrintPolicy,
   previewDocNo,
   type ChannelDefaultRow,
   type ChannelKey,
   type EndpointKind,
+  type MarketplacePrintPolicy,
 } from './labels'
 import { REMARK2_NONE, SML_REMARK2_OPTIONS, normalizeRemark2 } from '@/lib/smlRemark2'
 import { MapItemModal } from '../BillDetail/components/MapItemModal'
@@ -90,6 +95,10 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const [vatRate, setVatRate] = useState('')
   const [inquiryTypeStr, setInquiryTypeStr] = useState('')
   const [remark2Str, setRemark2Str] = useState(REMARK2_NONE)
+  const [printRequiresAllDocs, setPrintRequiresAllDocs] = useState(true)
+  const [printPaymentPrefixEnabled, setPrintPaymentPrefixEnabled] = useState(true)
+  const [printPaymentPrefixes, setPrintPaymentPrefixes] = useState('TT')
+  const [printPaymentMethods, setPrintPaymentMethods] = useState(DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS.join('\n'))
   const [passbookCode, setPassbookCode] = useState('')
   const [expenseCode, setExpenseCode] = useState('')
   const [passbooks, setPassbooks] = useState<SMLMasterOption[]>([])
@@ -126,6 +135,11 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
     setVatRate(typeof row.vat_rate === 'number' && row.vat_rate >= 0 ? String(row.vat_rate) : '')
     setInquiryTypeStr(typeof row.inquiry_type === 'number' && row.inquiry_type >= 0 ? String(row.inquiry_type) : '')
     setRemark2Str(normalizeRemark2(row.remark_2 || ''))
+    const printPolicy = normalizeMarketplacePrintPolicy(row.print_policy)
+    setPrintRequiresAllDocs(printPolicy.requires_all_orders_sml_doc)
+    setPrintPaymentPrefixEnabled(printPolicy.payment_method_prefix_enabled)
+    setPrintPaymentPrefixes(printPolicy.payment_method_prefixes.join(', '))
+    setPrintPaymentMethods(printPolicy.payment_methods.join('\n'))
     setPassbookCode(row.passbook_code || '')
     setExpenseCode(row.expense_code || '')
   }, [open, row])
@@ -200,14 +214,21 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const isPurchase = row.bill_type === 'purchase'
   const isSettlement = row.channel === 'shopee_settlement' && row.bill_type === 'ar_receipt'
   const isShopeePurchase = row.channel === 'shopee_shipped' && row.bill_type === 'purchase'
+  const isLazadaEmailPurchase = row.channel === 'lazada_email' && row.bill_type === 'purchase'
+  const supportsMarketplaceFeeLine = isShopeePurchase || isLazadaEmailPurchase
   const showPartyPicker =
-    (row.channel === 'shopee_shipped' && row.bill_type === 'purchase') ||
+    ((row.channel === 'shopee_shipped' || row.channel === 'lazada_email') && row.bill_type === 'purchase') ||
     (row.channel === 'shopee' && row.bill_type === 'sale') ||
     (row.channel === 'lazada' && row.bill_type === 'sale') ||
     (row.channel === 'tiktok' && row.bill_type === 'sale')
   const channelLabel = isShopeePurchase
     ? 'Email บิลซื้อ Shopee'
+    : isLazadaEmailPurchase
+      ? 'Email บิลซื้อ Lazada'
     : CHANNEL_LABELS[row.channel as ChannelKey] ?? row.channel
+  const feeLineTitle = isLazadaEmailPurchase ? 'ค่าจัดส่ง/ค่าธรรมเนียมจาก Lazada' : 'ค่าขนส่งจาก Shopee'
+  const feeLineShort = isLazadaEmailPurchase ? 'ค่าจัดส่ง/fee' : 'ค่าขนส่ง'
+  const feeLineRawName = isLazadaEmailPurchase ? 'ค่าจัดส่ง/ค่าธรรมเนียม Lazada' : 'ค่าขนส่งสินค้า'
   const billTypeLabel = isPurchase ? 'บิลซื้อ' : isSettlement ? 'ลูกหนี้' : 'บิลขาย'
   const destinationOptions = destinationOptionsFor(row.bill_type)
   const selectedDestinationMeta =
@@ -228,6 +249,20 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
   const parsedVatRate = Number(vatRate)
   const vatRateValue = vatRate.trim() === '' || !Number.isFinite(parsedVatRate) ? -1 : parsedVatRate
   const inquiryTypeValue = inquiryTypeStr === '' ? -1 : Number(inquiryTypeStr)
+  const printPrefixList = Array.from(new Set(printPaymentPrefixes
+    .split(/[,\s]+/)
+    .map((p) => p.trim().toUpperCase())
+    .filter(Boolean)))
+  const printPaymentMethodList = Array.from(new Set(printPaymentMethods
+    .split(/[\n,]+/)
+    .map((p) => p.trim())
+    .filter(Boolean)))
+  const printPolicy: MarketplacePrintPolicy = {
+    requires_all_orders_sml_doc: printRequiresAllDocs,
+    payment_method_prefix_enabled: printPaymentPrefixEnabled,
+    payment_method_prefixes: printPrefixList.length > 0 ? printPrefixList : defaultMarketplacePrintPolicy().payment_method_prefixes,
+    payment_methods: printPaymentMethodList.length > 0 ? printPaymentMethodList : defaultMarketplacePrintPolicy().payment_methods,
+  }
   const docWarning = docNoPatternWarning(docPrefixTrimmed, docRunningFormatTrimmed)
   const selectedPassbook = passbooks.find((p) => p.code === passbookCodeTrimmed)
   const selectedExpense = expenses.find((p) => p.code === expenseCodeTrimmed)
@@ -239,7 +274,9 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
       docRunningFormatTrimmed.includes('#')
     )) &&
     (!isSettlement || (selectedDocFormatCode !== '' && passbookCodeTrimmed !== '')) &&
-    (!isShopeePurchase || !shippingEnabled || shippingItemCodeTrimmed !== '') &&
+    (!supportsMarketplaceFeeLine || !shippingEnabled || shippingItemCodeTrimmed !== '') &&
+    (!supportsMarketplaceFeeLine || !printPaymentPrefixEnabled || printPrefixList.length > 0) &&
+    (!supportsMarketplaceFeeLine || printPaymentMethodList.length > 0) &&
     (isSettlement || !docWarning) &&
     !saving
 
@@ -270,8 +307,16 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
       toast.error('แก้รูปแบบเลขเอกสารตามคำเตือนก่อนบันทึก')
       return
     }
-    if (isShopeePurchase && shippingEnabled && !shippingItemCodeTrimmed) {
-      toast.error('กรุณาเลือกสินค้า SML สำหรับค่าขนส่งก่อนเปิดใช้งาน')
+    if (supportsMarketplaceFeeLine && shippingEnabled && !shippingItemCodeTrimmed) {
+      toast.error(`กรุณาเลือกสินค้า SML สำหรับ${feeLineShort}ก่อนเปิดใช้งาน`)
+      return
+    }
+    if (supportsMarketplaceFeeLine && printPaymentPrefixEnabled && printPrefixList.length === 0) {
+      toast.error('กรุณาระบุ prefix วิธีการชำระเงินอย่างน้อย 1 ค่า หรือปิดการตรวจก่อนบันทึก')
+      return
+    }
+    if (supportsMarketplaceFeeLine && printPaymentMethodList.length === 0) {
+      toast.error('กรุณาระบุรายการวิธีการชำระเงินอย่างน้อย 1 ค่า')
       return
     }
     setSaving(true)
@@ -292,9 +337,9 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         sale_code: isSettlement ? '' : saleCodeTrimmed,
         unit_code: '',
         doc_time: '',
-        shipping_item_enabled: isShopeePurchase ? shippingEnabled : false,
-        shipping_item_code: isShopeePurchase ? shippingItemCodeTrimmed : '',
-        shipping_item_unit_code: isShopeePurchase ? shippingItemUnitCodeTrimmed : '',
+        shipping_item_enabled: supportsMarketplaceFeeLine ? shippingEnabled : false,
+        shipping_item_code: supportsMarketplaceFeeLine ? shippingItemCodeTrimmed : '',
+        shipping_item_unit_code: supportsMarketplaceFeeLine ? shippingItemUnitCodeTrimmed : '',
         passbook_code: isSettlement ? passbookCodeTrimmed : '',
         passbook_name: isSettlement ? (selectedPassbook?.name_1 ?? row.passbook_name ?? '') : '',
         bank_code: isSettlement ? (selectedPassbook?.bank_code ?? row.bank_code ?? '') : '',
@@ -307,6 +352,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         vat_rate: isSettlement ? -1 : vatRateValue,
         inquiry_type: isSettlement ? -1 : inquiryTypeValue,
         remark_2: isSettlement ? '' : (remark2Str === REMARK2_NONE ? '' : remark2Str),
+        print_policy: supportsMarketplaceFeeLine ? printPolicy : undefined,
       })
       toast.success('บันทึกสำเร็จ')
       onSaved()
@@ -674,16 +720,112 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
             </div>
             )}
 
-            {isShopeePurchase && (
+            {supportsMarketplaceFeeLine && (
+              <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    เงื่อนไขการพิมพ์อีเมล
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    ใช้ควบคุมปุ่มพิมพ์ในหน้าใบสั่งซื้อและ filter พร้อมปริ้น เปลี่ยนได้โดยไม่ต้อง deploy ใหม่
+                  </p>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+                  <div>
+                    <div className="text-sm font-medium text-foreground">
+                      ต้องมีเลขเอกสาร SML ครบทุกคำสั่งซื้อในอีเมลเดียวกัน
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      กันการพิมพ์อีเมลที่มีหลาย order แต่ส่งเข้า SML ยังไม่ครบ
+                    </p>
+                  </div>
+                  <Switch
+                    checked={printRequiresAllDocs}
+                    onCheckedChange={setPrintRequiresAllDocs}
+                    aria-label="ต้องมีเลขเอกสาร SML ครบทุกคำสั่งซื้อในอีเมลเดียวกัน"
+                  />
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+                  <div>
+                    <div className="text-sm font-medium text-foreground">ตรวจวิธีการชำระเงินก่อนพิมพ์</div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      ค่า default คือวิธีการชำระเงินต้องขึ้นต้นด้วย TT
+                    </p>
+                  </div>
+                  <Switch
+                    checked={printPaymentPrefixEnabled}
+                    onCheckedChange={setPrintPaymentPrefixEnabled}
+                    aria-label="ตรวจวิธีการชำระเงินก่อนพิมพ์"
+                  />
+                </div>
+                <div className={printPaymentPrefixEnabled ? 'grid gap-3 sm:grid-cols-2' : 'grid gap-3 opacity-60 sm:grid-cols-2'}>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Prefix วิธีชำระที่ปริ้นได้</Label>
+                    <Input
+                      value={printPaymentPrefixes}
+                      onChange={(e) => setPrintPaymentPrefixes(e.target.value.toUpperCase())}
+                      placeholder="เช่น TT หรือ TT, TC"
+                      disabled={!printPaymentPrefixEnabled}
+                      className="font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">รายการวิธีการชำระเงิน</Label>
+                    <textarea
+                      value={printPaymentMethods}
+                      onChange={(e) => setPrintPaymentMethods(e.target.value)}
+                      rows={5}
+                      placeholder="หนึ่งรายการต่อหนึ่งบรรทัด เช่น TT3086"
+                      className="min-h-[132px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                  </div>
+                </div>
+                {printPaymentPrefixEnabled && printPrefixList.length === 0 && (
+                  <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    เปิดตรวจวิธีการชำระเงินอยู่ ต้องระบุ prefix อย่างน้อย 1 ค่า
+                  </div>
+                )}
+                {printPaymentMethodList.length === 0 && (
+                  <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    ต้องมีรายการวิธีการชำระเงินอย่างน้อย 1 ค่า
+                  </div>
+                )}
+                {printPaymentMethodList.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {printPaymentMethodList.slice(0, 16).map((method) => (
+                      <span
+                        key={method}
+                        className={method.toUpperCase().startsWith('TT')
+                          ? 'rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200'
+                          : 'rounded-md border border-border bg-muted px-2 py-1 text-xs text-muted-foreground'
+                        }
+                      >
+                        {method}
+                      </span>
+                    ))}
+                    {printPaymentMethodList.length > 16 && (
+                      <span className="rounded-md border border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
+                        +{printPaymentMethodList.length - 16}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="rounded-md border border-info/30 bg-info/5 px-3 py-2 text-xs text-info">
+                  {marketplacePrintPolicyNote(printPolicy)}
+                </div>
+              </div>
+            )}
+
+            {supportsMarketplaceFeeLine && (
               <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      ค่าขนส่งจาก Shopee
+                      {feeLineTitle}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      ถ้าเปิดใช้ ระบบจะเพิ่มค่าส่งจากเมล Shopee เป็นรายการสินค้าในบิลซื้อใหม่.
-                      ถ้าปิดไว้ จะไม่เพิ่มรายการค่าส่งใด ๆ
+                      ถ้าเปิดใช้ ระบบจะเพิ่ม{feeLineShort}จากอีเมลเป็นรายการสินค้าในบิลซื้อใหม่.
+                      ถ้าปิดไว้ ระบบจะกันการส่งเมื่อยอดจ่ายจริงต้องมีรายการนี้
                     </p>
                   </div>
                   <Switch
@@ -696,7 +838,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
                 <div className={shippingEnabled ? 'space-y-3' : 'space-y-3 opacity-60'}>
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
                     <div className="space-y-1">
-                      <Label className="text-xs">สินค้า SML สำหรับค่าส่ง</Label>
+                      <Label className="text-xs">สินค้า SML สำหรับ{feeLineShort}</Label>
                       <div className="rounded-md border border-border bg-background px-3 py-2">
                         {shippingItemCodeTrimmed ? (
                           <div className="min-w-0">
@@ -740,7 +882,7 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
 
                 {shippingEnabled && !shippingItemCodeTrimmed && (
                   <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-                    ต้องเลือกสินค้า SML ก่อนบันทึก เช่น สินค้าบริการที่ร้านตั้งไว้สำหรับค่าขนส่ง
+                    ต้องเลือกสินค้า SML ก่อนบันทึก เช่น สินค้าบริการที่ร้านตั้งไว้สำหรับ{feeLineShort}
                   </div>
                 )}
               </div>
@@ -758,14 +900,14 @@ export function EditDialog({ open, onOpenChange, row, onSaved }: Props) {
         </DialogContent>
       </Dialog>
 
-      {isShopeePurchase && (
+      {supportsMarketplaceFeeLine && (
         <MapItemModal
           open={open && shippingPickerOpen}
-          rawName="ค่าขนส่งสินค้า"
+          rawName={feeLineRawName}
           currentCode={shippingItemCode}
           currentUnit={shippingItemUnitCode}
           currentPrice={0}
-          rawNameLabel="รายการค่าส่งจาก Shopee"
+          rawNameLabel={`รายการ${feeLineShort}จาก${isLazadaEmailPurchase ? ' Lazada' : ' Shopee'}`}
           onPick={handleShippingPick}
           onClose={() => setShippingPickerOpen(false)}
         />

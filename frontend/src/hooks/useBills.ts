@@ -3,6 +3,7 @@ import client from '../api/client'
 import { notifyWorkQueueChanged } from '../lib/work-queue-events'
 import { humanizeSMLConnectionError } from '../lib/sml-readiness'
 import type { Bill, BillItem, BillListResponse } from '../types'
+import type { EmailPrintCandidate, EmailPrintEvent } from '../types'
 
 interface BillsFilter {
   page?: number
@@ -16,6 +17,7 @@ interface BillsFilter {
   search?: string
   shopee_shop_id?: string
   archived?: 'include' | 'only' | ''
+  print_ready?: boolean
   date_from?: string
   date_to?: string
   sort_order?: 'asc' | 'desc'
@@ -44,6 +46,55 @@ export interface RetryBillPayload {
 export interface RetryBillResponse {
   message?: string
   doc_no?: string
+  error?: string
+}
+
+export interface PurchaseCreditorUpdatePayload {
+  party_code: string
+  party_name: string
+}
+
+export interface PurchaseCreditorUpdateResponse {
+  message?: string
+  bill?: Bill
+  warning?: string
+  sml_update?: {
+    doc_no?: string
+    old_cust_code?: string
+    new_cust_code?: string
+    supplier_name?: string
+    updated_detail_rows?: number
+    changed?: boolean
+    log_status?: string
+    log_warning?: string
+  }
+  error?: string
+}
+
+export interface PrintPaymentMethodUpdatePayload {
+  payment_method: string
+  apply_to_email_group?: boolean
+}
+
+export interface PrintPaymentMethodUpdateResponse {
+  message?: string
+  bill?: Bill
+  result?: {
+    payment_method: string
+    apply_to_email_group: boolean
+    updated_count: number
+    message_id?: string
+    targets?: Array<{
+      bill_id: string
+      order_id: string
+      old_method?: string
+      old_effective_method?: string
+      status?: string
+      sml_doc_no?: string
+      source?: string
+      bill_type?: string
+    }>
+  }
   error?: string
 }
 
@@ -125,6 +176,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.search) params.set('search', filter.search)
       if (filter.shopee_shop_id) params.set('shopee_shop_id', filter.shopee_shop_id)
       if (filter.archived) params.set('archived', filter.archived)
+      if (filter.print_ready) params.set('print_ready', '1')
       if (filter.date_from) params.set('date_from', filter.date_from)
       if (filter.date_to) params.set('date_to', filter.date_to)
       if (filter.sort_order) params.set('sort_order', filter.sort_order)
@@ -145,6 +197,35 @@ export function useBills(filter: BillsFilter = {}) {
   return { data, loading, error, refetch: fetch }
 }
 
+export async function getEmailPrintCandidates(filter: BillsFilter = {}): Promise<{
+  data: EmailPrintCandidate[]
+  total_groups: number
+  total_orders: number
+  limit: number
+  truncated: boolean
+}> {
+  const params = new URLSearchParams()
+  if (filter.status) params.set('status', filter.status)
+  if (filter.shopee_status) params.set('shopee_status', filter.shopee_status)
+  if (filter.source) params.set('source', filter.source)
+  if (filter.bill_type) params.set('bill_type', filter.bill_type)
+  if (filter.document_route) params.set('document_route', filter.document_route)
+  if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
+  if (filter.search) params.set('search', filter.search)
+  if (filter.shopee_shop_id) params.set('shopee_shop_id', filter.shopee_shop_id)
+  if (filter.archived) params.set('archived', filter.archived)
+  if (filter.date_from) params.set('date_from', filter.date_from)
+  if (filter.date_to) params.set('date_to', filter.date_to)
+  if (filter.sort_order) params.set('sort_order', filter.sort_order)
+  const res = await client.get(`/api/bills/email-print-candidates?${params}`)
+  return res.data
+}
+
+export async function recordBulkEmailPrintEvents(items: Array<{ bill_id: string; artifact_id: string }>): Promise<EmailPrintEvent[]> {
+  const res = await client.post<{ data: EmailPrintEvent[] }>('/api/bills/email-print-events/bulk', { items })
+  return res.data.data
+}
+
 export async function getBill(id: string): Promise<Bill> {
   const res = await client.get<Bill>(`/api/bills/${id}`)
   return res.data
@@ -159,6 +240,50 @@ export async function retryBill(
   })
   if (res.status !== 200) {
     throw new Error(humanizeSMLConnectionError(res.data?.error || res.data?.message || `ส่ง SML ไม่สำเร็จ (HTTP ${res.status})`))
+  }
+  notifyWorkQueueChanged()
+  return res.data
+}
+
+export async function updateBillPurchaseCreditor(
+  id: string,
+  body: PurchaseCreditorUpdatePayload,
+): Promise<PurchaseCreditorUpdateResponse> {
+  const res = await client.patch<PurchaseCreditorUpdateResponse>(
+    `/api/bills/${id}/purchase-creditor`,
+    body,
+    { validateStatus: () => true },
+  )
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(
+      humanizeSMLConnectionError(
+        res.data?.error ||
+          res.data?.message ||
+          `อัปเดตเจ้าหนี้ใน SML ไม่สำเร็จ (HTTP ${res.status})`,
+      ),
+    )
+  }
+  notifyWorkQueueChanged()
+  return res.data
+}
+
+export async function updateBillPrintPaymentMethod(
+  id: string,
+  body: PrintPaymentMethodUpdatePayload,
+): Promise<PrintPaymentMethodUpdateResponse> {
+  const res = await client.patch<PrintPaymentMethodUpdateResponse>(
+    `/api/bills/${id}/print-payment-method`,
+    body,
+    { validateStatus: () => true },
+  )
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(
+      humanizeSMLConnectionError(
+        res.data?.error ||
+          res.data?.message ||
+          `อัปเดตวิธีการชำระเงินสำหรับปริ้นไม่สำเร็จ (HTTP ${res.status})`,
+      ),
+    )
   }
   notifyWorkQueueChanged()
   return res.data

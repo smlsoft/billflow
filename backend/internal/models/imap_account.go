@@ -27,7 +27,7 @@ type IMAPPollSummary struct {
 // Channel routes a poll's processed messages to the right body handler:
 //   - "general" → attachment pipeline (PDF/Excel attached files)
 //   - "shopee"  → Shopee email order/shipped flow (subject decides which)
-//   - "lazada"  → reserved (Phase 4b WIP, currently routes like general)
+//   - "lazada"  → Lazada email purchase flow (strict sender+subject guard)
 type IMAPAccount struct {
 	ID                  string           `json:"id"`
 	Name                string           `json:"name"`

@@ -17,7 +17,8 @@
 | Channel | รายละเอียด | ประเภทบิล | Phase | สถานะ |
 |---------|-----------|----------|-------|-------|
 | LINE OA (human chat) | text/image/file/audio → admin inbox `/messages` → reply ผ่าน Reply API/Push API | บิลขาย (sale) | Phase 3 + session 13+ | ✅ chat 2 ทาง + เปิดบิลขายจาก chat |
-| Email (IMAP) | multi-account body/attachment PDF/Excel/รูป | sale/purchase ตาม routing | Phase 5 + session 6+ | ✅ deployed |
+| Email (IMAP) | multi-account body/attachment PDF/Excel/รูป + marketplace email routing | sale/purchase ตาม routing | Phase 5 + session 6+ | ✅ deployed |
+| Lazada Email | IMAP Lazada Thailand purchase email → `source='lazada_email'` → admin review ก่อนส่ง SML `purchaseorder` | บิลซื้อ (purchase) | Phase 5+ post-v1.0 | ✅ deployed thaisunsport; auto poll ยังปิดรอ review + SML smoke |
 | Shopee Excel | Export จาก Shopee Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4a | ✅ deployed |
 | Lazada Excel | Export จาก Lazada Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4b | ✅ deployed main + Henna |
 | TikTok Excel/CSV | Export จาก TikTok Seller Center → local bills → Retry default saleorder | บิลขาย (sale) | Phase 4c | ✅ deployed main + Henna |
@@ -315,7 +316,7 @@ CREATE TABLE mapping_feedback (
 CREATE TABLE bills (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   bill_type     TEXT NOT NULL CHECK (bill_type IN ('sale','purchase')),
-  source        TEXT NOT NULL CHECK (source IN ('line','email','lazada','shopee','manual')),
+  source        TEXT NOT NULL CHECK (source IN ('line','email','lazada','shopee','manual','shopee_shipped','lazada_email')),
   status        TEXT NOT NULL DEFAULT 'pending'
                   CHECK (status IN ('pending','confirmed','sent','failed','skipped')),
   raw_data      JSONB,
@@ -528,7 +529,7 @@ CREATE TABLE sml_catalog (
 -- Final shape after migrations 007-011.
 CREATE TABLE channel_defaults (
   channel              TEXT NOT NULL
-                       CHECK (channel IN ('line','email','shopee','lazada','shopee_shipped')),
+                       CHECK (channel IN ('line','email','shopee','lazada','shopee_shipped','lazada_email')),
   bill_type            TEXT NOT NULL
                        CHECK (bill_type IN ('sale','purchase')),
   party_code           TEXT NOT NULL,   -- AR-prefixed for customers, V-prefixed for suppliers
@@ -618,6 +619,7 @@ CREATE TABLE imap_accounts (
 > - [019_line_oa_mark_as_read.sql](backend/internal/database/migrations/019_line_oa_mark_as_read.sql) — line_oa_accounts.mark_as_read_enabled per-OA opt-in toggle for LINE Premium "อ่านแล้ว" read receipts (session 17)
 > - [037_data_lifecycle.sql](backend/internal/database/migrations/037_data_lifecycle.sql) — production data lifecycle: summary tables, log/bill indexes, cursor-friendly access paths
 > - [044_sml_bulk_jobs.sql](backend/internal/database/migrations/044_sml_bulk_jobs.sql) — DB-backed async SML bulk send jobs and per-bill item progress/results
+> - [057_lazada_email_purchase.sql](backend/internal/database/migrations/057_lazada_email_purchase.sql) — extends bills/channel defaults for `lazada_email` and adds unique guard for Lazada email order id
 
 > **Production data lifecycle**
 > - `/api/logs` uses cursor pagination (`limit`, `cursor`, `has_more`, `next_cursor`) and does not run `COUNT(*)` unless `include_total=true`.
@@ -2546,9 +2548,10 @@ Bill flow → SML routing (bills.go Retry handler — 4-way dispatch):
   shopee / shopee_email    sale        saleorder (248) [was saleinvoice until session 7-10]
                                        override via channel_defaults.endpoint  party_code from channel_defaults
   shopee_shipped           purchase    purchaseorder (248)            party_code from channel_defaults
+  lazada_email             purchase    purchaseorder (248)            party_code + fee config from channel_defaults
   any                      any         endpoint URL overridable per (channel,bill_type) in /settings/channels
 
-Migrations applied (20 files):
+Selected migrations from the historical session log; current code has migrations through 057:
   001_init.sql
   002_audit_logging.sql                    (audit_logs structured columns)
   002_sml_catalog.sql                      (sml_catalog + extended CHECK)

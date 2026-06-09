@@ -1,28 +1,28 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-05-20 20:03 +07
+> อัพเดตล่าสุด: 2026-06-05 12:05 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
 
 ## ระบบทำงานยังไง
 
-BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
+BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Email, Lazada Email, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
 
-สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee email purchase flow, marketplace Excel sale flow, และ Shopee Open API direct preview แบบ multi-shop: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API live ใช้งานบน BillFlow main แล้ว โดยยังคง confirm แบบ review-first และไม่ auto-send เข้า SML.
+สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee/Lazada email purchase flow, marketplace Excel sale flow, และ Shopee Open API direct preview แบบ multi-shop: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Lazada email purchase ใช้ HTML summary parser ตรวจสูตรยอดจริงก่อนส่ง, กระจายคูปองเป็น line discount, และ block การส่งถ้า reconcile หรือ fee config ไม่พร้อม. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API live ใช้งานบน BillFlow main แล้ว โดยยังคง confirm แบบ review-first และไม่ auto-send เข้า SML.
 
 ---
 
 ## Input → Process → Output
 
 ```
-LINE OA / Email / Excel Upload
+LINE OA / Email / Excel Upload / Shopee API
         │
         ▼
 Ingest
   - LINE webhook: /webhook/line/:oaId หรือ /webhook/line
-  - EmailCoordinator: one goroutine per enabled imap_accounts row
-  - Import handlers: Lazada generic / Shopee/Lazada/TikTok preview+confirm
+  - EmailCoordinator: one goroutine per enabled imap_accounts row, route by channel/subject
+  - Import handlers: Shopee/Lazada/TikTok preview+confirm
         │
         ▼
 AI + Matching
@@ -73,11 +73,15 @@ billflow/
 │   ├── services/email/coordinator.go    per-account pollers
 │   ├── services/email/imap.go           connect/search/fetch/mark seen
 │   ├── handlers/email.go                attachment AI pipeline
+│   ├── handlers/shipped_email.go        Shopee purchase email → purchaseorder
+│   ├── handlers/lazada_email.go         Lazada purchase email → review-first PO
+│   ├── repository/bill_lazada_summary.go Lazada amount parser/reconciliation
 │   └── /settings/email                  IMAP account admin UI
 │
 ├── Import
-│   ├── handlers/import.go               generic Lazada WIP
-│   └── handlers/shopee_import.go        Shopee preview/confirm into local bills
+│   ├── handlers/shopee_import.go        Shopee preview/confirm into local bills
+│   ├── handlers/lazada_import.go        Lazada preview/confirm into local bills
+│   └── handlers/tiktok_import.go        TikTok preview/confirm into local bills
 │
 ├── SML + Catalog
 │   ├── services/sml/client.go           SML #1 JSON-RPC sale_reserve
@@ -110,7 +114,7 @@ billflow/
 | Email settings | `/api/settings/imap-accounts...` |
 | Channel defaults | `/api/settings/channel-defaults...` |
 | Catalog | `/api/catalog...` |
-| Imports | `/api/import/upload`, `/api/import/confirm`, `/api/import/shopee/preview`, `/api/import/shopee/confirm` |
+| Imports | `/api/import/upload`, `/api/import/confirm`, `/api/import/shopee/preview`, `/api/import/shopee/confirm`, `/api/import/lazada/preview`, `/api/import/lazada/confirm`, `/api/import/tiktok/preview`, `/api/import/tiktok/confirm` |
 | Logs | `GET /api/logs?limit=&cursor=`; no `COUNT(*)` unless `include_total=true` |
 
 ---
@@ -119,7 +123,7 @@ billflow/
 
 | Job | เวลา/Trigger | หน้าที่ |
 |---|---|---|
-| EmailCoordinator | per `imap_accounts.poll_interval_seconds`, min 300s | poll IMAP, route general/Shopee/Shopee shipped |
+| EmailCoordinator | per `imap_accounts.poll_interval_seconds`, min 300s | poll IMAP, route general/Shopee/Shopee shipped/Lazada purchase |
 | Daily Insight | `INSIGHT_CRON_HOUR`, default 08:00 | AI summary + optional LINE notify |
 | Backup | `BACKUP_CRON_HOUR`, default 00:00 | `pg_dump` to `/app/backups` mounted as `~/billflow/backups` |
 | Disk Monitor | daily 07:00 | LINE alert when disk usage exceeds threshold |
@@ -144,8 +148,9 @@ billflow/
 
 | Channel | สถานะ |
 |---|---|
-| Shopee purchase email | ✅ Phase 1 customer-test focus; sends SML `purchaseorder` through `192.168.2.248:8080` |
-| Email IMAP | ✅ multi-account DB-driven, Shopee email routing, artifacts, logs |
+| Shopee purchase email | ✅ Phase 1 customer-test focus; sends SML `purchaseorder` through `192.168.2.248:8080` after review |
+| Lazada purchase email | ✅ deployed on `billflow-thaisunsport` post-v1.0; 7 bills backfilled, amount reconciliation `ok`, IMAP still disabled until review + one SML smoke |
+| Email IMAP | ✅ multi-account DB-driven, Shopee/Lazada marketplace routing, artifacts, logs |
 | LINE OA | ✅ code exists for human chat 2 ทาง, multi-OA, media, quick replies, status, notes, tags, create bill from chat; hidden/not central in Phase 1 |
 | Shopee Excel | ✅ preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels` |
 | Lazada Excel | ✅ local implementation for sale Excel: preview/dedup/create local bills; routes to `saleorder` or `saleinvoice` based on `/settings/channels`; deploy target is main + Henna |
@@ -186,6 +191,7 @@ billflow/
 | [phase1-test-checklist.md](phase1-test-checklist.md) | checklist สำหรับทดสอบ Phase 1 ก่อน demo/customer test |
 | [line-oa.md](line-oa.md) | LINE OA human inbox |
 | [email.md](email.md) | Email IMAP pipeline |
+| [lazada-email-purchase.md](lazada-email-purchase.md) | Lazada email purchase runbook, amount reconciliation, fee line, rollout/rollback |
 | [shopee-import.md](shopee-import.md) | Shopee Excel import |
 | [phase1-guide.md](phase1-guide.md) | คู่มือใช้งาน Phase 1 |
 | [README.md](../README.md) | setup, API, deploy notes |

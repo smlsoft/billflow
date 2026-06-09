@@ -68,7 +68,7 @@ const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
 const GMAIL_SECURITY_URL = 'https://myaccount.google.com/security'
 const GMAIL_APP_PASSWORDS_URL = 'https://myaccount.google.com/apppasswords'
 const GMAIL_IMAP_SETTINGS_URL = 'https://mail.google.com/mail/u/0/#settings/fwdandpop'
-const PURCHASE_BILLS_URL = '/bills?status=needs_review&source=shopee_shipped&bill_type=purchase'
+const PURCHASE_BILLS_URL = '/bills?status=needs_review&bill_type=purchase'
 
 interface IMAPAccountFull extends IMAPAccount {
   last_polled_at?: string | null
@@ -148,7 +148,7 @@ function HelpBanner() {
               </SheetDescription>
             </SheetHeader>
             <div className="mt-5 space-y-4 text-sm">
-              <div className={cn('grid grid-cols-1 gap-3', PHASE >= 2 && 'sm:grid-cols-2')}>
+              <div className={cn('grid grid-cols-1 gap-3', PHASE >= 2 && 'sm:grid-cols-3')}>
                 <div className="rounded-md border border-border bg-card p-3">
                   <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
                     <ShoppingBag className="h-4 w-4 text-warning" />
@@ -163,6 +163,23 @@ function HelpBanner() {
                     </li>
                     <li className="list-disc">
                       บิลที่สร้างแล้วจะไปตรวจต่อที่หน้า <b>ใบสั่งซื้อ</b>
+                    </li>
+                  </ul>
+                </div>
+                <div className="rounded-md border border-border bg-card p-3">
+                  <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                    <ShoppingBag className="h-4 w-4 text-info" />
+                    กล่องเมล Lazada
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    สำหรับ Gmail/Outlook ที่มีอีเมลจาก Lazada Thailand — ใช้สร้างบิลซื้อจากอีเมล:
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5 pl-4 text-xs">
+                    <li className="list-disc">
+                      Subject "<b>ยืนยันคำสั่งซื้อหมายเลข</b>" หรือ "<b>ได้รับการจัดส่งเรียบร้อยแล้ว</b>" → บิลซื้อ
+                    </li>
+                    <li className="list-disc">
+                      ระบบรับเฉพาะผู้ส่ง <b>support.lazada.co.th</b> และข้าม cancellation/e-invoice
                     </li>
                   </ul>
                 </div>

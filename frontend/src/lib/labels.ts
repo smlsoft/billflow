@@ -46,6 +46,7 @@ export const BILL_SOURCE_LABEL: Record<string, string> = {
   shopee_email:   'Shopee Order',
   shopee_shipped: 'Email บิลซื้อ Shopee',
   lazada:         'Lazada',
+  lazada_email:   'Email บิลซื้อ Lazada',
   tiktok:         'TikTok Excel',
   manual:         'Manual',
 }

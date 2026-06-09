@@ -374,7 +374,30 @@ func validateIMAPUpsert(in models.IMAPAccountUpsert, requirePassword bool) strin
 	if isGmailHost(in.Host) && in.Password != "" && len([]rune(in.Password)) != 16 {
 		return "Gmail App Password ควรมี 16 ตัวอักษรหลังลบช่องว่าง เช่น qzqqvwqbzydodtsi ไม่ใช่รหัสผ่าน Gmail ปกติ"
 	}
+	if in.Channel == "lazada" {
+		if strings.TrimSpace(in.FilterFrom) == "" {
+			return "Lazada ต้องระบุผู้ส่ง เช่น support.lazada.co.th เพื่อไม่ให้ระบบค้นทั้งกล่องเมล"
+		}
+		if !csvContainsAny(in.FilterSubjects, []string{"ยืนยันคำสั่งซื้อหมายเลข", "ได้รับการจัดส่งเรียบร้อยแล้ว"}) {
+			return "Lazada ต้องระบุหัวข้ออย่างน้อย ยืนยันคำสั่งซื้อหมายเลข หรือ ได้รับการจัดส่งเรียบร้อยแล้ว"
+		}
+	}
 	return ""
+}
+
+func csvContainsAny(csv string, needles []string) bool {
+	for _, part := range strings.Split(csv, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		for _, needle := range needles {
+			if strings.Contains(part, needle) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateIMAPAccount(a *models.IMAPAccount, requirePassword bool) string {

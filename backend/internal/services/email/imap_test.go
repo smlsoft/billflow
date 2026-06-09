@@ -176,6 +176,97 @@ func TestCandidateUIDsUsesProgressAndLimit(t *testing.T) {
 	}
 }
 
+func TestClassifyLazadaEnvelope(t *testing.T) {
+	tests := []struct {
+		name     string
+		subject  string
+		from     string
+		allowed  []string
+		wantOK   bool
+		wantCode string
+	}{
+		{
+			name:    "order confirmation accepted",
+			subject: "ยืนยันคำสั่งซื้อหมายเลข 1107473377495692",
+			from:    "noreply@support.lazada.co.th",
+			allowed: []string{"support.lazada.co.th"},
+			wantOK:  true,
+		},
+		{
+			name:    "shipped accepted",
+			subject: "คำสั่งซื้อหมายเลข 1107071348695692 ได้รับการจัดส่งเรียบร้อยแล้ว",
+			from:    "noreply@support.lazada.co.th",
+			allowed: []string{"support.lazada.co.th"},
+			wantOK:  true,
+		},
+		{
+			name:     "e invoice skipped",
+			subject:  "E-invoice for order 1107071348695692",
+			from:     "noreply@support.lazada.co.th",
+			allowed:  []string{"support.lazada.co.th"},
+			wantOK:   false,
+			wantCode: "lazada_noise",
+		},
+		{
+			name:     "dispute sender skipped even when lazada domain",
+			subject:  "ยืนยันคำสั่งซื้อหมายเลข 1107473377495692",
+			from:     "DisputeTH@care.lazada.com",
+			allowed:  []string{"care.lazada.com"},
+			wantOK:   false,
+			wantCode: "lazada_sender_not_allowed",
+		},
+		{
+			name:     "broad lazada subject skipped",
+			subject:  "แจ้งกำหนดการจัดส่งสินค้าใหม่!",
+			from:     "noreply@support.lazada.co.th",
+			allowed:  []string{"support.lazada.co.th"},
+			wantOK:   false,
+			wantCode: "lazada_noise",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, label, ok := classifyLazadaEnvelope(tt.subject, tt.from, tt.allowed)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (code=%q label=%q)", ok, tt.wantOK, code, label)
+			}
+			if tt.wantCode != "" && code != tt.wantCode {
+				t.Fatalf("code = %q, want %q", code, tt.wantCode)
+			}
+			if !ok && label == "" {
+				t.Fatal("skipped Lazada messages should have a user-readable label")
+			}
+		})
+	}
+}
+
+func TestConfiguredMaxMessagesPerRunForLazadaCapsGlobal(t *testing.T) {
+	t.Setenv("IMAP_MAX_MESSAGES_PER_RUN", "150")
+	t.Setenv("LAZADA_EMAIL_MAX_MESSAGES_PER_RUN", "12")
+	if got := configuredMaxMessagesPerRunForChannel("lazada"); got != 12 {
+		t.Fatalf("lazada max = %d, want 12", got)
+	}
+	if got := configuredMaxMessagesPerRunForChannel("shopee"); got != 150 {
+		t.Fatalf("shopee max = %d, want 150", got)
+	}
+}
+
+func TestConfiguredMaxMessagesPerRunForLazadaNeverExceedsGlobal(t *testing.T) {
+	t.Setenv("IMAP_MAX_MESSAGES_PER_RUN", "25")
+	t.Setenv("LAZADA_EMAIL_MAX_MESSAGES_PER_RUN", "100")
+	if got := configuredMaxMessagesPerRunForChannel("lazada"); got != 25 {
+		t.Fatalf("lazada max = %d, want global cap 25", got)
+	}
+}
+
+func TestConfiguredMaxMessagesPerRunForLazadaDefault(t *testing.T) {
+	t.Setenv("IMAP_MAX_MESSAGES_PER_RUN", "150")
+	t.Setenv("LAZADA_EMAIL_MAX_MESSAGES_PER_RUN", "")
+	if got := configuredMaxMessagesPerRunForChannel("lazada"); got != 30 {
+		t.Fatalf("lazada default max = %d, want 30", got)
+	}
+}
+
 func modelsSummary(scanned, created, alreadyProcessed, skippedUser, failed int) models.IMAPPollSummary {
 	return models.IMAPPollSummary{
 		Scanned:          scanned,

@@ -12,7 +12,7 @@ import {
 } from '@/hooks/useIMAPPollJobs'
 import { cn } from '@/lib/utils'
 
-const PURCHASE_BILLS_URL = '/bills?status=needs_review&source=shopee_shipped&bill_type=purchase'
+const PURCHASE_BILLS_URL = '/bills?status=needs_review&bill_type=purchase'
 const ACTIVE_POLL_MS = 4_000
 const IDLE_POLL_MS = 30_000
 

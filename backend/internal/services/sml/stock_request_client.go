@@ -12,6 +12,7 @@ import (
 
 const stockRequestPath = "/SMLJavaWebService/rest/v1/processstockrequest"
 const stockChunkSize = 100
+const stockRequestNotFoundHint = "ไม่พบ endpoint processstockrequest: SMLJavaWebService ของ SML ต้องเป็นเวอร์ชันล่าสุด หรือเวอร์ชันที่มี processstockrequest"
 
 // StockRequestClient calls the SML processstockrequest endpoint to trigger
 // cost recalculation after a document is posted. This endpoint lives directly
@@ -48,7 +49,7 @@ func (c *StockRequestClient) ProcessStockRequest(ctx context.Context, rawCodes [
 		return nil
 	}
 
-	url := c.baseURL + stockRequestPath
+	url := stockRequestURL(c.baseURL)
 	var errs []string
 	total := (len(codes) + stockChunkSize - 1) / stockChunkSize
 
@@ -84,7 +85,11 @@ func (c *StockRequestClient) ProcessStockRequest(ctx context.Context, rawCodes [
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 300 {
-			errs = append(errs, fmt.Sprintf("chunk %d/%d HTTP %d", chunkNum, total, resp.StatusCode))
+			message := fmt.Sprintf("chunk %d/%d HTTP %d", chunkNum, total, resp.StatusCode)
+			if resp.StatusCode == http.StatusNotFound {
+				message += ": " + stockRequestNotFoundHint
+			}
+			errs = append(errs, message)
 		}
 	}
 
@@ -92,6 +97,24 @@ func (c *StockRequestClient) ProcessStockRequest(ctx context.Context, rawCodes [
 		return fmt.Errorf("%d/%d chunks failed: %s", len(errs), total, strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func StockRequestErrorHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	if strings.Contains(err.Error(), "HTTP 404") {
+		return stockRequestNotFoundHint
+	}
+	return ""
+}
+
+func stockRequestURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.Contains(strings.ToLower(baseURL), "processstockrequest") {
+		return baseURL
+	}
+	return baseURL + stockRequestPath
 }
 
 // dedupeTrimCodes trims whitespace, removes empty strings, and deduplicates

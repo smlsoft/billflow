@@ -1,14 +1,21 @@
 # Email IMAP — การทำงานของ Email Pipeline
 
-> อัพเดตล่าสุด: 2026-05-06
-> สถานะ: ✅ multi-account IMAP deployed; config อยู่ใน `/settings/email` และ `imap_accounts` table
+> อัพเดตล่าสุด: 2026-06-05
+> สถานะ: ✅ multi-account IMAP deployed; config อยู่ใน `/settings/email` และ `imap_accounts` table. Marketplace purchase email ใช้ manual-review flow ไม่ auto-send SML.
 
 ---
 
 ## ภาพรวม
 
-BillFlow poll Gmail/Outlook/IMAP อื่นตาม inbox ที่ admin เพิ่มใน `/settings/email` เพื่อตรวจหา email ใหม่ที่มี attachment
-เมื่อพบ → ส่ง AI อ่าน → map รหัสสินค้า → ส่งสร้างบิลใน SML โดยอัตโนมัติ
+BillFlow poll Gmail/Outlook/IMAP อื่นตาม inbox ที่ admin เพิ่มใน `/settings/email` เพื่อตรวจหา email ใหม่ แล้ว route ตาม `imap_accounts.channel`.
+
+| channel | ใช้กับ | ผลลัพธ์ |
+|---|---|---|
+| `general` | บิลทั่วไป PDF/Excel/รูปแนบ | AI/OCR → local bill → admin review/retry |
+| `shopee` | Shopee purchase/order email | `shopee_shipped` purchase flow หรือ Shopee sale routing ตาม subject |
+| `lazada` | Lazada Thailand purchase email | `source='lazada_email'`, `bill_type='purchase'`, admin review ก่อนส่ง SML |
+
+> Marketplace email purchase flow ไม่ auto-send เข้า SML. ระบบสร้างบิล, map/candidate items, เก็บ artifacts, แล้วให้ admin ตรวจใน `/bills` / Bill Detail ก่อนกดส่ง.
 
 ---
 
@@ -45,7 +52,12 @@ BillFlow poll Gmail/Outlook/IMAP อื่นตาม inbox ที่ admin เ
         │  - shopee_domains[] สำหรับ Shopee routing
         │  ถ้าไม่ผ่าน filter → ข้ามไป
         │                  │
-        │  parse email body → หา attachments
+        │  route ตาม channel/subject:
+        │    - Lazada purchase guard: from+subject ต้องตรง Lazada เท่านั้น
+        │    - Shopee purchase guard: subject/accepted domain ต้องตรง
+        │    - general: parse body → attachments
+        │
+        │  parse email body/attachments
         │  รองรับ:
         │    application/pdf (AttachmentHeader หรือ InlineHeader)
         │    image/jpeg, image/png
@@ -88,7 +100,7 @@ BillFlow poll Gmail/Outlook/IMAP อื่นตาม inbox ที่ admin เ
         │  └────────────────────┘
         │
         │  mark email เป็น SEEN (อ่านแล้ว)
-        │  ← เฉพาะเมื่อ process สำเร็จ
+        │  ← เฉพาะเมื่อ process/skip เสร็จอย่างตรวจสอบได้
         │        │  dedup check: Message-ID
         │  SELECT COUNT(*) FROM bills WHERE raw_data->>'message_id' = ?
         │  ← ป้องกัน process ซ้ำ ถ้า email ถูก mark unread โดยไม่ตั้งใจ
@@ -97,6 +109,62 @@ BillFlow poll Gmail/Outlook/IMAP อื่นตาม inbox ที่ admin เ
                  ▼
         disconnect IMAP
 ```
+
+---
+
+## Lazada Email Purchase Flow
+
+เริ่มใช้จริงบน `billflow-thaisunsport` วันที่ 2026-06-05 สำหรับอีเมล Lazada Thailand purchase (`channel='lazada'` ใน IMAP account แต่ bill source เป็น `lazada_email`).
+
+### Guard / routing
+
+- รับเฉพาะเมล Lazada ที่ผ่าน whitelist sender/domain + subject guard.
+- noise เช่น E-invoice, cancellation, dispute, survey/review, delivery-reschedule ไม่สร้าง bill.
+- duplicate guard ใช้ `source='lazada_email' + order_id` และ `processed_email_keys`; confirm/shipped ของ order เดียวกันต้องไม่สร้างซ้ำ.
+- Lazada IMAP accounts บน thaisunsport ยังปิด `enabled=false` หลัง rollout จนกว่าจะตรวจ 7 บิลและลองส่ง SML 1 ใบผ่าน.
+
+### Amount reconciliation
+
+Lazada ไม่ใช้ Shopee Coin logic. ระบบ parse HTML summary จริง แล้ว validate:
+
+```text
+ยอดรวมสินค้า + ค่าจัดส่ง + Service fee - คูปองส่วนลด = ยอดรวมทั้งหมด(รวม VAT)
+```
+
+Tolerance: `±0.01`.
+
+Fields ที่เก็บใน `bills.raw_data`:
+
+- `goods_total_amount`
+- `shipping_amount`
+- `coupon_discount_amount`
+- `service_fee_amount`
+- `paid_total_amount`
+- `shipping_method`
+- `payment_method`
+- `amount_reconciliation_status`
+- `amount_reconciliation_delta`
+
+ถ้า `amount_reconciliation_status != "ok"` backend จะ block การส่ง SML แม้ user/bulk-send เรียก API โดยตรง.
+
+### Items / discount / fee line
+
+- `price` ของสินค้า = ราคาก่อนคูปอง.
+- `bill_items.discount_amount` = คูปอง Lazada กระจาย proportional ตามมูลค่าสินค้า ไม่รวมค่าส่ง/fee.
+- ค่าส่ง + service fee ใช้ fee line เดียว:
+  - source SKU: `__lazada_shipping_fee__`
+  - SML item config: `/settings/channels` row `lazada_email/purchase`
+  - ใช้ fields เดิม `shipping_item_enabled`, `shipping_item_code`, `shipping_item_unit_code`
+- ถ้ายอด Lazada มีค่าส่ง/fee แต่ยังไม่ได้ตั้งค่าสินค้า SML สำหรับ fee line ระบบจะ block ส่ง SML.
+- เมื่อ config พร้อมแล้ว หน้า Bill Detail จะ auto-add fee line ตอนเปิดบิล.
+
+### Current thaisunsport rollout snapshot
+
+- Backfilled 7 Lazada bills: reconciliation `ok` ทั้ง 7, status ยัง `needs_review`.
+- `channel_defaults/lazada_email/purchase` ตั้ง fee item แล้ว: `SHIP_CUS`, unit `บาท`.
+- User ต้องเปิดแต่ละ Bill Detail เพื่อให้ระบบเติม `SHIP_CUS` ก่อนตรวจยอดและก่อนส่ง SML.
+
+Runbook เพิ่มเติม: [Lazada Email Purchase Intake](lazada-email-purchase.md).
 
 ---
 
@@ -190,7 +258,9 @@ c.Authenticate(sasl.NewPlainClient("", user, password))
 | IMAP connect ล้มเหลว | log error + LINE admin notify (throttle 1 ครั้ง/ชม.) |
 | AI extract ล้มเหลว | log error + LINE admin notify, ไม่สร้าง bill |
 | ไม่มี items ใน extract | log warning, ไม่สร้าง bill |
-| Items ไม่ match mapping | bill = 'pending' + LINE admin notify 📋 |
+| Items ไม่ match mapping | bill = `needs_review`/`pending` ตาม flow + LINE admin notify 📋 |
+| Lazada amount formula mismatch | bill = `needs_review`, block send SML จนกว่าจะตรวจ/แก้ |
+| Lazada fee config missing | block send SML ถ้ามีค่าส่ง/fee ที่ต้องส่งเข้า PO |
 | SML ล้มเหลว (3 retry) | bill = 'failed' + LINE admin notify ⚠️ |
 | Email mark SEEN ล้มเหลว | ถูก process ซ้ำใน poll ถัดไป (idempotent ถ้า auto-confirm ผ่าน) |
 
@@ -255,6 +325,8 @@ docker exec billflow-postgres psql -U billflow -d billflow \
 | `backend/internal/services/email/account.go` | account runtime/update helpers |
 | `backend/internal/services/email/imap.go` | IMAP connect, search UNSEEN, fetch, parse, mark SEEN |
 | `backend/internal/handlers/email.go` | AttachmentProcessor: OCR → extract → map → anomaly → DB → SML |
+| `backend/internal/handlers/lazada_email.go` | Lazada email purchase intake → local purchase bill |
+| `backend/internal/repository/bill_lazada_summary.go` | Lazada HTML amount summary parser + discount allocation |
 | `backend/internal/handlers/imap_settings.go` | `/settings/email` APIs |
 | `backend/internal/services/mistral/ocr.go` | Mistral OCR API (PDF → markdown) |
 | `backend/internal/services/ai/openrouter.go` | ExtractText, ExtractImage, ExtractPDF |

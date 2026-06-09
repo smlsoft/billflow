@@ -100,7 +100,7 @@ export default function Sidebar() {
     try {
       const [stats, purchase, saleorder, saleinvoice, marketplaceAliases] = await Promise.all([
         client.get<{ unread_messages?: number }>('/api/dashboard/stats'),
-        countDocumentQueue({ source: 'shopee_shipped', bill_type: 'purchase' }),
+        countDocumentQueue({ bill_type: 'purchase' }),
         countDocumentQueue({ bill_type: 'sale', document_route: 'saleorder' }),
         countDocumentQueue({ bill_type: 'sale', document_route: 'saleinvoice' }),
         countMarketplaceAliasQueue(),

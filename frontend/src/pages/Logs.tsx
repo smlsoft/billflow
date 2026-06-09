@@ -55,6 +55,7 @@ import {
   TONE_DOT,
   humanizeAuditError,
   smlRouteLabel,
+  stockRequestDiagnosticMessage,
   type ActionMeta,
   type AuditLog,
   type Tone,
@@ -239,6 +240,19 @@ function guidanceFor(log: AuditLog): LogGuidance | null {
     }
   }
 
+  if (log.action === 'sml_stock_recalc_failed') {
+    const diagnostic = stockRequestDiagnosticMessage(d)
+    return {
+      title: diagnostic ? 'SMLJavaWebService ยังไม่รองรับ processstockrequest' : 'คำนวณต้นทุนสต๊อกไม่สำเร็จ',
+      description:
+        d.suggested_action ??
+        (diagnostic
+          ? 'อัปเดตหรือ deploy SMLJavaWebService เป็นเวอร์ชันที่รองรับ /SMLJavaWebService/rest/v1/processstockrequest หรือใส่ full Stock Request URL ที่ถูกต้องใน /settings/instance'
+          : 'ตรวจ Stock Request URL ใน /settings/instance และตรวจว่า SMLJavaWebService ฝั่ง SML เปิด endpoint processstockrequest แล้ว'),
+      tone: 'warning',
+    }
+  }
+
   if (log.action === 'sml_failed') {
     if (errorText.includes('timeout') || errorText.includes('deadline') || errorText.includes('eof') || errorText.includes('connection refused')) {
       return {
@@ -391,7 +405,7 @@ function actorName(log: AuditLog): string {
     return log.actor.name
   }
   if (log.user_id) return 'ผู้ใช้ไม่ทราบชื่อ'
-  if (log.source === 'email' || log.source === 'shopee_email' || log.source === 'shopee_shipped') return 'ระบบอ่านอีเมล'
+  if (log.source === 'email' || log.source === 'shopee_email' || log.source === 'shopee_shipped' || log.source === 'lazada_email') return 'ระบบอ่านอีเมล'
   return 'ระบบ'
 }
 
@@ -460,6 +474,21 @@ function makeFacts(log: AuditLog): LogFact[] {
   if (d.party_code) facts.push({ label: 'คู่ค้า', value: d.party_code, mono: true })
   if (log.duration_ms != null) facts.push({ label: 'เวลาใช้', value: `${log.duration_ms.toLocaleString()}ms`, mono: true })
   if (log.trace_id) facts.push({ label: 'Trace', value: <CopyChip value={log.trace_id} label="trace" /> })
+
+  if (log.action === 'sml_stock_recalc_failed') {
+    const diagnostic = stockRequestDiagnosticMessage(d)
+    if (diagnostic) facts.push({ label: 'สาเหตุที่เป็นไปได้', value: compact(diagnostic, 180), tone: 'danger' })
+    if (d.stock_request_url) facts.push({ label: 'Stock Request URL', value: compact(String(d.stock_request_url), 180), mono: true, copyValue: String(d.stock_request_url) })
+    if (d.database) facts.push({ label: 'Database', value: String(d.database), mono: true })
+    facts.push({
+      label: 'วิธีแก้',
+      value: compact(
+        String(d.suggested_action ?? 'อัปเดตหรือ deploy SMLJavaWebService เป็นเวอร์ชันที่รองรับ processstockrequest หรือใส่ full Stock Request URL ที่ถูกต้องใน /settings/instance'),
+        220,
+      ),
+      tone: 'danger',
+    })
+  }
 
   if (log.action === 'demo_test_data_reset') {
     const beforeDocuments = d.before_documents && typeof d.before_documents === 'object' ? d.before_documents : {}
@@ -1461,6 +1490,7 @@ export default function Logs() {
                   <SelectItem value="email">อีเมล</SelectItem>
                   <SelectItem value="shopee_email">Shopee Email</SelectItem>
 	                  <SelectItem value="shopee_shipped">Shopee Shipped</SelectItem>
+                  <SelectItem value="lazada_email">Lazada Email</SelectItem>
 	                  {PHASE >= 2 && <SelectItem value="shopee_excel">Shopee Excel</SelectItem>}
                   <SelectItem value="shopee_settlement">รับชำระ Shopee</SelectItem>
 	                  {PHASE >= 2 && <SelectItem value="lazada">Lazada</SelectItem>}
