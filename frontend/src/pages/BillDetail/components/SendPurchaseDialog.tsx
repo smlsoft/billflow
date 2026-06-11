@@ -244,8 +244,8 @@ export function SendPurchaseDialog({
   const selectedPrintPaymentMethod = printPaymentMethod.trim();
   const printPaymentMethodAllowed =
     !isMarketplacePurchaseEmail ||
-    (selectedPrintPaymentMethod !== "" &&
-      paymentMethodOptions.includes(selectedPrintPaymentMethod));
+    selectedPrintPaymentMethod === "" ||
+    paymentMethodOptions.includes(selectedPrintPaymentMethod);
   const printPaymentMethodReadyForPrint =
     !marketplacePrintPolicy.payment_method_prefix_enabled ||
     isPaymentMethodPrintable(
@@ -278,7 +278,7 @@ export function SendPurchaseDialog({
     (!isPurchaseOrder || inquiryTypeStr !== "") &&
     docTime.trim() !== "" &&
     smlDocDateReady &&
-    (!isMarketplacePurchaseEmail || printPaymentMethodAllowed) &&
+    printPaymentMethodAllowed &&
     !savingPrintPaymentMethod;
   const missingFields = useMemo(
     () =>
@@ -296,9 +296,6 @@ export function SendPurchaseDialog({
           ? "ประเภทรายการซื้อ (inquiry_type)"
           : "",
         !smlDocDateReady ? "วันที่คำสั่งซื้อสำหรับวันที่เอกสาร SML" : "",
-        isMarketplacePurchaseEmail && selectedPrintPaymentMethod === ""
-          ? "วิธีการชำระเงิน"
-          : "",
         isMarketplacePurchaseEmail &&
         selectedPrintPaymentMethod !== "" &&
         !printPaymentMethodAllowed
@@ -464,7 +461,7 @@ export function SendPurchaseDialog({
 
   const handleConfirm = async () => {
     if (!canConfirm) return;
-    if (isMarketplacePurchaseEmail) {
+    if (isMarketplacePurchaseEmail && selectedPrintPaymentMethod !== "") {
       setSavingPrintPaymentMethod(true);
       try {
         await updateBillPrintPaymentMethod(bill.id, {
@@ -619,14 +616,14 @@ export function SendPurchaseDialog({
             {isMarketplacePurchaseEmail && (
               <div className="space-y-1.5">
                 <Label>
-                  วิธีการชำระเงิน <span className="text-destructive">*</span>
+                  วิธีการชำระเงิน
                 </Label>
                 <Select
                   value={printPaymentMethod}
                   onValueChange={setPrintPaymentMethod}
                 >
                   <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="เลือกเองก่อนส่ง SML" />
+                    <SelectValue placeholder="ไม่บังคับ เลือกเองถ้าต้องการ" />
                   </SelectTrigger>
                   <SelectContent>
                     {paymentMethodOptions.map((method) => (
@@ -637,9 +634,9 @@ export function SendPurchaseDialog({
                   </SelectContent>
                 </Select>
                 <div className="text-[10px] text-muted-foreground">
-                  ต้องเลือกเอง ไม่ดึงจากผู้ขายอัตโนมัติ
+                  ไม่บังคับสำหรับส่ง SML และไม่ดึงจากผู้ขายอัตโนมัติ
                   {bill.email_group?.order_count && bill.email_group.order_count > 1
-                    ? " และจะบันทึกให้ทุกคำสั่งซื้อในอีเมลเดียวกัน"
+                    ? " หากเลือก จะบันทึกให้ทุกคำสั่งซื้อในอีเมลเดียวกัน"
                     : ""}
                 </div>
                 {selectedPrintPaymentMethod &&

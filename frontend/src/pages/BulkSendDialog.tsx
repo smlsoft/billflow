@@ -152,21 +152,13 @@ function isMarketplacePurchaseSource(source: string) {
   return source === 'shopee_shipped' || source === 'lazada_email'
 }
 
-function paymentMethodFromParty(party: Party | null) {
-  const name = party?.name?.trim() ?? ''
-  const code = party?.code?.trim() ?? ''
-  if (name.toUpperCase().startsWith('TT')) return name
-  if (code.toUpperCase().startsWith('TT')) return code
-  return ''
-}
-
 function isPaymentMethodPrintable(method: string, prefixes: string[]) {
   const normalized = method.trim().toUpperCase()
   return normalized !== '' && prefixes.some((prefix) => normalized.startsWith(prefix))
 }
 
 function paymentMethodFromBill(bill: Bill) {
-  return (bill.print_payment_method || bill.effective_print_payment_method || '').trim()
+  return (bill.print_payment_method || '').trim()
 }
 
 const PURCHASE_INQUIRY_TYPE_OPTIONS = [
@@ -277,7 +269,6 @@ export function BulkSendDialog({
   const [saleCode, setSaleCode] = useState('')
   const [remark, setRemark] = useState('')
   const [printPaymentMethod, setPrintPaymentMethod] = useState('')
-  const [printPaymentMethodTouched, setPrintPaymentMethodTouched] = useState(false)
   const [marketplacePrintPolicy, setMarketplacePrintPolicy] = useState(() => normalizeMarketplacePrintPolicy())
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [totalPending, setTotalPending] = useState(0)
@@ -363,7 +354,8 @@ export function BulkSendDialog({
   const selectedPrintPaymentMethod = printPaymentMethod.trim()
   const printPaymentMethodAllowed =
     !isMarketplacePurchaseBulk ||
-    (selectedPrintPaymentMethod !== '' && paymentMethodOptions.includes(selectedPrintPaymentMethod))
+    selectedPrintPaymentMethod === '' ||
+    paymentMethodOptions.includes(selectedPrintPaymentMethod)
   const printPaymentMethodReadyForPrint =
     !marketplacePrintPolicy.payment_method_prefix_enabled ||
     isPaymentMethodPrintable(selectedPrintPaymentMethod, marketplacePrintPolicy.payment_method_prefixes)
@@ -377,7 +369,7 @@ export function BulkSendDialog({
     vatTypeStr !== '' &&
     vatRateValid &&
     (!isPurchaseOrder || inquiryTypeStr !== '') &&
-    (!isMarketplacePurchaseBulk || printPaymentMethodAllowed) &&
+    printPaymentMethodAllowed &&
     docTime.trim() !== '' &&
     !controlsLocked &&
     !job
@@ -388,7 +380,6 @@ export function BulkSendDialog({
     vatTypeStr === '' ? 'ประเภทภาษี (vat_type)' : '',
     !vatRateValid ? 'อัตราภาษี (vat_rate)' : '',
     isPurchaseOrder && inquiryTypeStr === '' ? 'ประเภทรายการซื้อ (inquiry_type)' : '',
-    isMarketplacePurchaseBulk && selectedPrintPaymentMethod === '' ? 'วิธีการชำระเงิน' : '',
     isMarketplacePurchaseBulk && selectedPrintPaymentMethod !== '' && !printPaymentMethodAllowed
       ? 'วิธีการชำระเงินต้องอยู่ในรายการที่ตั้งค่าไว้ใน Channels'
       : '',
@@ -457,7 +448,6 @@ export function BulkSendDialog({
     setSaleCode(p?.sale_code || '')
     setRemark(p?.remark || '')
     setPrintPaymentMethod('')
-    setPrintPaymentMethodTouched(false)
   }
 
   const applyPayloadToForm = (p?: RetryBillPayload) => {
@@ -586,13 +576,8 @@ export function BulkSendDialog({
         const details = await Promise.all(list.map((b) => getBill(b.id)))
         if (isMarketplacePurchaseBulk) {
           const existingMethod = details.map(paymentMethodFromBill).find(Boolean) || ''
-          const defaultParty = defaultsRow?.party_code
-            ? { code: defaultsRow.party_code, name: defaultsRow.party_name || defaultsRow.party_code }
-            : null
-          const defaultMethod = existingMethod || paymentMethodFromParty(defaultParty)
-          if (defaultMethod) {
-            setPrintPaymentMethod(defaultMethod)
-            setPrintPaymentMethodTouched(false)
+          if (existingMethod) {
+            setPrintPaymentMethod(existingMethod)
           }
         }
         const rows = details.map((bill) => {
@@ -640,13 +625,6 @@ export function BulkSendDialog({
     job,
     storageKey,
   ])
-
-  useEffect(() => {
-    if (!open || !isMarketplacePurchaseBulk || printPaymentMethodTouched) return
-    if (printPaymentMethod.trim() !== '') return
-    const next = paymentMethodFromParty(party)
-    if (next) setPrintPaymentMethod(next)
-  }, [isMarketplacePurchaseBulk, open, party, printPaymentMethod, printPaymentMethodTouched])
 
   const payload = (): RetryBillPayload => ({
     party_code: party?.code,
@@ -743,6 +721,7 @@ export function BulkSendDialog({
   const persistBulkPrintPaymentMethod = async () => {
     if (!isMarketplacePurchaseBulk) return
     const method = selectedPrintPaymentMethod
+    if (method === '') return
     const readyRows = candidates.filter((row) => row.ready)
     const updates: Array<{ billID: string; applyToEmailGroup: boolean }> = []
     const seenMessageIDs = new Set<string>()
@@ -1107,8 +1086,8 @@ export function BulkSendDialog({
               {isMarketplacePurchaseBulk && (
                 <SummaryItem
                   label="วิธีการชำระเงิน"
-                  value={selectedPrintPaymentMethod || 'ยังไม่เลือก'}
-                  muted={!selectedPrintPaymentMethod || !printPaymentMethodAllowed}
+                  value={selectedPrintPaymentMethod || 'ไม่เลือก'}
+                  muted={selectedPrintPaymentMethod !== '' && !printPaymentMethodAllowed}
                 />
               )}
               <SummaryItem
@@ -1134,13 +1113,52 @@ export function BulkSendDialog({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>{billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)'} <span className="text-destructive">*</span></Label>
-            <PartyPicker billType={billType} value={party} onChange={setParty} disabled={controlsLocked} />
-            {!party?.code && (
-              <p className="text-[11px] text-warning">
-                ต้องเลือก{billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)'}ก่อนส่งเข้า SML
-              </p>
+          <div className={`grid gap-3 ${isMarketplacePurchaseBulk ? 'sm:grid-cols-2' : ''}`}>
+            <div className="space-y-1.5">
+              <Label>{billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)'} <span className="text-destructive">*</span></Label>
+              <PartyPicker billType={billType} value={party} onChange={setParty} disabled={controlsLocked} />
+              {!party?.code && (
+                <p className="text-[11px] text-warning">
+                  ต้องเลือก{billType === 'sale' ? 'ลูกค้า (cust_code, cust_name)' : 'ผู้ขาย (cust_code, cust_name)'}ก่อนส่งเข้า SML
+                </p>
+              )}
+            </div>
+            {isMarketplacePurchaseBulk && (
+              <div className="space-y-1.5">
+                <Label>วิธีการชำระเงิน</Label>
+                <Select
+                  value={printPaymentMethod}
+                  onValueChange={setPrintPaymentMethod}
+                  disabled={controlsLocked}
+                >
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue placeholder="ไม่บังคับ เลือกเองถ้าต้องการ" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentMethodOptions.map((method) => (
+                      <SelectItem key={method} value={method}>
+                        {method}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="text-[10px] text-muted-foreground">
+                  ไม่บังคับสำหรับส่ง SML และไม่ดึงจากผู้ขายอัตโนมัติ หากเลือก จะบันทึกให้รายการพร้อมส่งทุกใบในรอบนี้ตามกลุ่มอีเมล
+                </div>
+                {selectedPrintPaymentMethod && !printPaymentMethodReadyForPrint && (
+                  <div className="text-[10px] text-warning">
+                    เลือกค่านี้ส่ง SML ได้ แต่ยังไม่พร้อมปริ้น
+                    เพราะเงื่อนไขปัจจุบันรับเฉพาะวิธีชำระเงินที่ขึ้นต้นด้วย{' '}
+                    {marketplacePrintPolicy.payment_method_prefixes.join(', ')}
+                  </div>
+                )}
+                {selectedPrintPaymentMethod && !printPaymentMethodAllowed && (
+                  <div className="text-[10px] text-warning">
+                    วิธีชำระเงินนี้ไม่อยู่ในรายการที่ตั้งค่าไว้ใน Channels
+                    กรุณาเลือกจาก dropdown หรือแก้ config ช่องทาง
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -1247,49 +1265,6 @@ export function BulkSendDialog({
                 </SelectContent>
               </Select>
             </div>
-            {isMarketplacePurchaseBulk && (
-              <div className="space-y-1 sm:col-span-2">
-                <Label className="text-xs">
-                  วิธีการชำระเงิน <span className="text-destructive">*</span>
-                </Label>
-                <Select
-                  value={printPaymentMethod}
-                  onValueChange={(value) => {
-                    setPrintPaymentMethod(value)
-                    setPrintPaymentMethodTouched(true)
-                  }}
-                  disabled={controlsLocked}
-                >
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="เลือกวิธีการชำระเงิน" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {paymentMethodOptions.map((method) => (
-                      <SelectItem key={method} value={method}>
-                        {method}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <div className="text-[10px] text-muted-foreground">
-                  เก็บไว้ใน BillFlow เท่านั้น ไม่ส่งเข้า SML
-                  และจะบันทึกให้รายการพร้อมส่งทุกใบในรอบนี้ตามกลุ่มอีเมล
-                </div>
-                {selectedPrintPaymentMethod && !printPaymentMethodReadyForPrint && (
-                  <div className="text-[10px] text-warning">
-                    เลือกค่านี้ส่ง SML ได้ แต่ยังไม่พร้อมปริ้น
-                    เพราะเงื่อนไขปัจจุบันรับเฉพาะวิธีชำระเงินที่ขึ้นต้นด้วย{' '}
-                    {marketplacePrintPolicy.payment_method_prefixes.join(', ')}
-                  </div>
-                )}
-                {selectedPrintPaymentMethod && !printPaymentMethodAllowed && (
-                  <div className="text-[10px] text-warning">
-                    วิธีชำระเงินนี้ไม่อยู่ในรายการที่ตั้งค่าไว้ใน Channels
-                    กรุณาเลือกจาก dropdown หรือแก้ config ช่องทาง
-                  </div>
-                )}
-              </div>
-            )}
             {ENABLE_REMARK2 && (
               <div className="space-y-1">
                 <Label className="text-xs">สถานะเอกสาร (remark_2)</Label>
