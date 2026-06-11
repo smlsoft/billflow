@@ -550,7 +550,6 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       await recordArtifactPrint(bill.id, artifact.id)
       await printArtifact(bill.id, artifact.id, artifact.filename, printContextFromBill(fullBill))
       toast.success('เปิดหน้าพิมพ์แล้ว')
-      refreshAll()
     } catch (err) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
       toast.error(e?.response?.data?.error || e?.message || 'พิมพ์ไม่สำเร็จ')
@@ -600,7 +599,6 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       setBulkPrintOpen(false)
       setBulkPrintCandidates([])
       setBulkPrintTruncated(false)
-      refreshAll()
     } catch (err) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
       toast.error(e?.response?.data?.error || e?.message || 'พิมพ์ทั้งหมดไม่สำเร็จ')
