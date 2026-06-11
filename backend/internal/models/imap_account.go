@@ -16,6 +16,7 @@ type IMAPPollDetail struct {
 type IMAPPollSummary struct {
 	Scanned          int  `json:"scanned"`
 	Created          int  `json:"created"`
+	UpdatedExisting  int  `json:"updated_existing,omitempty"`
 	AlreadyProcessed int  `json:"already_processed"`
 	SkippedUser      int  `json:"skipped_user"`
 	Failed           int  `json:"failed"`

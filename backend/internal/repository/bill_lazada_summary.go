@@ -94,6 +94,16 @@ func ExtractLazadaAmountSummary(bodyText, bodyHTML string) LazadaAmountSummary {
 	return s
 }
 
+// ExtractLazadaSellerName parses the seller displayed in Lazada purchase
+// emails. This field is operationally important because purchase-order SML
+// remarks use the marketplace seller, and AI sometimes returns generic values
+// such as "Lazada Thailand" even when the email contains the real shop name.
+func ExtractLazadaSellerName(bodyText, bodyHTML string) string {
+	text := shopeeSummaryBody(bodyText, bodyHTML)
+	lines := lazadaSummaryLines(text)
+	return lazadaSellerAfterLabel(lines)
+}
+
 func ApplyLazadaDiscountsToItems(items []models.BillItem, couponDiscount float64) {
 	discounts := AllocateLazadaDiscountsByLine(items, couponDiscount)
 	for i := range items {
@@ -227,6 +237,72 @@ func lazadaTextAfterLabel(lines []string, label string) string {
 		}
 	}
 	return ""
+}
+
+func lazadaSellerAfterLabel(lines []string) string {
+	const label = "จัดจำหน่ายโดย"
+	for i, line := range lines {
+		idx := strings.Index(line, label)
+		if idx < 0 {
+			continue
+		}
+		value := trimLazadaSellerName(line[idx+len(label):])
+		if value != "" {
+			return value
+		}
+		for j := i + 1; j < len(lines) && j <= i+4; j++ {
+			next := strings.TrimSpace(lines[j])
+			if next == "" {
+				continue
+			}
+			if lazadaLooksLikeNextLabel(next) || lazadaLooksLikeSellerBoundary(next) {
+				break
+			}
+			if value := trimLazadaSellerName(next); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func trimLazadaSellerName(value string) string {
+	value = strings.TrimSpace(strings.TrimLeft(value, " \t:-："))
+	if value == "" {
+		return ""
+	}
+	value = strings.Join(strings.Fields(value), " ")
+	for _, boundary := range lazadaSellerBoundaryLabels() {
+		if idx := strings.Index(value, boundary); idx >= 0 {
+			value = strings.TrimSpace(value[:idx])
+		}
+	}
+	return strings.TrimSpace(strings.Trim(value, " \t\r\n:-："))
+}
+
+func lazadaLooksLikeSellerBoundary(line string) bool {
+	for _, label := range lazadaSellerBoundaryLabels() {
+		if strings.Contains(line, label) {
+			return true
+		}
+	}
+	return false
+}
+
+func lazadaSellerBoundaryLabels() []string {
+	return []string{
+		"วันและเวลาจัดส่ง",
+		"การจัดส่ง",
+		"รายละเอียดคำสั่งซื้อ",
+		"รายละเอียดสินค้า",
+		"ยอดรวม:",
+		"ค่าธรรมเนียมจัดส่ง:",
+		"คูปองส่วนลด:",
+		"Service fee:",
+		"ยอดรวมทั้งหมด(รวม VAT):",
+		"วิธีการจัดส่ง:",
+		"ช่องทางการชำระเงิน:",
+	}
 }
 
 func lazadaLooksLikeNextLabel(line string) bool {

@@ -428,7 +428,7 @@ func (p *imapPollJobProgress) applyFinal(base imapPollJobProgressBase, res PollR
 }
 
 func pollJobSkippedCount(summary models.IMAPPollSummary) int {
-	skipped := summary.Scanned - summary.Created - summary.Failed
+	skipped := summary.Scanned - summary.Created - summary.UpdatedExisting - summary.Failed
 	if skipped < 0 {
 		return 0
 	}
@@ -529,6 +529,10 @@ func compactWarnings(warnings []string, limit int) []string {
 		w = strings.TrimSpace(w)
 		if w == "" || seen[w] {
 			continue
+		}
+		if len([]rune(w)) > 900 {
+			runes := []rune(w)
+			w = string(runes[:900]) + fmt.Sprintf("… [truncated %d chars]", len(runes)-900)
 		}
 		seen[w] = true
 		out = append(out, w)

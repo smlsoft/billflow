@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,19 +16,22 @@ import (
 	emailservice "billflow/internal/services/email"
 )
 
+const (
+	shopeeAITextBudgetChars = 25000
+	shopeeAIHTMLBudgetChars = 12000
+	shopeeAIChunkOrderLimit = 3
+)
+
+var shopeeOrderIDTokenPattern = regexp.MustCompile(`#([0-9A-Za-z]{8,})`)
+
 // ProcessShopeeShippedEmailBody handles Shopee shipping-confirmation emails
 // (subject contains "ถูกจัดส่งแล้ว" or "ยืนยันการชำระเงิน").
 // One email may contain multiple Shopee orders (one per seller) — this
 // function creates a separate purchase bill for each order_id found by AI.
 // Bills are never auto-sent — status is always pending or needs_review.
-func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) error {
+func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) (emailservice.ProcessOutcome, error) {
 	traceID := fmt.Sprintf("shopee-shipped-%d", time.Now().UnixMilli())
 	startTime := time.Now()
-
-	if h.catalogSvc == nil {
-		h.logger.Warn("shopee_shipped: catalog service not configured — skipping")
-		return fmt.Errorf("catalog service not configured")
-	}
 
 	if messageID != "" {
 		var count int
@@ -47,24 +51,41 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 				zap.String("message_id", messageID),
 				zap.Int("existing_bills", count),
 			)
-			return emailservice.SkipMessage("duplicate", "เมลนี้เคยประมวลผลแล้ว")
+			return emailservice.ProcessOutcome{}, emailservice.SkipMessage("duplicate", "เมลนี้เคยประมวลผลแล้ว")
 		}
 	}
 
 	// bodyText is already plain text (extractBodyText prefers text/plain).
 	// htmlToText is a no-op when input has no HTML tags, so it's safe to call.
 	plainText := htmlToText(bodyText)
+	if strings.TrimSpace(plainText) == "" {
+		plainText = htmlToText(bodyHTML)
+	}
 
-	// AI extracts all orders from this email, including per-item image URLs
-	// resolved from the HTML (more accurate than index-based assignment).
-	orders, err := h.aiClient.ExtractOrdersWithHTML(plainText, bodyHTML)
+	if updated, err := h.recordShopeeStatusEventBeforeAI(subject, from, plainText, bodyHTML, messageID, source); err != nil {
+		return emailservice.ProcessOutcome{}, err
+	} else if updated {
+		return emailservice.UpdatedExistingOutcome("status_event_recorded", "บันทึกสถานะบนบิลเดิมแล้ว"), nil
+	}
+
+	if h.catalogSvc == nil {
+		h.logger.Warn("shopee_shipped: catalog service not configured — skipping")
+		return emailservice.ProcessOutcome{}, fmt.Errorf("catalog service not configured")
+	}
+	if h.aiClient == nil {
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI client not configured")
+	}
+
+	// AI extracts all orders from bounded input. Small emails can include HTML
+	// for image URLs; large/status emails use compact text-only jobs.
+	orders, err := h.extractShopeeOrdersBounded(subject, plainText, bodyHTML, traceID)
 	if err != nil || len(orders) == 0 {
 		h.logger.Warn("shopee_shipped: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
 		if err == nil {
-			return fmt.Errorf("AI extract shopee_shipped: empty orders")
+			return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: empty orders")
 		}
-		return fmt.Errorf("AI extract shopee_shipped: %w", err)
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: %w", err)
 	}
 
 	h.logger.Info("shopee_shipped: orders extracted",
@@ -104,9 +125,278 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
 	}
 	if createdCount == 0 && skippedCount > 0 && failedCount == 0 {
-		return emailservice.SkipMessage("duplicate_or_empty", "ไม่มีบิลใหม่จากเมลนี้ อาจซ้ำหรือไม่มีรายการสินค้าที่ใช้ได้")
+		return emailservice.ProcessOutcome{}, emailservice.SkipMessage("duplicate_or_empty", "ไม่มีบิลใหม่จากเมลนี้ อาจซ้ำหรือไม่มีรายการสินค้าที่ใช้ได้")
 	}
-	return nil
+	return emailservice.CreatedBillOutcome(), nil
+}
+
+func (h *EmailHandler) recordShopeeStatusEventBeforeAI(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) (bool, error) {
+	eventType, _, subjectOrderID, ok := shopeeOrderEventFromSubject(subject)
+	if !ok || subjectOrderID == "" {
+		return false, nil
+	}
+	existingBillID, exists, err := h.findExistingShopeeShippedBillID(subjectOrderID)
+	if err != nil {
+		return false, fmt.Errorf("lookup existing shopee_shipped order before AI: %w", err)
+	}
+	if !exists {
+		return false, nil
+	}
+
+	h.recordShopeeOrderEvent(existingBillID, subject, from, messageID, source, subjectOrderID)
+	h.saveShopeeShippedEmailArtifacts(existingBillID, subject, from, bodyText, bodyHTML, messageID)
+	discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, subjectOrderID)
+	if ok, err := h.billRepo.ApplyShopeePurchaseDiscountsToBill(existingBillID, discountSummary); err != nil {
+		h.logger.Warn("shopee_shipped: pre-AI existing bill discount update failed",
+			zap.String("message_id", messageID),
+			zap.String("order_id", subjectOrderID),
+			zap.String("bill_id", existingBillID),
+			zap.Error(err))
+	} else if ok {
+		h.logger.Info("shopee_shipped: pre-AI updated existing bill discounts",
+			zap.String("message_id", messageID),
+			zap.String("order_id", subjectOrderID),
+			zap.String("bill_id", existingBillID),
+			zap.Float64("discount", discountSummary.TotalDiscountAmount))
+	}
+	paymentSummary := repository.ExtractShopeePaymentSummary(bodyText, bodyHTML, subjectOrderID)
+	if ok, err := h.billRepo.ApplyShopeePurchasePaymentSummaryToBill(existingBillID, paymentSummary); err != nil {
+		h.logger.Warn("shopee_shipped: pre-AI existing bill payment summary update failed",
+			zap.String("message_id", messageID),
+			zap.String("order_id", subjectOrderID),
+			zap.String("bill_id", existingBillID),
+			zap.Error(err))
+	} else if ok {
+		h.logger.Info("shopee_shipped: pre-AI updated existing bill payment summary",
+			zap.String("message_id", messageID),
+			zap.String("order_id", subjectOrderID),
+			zap.String("bill_id", existingBillID),
+			zap.String("payment_method", paymentSummary.PaymentMethod))
+	}
+	if messageID != "" {
+		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, subjectOrderID)
+		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+	}
+	h.logger.Info("shopee_shipped: recorded status event on existing bill before AI",
+		zap.String("message_id", messageID),
+		zap.String("order_id", subjectOrderID),
+		zap.String("event_type", eventType),
+		zap.String("bill_id", existingBillID),
+	)
+	return true, nil
+}
+
+type shopeeExtractionJob struct {
+	Text    string
+	HTML    string
+	Compact bool
+	OrderID string
+}
+
+func (h *EmailHandler) extractShopeeOrdersBounded(subject, plainText, bodyHTML, traceID string) ([]ai.ExtractedOrder, error) {
+	jobs := buildShopeeExtractionJobs(subject, plainText, bodyHTML)
+	if len(jobs) == 0 {
+		return nil, fmt.Errorf("AI extract shopee_shipped: empty extraction input")
+	}
+	ordersByID := map[string]ai.ExtractedOrder{}
+	orderSequence := []string{}
+	for i, job := range jobs {
+		h.logger.Info("shopee_shipped: AI extraction job",
+			zap.String("trace_id", traceID),
+			zap.Int("job_index", i+1),
+			zap.Int("job_count", len(jobs)),
+			zap.Bool("compact", job.Compact),
+			zap.String("order_id", job.OrderID),
+			zap.Int("text_chars", len([]rune(job.Text))),
+			zap.Int("html_chars", len([]rune(job.HTML))),
+		)
+		var (
+			orders []ai.ExtractedOrder
+			err    error
+		)
+		if job.Compact {
+			orders, err = h.aiClient.ExtractOrdersCompact(job.Text)
+		} else {
+			orders, err = h.aiClient.ExtractOrdersWithHTML(job.Text, job.HTML)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("job %d/%d: %w", i+1, len(jobs), err)
+		}
+		for _, order := range orders {
+			canonical := normalizeShopeeOrderID(order.OrderID)
+			if canonical == "" {
+				continue
+			}
+			order.OrderID = canonical
+			if _, exists := ordersByID[canonical]; !exists {
+				orderSequence = append(orderSequence, canonical)
+			}
+			ordersByID[canonical] = order
+		}
+	}
+	out := make([]ai.ExtractedOrder, 0, len(orderSequence))
+	for _, orderID := range orderSequence {
+		out = append(out, ordersByID[orderID])
+	}
+	return out, nil
+}
+
+func buildShopeeExtractionJobs(subject, plainText, bodyHTML string) []shopeeExtractionJob {
+	plainText = strings.TrimSpace(plainText)
+	bodyHTML = strings.TrimSpace(bodyHTML)
+	subjectOrderID := normalizeShopeeOrderID(extractShopeeOrderID(subject))
+	if subjectOrderID != "" {
+		scopedText := scopeShopeeTextToOrder(plainText, subjectOrderID)
+		if scopedText == "" {
+			scopedText = plainText
+		}
+		scopedText, textClipped := clampRunes(scopedText, shopeeAITextBudgetChars)
+		scopedHTML, htmlClipped := clampRunes(scopeShopeeHTMLToOrder(bodyHTML, subjectOrderID), shopeeAIHTMLBudgetChars)
+		compact := textClipped || htmlClipped || scopedHTML == ""
+		if compact {
+			scopedHTML = ""
+		}
+		return []shopeeExtractionJob{{
+			Text:    scopedText,
+			HTML:    scopedHTML,
+			Compact: compact,
+			OrderID: subjectOrderID,
+		}}
+	}
+
+	matches := uniqueShopeeOrderIDMatches(plainText)
+	if len(matches) > 1 {
+		jobs := []shopeeExtractionJob{}
+		for start := 0; start < len(matches); start += shopeeAIChunkOrderLimit {
+			end := start + shopeeAIChunkOrderLimit
+			if end > len(matches) {
+				end = len(matches)
+			}
+			parts := []string{}
+			orderIDs := []string{}
+			for _, m := range matches[start:end] {
+				block := scopeShopeeTextToOrder(plainText, m.id)
+				if block == "" {
+					continue
+				}
+				parts = append(parts, block)
+				orderIDs = append(orderIDs, m.id)
+			}
+			text := strings.Join(parts, "\n\n--- NEXT ORDER ---\n\n")
+			text, _ = clampRunes(text, shopeeAITextBudgetChars)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			jobs = append(jobs, shopeeExtractionJob{
+				Text:    text,
+				Compact: true,
+				OrderID: strings.Join(orderIDs, ","),
+			})
+		}
+		if len(jobs) > 0 {
+			return jobs
+		}
+	}
+
+	text, textClipped := clampRunes(plainText, shopeeAITextBudgetChars)
+	html, htmlClipped := clampRunes(bodyHTML, shopeeAIHTMLBudgetChars)
+	compact := textClipped || htmlClipped || html == ""
+	if compact {
+		html = ""
+	}
+	return []shopeeExtractionJob{{Text: text, HTML: html, Compact: compact}}
+}
+
+type shopeeOrderIDMatch struct {
+	id    string
+	start int
+	end   int
+}
+
+func uniqueShopeeOrderIDMatches(text string) []shopeeOrderIDMatch {
+	raw := shopeeOrderIDTokenPattern.FindAllStringSubmatchIndex(text, -1)
+	out := []shopeeOrderIDMatch{}
+	seen := map[string]bool{}
+	for _, m := range raw {
+		if len(m) < 4 {
+			continue
+		}
+		id := normalizeShopeeOrderID(text[m[2]:m[3]])
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, shopeeOrderIDMatch{id: id, start: m[0], end: m[1]})
+	}
+	return out
+}
+
+func scopeShopeeTextToOrder(text, orderID string) string {
+	text = strings.TrimSpace(text)
+	orderID = normalizeShopeeOrderID(orderID)
+	if text == "" || orderID == "" {
+		return text
+	}
+	matches := uniqueShopeeOrderIDMatches(text)
+	if len(matches) == 0 {
+		return text
+	}
+	target := -1
+	for i, m := range matches {
+		if m.id == orderID {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		return text
+	}
+	start := matches[target].start
+	end := len(text)
+	if target+1 < len(matches) {
+		end = matches[target+1].start
+	}
+	if start < 0 || end <= start || end > len(text) {
+		return text
+	}
+	return strings.TrimSpace(text[start:end])
+}
+
+func scopeShopeeHTMLToOrder(html, orderID string) string {
+	html = strings.TrimSpace(html)
+	orderID = normalizeShopeeOrderID(orderID)
+	if html == "" || orderID == "" {
+		return html
+	}
+	upper := strings.ToUpper(html)
+	idx := strings.Index(upper, "#"+orderID)
+	if idx < 0 {
+		idx = strings.Index(upper, orderID)
+	}
+	if idx < 0 {
+		return html
+	}
+	start := idx - shopeeAIHTMLBudgetChars/2
+	if start < 0 {
+		start = 0
+	}
+	end := idx + shopeeAIHTMLBudgetChars/2
+	if end > len(html) {
+		end = len(html)
+	}
+	return strings.TrimSpace(html[start:end])
+}
+
+func clampRunes(s string, max int) (string, bool) {
+	s = strings.TrimSpace(s)
+	if max <= 0 {
+		return s, false
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s, false
+	}
+	return string(runes[:max]), true
 }
 
 // processOneShippedOrder creates a single purchase bill for one Shopee order.
@@ -119,7 +409,7 @@ func (h *EmailHandler) processOneShippedOrder(
 	startTime time.Time,
 	source emailservice.MailSource,
 ) (bool, error) {
-	orderID := strings.TrimSpace(order.OrderID)
+	orderID := normalizeShopeeOrderID(order.OrderID)
 	if orderID == "" || strings.EqualFold(orderID, "#unknown") {
 		h.logger.Warn("shopee_shipped: skipping order without order_id",
 			zap.String("message_id", messageID),
@@ -155,11 +445,11 @@ func (h *EmailHandler) processOneShippedOrder(
 		   (SELECT COUNT(*) FROM bills
 		     WHERE source='shopee_shipped'
 		       AND raw_data->>'email_message_id' = $1
-		       AND raw_data->>'order_id' = $2) +
+		       AND UPPER(TRIM(LEADING '#' FROM COALESCE(raw_data->>'order_id', ''))) = $2) +
 		   (SELECT COUNT(*) FROM processed_email_keys
 		     WHERE source='shopee_shipped'
 		       AND message_id = $1
-		       AND order_id = $2)`,
+		       AND UPPER(TRIM(LEADING '#' FROM COALESCE(order_id, ''))) = $2)`,
 		messageID, orderID,
 	).Scan(&count)
 	if count > 0 {

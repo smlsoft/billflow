@@ -46,12 +46,12 @@ type lazadaItemWithCandidates struct {
 // ProcessLazadaEmailBody handles Lazada Thailand purchase emails. It is
 // intentionally separate from Lazada Excel (source='lazada') so retries,
 // dashboards, and duplicate guards can distinguish IMAP-created purchase bills.
-func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) error {
+func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) (emailservice.ProcessOutcome, error) {
 	traceID := fmt.Sprintf("lazada-email-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 
 	if h.aiClient == nil {
-		return fmt.Errorf("AI client not configured")
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI client not configured")
 	}
 	if messageID != "" {
 		var count int
@@ -71,13 +71,13 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 				zap.String("message_id", messageID),
 				zap.Int("existing_bills", count),
 			)
-			return emailservice.SkipMessage("duplicate", "เมลนี้เคยประมวลผลแล้ว")
+			return emailservice.ProcessOutcome{}, emailservice.SkipMessage("duplicate", "เมลนี้เคยประมวลผลแล้ว")
 		}
 	}
 
 	plainText := prepareLazadaEmailText(bodyText, bodyHTML)
 	if strings.TrimSpace(plainText) == "" {
-		return emailservice.SkipMessage("lazada_no_new_bill", "เมล Lazada นี้ไม่มีเนื้อหาที่อ่านได้")
+		return emailservice.ProcessOutcome{}, emailservice.SkipMessage("lazada_no_new_bill", "เมล Lazada นี้ไม่มีเนื้อหาที่อ่านได้")
 	}
 
 	releaseSlot := acquireLazadaAISlot()
@@ -87,9 +87,9 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 		h.logger.Warn("lazada_email: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
 		if err == nil {
-			return fmt.Errorf("AI extract lazada_email: empty orders")
+			return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract lazada_email: empty orders")
 		}
-		return fmt.Errorf("AI extract lazada_email: %w", err)
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract lazada_email: %w", err)
 	}
 
 	fallbackOrderID := extractLazadaOrderID(subject + "\n" + plainText)
@@ -125,7 +125,10 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 	if messageID != "" && failedCount == 0 {
 		_ = h.billRepo.MarkProcessedEmailKey(lazadaEmailSource, messageID, "")
 	}
-	return lazadaBatchCompletionError(createdCount, skippedCount, failedCount)
+	if err := lazadaBatchCompletionError(createdCount, skippedCount, failedCount); err != nil {
+		return emailservice.ProcessOutcome{}, err
+	}
+	return emailservice.CreatedBillOutcome(), nil
 }
 
 func lazadaBatchCompletionError(createdCount, skippedCount, failedCount int) error {
@@ -220,10 +223,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 	applyLazadaEmailDiscounts(itemsWithCandidates, amountSummary)
 
 	docDate := normalizeLazadaEmailDocDate(order.DocDate, source)
-	sellerName := strings.TrimSpace(order.SellerName)
-	if sellerName == "" {
-		sellerName = "Lazada"
-	}
+	sellerName := resolveLazadaEmailSellerName(order.SellerName, plainText, bodyHTML)
 	rawDataMap := map[string]interface{}{
 		"subject":          subject,
 		"from":             from,
@@ -307,6 +307,16 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		zap.String("amount_status", amountSummary.ReconciliationStatus),
 	)
 	return true, nil
+}
+
+func resolveLazadaEmailSellerName(aiSellerName, plainText, bodyHTML string) string {
+	if sellerName := repository.ExtractLazadaSellerName(plainText, bodyHTML); sellerName != "" {
+		return sellerName
+	}
+	if sellerName := strings.TrimSpace(aiSellerName); sellerName != "" {
+		return sellerName
+	}
+	return "Lazada"
 }
 
 func applyLazadaEmailSummaryPrices(items []ai.ExtractedItem, summary repository.LazadaAmountSummary) []ai.ExtractedItem {

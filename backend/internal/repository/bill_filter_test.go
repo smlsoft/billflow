@@ -48,6 +48,7 @@ func TestBillWhereOrderLikeSearchUsesExactOrderPredicate(t *testing.T) {
 	for _, want := range []string{
 		"b.id IN",
 		"TRIM(LEADING '#' FROM COALESCE(sml_order_id",
+		"TRIM(LEADING '#' FROM COALESCE(sml_doc_no",
 		"TRIM(LEADING '#' FROM COALESCE(raw_data->>'order_id'",
 		"shopee_order_events",
 		"UPPER(order_id)",
@@ -66,6 +67,42 @@ func TestBillWhereOrderLikeSearchUsesExactOrderPredicate(t *testing.T) {
 	}
 	if len(args) != 1 || args[0] != "260518Q4C1HSMB" {
 		t.Fatalf("args = %#v, want normalized exact order id", args)
+	}
+}
+
+func TestBillWherePOLSearchUsesExactDocNoPredicate(t *testing.T) {
+	where, args, _ := billWhere(models.BillListFilter{Search: "POL26060014"})
+	if !strings.Contains(where, "TRIM(LEADING '#' FROM COALESCE(sml_doc_no") {
+		t.Fatalf("where = %q, missing normalized sml_doc_no predicate", where)
+	}
+	for _, unwanted := range []string{
+		"b.sml_doc_no ILIKE",
+		"b.raw_data->>'subject' ILIKE",
+	} {
+		if strings.Contains(where, unwanted) {
+			t.Fatalf("where = %q, should not use fuzzy predicate %q for POL lookup", where, unwanted)
+		}
+	}
+	if len(args) != 1 || args[0] != "POL26060014" {
+		t.Fatalf("args = %#v, want normalized POL doc no", args)
+	}
+}
+
+func TestBillWherePrintPaymentMethodFilterUsesEffectiveMethod(t *testing.T) {
+	where, args, _ := billWhere(models.BillListFilter{PrintPaymentMethod: " TT2789 "})
+	for _, want := range []string{
+		"b.source IN ('shopee_shipped', 'lazada_email')",
+		"b.bill_type = 'purchase'",
+		"NULLIF(BTRIM(b.print_payment_method), '')",
+		"b.sml_payload->>'supplier_name'",
+		"= $1",
+	} {
+		if !strings.Contains(where, want) {
+			t.Fatalf("where = %q, missing %q", where, want)
+		}
+	}
+	if len(args) != 1 || args[0] != "TT2789" {
+		t.Fatalf("args = %#v, want trimmed payment method", args)
 	}
 }
 

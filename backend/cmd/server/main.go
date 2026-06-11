@@ -132,6 +132,17 @@ func main() {
 	anomalySvc := anomaly.New(billRepo).WithCustomerLookup(billRepo)
 	insightSvc := insight.New(aiClient)
 	artifactSvc := artifact.New(cfg.ArtifactsDir, cfg.ArtifactsMaxBytes, artifactRepo, logger)
+	if stats, err := artifactSvc.BackfillLazadaEmailSellerNames(billRepo, auditLogRepo); err != nil {
+		logger.Warn("startup lazada email seller backfill failed", zap.Error(err))
+	} else if stats.Updated > 0 || stats.ReadErrors > 0 {
+		logger.Info("startup lazada email seller backfill checked",
+			zap.Int("scanned", stats.Scanned),
+			zap.Int("updated", stats.Updated),
+			zap.Int("missing_artifact", stats.MissingArtifact),
+			zap.Int("missing_seller", stats.MissingSeller),
+			zap.Int("read_errors", stats.ReadErrors),
+		)
+	}
 	pool := worker.New()
 
 	// Shopee SML 248 REST clients — saleorder (default sale path), saleinvoice
@@ -459,21 +470,21 @@ func main() {
 		api.GET("/bills/counts", billH.Counts)
 		api.GET("/bills/email-print-candidates", billH.EmailPrintCandidates)
 		api.POST("/bills/email-print-events/bulk", middleware.RequireRole("admin", "staff"), billH.RecordEmailPrintEventsBulk)
-		api.POST("/bills/bulk-send-jobs", middleware.RequireRole("admin", "staff"), billH.CreateBulkSendJob)
+		api.POST("/bills/bulk-send-jobs", middleware.RequireRole("admin"), billH.CreateBulkSendJob)
 		api.GET("/bills/bulk-send-jobs", middleware.RequireRole("admin", "staff"), billH.ListBulkSendJobs)
 		api.GET("/bills/bulk-send-jobs/active", middleware.RequireRole("admin", "staff"), billH.GetActiveBulkSendJob)
 		api.GET("/bills/bulk-send-jobs/:job_id", middleware.RequireRole("admin", "staff"), billH.GetBulkSendJob)
-		api.POST("/bills/bulk-send-jobs/:job_id/retry-failed", middleware.RequireRole("admin", "staff"), billH.RetryFailedBulkSendJob)
+		api.POST("/bills/bulk-send-jobs/:job_id/retry-failed", middleware.RequireRole("admin"), billH.RetryFailedBulkSendJob)
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
-		api.POST("/bills/:id/retry", billH.Retry)
+		api.POST("/bills/:id/retry", middleware.RequireRole("admin", "staff"), billH.Retry)
 		api.PATCH("/bills/:id/purchase-creditor", middleware.RequireRole("admin"), billH.UpdatePurchaseCreditor)
 		api.PATCH("/bills/:id/print-payment-method", middleware.RequireRole("admin", "staff"), billH.UpdatePrintPaymentMethod)
 		api.POST("/bills/:id/ensure-shopee-shipping-line", middleware.RequireRole("admin", "staff"), billH.EnsureShopeeShippingLine)
 		api.GET("/bills/:id/latest-doc-no", middleware.RequireRole("admin", "staff"), billH.LatestDocNo)
 		api.POST("/bills/:id/regenerate-doc-no", middleware.RequireRole("admin", "staff"), billH.RegenerateDocNo)
-		api.POST("/bills/:id/archive", middleware.RequireRole("admin", "staff"), billH.Archive)
-		api.POST("/bills/:id/restore", middleware.RequireRole("admin", "staff"), billH.Restore)
+		api.POST("/bills/:id/archive", middleware.RequireRole("admin"), billH.Archive)
+		api.POST("/bills/:id/restore", middleware.RequireRole("admin"), billH.Restore)
 		api.DELETE("/bills/:id", middleware.RequireRole("admin"), billH.Delete)
 		api.PUT("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.UpdateItem)
 		api.POST("/bills/:id/items", middleware.RequireRole("admin", "staff"), billH.AddItem)

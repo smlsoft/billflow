@@ -32,6 +32,49 @@ func TestExtractLazadaAmountSummarySplitHTMLLabels(t *testing.T) {
 	}
 }
 
+func TestExtractLazadaSellerNameFromRealLikeHTML(t *testing.T) {
+	html := `
+<html><body>
+  <table>
+    <tr><td>จัดจำหน่ายโดย: Mostna Store</td></tr>
+    <tr><td>วันและเวลาจัดส่ง 12 มิถุนายน - 19 มิถุนายน 2569</td></tr>
+  </table>
+</body></html>`
+
+	if got := ExtractLazadaSellerName("", html); got != "Mostna Store" {
+		t.Fatalf("seller = %q, want Mostna Store", got)
+	}
+}
+
+func TestExtractLazadaSellerNameSplitHTMLCells(t *testing.T) {
+	html := `
+<table>
+  <tr>
+    <td>จัดจำหน่ายโดย:</td>
+    <td>CCC Sports</td>
+    <td>วันและเวลาจัดส่ง 12 มิถุนายน - 17 มิถุนายน 2569</td>
+  </tr>
+</table>`
+
+	if got := ExtractLazadaSellerName("", html); got != "CCC Sports" {
+		t.Fatalf("seller = %q, want CCC Sports", got)
+	}
+}
+
+func TestExtractLazadaSellerNameStopsBeforeDeliveryLabel(t *testing.T) {
+	body := `จัดจำหน่ายโดย: ThaiBasShop อุปกรณ์กีฬา ขายแต่ของแท้ วันและเวลาจัดส่ง 11 มิถุนายน - 16 มิถุนายน 2569`
+
+	if got := ExtractLazadaSellerName(body, ""); got != "ThaiBasShop อุปกรณ์กีฬา ขายแต่ของแท้" {
+		t.Fatalf("seller = %q", got)
+	}
+}
+
+func TestExtractLazadaSellerNameMissing(t *testing.T) {
+	if got := ExtractLazadaSellerName("ยอดรวม: THB 100.00", ""); got != "" {
+		t.Fatalf("seller = %q, want empty", got)
+	}
+}
+
 func TestExtractLazadaAmountSummaryNoCouponLargeShipping(t *testing.T) {
 	body := `
 ยอดรวม:

@@ -15,6 +15,7 @@ interface BillsFilter {
   document_route?: string
   email_account_id?: string
   search?: string
+  print_payment_method?: string
   shopee_shop_id?: string
   archived?: 'include' | 'only' | ''
   print_ready?: boolean
@@ -174,6 +175,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.document_route) params.set('document_route', filter.document_route)
       if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
       if (filter.search) params.set('search', filter.search)
+      if (filter.print_payment_method) params.set('print_payment_method', filter.print_payment_method)
       if (filter.shopee_shop_id) params.set('shopee_shop_id', filter.shopee_shop_id)
       if (filter.archived) params.set('archived', filter.archived)
       if (filter.print_ready) params.set('print_ready', '1')
@@ -212,6 +214,7 @@ export async function getEmailPrintCandidates(filter: BillsFilter = {}): Promise
   if (filter.document_route) params.set('document_route', filter.document_route)
   if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
   if (filter.search) params.set('search', filter.search)
+  if (filter.print_payment_method) params.set('print_payment_method', filter.print_payment_method)
   if (filter.shopee_shop_id) params.set('shopee_shop_id', filter.shopee_shop_id)
   if (filter.archived) params.set('archived', filter.archived)
   if (filter.date_from) params.set('date_from', filter.date_from)

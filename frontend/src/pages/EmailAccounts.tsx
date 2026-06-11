@@ -90,6 +90,7 @@ interface IMAPAccountFull extends IMAPAccount {
 interface IMAPPollSummary {
   scanned?: number
   created?: number
+  updated_existing?: number
   already_processed?: number
   skipped_user?: number
   failed?: number
@@ -356,6 +357,7 @@ function pollSummaryFor(account: IMAPAccountFull): Required<IMAPPollSummary> {
   return {
     scanned,
     created,
+    updated_existing: summary.updated_existing ?? 0,
     already_processed: alreadyProcessed,
     skipped_user: skippedUser,
     failed,
@@ -364,7 +366,7 @@ function pollSummaryFor(account: IMAPAccountFull): Required<IMAPPollSummary> {
 }
 
 function formatPollSummary(summary: Required<IMAPPollSummary>): string {
-  return `สแกน ${summary.scanned} / สร้างใหม่ ${summary.created} / เคยประมวลผลแล้ว ${summary.already_processed}`
+  return `สแกน ${summary.scanned} / สร้างใหม่ ${summary.created} / อัปเดต ${summary.updated_existing} / เคยประมวลผลแล้ว ${summary.already_processed}`
 }
 
 function withPurchaseBillsAction(id: string | number, enabled = true) {
@@ -452,6 +454,7 @@ function pollSummaryText(account: IMAPAccountFull): string {
   const parts = [
     `สแกน ${summary.scanned.toLocaleString('th-TH')}`,
     `ใหม่ ${summary.created.toLocaleString('th-TH')}`,
+    `อัปเดต ${summary.updated_existing.toLocaleString('th-TH')}`,
     `เคยอ่าน ${summary.already_processed.toLocaleString('th-TH')}`,
     `ต้องตรวจ ${summary.failed.toLocaleString('th-TH')}`,
   ]
@@ -486,6 +489,11 @@ function PollSummaryView({
       <span className={cn('rounded-full border px-2 py-0.5 tabular-nums', summary.created > 0 ? 'border-success/20 bg-success/10 text-success' : 'border-border bg-muted/40 text-muted-foreground')}>
         สร้างบิลใหม่ {summary.created.toLocaleString('th-TH')}
       </span>
+      {summary.updated_existing > 0 && (
+        <span className="rounded-full border border-info/20 bg-info/10 px-2 py-0.5 tabular-nums text-info">
+          อัปเดตสถานะ {summary.updated_existing.toLocaleString('th-TH')}
+        </span>
+      )}
       <span className="rounded-full border border-border bg-background px-2 py-0.5 tabular-nums text-muted-foreground">
         เคยอ่าน {summary.already_processed.toLocaleString('th-TH')}
       </span>

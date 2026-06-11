@@ -354,13 +354,14 @@ export function BillItemRow({
             ฿{netAmount.toLocaleString()}
           </TableCell>
           {editable && (
-            <TableCell className="text-center whitespace-nowrap">
+            <TableCell className="whitespace-nowrap">
+              <div className="flex items-center justify-center gap-1.5">
               {needsConfirm && (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 px-2 text-success"
+                  className="h-8 gap-1.5 px-2.5 text-success"
                   onClick={handleQuickConfirm}
                   disabled={confirming || !item.unit_code}
                   title={item.unit_code ? 'ยืนยันสินค้านี้โดยไม่ต้องเข้าโหมดแก้ไข' : 'ตั้งหน่วยก่อนยืนยันสินค้า'}
@@ -371,27 +372,32 @@ export function BillItemRow({
               )}
               <Button
                 type="button"
-                variant="ghost"
+                variant={item.item_code ? 'outline' : 'default'}
                 size="sm"
-                className="h-7 px-2"
+                className={cn(
+                  'h-8 gap-1.5 px-3 font-medium',
+                  item.item_code ? 'border-primary/35 text-primary hover:bg-primary/10 hover:text-primary' : 'shadow-sm',
+                )}
                 onClick={() => {
                   reset()
                   setEditing(true)
                 }}
+                title={item.item_code ? 'แก้ไขการจับคู่สินค้า' : 'จับคู่สินค้ากับรหัส SML'}
               >
                 <Edit className="h-3.5 w-3.5" />
-                {item.item_code ? 'แก้ไข' : 'จับคู่'}
+                {item.item_code ? 'แก้ไข' : 'จับคู่สินค้า'}
               </Button>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-destructive hover:text-destructive"
+                className="h-8 w-8 px-0 text-destructive hover:text-destructive"
                 onClick={() => setDeleteOpen(true)}
                 title="ลบรายการ"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
+              </div>
             </TableCell>
           )}
         </TableRow>

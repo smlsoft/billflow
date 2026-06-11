@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Filter, Mail, Printer, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
@@ -33,6 +33,7 @@ import {
 } from '@/lib/labels'
 import type { Bill, EmailPrintCandidate } from '@/types'
 import type { Party } from '@/pages/ChannelDefaults/PartyPicker'
+import { DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS } from '@/pages/ChannelDefaults/labels'
 
 const DEFAULT_PER_PAGE = 20
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
@@ -86,6 +87,7 @@ const PURCHASE_SOURCE_OPTIONS = [
   { value: 'lazada_email', label: BILL_SOURCE_LABEL.lazada_email, description: 'อีเมล Lazada ที่สร้างเป็นบิลซื้อรอตรวจ' },
 ]
 const VALID_PURCHASE_SOURCES = PURCHASE_SOURCE_OPTIONS.map((o) => o.value)
+const PAYMENT_METHOD_ALL_LABEL = 'ทุกวิธีชำระเงิน'
 const ARCHIVE_OPTIONS = [
   { value: 'active', label: 'รายการปกติ' },
   { value: 'include', label: 'รวมบิลที่เก็บแล้ว' },
@@ -229,7 +231,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [emailAccountId, setEmailAccountId] = useState(() => searchParams.get('email_account_id') || ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
   const [shopeeShops, setShopeeShops] = useState<ShopeeShopOption[]>([])
-  const [search, setSearch] = useState(() => searchParams.get('search') ?? '')
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '')
+  const [search, setSearch] = useState(() => (searchParams.get('search') ?? '').trim())
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState(() => searchParams.get('print_payment_method')?.trim() || ALL)
   const [archiveMode, setArchiveMode] = useState<ArchiveMode>(() => readURLArchive(searchParams))
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() =>
     searchParams.get('sort_order') === 'asc' ? 'asc' : 'desc',
@@ -257,12 +261,15 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const showPurchaseSourceFilter = mode === 'purchase-order'
   const showShopeeStatusFilter = mode === 'purchase-order'
   const showShopeeShopFilter = mode !== 'purchase-order'
-  const canManageBills = user?.role === 'admin' || user?.role === 'staff'
+  const canUseBillActions = user?.role === 'admin' || user?.role === 'staff'
+  const canBulkSend = user?.role === 'admin'
+  const canManageBillLifecycle = user?.role === 'admin'
   const canPermanentDelete = user?.role === 'admin'
   const canUpdatePurchaseCreditor = user?.role === 'admin'
   const canUpdatePrintPaymentMethod = user?.role === 'admin' || user?.role === 'staff'
   const activeSource = showPurchaseSourceFilter && sourceFilter !== ALL ? sourceFilter : config.source
   const activeSourceOption = PURCHASE_SOURCE_OPTIONS.find((o) => o.value === sourceFilter) ?? PURCHASE_SOURCE_OPTIONS[0]
+  const activePaymentMethod = showPurchaseSourceFilter && paymentMethodFilter !== ALL ? paymentMethodFilter : ''
 
   const { data, loading, refetch } = useBills({
     page,
@@ -277,12 +284,28 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     email_account_id: emailAccountId === ALL ? '' : emailAccountId,
     shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
     search,
+    print_payment_method: activePaymentMethod,
     archived: archiveMode === 'active' ? '' : archiveMode,
     sort_order: sortOrder,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
   })
   const bills = data?.data ?? []
+  const paymentMethodOptions = useMemo(() => {
+    const values = new Set<string>()
+    DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS.forEach((method) => values.add(method))
+    bills.forEach((bill) => {
+      const method = effectivePrintPaymentMethodFromBill(bill)
+      if (method) values.add(method)
+    })
+    if (activePaymentMethod) values.add(activePaymentMethod)
+    return [
+      { value: ALL, label: PAYMENT_METHOD_ALL_LABEL },
+      ...Array.from(values).map((method) => ({ value: method, label: method })),
+    ]
+  }, [activePaymentMethod, bills])
+  const selectedPaymentMethodLabel =
+    paymentMethodOptions.find((o) => o.value === paymentMethodFilter)?.label ?? paymentMethodFilter
   const total = typeof data?.total === 'number' ? data.total : counts.total
   const totalPages = Math.max(1, Math.ceil(total / perPage))
   const pageStart = total === 0 ? 0 : (page - 1) * perPage + 1
@@ -292,9 +315,11 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const bulkCandidateCount = counts.pending
   const bulkStatusAllowed = status === ALL || status === 'pending'
   const bulkSourceAllowed = !showPurchaseSourceFilter || sourceFilter !== ALL
-  const bulkDisabled = bulkCandidateCount === 0 || archiveMode !== 'active' || !bulkStatusAllowed || !bulkSourceAllowed
+  const bulkDisabled = !canBulkSend || bulkCandidateCount === 0 || archiveMode !== 'active' || !bulkStatusAllowed || !bulkSourceAllowed
   const bulkButtonLabel =
-    archiveMode !== 'active'
+    !canBulkSend
+      ? 'ส่ง SML ใช้ได้เฉพาะผู้ดูแลระบบ'
+      : archiveMode !== 'active'
       ? 'ส่ง SML ใช้ได้เฉพาะรายการปกติ'
       : !bulkSourceAllowed
         ? 'เลือกช่องทางก่อนส่ง SML แบบกลุ่ม'
@@ -331,6 +356,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     `ช่องทาง: ${sourceSummary}`,
     showShopeeStatusFilter ? `สถานะคำสั่งซื้อ: ${selectedShopeeStatus}` : '',
     showPurchaseSourceFilter && printReadyOnly ? 'พร้อมปริ้นเท่านั้น' : '',
+    showPurchaseSourceFilter && activePaymentMethod ? `วิธีชำระ: ${selectedPaymentMethodLabel}` : '',
     `กล่อง/ร้าน: ${inboxSummary}`,
     `วันที่: ${dateSummary}`,
     `มุมมอง: ${selectedArchiveLabel}`,
@@ -376,6 +402,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     if (showShopeeStatusFilter && shopeeStatus !== ALL) params.set('shopee_status', shopeeStatus)
     if (showShopeeShopFilter && shopeeShopId !== ALL) params.set('shopee_shop_id', shopeeShopId)
     if (search) params.set('search', search)
+    if (activePaymentMethod) params.set('print_payment_method', activePaymentMethod)
     if (dateFrom) params.set('date_from', dateFrom)
     if (dateTo) params.set('date_to', dateTo)
     const res = await client.get<typeof counts>(`/api/bills/counts?${params}`)
@@ -505,6 +532,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
     archived: archiveMode === 'active' ? '' as const : archiveMode,
     search,
+    print_payment_method: activePaymentMethod,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
     sort_order: sortOrder,
@@ -602,11 +630,22 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   }, [])
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const next = searchInput.trim()
+      if (next !== search) {
+        setSearch(next)
+        setPage(1)
+      }
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [searchInput, search])
+
+  useEffect(() => {
     fetchCounts().catch(() => {
       setCounts({ needs_review: 0, pending: 0, sent: 0, failed: 0, skipped: 0, total: 0, print_ready_orders: 0, print_ready_groups: 0 })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSource, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, shopeeShopId, search, printReadyOnly, dateFrom, dateTo])
+  }, [activeSource, activePaymentMethod, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, shopeeShopId, search, printReadyOnly, dateFrom, dateTo])
 
   useEffect(() => {
     if (!loading && data && page > totalPages) {
@@ -628,13 +667,15 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.delete('source')
     if (showPurchaseSourceFilter && printReadyOnly) next.set('print_ready', '1')
     else next.delete('print_ready')
+    if (showPurchaseSourceFilter && activePaymentMethod) next.set('print_payment_method', activePaymentMethod)
+    else next.delete('print_payment_method')
     if (showShopeeShopFilter && shopeeShopId !== ALL) next.set('shopee_shop_id', shopeeShopId)
     else next.delete('shopee_shop_id')
     if (archiveMode === 'active') next.delete('archived')
     else next.set('archived', archiveMode)
     if (emailAccountId === ALL) next.delete('email_account_id')
     else next.set('email_account_id', emailAccountId)
-    if (search.trim()) next.set('search', search)
+    if (search) next.set('search', search)
     else next.delete('search')
     if (sortOrder === 'asc') next.set('sort_order', 'asc')
     else next.delete('sort_order')
@@ -655,6 +696,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     shopeeStatus,
     sourceFilter,
     printReadyOnly,
+    activePaymentMethod,
     archiveMode,
     emailAccountId,
     search,
@@ -716,8 +758,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder={config.searchPlaceholder}
-                value={search}
-                onChange={(e) => resetPage(() => setSearch(e.target.value))}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 className="h-9 pl-8"
               />
             </div>
@@ -739,6 +781,21 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
                 <Filter className="h-3.5 w-3.5" />
                 <span className="truncate">{activeSourceOption.label}</span>
               </Button>
+            )}
+            {showPurchaseSourceFilter && (
+              <select
+                value={paymentMethodFilter}
+                onChange={(e) => resetPage(() => setPaymentMethodFilter(e.target.value))}
+                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[210px]"
+                aria-label="กรองตามวิธีชำระเงิน BillFlow"
+                title="กรองตามวิธีชำระเงินที่ BillFlow ใช้สำหรับส่ง/ปริ้น"
+              >
+                {paymentMethodOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             )}
             {showShopeeStatusFilter && (
               <select
@@ -863,7 +920,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               disabled={bulkDisabled}
               onClick={() => setBulkOpen(true)}
               title={
-                archiveMode !== 'active'
+                !canBulkSend
+                  ? 'ส่ง SML แบบกลุ่มใช้ได้เฉพาะผู้ดูแลระบบ'
+                  : archiveMode !== 'active'
                   ? 'Bulk send ปิดไว้เมื่อดูบิลที่เก็บแล้ว เพื่อไม่ส่งเอกสารย้อนหลังโดยไม่ตั้งใจ'
                   : !bulkSourceAllowed
                     ? 'เลือก Email บิลซื้อ Shopee หรือ Email บิลซื้อ Lazada ก่อน เพื่อไม่ส่งข้ามช่องทางโดยไม่ตั้งใจ'
@@ -907,7 +966,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           bills={bills}
           loading={loading}
           showShopeeStatusColumn={showShopeeStatusFilter}
-          canManage={canManageBills}
+          canUseOperationalActions={canUseBillActions}
+          canManageLifecycle={canManageBillLifecycle}
           canPermanentDelete={canPermanentDelete}
           canUpdatePurchaseCreditor={canUpdatePurchaseCreditor}
           purchaseCreditorLoadingBillId={creditorDialogLoadingBillId}
@@ -1009,6 +1069,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
           shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
           search,
+          print_payment_method: activePaymentMethod,
         }}
         onDone={() => {
           setPage(1)
@@ -1239,6 +1300,10 @@ function printContextFromCandidate(candidate: EmailPrintCandidate): ArtifactPrin
 function payloadString(payload: Record<string, unknown> | null | undefined, key: string): string {
   const value = payload?.[key]
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function effectivePrintPaymentMethodFromBill(bill: Bill): string {
+  return (bill.effective_print_payment_method || bill.print_payment_method || '').trim()
 }
 
 function formatPrintPaymentMethod(method?: string): string {

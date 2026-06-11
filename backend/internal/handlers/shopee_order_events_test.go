@@ -51,4 +51,7 @@ func TestNormalizeShopeeOrderID(t *testing.T) {
 	if got := normalizeShopeeOrderID(" #260504H4YJMFW1 "); got != "260504H4YJMFW1" {
 		t.Fatalf("normalizeShopeeOrderID() = %q", got)
 	}
+	if got := normalizeShopeeOrderID(" #260608hpc8a42a "); got != "260608HPC8A42A" {
+		t.Fatalf("normalizeShopeeOrderID() lower-case = %q", got)
+	}
 }

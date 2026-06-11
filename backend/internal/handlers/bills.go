@@ -226,7 +226,10 @@ func (h *BillHandler) allocateFreshDocNo(bill *models.Bill, def *models.ChannelD
 	if h.docNoClient == nil || !h.docNoClient.IsConfigured() {
 		return "", fmt.Errorf("ดึงเลข running ล่าสุดจาก SML ไม่ได้: SML doc_no API ยังไม่ได้ตั้งค่า")
 	}
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	next, err := h.docNoClient.Next(ctx, sml.NextDocNoRequest{
@@ -263,7 +266,10 @@ func (h *BillHandler) allocateFreshDocNo(bill *models.Bill, def *models.ChannelD
 
 func (h *BillHandler) previewFreshDocNo(bill *models.Bill, def *models.ChannelDefault, fallbackPrefix, route string) (string, error) {
 	prefix, format := resolveDocCounterPattern(def, fallbackPrefix)
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		return "", err
+	}
 	docNoDate, _ := time.Parse("2006-01-02", docDate)
 	if docNoDate.IsZero() {
 		docNoDate = time.Now()
@@ -383,41 +389,6 @@ func (h *BillHandler) localDocNoExists(docNo, currentBillID string) (bool, error
 		return false, fmt.Errorf("check local doc_no: %w", err)
 	}
 	return n > 0, nil
-}
-
-func (h *BillHandler) peekDocNo(def *models.ChannelDefault, fallbackPrefix, route string) (string, error) {
-	prefix, format := resolveDocCounterPattern(def, fallbackPrefix)
-	if h.docNoClient != nil && h.docNoClient.IsConfigured() {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		next, err := h.docNoClient.Next(ctx, sml.NextDocNoRequest{
-			Route:   route,
-			Prefix:  prefix,
-			Format:  format,
-			DocDate: time.Now().Format("2006-01-02"),
-		})
-		if err != nil {
-			return "", err
-		}
-		return next.NextDocNo, nil
-	}
-	if h.docCounters == nil {
-		return "", nil
-	}
-	for i := 0; i < 100; i++ {
-		docNo, err := h.docCounters.PeekDocNoWithOffset(prefix, format, time.Now(), i)
-		if err != nil {
-			return "", err
-		}
-		exists, err := h.localDocNoExists(docNo, "")
-		if err != nil {
-			return "", err
-		}
-		if !exists {
-			return docNo, nil
-		}
-	}
-	return "", fmt.Errorf("cannot preview unique doc_no for prefix %s", prefix)
 }
 
 func (h *BillHandler) writeDocNoError(c *gin.Context, err error) {
@@ -837,9 +808,14 @@ func (h *BillHandler) Get(c *gin.Context) {
 			if urlOverride != "" {
 				preview["endpoint"] = urlOverride
 			}
+			if docDate, err := docDateFromBillForSML(bill); err == nil && docDate != "" {
+				preview["sml_doc_date"] = docDate
+			} else if err != nil {
+				preview["sml_doc_date_error"] = err.Error()
+			}
 			if bill.SMLDocNo != nil && *bill.SMLDocNo != "" {
 				preview["doc_no"] = *bill.SMLDocNo
-			} else if docNo, err := h.peekDocNo(def, fallbackDocPrefix(route), route); err == nil && docNo != "" {
+			} else if docNo, err := h.previewFreshDocNo(bill, def, fallbackDocPrefix(route), route); err == nil && docNo != "" {
 				preview["doc_no"] = docNo
 			}
 			if def.DocPrefix != "" || def.DocRunningFormat != "" {
@@ -1029,13 +1005,14 @@ type printPaymentMethodUpdateRequest struct {
 }
 
 type retrySendOptions struct {
-	UserID            string
-	TraceID           string
-	Via               string
-	BulkJobID         string
-	BulkJobItemID     string
-	BulkItemSequence  int
-	SuppressLineAlert bool
+	UserID             string
+	TraceID            string
+	Via                string
+	BulkJobID          string
+	BulkJobItemID      string
+	BulkItemSequence   int
+	SuppressLineAlert  bool
+	LazadaChargeGroups map[string]*repository.LazadaChargeGroup
 }
 
 type retrySendResult struct {
@@ -1315,7 +1292,11 @@ func (h *BillHandler) RegenerateDocNo(c *gin.Context) {
 	docNo, err := h.allocateFreshDocNo(bill, def, fallbackDocPrefix(kind), kind)
 	if err != nil {
 		h.auditDocNoRegenerateFailed(c, bill, kind, err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "ออกเลขเอกสารใหม่ไม่สำเร็จ: " + err.Error()})
+		status := http.StatusBadGateway
+		if isBillDocDateError(err) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": "ออกเลขเอกสารใหม่ไม่สำเร็จ: " + err.Error()})
 		return
 	}
 	if err := h.billRepo.UpdateStatus(bill.ID, bill.Status, &docNo, nil, nil); err != nil {
@@ -1363,7 +1344,11 @@ func (h *BillHandler) LatestDocNo(c *gin.Context) {
 	docNo, err := h.previewFreshDocNo(bill, def, fallbackDocPrefix(kind), kind)
 	if err != nil {
 		h.auditDocNoPreviewFailed(c, bill, kind, err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "ดึงเลขล่าสุดจาก SML ไม่สำเร็จ: " + err.Error()})
+		status := http.StatusBadGateway
+		if isBillDocDateError(err) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": "ดึงเลขล่าสุดจาก SML ไม่สำเร็จ: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"doc_no": docNo, "route": kind})
@@ -1736,7 +1721,10 @@ func (h *BillHandler) sendSaleOrderToSML(bill *models.Bill, req RetryRequest, ur
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
 	}
 
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
 	docRef := docRefFromBill(bill)
 	docRefDate := ""
 	if docRef != "" {
@@ -1874,7 +1862,10 @@ func (h *BillHandler) sendSaleInvoiceToSML(bill *models.Bill, req RetryRequest, 
 		}
 	}
 
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
 	docRef := docRefFromBill(bill)
 	docRefDate := ""
 	if docRef != "" {
@@ -2015,8 +2006,18 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
 	}
 
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
 	docRef, docRefDate, remark, remark5 := purchaseOrderHeaderFromBill(bill, req, docDate)
+	lazadaChargeGroup, err := h.resolveLazadaCardChargeGroupForSend(bill, opts)
+	if err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+	if lazadaChargeGroup != nil {
+		docRef = formatDocRefAmount(lazadaChargeGroup.GroupTotal)
+	}
 	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO", "purchaseorder")
 	if err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: "เลขเอกสาร SML ไม่ถูกต้อง: " + err.Error(), Route: route}
@@ -2038,6 +2039,10 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 		InquiryType: inquiryType,
 		UserRequest: smlUserCode,
 	})
+	if err := validateLazadaPurchasePayloadTotalForSend(bill, payload); err != nil {
+		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error(), Route: route}
+	}
+	h.logLazadaChargeGroupForSend(bill, lazadaChargeGroup, payload)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -2252,6 +2257,21 @@ func validateMarketplaceAmountReadyForSend(bill *models.Bill) error {
 		return nil
 	}
 	rd := rawDataMapFromBill(bill)
+	orderID := marketplaceOrderIDFromRawData(rd)
+	emailDate := strings.TrimSpace(fmt.Sprint(rd["email_date"]))
+	if emailDate == "" || emailDate == "<nil>" {
+		return &marketplaceAmountReconciliationError{message: fmt.Sprintf("Lazada order %s ไม่มีวันที่อีเมลสำหรับรวมยอดรูดบัตร — กรุณา poll/import อีเมลใหม่หรือตรวจ raw data", orderID)}
+	}
+	method := strings.TrimSpace(fmt.Sprint(rd["payment_method"]))
+	if !isCardPaymentMethod(method) {
+		if method == "" || method == "<nil>" {
+			method = "missing"
+		}
+		return &marketplaceAmountReconciliationError{message: fmt.Sprintf("Lazada order %s ไม่ใช่การชำระด้วยบัตร (%s) — ไม่สามารถใส่ doc_ref เป็นยอดรูดบัตรรวมได้", orderID, method)}
+	}
+	if _, ok := rawMoneyField(rd, "paid_total_amount"); !ok {
+		return &marketplaceAmountReconciliationError{message: fmt.Sprintf("Lazada order %s ไม่มียอดชำระจากอีเมล — กรุณาตรวจ summary ก่อนส่ง SML", orderID)}
+	}
 	status := strings.TrimSpace(fmt.Sprint(rd["amount_reconciliation_status"]))
 	if status == "ok" {
 		return nil
@@ -2655,6 +2675,7 @@ func (h *BillHandler) runBulkSendJob(jobID string) {
 		return
 	}
 
+	lazadaChargeGroupCache := map[string]*repository.LazadaChargeGroup{}
 	for _, item := range job.Items {
 		if item.Status != models.SMLBulkJobItemQueued {
 			continue
@@ -2686,13 +2707,14 @@ func (h *BillHandler) runBulkSendJob(jobID string) {
 		}
 
 		result := h.sendBillToSML(bill, payload, retrySendOptions{
-			UserID:            userID,
-			TraceID:           traceID,
-			Via:               "bulk_job",
-			BulkJobID:         job.ID,
-			BulkJobItemID:     item.ID,
-			BulkItemSequence:  item.Sequence,
-			SuppressLineAlert: true,
+			UserID:             userID,
+			TraceID:            traceID,
+			Via:                "bulk_job",
+			BulkJobID:          job.ID,
+			BulkJobItemID:      item.ID,
+			BulkItemSequence:   item.Sequence,
+			SuppressLineAlert:  true,
+			LazadaChargeGroups: lazadaChargeGroupCache,
 		})
 		switch {
 		case result.HTTPStatus == http.StatusOK:
@@ -2836,7 +2858,11 @@ func (h *BillHandler) retrySaleOrder(c *gin.Context, bill *models.Bill, req Retr
 		return
 	}
 
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	docRef := docRefFromBill(bill)
 	docRefDate := ""
 	if docRef != "" {
@@ -2932,7 +2958,11 @@ func (h *BillHandler) retrySaleInvoice(c *gin.Context, bill *models.Bill, req Re
 		}
 	}
 
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	docRef := docRefFromBill(bill)
 	docRefDate := ""
 	if docRef != "" {
@@ -3025,8 +3055,20 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	docDate := docDateFromBill(bill)
+	docDate, err := docDateFromBillForSML(bill)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	docRef, docRefDate, remark, remark5 := purchaseOrderHeaderFromBill(bill, req, docDate)
+	lazadaChargeGroup, err := h.resolveLazadaCardChargeGroupForSend(bill, retrySendOptions{Via: "retry"})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if lazadaChargeGroup != nil {
+		docRef = formatDocRefAmount(lazadaChargeGroup.GroupTotal)
+	}
 	reqDocNo, err := h.resolveRetryDocNo(req, bill, def, "BF-PO", "purchaseorder")
 	if err != nil {
 		h.writeDocNoError(c, err)
@@ -3043,6 +3085,11 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 		Remark5:     remark5,
 		InquiryType: inquiryType,
 	})
+	if err := validateLazadaPurchasePayloadTotalForSend(bill, payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	h.logLazadaChargeGroupForSend(bill, lazadaChargeGroup, payload)
 	reqJSON, _ := json.Marshal(payload)
 
 	start := time.Now()
@@ -3068,22 +3115,79 @@ func (h *BillHandler) retryPurchaseOrder(c *gin.Context, bill *models.Bill, req 
 	c.JSON(http.StatusOK, gin.H{"message": "bill sent to SML (purchaseorder)", "doc_no": docNo})
 }
 
-// docDateFromBill returns "YYYY-MM-DD" — the email-extracted doc_date stored
-// in raw_data["doc_date"] when present, else today's date.
-// Used by saleinvoice + purchaseorder retry paths so SML records reflect the
-// real order/ship date rather than the moment the user clicked "ส่ง".
+type billDocDateError struct {
+	message string
+}
+
+func (e *billDocDateError) Error() string {
+	return e.message
+}
+
+func isBillDocDateError(err error) bool {
+	var target *billDocDateError
+	return errors.As(err, &target)
+}
+
+// docDateFromBill returns "YYYY-MM-DD". Marketplace purchase bills must use
+// the real order date; ordinary routes keep the historical fallback to today.
 func docDateFromBill(bill *models.Bill) string {
-	if bill != nil && bill.RawData != nil {
-		var rd map[string]interface{}
-		if err := json.Unmarshal(bill.RawData, &rd); err == nil {
-			if v, ok := rd["doc_date"].(string); ok && v != "" {
-				if normalized := normalizeBillDocDateString(v); normalized != "" {
-					return normalized
-				}
+	docDate, err := docDateFromBillForSML(bill)
+	if err == nil && docDate != "" {
+		return docDate
+	}
+	return time.Now().Format("2006-01-02")
+}
+
+func docDateFromBillForSML(bill *models.Bill) (string, error) {
+	if docDate, _, _ := orderDocDateFromBill(bill); docDate != "" {
+		return docDate, nil
+	}
+	if isMarketplacePurchaseEmailBill(bill) {
+		orderID := ""
+		if bill != nil && bill.RawData != nil {
+			var rd map[string]interface{}
+			if err := json.Unmarshal(bill.RawData, &rd); err == nil {
+				orderID = orderIDFromRawData(rd)
+			}
+		}
+		if orderID == "" {
+			orderID = "unknown"
+		}
+		return "", &billDocDateError{message: fmt.Sprintf(
+			"ไม่พบวันที่คำสั่งซื้อสำหรับ %s: ต้องมี raw_data.doc_date หรือ raw_data.order_datetime ที่อ่านได้ก่อนส่ง SML",
+			orderID,
+		)}
+	}
+	return time.Now().Format("2006-01-02"), nil
+}
+
+func orderDocDateFromBill(bill *models.Bill) (string, string, string) {
+	if bill == nil || bill.RawData == nil {
+		return "", "", ""
+	}
+	var rd map[string]interface{}
+	if err := json.Unmarshal(bill.RawData, &rd); err != nil {
+		return "", "", ""
+	}
+	for _, key := range []string{"doc_date", "order_datetime"} {
+		if v, ok := rd[key].(string); ok && strings.TrimSpace(v) != "" {
+			if normalized := normalizeBillDocDateString(v); normalized != "" {
+				return normalized, key, v
 			}
 		}
 	}
-	return time.Now().Format("2006-01-02")
+	return "", "", ""
+}
+
+func orderIDFromRawData(rd map[string]interface{}) string {
+	for _, key := range []string{"order_id", "shopee_order_id", "order_no", "doc_ref"} {
+		if v, ok := rd[key].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return strings.TrimLeft(s, "#")
+			}
+		}
+	}
+	return ""
 }
 
 func normalizeBillDocDateString(raw string) string {
@@ -3097,6 +3201,8 @@ func normalizeBillDocDateString(raw string) string {
 		"2006/01/02",
 		"02/01/2006",
 		"02-01-2006",
+		"2/1/2006",
+		"2-1-2006",
 	}
 	for _, layout := range layouts {
 		if ts, err := time.Parse(layout, raw); err == nil {
@@ -3110,10 +3216,77 @@ func normalizeBillDocDateString(raw string) string {
 			return time.Date(year, ts.Month(), ts.Day(), 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 		}
 	}
-	if len(raw) >= 10 {
+	if normalized := normalizeThaiBillDocDateString(raw); normalized != "" {
+		return normalized
+	}
+	if len(raw) > 10 {
 		return normalizeBillDocDateString(raw[:10])
 	}
 	return ""
+}
+
+func normalizeThaiBillDocDateString(raw string) string {
+	clean := strings.NewReplacer(
+		",", " ",
+		"\u00a0", " ",
+		"เวลา", " ",
+	).Replace(strings.TrimSpace(raw))
+	fields := strings.Fields(clean)
+	if len(fields) < 3 {
+		return ""
+	}
+	day, err := strconv.Atoi(strings.Trim(fields[0], "."))
+	if err != nil || day < 1 || day > 31 {
+		return ""
+	}
+	month, ok := thaiMonthNumber(fields[1])
+	if !ok {
+		return ""
+	}
+	year, err := strconv.Atoi(strings.Trim(fields[2], "."))
+	if err != nil {
+		return ""
+	}
+	if year > 2400 {
+		year -= 543
+	}
+	if year < 2000 || year > 2100 {
+		return ""
+	}
+	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+}
+
+func thaiMonthNumber(raw string) (int, bool) {
+	key := strings.Trim(strings.TrimSpace(raw), ".")
+	key = strings.ReplaceAll(key, ".", "")
+	months := map[string]int{
+		"มค":         1,
+		"มกราคม":     1,
+		"กพ":         2,
+		"กุมภาพันธ์": 2,
+		"มีค":        3,
+		"มีนาคม":     3,
+		"เมย":        4,
+		"เมษายน":     4,
+		"พค":         5,
+		"พฤษภาคม":    5,
+		"มิย":        6,
+		"มิถุนายน":   6,
+		"กค":         7,
+		"กรกฎาคม":    7,
+		"สค":         8,
+		"สิงหาคม":    8,
+		"กย":         9,
+		"กันยายน":    9,
+		"ตค":         10,
+		"ตุลาคม":     10,
+		"พย":         11,
+		"พฤศจิกายน":  11,
+		"ธค":         12,
+		"ธันวาคม":    12,
+	}
+	month, ok := months[key]
+	return month, ok
 }
 
 // docRefFromBill returns the upstream Shopee order number for SML doc_ref.
@@ -3220,7 +3393,7 @@ func purchaseOrderHeaderFromBill(bill *models.Bill, req RetryRequest, docDate st
 	if isLazadaEmailPurchaseBill(bill) {
 		remark = marketplacePurchaseSellerFromBill(bill)
 		remark5 = docRefFromBill(bill)
-		return lazadaEmailCardDocRefFromBill(bill), "", remark, remark5
+		return "", "", remark, remark5
 	}
 	if docRef != "" {
 		docRefDate = docDate
@@ -3249,31 +3422,101 @@ func shopeePurchaseDocRefFromBill(bill *models.Bill) string {
 	return ""
 }
 
-func lazadaEmailCardDocRefFromBill(bill *models.Bill) string {
+func (h *BillHandler) resolveLazadaCardChargeGroupForSend(bill *models.Bill, opts retrySendOptions) (*repository.LazadaChargeGroup, error) {
+	if !isLazadaEmailPurchaseBill(bill) {
+		return nil, nil
+	}
 	rd := rawDataMapFromBill(bill)
 	if rd == nil {
-		return ""
+		return nil, fmt.Errorf("Lazada bill ไม่มี raw data สำหรับรวมยอดรูดบัตร")
 	}
-	method := ""
-	if v, ok := rd["payment_method"].(string); ok {
-		method = v
+	emailDate := strings.TrimSpace(fmt.Sprint(rd["email_date"]))
+	if emailDate == "" || emailDate == "<nil>" {
+		return nil, fmt.Errorf("Lazada order %s ไม่มีวันที่อีเมลสำหรับรวมยอดรูดบัตร", marketplaceOrderIDFromRawData(rd))
 	}
-	if !isCardPaymentMethod(method) {
-		return ""
+	if opts.LazadaChargeGroups != nil {
+		if cached := opts.LazadaChargeGroups[emailDate]; cached != nil {
+			if err := validateLazadaChargeGroupForDocRef(cached); err != nil {
+				return nil, err
+			}
+			return cached, nil
+		}
 	}
+	if h == nil || h.billRepo == nil {
+		return nil, fmt.Errorf("ตรวจ Lazada charge group ไม่ได้: bill repository not configured")
+	}
+	group, err := h.billRepo.GetLazadaChargeGroupByEmailDate(emailDate)
+	if err != nil {
+		return nil, err
+	}
+	if opts.LazadaChargeGroups != nil {
+		opts.LazadaChargeGroups[emailDate] = group
+	}
+	if err := validateLazadaChargeGroupForDocRef(group); err != nil {
+		return nil, err
+	}
+	return group, nil
+}
+
+func validateLazadaChargeGroupForDocRef(group *repository.LazadaChargeGroup) error {
+	if group == nil || group.GroupCount == 0 {
+		return fmt.Errorf("ไม่พบ Lazada orders ในกลุ่มเวลาอีเมลนี้สำหรับรวมยอดรูดบัตร")
+	}
+	problems := []string{}
+	if len(group.MissingPaidTotalOrderIDs) > 0 {
+		problems = append(problems, "ไม่มียอดชำระ: "+strings.Join(group.MissingPaidTotalOrderIDs, ", "))
+	}
+	if len(group.NonCardPaymentOrderIDs) > 0 {
+		problems = append(problems, "ไม่ใช่บัตรเครดิต/เดบิต: "+strings.Join(group.NonCardPaymentOrderIDs, ", "))
+	}
+	if len(group.NotReconciledOrderIDs) > 0 {
+		problems = append(problems, "reconcile ไม่ผ่าน: "+strings.Join(group.NotReconciledOrderIDs, ", "))
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("ยอดรูดบัตร Lazada group %s ยังไม่พร้อมสำหรับ doc_ref (%s)", group.EmailDate, strings.Join(problems, "; "))
+	}
+	if group.GroupTotal <= 0 {
+		return fmt.Errorf("ยอดรูดบัตร Lazada group %s ต้องมากกว่า 0", group.EmailDate)
+	}
+	return nil
+}
+
+func validateLazadaPurchasePayloadTotalForSend(bill *models.Bill, payload sml.PurchaseOrderPayload) error {
+	if !isLazadaEmailPurchaseBill(bill) {
+		return nil
+	}
+	rd := rawDataMapFromBill(bill)
 	paidTotal, ok := rawMoneyField(rd, "paid_total_amount")
-	if !ok || paidTotal <= 0 {
-		return ""
+	if !ok {
+		return fmt.Errorf("Lazada order %s ไม่มียอดชำระจากอีเมลสำหรับตรวจยอด PO", marketplaceOrderIDFromRawData(rd))
 	}
-	return formatDocRefAmount(paidTotal)
+	delta := roundMoneyForBill(payload.TotalAmount - paidTotal)
+	if math.Abs(delta) <= 0.01 {
+		return nil
+	}
+	return fmt.Errorf("ยอด PO Lazada ไม่ตรงกับยอดชำระจากอีเมล (order %s, Lazada %.2f, PO %.2f, ส่วนต่าง %.2f) — กรุณาตรวจรายการสินค้าและค่าจัดส่ง/fee SHIP_CUS",
+		marketplaceOrderIDFromRawData(rd), paidTotal, payload.TotalAmount, delta)
+}
+
+func (h *BillHandler) logLazadaChargeGroupForSend(bill *models.Bill, group *repository.LazadaChargeGroup, payload sml.PurchaseOrderPayload) {
+	if h == nil || h.log == nil || bill == nil || group == nil {
+		return
+	}
+	rd := rawDataMapFromBill(bill)
+	paidTotal, _ := rawMoneyField(rd, "paid_total_amount")
+	h.log.Info("lazada_card_doc_ref_group_resolved",
+		zap.String("bill_id", bill.ID),
+		zap.String("order_id", marketplaceOrderIDFromRawData(rd)),
+		zap.String("email_date", group.EmailDate),
+		zap.Int("group_count", group.GroupCount),
+		zap.Float64("group_total", group.GroupTotal),
+		zap.Float64("order_paid_total", paidTotal),
+		zap.Float64("payload_total", payload.TotalAmount),
+	)
 }
 
 func isCardPaymentMethod(method string) bool {
-	lower := strings.ToLower(strings.TrimSpace(method))
-	return strings.Contains(lower, "credit") ||
-		strings.Contains(lower, "debit") ||
-		strings.Contains(method, "บัตรเครดิต") ||
-		strings.Contains(method, "บัตรเดบิต")
+	return repository.IsCreditDebitCardPaymentMethod(method)
 }
 
 func formatDocRefAmount(v float64) string {
@@ -3292,6 +3535,17 @@ func rawDataMapFromBill(bill *models.Bill) map[string]interface{} {
 		return nil
 	}
 	return rd
+}
+
+func marketplaceOrderIDFromRawData(rd map[string]interface{}) string {
+	for _, key := range []string{"order_id", "lazada_order_id", "shopee_order_id", "order_no"} {
+		if v, ok := rd[key].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	return "unknown"
 }
 
 func smlPayloadString(raw json.RawMessage, key string) string {

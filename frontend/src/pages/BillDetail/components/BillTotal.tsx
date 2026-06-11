@@ -50,6 +50,7 @@ interface Props {
   expectedDocFormat?: string
   smlReadiness?: SMLReadiness | null
   smlReadinessLoading?: boolean
+  canSendToSML?: boolean
 }
 
 const ROUTE_LABEL: Record<string, string> = {
@@ -78,11 +79,13 @@ export function BillTotal({
   expectedDocFormat,
   smlReadiness,
   smlReadinessLoading = false,
+  canSendToSML = true,
 }: Props) {
   const canShowSendButton =
-    bill.status === 'failed' ||
-    bill.status === 'pending' ||
-    bill.status === 'needs_review'
+    canSendToSML &&
+    (bill.status === 'failed' ||
+      bill.status === 'pending' ||
+      bill.status === 'needs_review')
   const isPurchase = bill.bill_type === 'purchase'
   const isShopeePurchase = isShopeePurchaseBill(bill)
   const isLazadaPurchase = isLazadaEmailPurchaseBill(bill)

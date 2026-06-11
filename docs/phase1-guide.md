@@ -168,7 +168,7 @@ Payload สำคัญ:
 |---|---|
 | `doc_no` | BillFlow doc counter |
 | `doc_format_code` | `/settings/channels` |
-| `doc_ref` | Shopee ใช้เลขอ้างอิงการชำระเงินตาม logic เดิม; Lazada ใส่ยอดรูดบัตรเฉพาะเมื่อ email เป็น Credit/Debit Card |
+| `doc_ref` | Shopee ใช้เลขอ้างอิงการชำระเงินตาม logic เดิม; Lazada card ใส่ยอดรูดบัตรรวมของ active orders ที่มี `raw_data.email_date` เดียวกัน |
 | `doc_ref_date` | วันที่เอกสาร/อีเมลเมื่อ route นั้นส่งค่า |
 | `remark` | ชื่อร้านค้า/ผู้ขายจาก source email สำหรับ purchase email |
 | `remark_5` | เลขคำสั่งซื้อ Shopee/Lazada |

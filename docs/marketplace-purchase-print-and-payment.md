@@ -117,7 +117,8 @@ For purchase orders sent to SML:
 
 - `remark` uses seller/supplier name from the source email guard.
 - Shopee and Lazada order ids go to `remark_5`.
-- Lazada `doc_ref` is empty except when the Lazada email payment method is Credit/Debit Card; then `doc_ref` stores the paid total amount from the email.
+- Lazada card `doc_ref` stores the summed paid total for every active Lazada purchase order with the exact same `raw_data.email_date`, because Lazada can split one card charge across multiple order emails.
+- Lazada send blocks if the card-charge group is incomplete or if the current PO total does not match the order paid total after the `SHIP_CUS` fee line is present.
 - User-entered `remark` is not available in purchase send dialogs to avoid overwriting the SML remark field.
 - `remark_2` remains available because it is a separate SML field.
 

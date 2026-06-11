@@ -130,7 +130,7 @@ export function BillHeader({ bill }: Props) {
             )}
             {isPurchase && sellerName && (
               <InfoRow
-                label="ผู้ขาย Shopee"
+                label="ผู้ขาย"
                 value={sellerName}
               />
             )}

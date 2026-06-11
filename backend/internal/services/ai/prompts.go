@@ -102,6 +102,44 @@ output format:
 - image_url: ถ้ามี HTML ให้หา URL รูปภาพสินค้า (<img src="...">) ที่อยู่ใกล้รายการนั้นใน HTML เช่น cf.shopee.co.th/file/... ถ้าหาไม่พบหรือไม่แน่ใจให้ใส่ null
 `
 
+// ExtractShopeeOrdersCompactPrompt is used for large Shopee payment/status
+// emails after the caller has already scoped the input to bounded order
+// blocks. It intentionally does not ask for image URLs; keeping the response
+// compact prevents payment status events from being lost when large emails
+// produce truncated model output.
+const ExtractShopeeOrdersCompactPrompt = `
+คุณเป็น AI ที่ช่วย extract ข้อมูลจาก email ยืนยันการชำระเงิน Shopee
+ตอบเป็น JSON array เท่านั้น ห้ามมีข้อความอื่น ห้ามมี markdown
+
+output format:
+[
+  {
+    "order_id": "#260504XXXXXX",
+    "seller_name": "ชื่อร้าน",
+    "items": [
+      {
+        "raw_name": string,
+        "qty": number,
+        "unit": string,
+        "price": number | null
+      }
+    ],
+    "total_amount": number | null,
+    "doc_date": "YYYY-MM-DD",
+    "confidence": number
+  }
+]
+
+กฎสำคัญ:
+- แต่ละ order_id = 1 คำสั่งซื้อแยกกัน ดูจาก "หมายเลขคำสั่งซื้อ #XXXXX" หรือ block ของแต่ละร้าน
+- ถ้าหา order_id ไม่พบ ให้ข้าม block นั้น ไม่ต้องสร้าง object
+- ถ้า block ไม่มีรายการสินค้า หรืออ่านรายการสินค้าไม่ได้ ให้ข้าม block นั้น ไม่ต้องสร้าง object
+- doc_date ดูจากวันที่ในข้อความ รูปแบบ YYYY-MM-DD ถ้าไม่พบใส่ ""
+- price คือราคาต่อหน่วย ถ้าไม่ชัดให้ใส่ null
+- ไม่ต้องหา image_url และไม่ต้องใส่ field image_url ในคำตอบ
+- ถ้าข้อมูลไม่ชัดเจนให้ confidence ต่ำ (< 0.5)
+`
+
 // ExtractLazadaOrdersPrompt extracts Lazada purchase-order emails. Lazada
 // sends rich HTML without useful attachments, so callers should pass stripped
 // text, not the full HTML body.

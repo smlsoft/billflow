@@ -2,6 +2,44 @@ package emailservice
 
 import "fmt"
 
+type ProcessOutcomeKind string
+
+const (
+	ProcessOutcomeCreatedBill     ProcessOutcomeKind = "created_bill"
+	ProcessOutcomeUpdatedExisting ProcessOutcomeKind = "updated_existing"
+	ProcessOutcomeSkipped         ProcessOutcomeKind = "skipped"
+)
+
+type ProcessOutcome struct {
+	Kind  ProcessOutcomeKind
+	Code  string
+	Label string
+}
+
+func CreatedBillOutcome() ProcessOutcome {
+	return ProcessOutcome{Kind: ProcessOutcomeCreatedBill, Code: "created_bill", Label: "สร้างบิลใหม่แล้ว"}
+}
+
+func UpdatedExistingOutcome(code, label string) ProcessOutcome {
+	if code == "" {
+		code = "updated_existing"
+	}
+	if label == "" {
+		label = "อัปเดตข้อมูลบนบิลเดิมแล้ว"
+	}
+	return ProcessOutcome{Kind: ProcessOutcomeUpdatedExisting, Code: code, Label: label}
+}
+
+func SkippedOutcome(code, label string) ProcessOutcome {
+	if code == "" {
+		code = "skipped"
+	}
+	if label == "" {
+		label = fmt.Sprintf("ไม่สร้างบิลใหม่ (%s)", code)
+	}
+	return ProcessOutcome{Kind: ProcessOutcomeSkipped, Code: code, Label: label}
+}
+
 type MessageSkipError struct {
 	Code  string
 	Label string

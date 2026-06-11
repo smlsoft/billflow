@@ -37,7 +37,7 @@ type AttachmentProcessor func(data []byte, mimeType, filename, messageID, subjec
 // ShopeeBodyProcessor is called when an email from a Shopee domain is detected.
 // bodyText is the plain-text part (sent to AI); bodyHTML is the original HTML
 // (stored in raw_data for display in BillDetail).
-type ShopeeBodyProcessor func(subject, from, bodyText, bodyHTML, messageID string, source MailSource) error
+type ShopeeBodyProcessor func(subject, from, bodyText, bodyHTML, messageID string, source MailSource) (ProcessOutcome, error)
 
 // PollConfig holds everything one IMAP poll cycle needs.
 // Re-built per cycle from the account's current DB state, so admin edits
@@ -106,7 +106,7 @@ func (r *PollResult) Status() string {
 		return "interrupted"
 	}
 	if r.Err == nil {
-		if (r.Limited || r.Backlog > 0) && r.Summary.Created > 0 && r.Summary.Failed == 0 {
+		if (r.Limited || r.Backlog > 0) && (r.Summary.Created+r.Summary.UpdatedExisting) > 0 && r.Summary.Failed == 0 {
 			return "backlog"
 		}
 		if len(r.ProcessWarnings) > 0 {
@@ -415,19 +415,37 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				msgSource.EmailDate = envelope.Date.Format(time.RFC3339)
 			}
 
-			ok, warning := dispatch(cfg, p, envelope, summary.FromAddr, bodyBytes, messageID, msgSource, logger, res.TraceID)
+			outcome, ok, warning := dispatch(cfg, p, envelope, summary.FromAddr, bodyBytes, messageID, msgSource, logger, res.TraceID)
 			if ok && summary.UID != 0 {
 				processedUIDs.AddNum(summary.UID)
 				batchProcessedUIDs.AddNum(summary.UID)
 				batchProcessed++
 				res.Processed++
-				res.Summary.Created++
-				res.addDetail(summary, "processed", "accepted", "ส่งเข้ากระบวนการสร้างบิลแล้ว")
+				code, label := outcome.Code, outcome.Label
+				switch outcome.Kind {
+				case ProcessOutcomeUpdatedExisting:
+					res.Summary.UpdatedExisting++
+					if code == "" {
+						code = "updated_existing"
+					}
+					if label == "" {
+						label = "อัปเดตข้อมูลบนบิลเดิมแล้ว"
+					}
+				default:
+					res.Summary.Created++
+					if code == "" {
+						code = "accepted"
+					}
+					if label == "" {
+						label = "ส่งเข้ากระบวนการสร้างบิลแล้ว"
+					}
+				}
+				res.addDetail(summary, "processed", code, label)
 			} else {
 				if warning != "" {
 					code, label, userSkipped := classifyDispatchWarning(warning)
 					if !userSkipped {
-						res.ProcessWarnings = append(res.ProcessWarnings, warning)
+						res.ProcessWarnings = append(res.ProcessWarnings, label)
 						res.Summary.Failed++
 					} else {
 						res.Summary.SkippedUser++
@@ -461,6 +479,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		zap.Int("skipped", res.Skipped),
 		zap.Int("summary_scanned", res.Summary.Scanned),
 		zap.Int("summary_created", res.Summary.Created),
+		zap.Int("summary_updated_existing", res.Summary.UpdatedExisting),
 		zap.Int("summary_already_processed", res.Summary.AlreadyProcessed),
 		zap.Int("summary_skipped_user", res.Summary.SkippedUser),
 		zap.Int("summary_failed", res.Summary.Failed),
@@ -711,9 +730,9 @@ func dispatch(
 	source MailSource,
 	logger *zap.Logger,
 	traceID string,
-) (bool, string) {
+) (ProcessOutcome, bool, string) {
 	if p == nil {
-		return false, ""
+		return ProcessOutcome{}, false, ""
 	}
 
 	switch cfg.Channel {
@@ -726,35 +745,37 @@ func dispatch(
 				zap.String("trace_id", traceID), zap.String("from", fromAddr),
 				zap.String("reason", "shopee_channel_non_shopee_from"),
 			)
-			return false, ""
+			return ProcessOutcome{}, false, ""
 		}
 		plainText, bodyHTML := extractBodyParts(bodyBytes)
 		if plainText == "" {
 			plainText = bodyHTML
 		}
 		if isShippedSubject(envelope.Subject) && p.ShopeeShipped != nil {
-			if err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
+			outcome, err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source)
+			if err != nil {
 				if skip, ok := err.(*MessageSkipError); ok {
-					return false, skipDispatchWarning(skip)
+					return ProcessOutcome{}, false, skipDispatchWarning(skip)
 				}
 				logger.Warn("imap_shopee_shipped_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
-				return false, err.Error()
+				return ProcessOutcome{}, false, err.Error()
 			}
-			return true, ""
+			return normalizeProcessOutcome(outcome), true, ""
 		}
 		if p.ShopeeOrder != nil {
-			if err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
+			outcome, err := p.ShopeeOrder(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source)
+			if err != nil {
 				if skip, ok := err.(*MessageSkipError); ok {
-					return false, skipDispatchWarning(skip)
+					return ProcessOutcome{}, false, skipDispatchWarning(skip)
 				}
 				logger.Warn("imap_shopee_order_failed",
 					zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
-				return false, err.Error()
+				return ProcessOutcome{}, false, err.Error()
 			}
-			return true, ""
+			return normalizeProcessOutcome(outcome), true, ""
 		}
-		return false, ""
+		return ProcessOutcome{}, false, ""
 
 	case "lazada":
 		if code, label, ok := classifyLazadaEnvelope(envelope.Subject, fromAddr, parseCSV(cfg.FilterFrom, true)); !ok {
@@ -763,32 +784,44 @@ func dispatch(
 				zap.String("subject", envelope.Subject),
 				zap.String("reason", code),
 			)
-			return false, skipDispatchWarning(&MessageSkipError{Code: code, Label: label})
+			return ProcessOutcome{}, false, skipDispatchWarning(&MessageSkipError{Code: code, Label: label})
 		}
 		if p.LazadaPurchase == nil {
-			return false, ""
+			return ProcessOutcome{}, false, ""
 		}
 		plainText, bodyHTML := extractBodyParts(bodyBytes)
 		if plainText == "" {
 			plainText = bodyHTML
 		}
-		if err := p.LazadaPurchase(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source); err != nil {
+		outcome, err := p.LazadaPurchase(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source)
+		if err != nil {
 			if skip, ok := err.(*MessageSkipError); ok {
-				return false, skipDispatchWarning(skip)
+				return ProcessOutcome{}, false, skipDispatchWarning(skip)
 			}
 			logger.Warn("imap_lazada_purchase_failed",
 				zap.String("trace_id", traceID), zap.String("message_id", messageID), zap.Error(err))
-			return false, err.Error()
+			return ProcessOutcome{}, false, err.Error()
 		}
-		return true, ""
+		return normalizeProcessOutcome(outcome), true, ""
 
 	default:
 		// general → attachment pipeline
 		if p.Attachment == nil {
-			return false, ""
+			return ProcessOutcome{}, false, ""
 		}
-		return parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, source, p.Attachment, logger, traceID)
+		ok, warning := parseAndProcess(bodyBytes, messageID, envelope.Subject, fromAddr, source, p.Attachment, logger, traceID)
+		if ok {
+			return CreatedBillOutcome(), true, ""
+		}
+		return ProcessOutcome{}, false, warning
 	}
+}
+
+func normalizeProcessOutcome(outcome ProcessOutcome) ProcessOutcome {
+	if outcome.Kind == "" {
+		return CreatedBillOutcome()
+	}
+	return outcome
 }
 
 func skipDispatchWarning(skip *MessageSkipError) string {
@@ -839,8 +872,18 @@ func classifyDispatchWarning(warning string) (code, label string, userSkipped bo
 		}
 		return code, label, true
 	default:
-		return "processing_failed", warning, false
+		return "processing_failed", compactWarningLabel(warning), false
 	}
+}
+
+func compactWarningLabel(warning string) string {
+	warning = strings.TrimSpace(warning)
+	const maxWarningRunes = 900
+	runes := []rune(warning)
+	if len(runes) <= maxWarningRunes {
+		return warning
+	}
+	return string(runes[:maxWarningRunes]) + fmt.Sprintf("… [truncated %d chars]", len(runes)-maxWarningRunes)
 }
 
 // matchesSubject is true if any keyword is contained in the subject (case-insensitive).

@@ -145,26 +145,27 @@ func IsMarketplaceFeeSourceSKU(sourceSKU string) bool {
 }
 
 type BillListFilter struct {
-	Status         string `form:"status"`
-	Source         string `form:"source"`
-	BillType       string `form:"bill_type"`
-	DocumentRoute  string `form:"document_route"`
-	EmailAccountID string `form:"email_account_id"`
-	ShopeeStatus   string `form:"shopee_status"`
-	ShopeeShopID   string `form:"shopee_shop_id"`
-	Search         string `form:"search"`
-	Archived       string `form:"archived"` // ""/"active" | "include" | "only"
-	PrintReady     bool   `form:"print_ready"`
-	DateFrom       string `form:"date_from"`
-	DateTo         string `form:"date_to"`
-	SortOrder      string `form:"sort_order"` // "asc" | "desc" (default "desc")
-	Cursor         string `form:"cursor"`
-	Limit          int    `form:"limit"`
-	CursorMode     bool   `form:"-"`
-	IncludeTotal   bool   `form:"include_total"`
-	Page           int    `form:"page,default=1"`
-	PageSize       int    `form:"page_size,default=20"`
-	PerPage        int    `form:"per_page"`
+	Status             string `form:"status"`
+	Source             string `form:"source"`
+	BillType           string `form:"bill_type"`
+	DocumentRoute      string `form:"document_route"`
+	EmailAccountID     string `form:"email_account_id"`
+	ShopeeStatus       string `form:"shopee_status"`
+	ShopeeShopID       string `form:"shopee_shop_id"`
+	Search             string `form:"search"`
+	PrintPaymentMethod string `form:"print_payment_method"`
+	Archived           string `form:"archived"` // ""/"active" | "include" | "only"
+	PrintReady         bool   `form:"print_ready"`
+	DateFrom           string `form:"date_from"`
+	DateTo             string `form:"date_to"`
+	SortOrder          string `form:"sort_order"` // "asc" | "desc" (default "desc")
+	Cursor             string `form:"cursor"`
+	Limit              int    `form:"limit"`
+	CursorMode         bool   `form:"-"`
+	IncludeTotal       bool   `form:"include_total"`
+	Page               int    `form:"page,default=1"`
+	PageSize           int    `form:"page_size,default=20"`
+	PerPage            int    `form:"per_page"`
 }
 
 type EmailPrintCandidateOrder struct {

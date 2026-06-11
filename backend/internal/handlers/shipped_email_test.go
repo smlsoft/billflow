@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,7 +84,7 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	htmlBody := "<html></html>"
 
 	mock.ExpectQuery("SELECT").
-		WithArgs(messageID, orderID).
+		WithArgs(messageID, "2604294EP99PKT").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("FROM bills").
 		WithArgs("2604294EP99PKT").
@@ -98,7 +99,7 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 		WithArgs(existingBillID, "email_envelope", "envelope.json", "application/json", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), nil).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", time.Now()))
 	mock.ExpectExec("INSERT INTO processed_email_keys").
-		WithArgs("shopee_shipped", messageID, orderID).
+		WithArgs("shopee_shipped", messageID, "2604294EP99PKT").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	created, err := h.processOneShippedOrder(
@@ -121,6 +122,107 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestProcessShopeeShippedEmailBodyRecordsPaymentEventBeforeAI(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &EmailHandler{
+		billRepo:    repository.NewBillRepo(db),
+		artifactSvc: artifact.New(t.TempDir(), 10<<20, repository.NewBillArtifactRepo(db), zap.NewNop()),
+		logger:      zap.NewNop(),
+	}
+	messageID := "payment-message@example.test"
+	existingBillID := "768a0068-cad3-4b6e-b229-a5d2ce2ede73"
+	subject := "ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #260608HPC8A42A"
+	body := "ยืนยันการชำระเงินแล้ว"
+
+	mock.ExpectQuery("SELECT").
+		WithArgs(messageID).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("FROM bills").
+		WithArgs("260608HPC8A42A").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(existingBillID))
+	mock.ExpectExec("INSERT INTO shopee_order_events").
+		WithArgs(existingBillID, "260608HPC8A42A", shopeeEventPaymentConfirmed, "ยืนยันการชำระเงินแล้ว", subject, "info@mail.shopee.co.th", messageID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("INSERT INTO bill_artifacts").
+		WithArgs(existingBillID, "email_text", "shopee-shipped.txt", "text/plain; charset=utf-8", int64(len(body)), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", time.Now()))
+	mock.ExpectQuery("INSERT INTO bill_artifacts").
+		WithArgs(existingBillID, "email_envelope", "envelope.json", "application/json", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", time.Now()))
+	mock.ExpectExec("INSERT INTO processed_email_keys").
+		WithArgs("shopee_shipped", messageID, "260608HPC8A42A").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO processed_email_keys").
+		WithArgs("shopee_shipped", messageID, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	outcome, err := h.ProcessShopeeShippedEmailBody(
+		subject,
+		"info@mail.shopee.co.th",
+		body,
+		"",
+		messageID,
+		mailSourceForTest(),
+	)
+	if err != nil {
+		t.Fatalf("ProcessShopeeShippedEmailBody: %v", err)
+	}
+	if outcome.Kind != emailservice.ProcessOutcomeUpdatedExisting || outcome.Code != "status_event_recorded" {
+		t.Fatalf("outcome = %#v, want updated status event", outcome)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestBuildShopeeExtractionJobsScopesSubjectOrder(t *testing.T) {
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260608AAAAAAA",
+		"สินค้า A",
+		"หมายเลขคำสั่งซื้อ #260608BBBBBBB",
+		"สินค้า B",
+	}, "\n")
+	jobs := buildShopeeExtractionJobs("ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #260608BBBBBBB", body, strings.Repeat("<div>html</div>", 2000))
+	if len(jobs) != 1 {
+		t.Fatalf("len(jobs) = %d, want 1", len(jobs))
+	}
+	if jobs[0].OrderID != "260608BBBBBBB" {
+		t.Fatalf("OrderID = %q", jobs[0].OrderID)
+	}
+	if strings.Contains(jobs[0].Text, "สินค้า A") || !strings.Contains(jobs[0].Text, "สินค้า B") {
+		t.Fatalf("subject-scoped text = %q", jobs[0].Text)
+	}
+	if !jobs[0].Compact || jobs[0].HTML != "" {
+		t.Fatalf("large html should use compact text-only job: %#v", jobs[0])
+	}
+}
+
+func TestBuildShopeeExtractionJobsChunksLargeMultiOrderEmail(t *testing.T) {
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260608AAAAAAA\nสินค้า A",
+		"หมายเลขคำสั่งซื้อ #260608BBBBBBB\nสินค้า B",
+		"หมายเลขคำสั่งซื้อ #260608CCCCCCC\nสินค้า C",
+		"หมายเลขคำสั่งซื้อ #260608DDDDDDD\nสินค้า D",
+	}, "\n")
+	jobs := buildShopeeExtractionJobs("ยืนยันการชำระเงินคำสั่งซื้อ", body, "")
+	if len(jobs) != 2 {
+		t.Fatalf("len(jobs) = %d, want 2", len(jobs))
+	}
+	for _, job := range jobs {
+		if !job.Compact || job.HTML != "" {
+			t.Fatalf("multi-order chunks should be compact text-only jobs: %#v", job)
+		}
+	}
+	if strings.Contains(jobs[0].Text, "สินค้า D") {
+		t.Fatalf("first chunk should not contain fourth order: %q", jobs[0].Text)
 	}
 }
 

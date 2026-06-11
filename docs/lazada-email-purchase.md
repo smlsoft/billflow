@@ -29,6 +29,7 @@ The PO target is the real Lazada paid amount. AI output is not trusted for money
 
 `bills.raw_data` for `source='lazada_email'` stores:
 
+- `seller_name` from the Lazada email label `จัดจำหน่ายโดย:`; deterministic parsing wins over AI output
 - `goods_total_amount`
 - `shipping_amount`
 - `coupon_discount_amount`
@@ -80,8 +81,8 @@ This applies to normal retry and bulk send.
 
 - `remark` uses the seller/supplier name from the Lazada email, not user-entered text.
 - `remark_5` stores the Lazada order id, matching the Shopee purchase behavior.
-- `doc_ref` is normally empty for Lazada email.
-- If the Lazada email payment method is Credit/Debit Card, `doc_ref` stores the paid total amount from `ยอดรวมทั้งหมด(รวม VAT)`.
+- If the Lazada email payment method is Credit/Debit Card, `doc_ref` stores the total card charge for every active Lazada purchase bill with the exact same `raw_data.email_date`.
+- Before send, BillFlow blocks Lazada card PO creation when the group is missing `email_date`, paid totals, card payment method, or `amount_reconciliation_status='ok'`; the PO line total must also match the order paid total after the `SHIP_CUS` fee line is present.
 - Purchase send dialogs do not show a free-form `remark` field, to avoid overwriting the SML remark that must carry the shop/seller name.
 
 ## Print And Payment Method
@@ -149,6 +150,7 @@ Current thaisunsport production state:
 - 3 Lazada IMAP accounts are enabled.
 - Each account uses `lookback_days=1` to limit AI/token cost.
 - Poll interval is 600 seconds.
+- Seller-name startup backfill is idempotent: it reads stored `email_html`/`email_text` artifacts, updates only `raw_data.seller_name`, writes an audit event, and does not modify historical SML documents.
 - Rollback remains disabling the Lazada IMAP accounts in `/settings/email`.
 
 Rollback:

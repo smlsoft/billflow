@@ -119,6 +119,8 @@ export interface BillRoutePreview {
   route?: string             // sale_reserve / saleorder / saleinvoice / purchaseorder
   endpoint?: string          // tested SML destination path from /settings/channels
   doc_no?: string            // existing doc_no or SML-latest next preview (not reserved)
+  sml_doc_date?: string      // document date that retry/send will use
+  sml_doc_date_error?: string
   doc_format?: string        // e.g. "BF-SO" + "YYMM####"
   doc_format_code?: string   // e.g. "SR", "INV", "PO"
   party_code?: string        // legacy channel value; purchase flow now selects seller in the send dialog

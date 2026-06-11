@@ -1,10 +1,63 @@
 package repository
 
 import (
+	"encoding/json"
 	"testing"
 
 	"billflow/internal/models"
 )
+
+func TestEnrichMarketplacePurchaseBillRawDataAddsItemCountForLazada(t *testing.T) {
+	b := models.Bill{
+		Source:  "lazada_email",
+		RawData: json.RawMessage(`{"seller_name":"Mostna Store","doc_date":"2026-06-10","body_text":"keep"}`),
+	}
+
+	enrichMarketplacePurchaseBillRawData(&b, 3, true)
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(b.RawData, &raw); err != nil {
+		t.Fatalf("unmarshal raw_data: %v", err)
+	}
+	if got := raw["item_count"]; got != float64(3) {
+		t.Fatalf("item_count = %#v, want 3", got)
+	}
+	if got := raw["seller_name"]; got != "Mostna Store" {
+		t.Fatalf("seller_name = %#v, want Mostna Store", got)
+	}
+	if got := raw["body_text"]; got != "keep" {
+		t.Fatalf("body_text = %#v, want preserved for Lazada", got)
+	}
+}
+
+func TestEnrichMarketplacePurchaseBillRawDataKeepsShopeeSummaryParsing(t *testing.T) {
+	b := models.Bill{
+		Source: "shopee_shipped",
+		RawData: json.RawMessage(`{
+			"order_id":"2601AAA",
+			"body_text":"หมายเลขคำสั่งซื้อ #2601AAA\nวันที่สั่งซื้อ: 10 มิ.ย. 2026 16:47:47\nผู้ขาย: be_department_store\nยอดรวมค่าสินค้า: ฿100\nค่าจัดส่งสินค้า: ฿20\nยอดที่ต้องชำระทั้งหมด: ฿120"
+		}`),
+	}
+
+	enrichMarketplacePurchaseBillRawData(&b, 2, true)
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(b.RawData, &raw); err != nil {
+		t.Fatalf("unmarshal raw_data: %v", err)
+	}
+	if got := raw["item_count"]; got != float64(2) {
+		t.Fatalf("item_count = %#v, want 2", got)
+	}
+	if got := raw["seller_name"]; got != "be_department_store" {
+		t.Fatalf("seller_name = %#v, want be_department_store", got)
+	}
+	if got := raw["order_datetime"]; got != "10 มิ.ย. 2026 16:47:47" {
+		t.Fatalf("order_datetime = %#v, want Shopee order date", got)
+	}
+	if _, ok := raw["body_text"]; ok {
+		t.Fatalf("body_text should be stripped for Shopee list response: %#v", raw["body_text"])
+	}
+}
 
 func TestExtractShopeeShippingAmountScopesToOrderBlock(t *testing.T) {
 	body := `

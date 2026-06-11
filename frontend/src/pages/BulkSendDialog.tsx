@@ -197,6 +197,7 @@ function bulkJobStorageKey(filters: Props['filters']) {
     filters.bill_type || '',
     filters.document_route || '',
     filters.shopee_shop_id || '',
+    filters.print_payment_method || '',
   ].join(':')
 }
 
@@ -248,6 +249,7 @@ interface Props {
     shopee_status?: string
     shopee_shop_id?: string
     search?: string
+    print_payment_method?: string
   }
   onDone?: () => void
 }
@@ -578,6 +580,7 @@ export function BulkSendDialog({
         if (filters.shopee_status) params.set('shopee_status', filters.shopee_status)
         if (filters.shopee_shop_id) params.set('shopee_shop_id', filters.shopee_shop_id)
         if (filters.search) params.set('search', filters.search)
+        if (filters.print_payment_method) params.set('print_payment_method', filters.print_payment_method)
         const res = await client.get<{ data: Bill[]; total: number }>(`/api/bills?${params}`)
         const list = res.data.data ?? []
         const details = await Promise.all(list.map((b) => getBill(b.id)))

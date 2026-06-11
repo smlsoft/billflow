@@ -17,13 +17,24 @@ var (
 	spacePattern           = regexp.MustCompile(`[ \t]+`)
 )
 
-func enrichShopeeBillRawData(b *models.Bill, itemCount int, stripBody bool) {
-	if b == nil || b.RawData == nil || b.Source != "shopee_shipped" {
+func enrichMarketplacePurchaseBillRawData(b *models.Bill, itemCount int, stripBody bool) {
+	if b == nil || b.RawData == nil || (b.Source != "shopee_shipped" && b.Source != "lazada_email") {
 		return
 	}
 
 	var raw map[string]interface{}
 	if err := json.Unmarshal(b.RawData, &raw); err != nil {
+		return
+	}
+
+	if itemCount > 0 {
+		raw["item_count"] = itemCount
+	}
+
+	if b.Source != "shopee_shipped" {
+		if out, err := json.Marshal(raw); err == nil {
+			b.RawData = out
+		}
 		return
 	}
 
@@ -47,9 +58,6 @@ func enrichShopeeBillRawData(b *models.Bill, itemCount int, stripBody bool) {
 	}
 	if summary := extractShopeePaymentSummaryFromBlock(block); summary.HasAny() {
 		raw["payment_summary"] = summary
-	}
-	if itemCount > 0 {
-		raw["item_count"] = itemCount
 	}
 
 	if stripBody {

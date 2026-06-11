@@ -204,6 +204,34 @@ func (c *Client) ExtractOrders(text string) ([]ExtractedOrder, error) {
 	return nil, err
 }
 
+// ExtractOrdersCompact parses bounded Shopee order blocks without requesting
+// product image URLs. Use this for large payment/status emails where sending
+// full HTML would make the model response too large and brittle.
+func (c *Client) ExtractOrdersCompact(text string) ([]ExtractedOrder, error) {
+	parts := []contentPart{
+		{Type: "text", Text: ExtractShopeeOrdersCompactPrompt},
+		{Type: "text", Text: text},
+	}
+
+	body, err := c.requestChat("shopee_email_parse", "extract_orders_compact", c.model, parts)
+	if err == nil {
+		orders, parseErr := parseExtractedOrders(body)
+		if parseErr == nil {
+			return orders, nil
+		}
+		err = parseErr
+	}
+
+	if c.model != c.fallbackModel {
+		fallbackBody, fallbackErr := c.requestChat("shopee_email_parse", "extract_orders_compact_fallback", c.fallbackModel, parts)
+		if fallbackErr == nil {
+			return parseExtractedOrders(fallbackBody)
+		}
+		return nil, fallbackErr
+	}
+	return nil, err
+}
+
 // ExtractOrdersWithHTML is like ExtractOrders but also sends the email HTML so
 // the AI can correlate each item with its product image URL.
 func (c *Client) ExtractOrdersWithHTML(text, html string) ([]ExtractedOrder, error) {

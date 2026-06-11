@@ -2,6 +2,7 @@ package emailservice
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"billflow/internal/models"
@@ -89,6 +90,18 @@ func TestPollResultStatus(t *testing.T) {
 			want: "ok",
 		},
 		{
+			name: "updated existing bill status is ok",
+			res: PollResult{
+				MessagesFound: 1,
+				Processed:     1,
+				Summary: models.IMAPPollSummary{
+					Scanned:         1,
+					UpdatedExisting: 1,
+				},
+			},
+			want: "ok",
+		},
+		{
 			name: "processing warning",
 			res: PollResult{
 				MessagesFound:   1,
@@ -157,6 +170,17 @@ func TestPollResultStatus(t *testing.T) {
 				t.Fatalf("Status() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCompactWarningLabelTruncatesLongAIOutput(t *testing.T) {
+	warning := "AI extract shopee_shipped: " + strings.Repeat("x", 2000)
+	got := compactWarningLabel(warning)
+	if len([]rune(got)) > 950 {
+		t.Fatalf("compactWarningLabel length = %d, want truncated", len([]rune(got)))
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Fatalf("compactWarningLabel = %q, want truncation marker", got)
 	}
 }
 

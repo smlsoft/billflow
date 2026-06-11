@@ -163,14 +163,6 @@ function isPaymentMethodPrintable(method: string, prefixes: string[]) {
   return normalized !== "" && prefixes.some((prefix) => normalized.startsWith(prefix));
 }
 
-function paymentMethodFromParty(party: Party | null) {
-  const name = party?.name?.trim() ?? "";
-  const code = party?.code?.trim() ?? "";
-  if (name.toUpperCase().startsWith("TT")) return name;
-  if (code.toUpperCase().startsWith("TT")) return code;
-  return "";
-}
-
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -235,10 +227,12 @@ export function SendPurchaseDialog({
   const [inquiryTypeStr, setInquiryTypeStr] = useState("");
   const [remark2Str, setRemark2Str] = useState(REMARK2_NONE);
   const [printPaymentMethod, setPrintPaymentMethod] = useState("");
-  const [printPaymentMethodTouched, setPrintPaymentMethodTouched] = useState(false);
   const [savingPrintPaymentMethod, setSavingPrintPaymentMethod] = useState(false);
 
   const effectivePartyCode = party?.code ?? "";
+  const smlDocDate = (bill.preview?.sml_doc_date || "").trim();
+  const smlDocDateError = (bill.preview?.sml_doc_date_error || "").trim();
+  const smlDocDateReady = !isMarketplacePurchaseEmail || smlDocDate !== "";
   const marketplacePrintPolicy = useMemo(
     () => normalizeMarketplacePrintPolicy(bill.email_group?.print_policy),
     [bill.email_group?.print_policy],
@@ -283,6 +277,7 @@ export function SendPurchaseDialog({
     vatRateValid &&
     (!isPurchaseOrder || inquiryTypeStr !== "") &&
     docTime.trim() !== "" &&
+    smlDocDateReady &&
     (!isMarketplacePurchaseEmail || printPaymentMethodAllowed) &&
     !savingPrintPaymentMethod;
   const missingFields = useMemo(
@@ -300,6 +295,7 @@ export function SendPurchaseDialog({
         isPurchaseOrder && inquiryTypeStr === ""
           ? "ประเภทรายการซื้อ (inquiry_type)"
           : "",
+        !smlDocDateReady ? "วันที่คำสั่งซื้อสำหรับวันที่เอกสาร SML" : "",
         isMarketplacePurchaseEmail && selectedPrintPaymentMethod === ""
           ? "วิธีการชำระเงิน"
           : "",
@@ -320,6 +316,7 @@ export function SendPurchaseDialog({
       printPaymentMethodAllowed,
       shelfCode,
       selectedPrintPaymentMethod,
+      smlDocDateReady,
       vatRateValid,
       vatTypeStr,
       whCode,
@@ -453,15 +450,10 @@ export function SendPurchaseDialog({
           ? String(defaults.inquiry_type)
           : "",
     );
-    setPrintPaymentMethodTouched(false);
     setSavingPrintPaymentMethod(false);
-    setPrintPaymentMethod(
-      (bill.print_payment_method || bill.effective_print_payment_method || "").trim() ||
-        paymentMethodFromParty(initialParty),
-    );
+    setPrintPaymentMethod((bill.print_payment_method || "").trim());
   }, [
     open,
-    bill.effective_print_payment_method,
     bill.id,
     bill.print_payment_method,
     bill.remark,
@@ -469,13 +461,6 @@ export function SendPurchaseDialog({
     bill.sml_payload,
     defaults,
   ]);
-
-  useEffect(() => {
-    if (!open || !isMarketplacePurchaseEmail || printPaymentMethodTouched) return;
-    if (printPaymentMethod.trim() !== "") return;
-    const next = paymentMethodFromParty(party);
-    if (next) setPrintPaymentMethod(next);
-  }, [isMarketplacePurchaseEmail, open, party, printPaymentMethod, printPaymentMethodTouched]);
 
   const handleConfirm = async () => {
     if (!canConfirm) return;
@@ -608,26 +593,70 @@ export function SendPurchaseDialog({
             </div>
           )}
 
-          <div className="space-y-1.5">
-            <Label>
-              {isSale
-                ? "ลูกค้า (cust_code, cust_name)"
-                : "ผู้ขาย (cust_code, cust_name)"}{" "}
-              <span className="text-destructive">*</span>
-            </Label>
-            <PartyPicker
-              billType={billType}
-              value={party}
-              onChange={setParty}
-            />
-            {!effectivePartyCode && (
-              <p className="text-[11px] text-warning">
-                ต้องเลือก
+          <div className={`grid gap-3 ${isMarketplacePurchaseEmail ? "sm:grid-cols-2" : ""}`}>
+            <div className="space-y-1.5">
+              <Label>
                 {isSale
                   ? "ลูกค้า (cust_code, cust_name)"
-                  : "ผู้ขาย (cust_code, cust_name)"}
-                ก่อนส่งเข้า SML
-              </p>
+                  : "ผู้ขาย (cust_code, cust_name)"}{" "}
+                <span className="text-destructive">*</span>
+              </Label>
+              <PartyPicker
+                billType={billType}
+                value={party}
+                onChange={setParty}
+              />
+              {!effectivePartyCode && (
+                <p className="text-[11px] text-warning">
+                  ต้องเลือก
+                  {isSale
+                    ? "ลูกค้า (cust_code, cust_name)"
+                    : "ผู้ขาย (cust_code, cust_name)"}
+                  ก่อนส่งเข้า SML
+                </p>
+              )}
+            </div>
+            {isMarketplacePurchaseEmail && (
+              <div className="space-y-1.5">
+                <Label>
+                  วิธีการชำระเงิน <span className="text-destructive">*</span>
+                </Label>
+                <Select
+                  value={printPaymentMethod}
+                  onValueChange={setPrintPaymentMethod}
+                >
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue placeholder="เลือกเองก่อนส่ง SML" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentMethodOptions.map((method) => (
+                      <SelectItem key={method} value={method}>
+                        {method}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="text-[10px] text-muted-foreground">
+                  ต้องเลือกเอง ไม่ดึงจากผู้ขายอัตโนมัติ
+                  {bill.email_group?.order_count && bill.email_group.order_count > 1
+                    ? " และจะบันทึกให้ทุกคำสั่งซื้อในอีเมลเดียวกัน"
+                    : ""}
+                </div>
+                {selectedPrintPaymentMethod &&
+                  !printPaymentMethodReadyForPrint && (
+                    <div className="text-[10px] text-warning">
+                      เลือกค่านี้ส่ง SML ได้ แต่ยังไม่พร้อมปริ้น
+                      เพราะเงื่อนไขปัจจุบันรับเฉพาะวิธีชำระเงินที่ขึ้นต้นด้วย{" "}
+                      {marketplacePrintPolicy.payment_method_prefixes.join(", ")}
+                    </div>
+                  )}
+                {selectedPrintPaymentMethod && !printPaymentMethodAllowed && (
+                  <div className="text-[10px] text-warning">
+                    วิธีชำระเงินนี้ไม่อยู่ในรายการที่ตั้งค่าไว้ใน Channels
+                    กรุณาเลือกจาก dropdown หรือแก้ config ช่องทาง
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -662,6 +691,20 @@ export function SendPurchaseDialog({
                 ปุ่มนี้ดึงเลขล่าสุดมาแสดงใน dialog เท่านั้น
                 เลขที่จะส่งคือค่าที่อยู่ในช่องนี้
               </p>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">วันที่เอกสาร SML (doc_date)</Label>
+              <Input
+                value={smlDocDate || "ไม่พบวันที่คำสั่งซื้อ"}
+                readOnly
+                className={`font-mono bg-muted/50 cursor-not-allowed ${!smlDocDateReady ? "text-warning" : ""}`}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                ใช้วันที่เดียวกับวันที่คำสั่งซื้อ
+              </p>
+              {smlDocDateError && (
+                <p className="text-[10px] text-warning">{smlDocDateError}</p>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-xs">
@@ -791,51 +834,6 @@ export function SendPurchaseDialog({
                 </SelectContent>
               </Select>
             </div>
-            {isMarketplacePurchaseEmail && (
-              <div className="space-y-1 sm:col-span-2">
-                <Label className="text-xs">
-                  วิธีการชำระเงิน <span className="text-destructive">*</span>
-                </Label>
-                <Select
-                  value={printPaymentMethod}
-                  onValueChange={(value) => {
-                    setPrintPaymentMethod(value);
-                    setPrintPaymentMethodTouched(true);
-                  }}
-                >
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="เลือกวิธีการชำระเงิน" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {paymentMethodOptions.map((method) => (
-                      <SelectItem key={method} value={method}>
-                        {method}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <div className="text-[10px] text-muted-foreground">
-                  เก็บไว้ใน BillFlow เพื่อใช้ตรวจเงื่อนไขปริ้น ไม่ส่งค่าเข้า SML
-                  {bill.email_group?.order_count && bill.email_group.order_count > 1
-                    ? " และจะบันทึกให้ทุกคำสั่งซื้อในอีเมลเดียวกัน"
-                    : ""}
-                </div>
-                {selectedPrintPaymentMethod &&
-                  !printPaymentMethodReadyForPrint && (
-                    <div className="text-[10px] text-warning">
-                      เลือกค่านี้ส่ง SML ได้ แต่ยังไม่พร้อมปริ้น
-                      เพราะเงื่อนไขปัจจุบันรับเฉพาะวิธีชำระเงินที่ขึ้นต้นด้วย{" "}
-                      {marketplacePrintPolicy.payment_method_prefixes.join(", ")}
-                    </div>
-                  )}
-                {selectedPrintPaymentMethod && !printPaymentMethodAllowed && (
-                  <div className="text-[10px] text-warning">
-                    วิธีชำระเงินนี้ไม่อยู่ในรายการที่ตั้งค่าไว้ใน Channels
-                    กรุณาเลือกจาก dropdown หรือแก้ config ช่องทาง
-                  </div>
-                )}
-              </div>
-            )}
             {ENABLE_REMARK2 && (
               <div className="space-y-1">
                 <Label className="text-xs">สถานะเอกสาร (remark_2)</Label>

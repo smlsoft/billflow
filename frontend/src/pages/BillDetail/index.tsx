@@ -144,6 +144,7 @@ export default function BillDetail() {
   }
 
   const handleSendClick = () => {
+    if (!(user?.role === 'admin' || user?.role === 'staff')) return
     if (retrying || (sendProgress.status === 'sending' && sendProgress.open)) return
     if (!isSMLReady(smlReadiness)) {
       toast.error('ยังส่ง SML ไม่ได้', {
@@ -248,11 +249,12 @@ export default function BillDetail() {
     (s, i) => s + Math.max((i.qty ?? 0) * (i.price ?? 0) - (i.discount_amount ?? 0), 0),
     0,
   )
+  const canSendToSML = user?.role === 'admin' || user?.role === 'staff'
   const canSend =
     bill.status === 'failed' ||
     bill.status === 'pending' ||
     bill.status === 'needs_review'
-  const canEdit = canSend
+  const canEdit = canSendToSML && canSend
   const canUpdatePurchaseCreditor =
     user?.role === 'admin' &&
     bill.status === 'sent' &&
@@ -320,6 +322,7 @@ export default function BillDetail() {
         expectedDocFormat={bill.preview?.doc_format}
         smlReadiness={smlReadiness}
         smlReadinessLoading={smlReadinessLoading}
+        canSendToSML={canSendToSML}
       />
 
       <BillItemsTable

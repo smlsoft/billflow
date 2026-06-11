@@ -346,7 +346,7 @@ export function BillItemsTable({
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
-          <Table className={showDiscountColumn ? 'min-w-[1210px]' : 'min-w-[1080px]'}>
+          <Table className={showDiscountColumn ? 'min-w-[1260px]' : 'min-w-[1130px]'}>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[360px]">{rawNameLabel}</TableHead>
@@ -360,7 +360,7 @@ export function BillItemsTable({
                   <TableHead className="w-[130px] text-right">ส่วนลด</TableHead>
                 )}
                 <TableHead className="w-[140px] text-right">รวม</TableHead>
-                {canEdit && <TableHead className="w-[170px] text-center">จัดการ</TableHead>}
+                {canEdit && <TableHead className="w-[220px] text-center">จัดการ</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>

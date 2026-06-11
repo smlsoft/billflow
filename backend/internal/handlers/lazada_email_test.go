@@ -80,6 +80,22 @@ func TestNormalizeLazadaDocDateStringBuddhistYear(t *testing.T) {
 	}
 }
 
+func TestResolveLazadaEmailSellerNamePrefersEmailLabel(t *testing.T) {
+	body := "ยืนยันคำสั่งซื้อหมายเลข 1100887410295692\nจัดจำหน่ายโดย: CCC Sports\nวันและเวลาจัดส่ง 12 มิถุนายน"
+	if got := resolveLazadaEmailSellerName("Lazada Thailand", body, ""); got != "CCC Sports" {
+		t.Fatalf("seller = %q, want CCC Sports", got)
+	}
+}
+
+func TestResolveLazadaEmailSellerNameFallsBackToAIThenDefault(t *testing.T) {
+	if got := resolveLazadaEmailSellerName("Mostna Store", "no seller label", ""); got != "Mostna Store" {
+		t.Fatalf("seller = %q, want AI seller", got)
+	}
+	if got := resolveLazadaEmailSellerName("", "no seller label", ""); got != "Lazada" {
+		t.Fatalf("seller = %q, want Lazada", got)
+	}
+}
+
 func TestAttachLazadaItemImagesUsesNearestProductImage(t *testing.T) {
 	html := `
 	  <img src="https://lzd-img-global.slatic.net/g/tps/logo.png">

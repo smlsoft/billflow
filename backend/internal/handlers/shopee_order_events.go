@@ -34,7 +34,7 @@ func shopeeOrderEventFromSubject(subject string) (eventType, label, orderID stri
 func normalizeShopeeOrderID(orderID string) string {
 	orderID = strings.TrimSpace(orderID)
 	orderID = strings.TrimPrefix(orderID, "#")
-	return strings.TrimSpace(orderID)
+	return strings.ToUpper(strings.TrimSpace(orderID))
 }
 
 func (h *EmailHandler) recordShopeeOrderEvent(

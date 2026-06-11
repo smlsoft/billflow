@@ -37,6 +37,13 @@ type BillQueueCounts struct {
 	PrintReadyGroups int `json:"print_ready_groups"`
 }
 
+type LazadaSellerBackfillTarget struct {
+	ID             string
+	OrderID        string
+	EmailMessageID string
+	SellerName     string
+}
+
 func NewBillRepo(db *sql.DB) *BillRepo {
 	return &BillRepo{db: db}
 }
@@ -149,7 +156,7 @@ func (r *BillRepo) FindByID(id string) (*models.Bill, error) {
 	} else {
 		return nil, err
 	}
-	enrichShopeeBillRawData(b, len(items), false)
+	enrichMarketplacePurchaseBillRawData(b, len(items), false)
 	single := []models.Bill{*b}
 	if err := r.attachEmailGroups(single); err != nil {
 		return nil, fmt.Errorf("attach email group: %w", err)
@@ -258,7 +265,7 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 		if smlPayloadRaw != nil {
 			b.SMLPayload = json.RawMessage(smlPayloadRaw)
 		}
-		enrichShopeeBillRawData(&b, itemCount, true)
+		enrichMarketplacePurchaseBillRawData(&b, itemCount, true)
 		bills = append(bills, b)
 	}
 	if err := rows.Err(); err != nil {
@@ -342,6 +349,12 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 		args = append(args, f.ShopeeShopID)
 		argN++
 	}
+	if method := strings.TrimSpace(f.PrintPaymentMethod); method != "" {
+		where += " AND b.source IN ('shopee_shipped', 'lazada_email') AND b.bill_type = 'purchase'"
+		where += " AND " + effectivePrintPaymentMethodExpr("b") + fmt.Sprintf(" = $%d", argN)
+		args = append(args, method)
+		argN++
+	}
 	if f.DateFrom != "" {
 		where += fmt.Sprintf(" AND b.created_at >= $%d::date", argN)
 		args = append(args, f.DateFrom)
@@ -362,6 +375,10 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 				 UNION
 				 SELECT id FROM bills
 				  WHERE archived_at IS NULL
+				    AND UPPER(TRIM(LEADING '#' FROM COALESCE(sml_doc_no, ''))) = $%d
+				 UNION
+				 SELECT id FROM bills
+				  WHERE archived_at IS NULL
 				    AND UPPER(TRIM(LEADING '#' FROM COALESCE(raw_data->>'order_id', ''))) = $%d
 				 UNION
 				 SELECT id FROM bills
@@ -371,7 +388,7 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 				 SELECT bill_id FROM shopee_order_events
 				  WHERE UPPER(order_id) = $%d
 				)`,
-				argN, argN, argN, argN,
+				argN, argN, argN, argN, argN,
 			)
 			args = append(args, orderID)
 		} else {
@@ -1326,6 +1343,68 @@ func (r *BillRepo) ApplyShopeePurchasePaymentSummaryToBill(billID string, summar
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+func (r *BillRepo) ListLazadaEmailSellerBackfillTargets() ([]LazadaSellerBackfillTarget, error) {
+	rows, err := r.db.Query(`
+		SELECT id::text,
+		       COALESCE(NULLIF(raw_data->>'order_id', ''), NULLIF(raw_data->>'lazada_order_id', ''), '') AS order_id,
+		       COALESCE(raw_data->>'email_message_id', '') AS email_message_id,
+		       COALESCE(raw_data->>'seller_name', '') AS seller_name
+		  FROM bills
+		 WHERE source = 'lazada_email'
+		   AND bill_type = 'purchase'
+		   AND raw_data IS NOT NULL
+		 ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list lazada email seller backfill targets: %w", err)
+	}
+	defer rows.Close()
+
+	targets := []LazadaSellerBackfillTarget{}
+	for rows.Next() {
+		var target LazadaSellerBackfillTarget
+		if err := rows.Scan(&target.ID, &target.OrderID, &target.EmailMessageID, &target.SellerName); err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
+}
+
+func (r *BillRepo) UpdateLazadaEmailSellerName(billID, sellerName string) (bool, string, error) {
+	sellerName = strings.TrimSpace(sellerName)
+	if billID == "" || sellerName == "" {
+		return false, "", nil
+	}
+
+	var oldSeller string
+	err := r.db.QueryRow(`
+		WITH current AS (
+			SELECT id, COALESCE(raw_data->>'seller_name', '') AS old_seller
+			  FROM bills
+			 WHERE id = $1
+			   AND source = 'lazada_email'
+			   AND bill_type = 'purchase'
+		),
+		updated AS (
+			UPDATE bills b
+			   SET raw_data = jsonb_set(COALESCE(b.raw_data, '{}'::jsonb), '{seller_name}', to_jsonb($2::text), true)
+			  FROM current c
+			 WHERE b.id = c.id
+			   AND c.old_seller IS DISTINCT FROM $2
+			 RETURNING c.old_seller
+		)
+		SELECT old_seller FROM updated`,
+		billID, sellerName,
+	).Scan(&oldSeller)
+	if err == sql.ErrNoRows {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	return true, oldSeller, nil
 }
 
 func (r *BillRepo) backfillShopeePurchaseDiscount(billID string, rawData json.RawMessage) (bool, error) {

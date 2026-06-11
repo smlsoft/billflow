@@ -511,7 +511,7 @@ func (h *EmailHandler) adminNotify(msg string) {
 //  3. Creates a bill with source='shopee_email'
 //     - status='needs_review' if any item has low confidence
 //     - status='pending' if all items are high confidence (and sends to SML)
-func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) error {
+func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) (emailservice.ProcessOutcome, error) {
 	traceID := fmt.Sprintf("shopee-email-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 
@@ -522,13 +522,13 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 			h.logger.Warn("shopee_email: dedup check failed", zap.String("message_id", messageID), zap.Error(err))
 		} else if exists {
 			h.logger.Info("shopee_email: skipping duplicate", zap.String("message_id", messageID))
-			return emailservice.SkipMessage("duplicate", "เมลนี้เคยสร้างบิลแล้ว")
+			return emailservice.ProcessOutcome{}, emailservice.SkipMessage("duplicate", "เมลนี้เคยสร้างบิลแล้ว")
 		}
 	}
 
 	if h.catalogSvc == nil {
 		h.logger.Warn("shopee_email: catalog service not configured — skipping")
-		return fmt.Errorf("catalog service not configured")
+		return emailservice.ProcessOutcome{}, fmt.Errorf("catalog service not configured")
 	}
 
 	// Use AI to extract order info from HTML body
@@ -539,9 +539,9 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		h.logger.Warn("shopee_email: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
 		if err == nil {
-			return fmt.Errorf("AI extract shopee email: empty items")
+			return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee email: empty items")
 		}
-		return fmt.Errorf("AI extract shopee email: %w", err)
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee email: %w", err)
 	}
 
 	// Extract Shopee order ID from subject (e.g. "คำสั่งซื้อ #2501234567890")
@@ -552,7 +552,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		existsByOrderID, _ := h.billRepo.FindByShopeeOrderID(shopeeOrderID)
 		if existsByOrderID {
 			h.logger.Info("shopee_email: skipping duplicate order", zap.String("order_id", shopeeOrderID))
-			return emailservice.SkipMessage("duplicate_order", "คำสั่งซื้อนี้เคยสร้างบิลแล้ว")
+			return emailservice.ProcessOutcome{}, emailservice.SkipMessage("duplicate_order", "คำสั่งซื้อนี้เคยสร้างบิลแล้ว")
 		}
 	}
 
@@ -668,7 +668,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		SMLOrderID:   shopeeOrderID,
 	}
 	if err := h.billRepo.Create(bill); err != nil {
-		return fmt.Errorf("create shopee_email bill: %w", err)
+		return emailservice.ProcessOutcome{}, fmt.Errorf("create shopee_email bill: %w", err)
 	}
 	h.recordShopeeOrderEvent(bill.ID, subject, from, messageID, source, shopeeOrderID)
 	_ = h.billRepo.MarkProcessedEmailKey("shopee_email", messageID, shopeeOrderID)
@@ -730,7 +730,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 		zap.Int("items", len(itemsWithCandidates)),
 	)
 
-	return nil
+	return emailservice.CreatedBillOutcome(), nil
 }
 
 // htmlToText strips HTML tags for cleaner AI extraction

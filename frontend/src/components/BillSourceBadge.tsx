@@ -13,13 +13,13 @@ export function BillSourceBadge({ source, label, className }: Props) {
   return (
     <span
       className={cn(
-        'inline-flex w-fit items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium transition-colors',
+        'inline-flex w-fit min-w-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium transition-colors',
         tone.className,
         className,
       )}
     >
       <SourceAccent source={source} tone={tone} />
-      <span>{label ?? billSourceLabel(source)}</span>
+      <span className="min-w-0 truncate">{label ?? billSourceLabel(source)}</span>
     </span>
   )
 }

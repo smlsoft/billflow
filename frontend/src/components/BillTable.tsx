@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import type { MouseEvent } from 'react'
+import { Fragment, type MouseEvent, type ReactNode } from 'react'
 import { Archive, CreditCard, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
-  isShopeePurchaseBill,
+  isMarketplacePurchaseBill,
   isShopeeSalesBill,
   money,
   rawNumber,
@@ -30,7 +30,8 @@ interface Props {
   loading?: boolean
   onRowClick: (id: string) => void
   showShopeeStatusColumn?: boolean
-  canManage?: boolean
+  canUseOperationalActions?: boolean
+  canManageLifecycle?: boolean
   canPermanentDelete?: boolean
   virtualize?: boolean
   onArchive?: (bill: Bill) => void
@@ -52,7 +53,8 @@ export default function BillTable({
   loading,
   onRowClick,
   showShopeeStatusColumn = true,
-  canManage = true,
+  canUseOperationalActions = true,
+  canManageLifecycle = true,
   canPermanentDelete = false,
   virtualize = false,
   onArchive,
@@ -78,7 +80,7 @@ export default function BillTable({
       dense
       virtualize={virtualize}
       virtualizeThreshold={100}
-      virtualRowHeight={64}
+      virtualRowHeight={80}
       virtualMaxHeight={620}
       columns={[
         {
@@ -154,16 +156,17 @@ export default function BillTable({
                 <span className="block h-px w-0 overflow-hidden">
                   {displayDate.long}
                 </span>
-                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                  {isShopeePurchaseBill(b) && (
-                    <ShopeePurchaseSummary bill={b} />
-                  )}
-                  {isShopeeSalesBill(b) && (
-                    <ShopeeSalesSummary bill={b} />
-                  )}
-                  <ShopeeShopLine bill={b} />
-                  <EmailGroupLine bill={b} />
-                </div>
+                {isMarketplacePurchaseBill(b) ? (
+                  <MarketplacePurchaseLines bill={b} />
+                ) : (
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                    {isShopeeSalesBill(b) && (
+                      <ShopeeSalesSummary bill={b} />
+                    )}
+                    <ShopeeShopLine bill={b} />
+                    <EmailGroupLine bill={b} />
+                  </div>
+                )}
               </div>
             )
           },
@@ -176,7 +179,7 @@ export default function BillTable({
             const inbox = emailInboxLabel(b)
             return (
               <div className="flex min-w-0 flex-col gap-0.5">
-                <BillSourceBadge source={b.source} className="px-1.5 py-0.5 text-[11px] leading-4" />
+                <BillSourceBadge source={b.source} className="h-6 max-w-[190px] px-1.5 py-0.5 text-[11px] leading-4" />
                 {inbox && (
                   <span className="max-w-[180px] truncate text-[11px] text-muted-foreground" title={inbox}>
                     {inbox}
@@ -229,7 +232,7 @@ export default function BillTable({
               cell: (b: Bill) => (
                 <div className="flex justify-center">
                   {b.source === 'lazada_email' && !b.shopee_status ? (
-                    <span className="text-xs text-muted-foreground/70">—</span>
+                    <LazadaEmailOrderStatusBadge />
                   ) : (
                     <ShopeeOrderStatusBadge event={b.shopee_status} title={shopeeStatusTitle(b)} />
                   )}
@@ -245,7 +248,8 @@ export default function BillTable({
           cell: (b) => (
             <BillRowActions
               bill={b}
-              canManage={canManage}
+              canUseOperationalActions={canUseOperationalActions}
+              canManageLifecycle={canManageLifecycle}
               canPermanentDelete={canPermanentDelete}
               onArchive={onArchive}
               onRestore={onRestore}
@@ -278,7 +282,8 @@ export default function BillTable({
 
 function BillRowActions({
   bill,
-  canManage,
+  canUseOperationalActions,
+  canManageLifecycle,
   canPermanentDelete,
   onArchive,
   onRestore,
@@ -294,7 +299,8 @@ function BillRowActions({
   onPrintEmail,
 }: {
   bill: Bill
-  canManage: boolean
+  canUseOperationalActions: boolean
+  canManageLifecycle: boolean
   canPermanentDelete: boolean
   onArchive?: (bill: Bill) => void
   onRestore?: (bill: Bill) => void
@@ -314,9 +320,8 @@ function BillRowActions({
     fn?.(bill)
   }
 
-  if (!canManage) return null
-
   if (bill.archived_at) {
+    if (!canManageLifecycle) return null
     return (
       <div className="flex justify-end gap-1.5">
         <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={stop(onRestore)}>
@@ -344,11 +349,12 @@ function BillRowActions({
     const loadingCreditor = purchaseCreditorLoadingBillId === bill.id
     const showUpdatePayment = canShowPrintPaymentMethodAction(bill, canUpdatePrintPaymentMethod) && !!onUpdatePrintPaymentMethod
     const loadingPayment = printPaymentMethodLoadingBillId === bill.id
-    const showPrint = canShowEmailPrintAction(bill) && !!onPrintEmail
+    const showPrint = canUseOperationalActions && canShowEmailPrintAction(bill) && !!onPrintEmail
     const printReady = Boolean(bill.email_group?.print_ready)
     const printLoading = printLoadingMessageID === bill.email_group?.message_id
     const printReason = bill.email_group?.print_block_reason || bill.email_group?.print_policy_note || 'ยังไม่พร้อมพิมพ์'
-    const hasSecondaryActions = showUpdateCreditor || showUpdatePayment || !!onArchive
+    const showArchive = canManageLifecycle && !!onArchive
+    const hasSecondaryActions = showUpdateCreditor || showUpdatePayment || showArchive
     return (
       <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
         {showPrint && (
@@ -409,10 +415,10 @@ function BillRowActions({
                   {loadingPayment ? 'กำลังเปิด...' : 'วิธีชำระ'}
                 </DropdownMenuItem>
               )}
-              {(showUpdateCreditor || showUpdatePayment) && onArchive && (
+              {(showUpdateCreditor || showUpdatePayment) && showArchive && (
                 <DropdownMenuSeparator />
               )}
-              {onArchive && (
+              {showArchive && (
                 <DropdownMenuItem onSelect={() => onArchive(bill)}>
                   <Archive className="h-3.5 w-3.5" />
                   เก็บบิล
@@ -424,6 +430,8 @@ function BillRowActions({
       </div>
     )
   }
+
+  if (!canManageLifecycle) return null
 
   return (
     <Button
@@ -534,6 +542,17 @@ export function ShopeeOrderStatusBadge({
     >
       {event.status_label}
     </Badge>
+  )
+}
+
+function LazadaEmailOrderStatusBadge() {
+  return (
+    <span
+      className="inline-flex h-6 items-center rounded-full border border-border bg-muted/40 px-2 text-[11px] font-medium text-muted-foreground"
+      title="Lazada email purchase ไม่มี Shopee order event"
+    >
+      อีเมลสั่งซื้อ
+    </span>
   )
 }
 
@@ -666,6 +685,29 @@ function ShopeeShopLine({ bill }: { bill: Bill }) {
   )
 }
 
+function MarketplacePurchaseLines({ bill }: { bill: Bill }) {
+  const hasTraceLine = hasEmailGroupLine(bill) || hasShopeeShopLine(bill)
+  return (
+    <div className="min-w-0 space-y-1">
+      <MarketplacePurchaseSummary bill={bill} />
+      {hasTraceLine && (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          <EmailGroupLine bill={bill} />
+          <ShopeeShopLine bill={bill} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function hasEmailGroupLine(bill: Bill): boolean {
+  return !!bill.email_group?.message_id && !!bill.email_group?.group_key
+}
+
+function hasShopeeShopLine(bill: Bill): boolean {
+  return !!rawString(bill.raw_data, 'shopee_shop_id')
+}
+
 function ShopeeSalesSummary({ bill }: { bill: Bill }) {
   const raw = bill.raw_data
   const orderID = shopeeOrderID(raw)
@@ -700,36 +742,93 @@ function ShopeeSalesSummary({ bill }: { bill: Bill }) {
   )
 }
 
-function ShopeePurchaseSummary({ bill }: { bill: Bill }) {
+function MarketplacePurchaseSummary({ bill }: { bill: Bill }) {
   const raw = bill.raw_data
   const orderID = shopeeOrderID(raw)
-  const orderDate = rawString(raw, 'order_datetime')
+  const orderDate = formatMarketplaceOrderDate(rawString(raw, 'order_datetime') || rawString(raw, 'doc_date'))
   const seller = rawString(raw, 'seller_name')
   const itemCount = rawNumber(raw, 'item_count') ?? bill.items?.length ?? null
+  const fields: Array<{ key: string; node: ReactNode }> = []
+  if (orderID) {
+    fields.push({
+      key: 'order',
+      node: (
+        <MarketplaceMetaField label="เลขคำสั่งซื้อ" valueClassName="max-w-[220px] font-mono">
+          {orderID}
+        </MarketplaceMetaField>
+      ),
+    })
+  }
+  if (orderDate) {
+    fields.push({
+      key: 'date',
+      node: (
+        <MarketplaceMetaField label="วันที่สั่งซื้อ" valueClassName="max-w-[200px]">
+          {orderDate}
+        </MarketplaceMetaField>
+      ),
+    })
+  }
+  if (seller) {
+    fields.push({
+      key: 'seller',
+      node: (
+        <MarketplaceMetaField label="ผู้ขาย" title={seller} valueClassName="max-w-[240px]">
+          {seller}
+        </MarketplaceMetaField>
+      ),
+    })
+  }
+  if (itemCount != null) {
+    fields.push({
+      key: 'items',
+      node: (
+        <span className="inline-flex shrink-0 items-baseline gap-1 text-muted-foreground">
+          <span className="tabular-nums text-foreground">{itemCount.toLocaleString('th-TH')}</span>
+          <span>รายการ</span>
+        </span>
+      ),
+    })
+  }
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
-      {orderID && (
-        <span className="min-w-0">
-          เลขคำสั่งซื้อ{' '}
-          <span className="font-mono text-foreground">{orderID}</span>
-        </span>
-      )}
-      {orderDate && (
-        <span>
-          วันที่สั่งซื้อ: <span className="text-foreground">{orderDate}</span>
-        </span>
-      )}
-      {seller && (
-        <span>
-          ผู้ขาย: <span className="text-foreground">{seller}</span>
-        </span>
-      )}
-      {itemCount != null && (
-        <span>
-          <span className="tabular-nums text-foreground">{itemCount}</span> รายการ
-        </span>
-      )}
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[11px] leading-4">
+      {fields.map((field, index) => (
+        <Fragment key={field.key}>
+          {index > 0 && <span className="shrink-0 text-muted-foreground/70">·</span>}
+          {field.node}
+        </Fragment>
+      ))}
     </div>
   )
+}
+
+function MarketplaceMetaField({
+  label,
+  children,
+  title,
+  valueClassName,
+}: {
+  label: string
+  children: ReactNode
+  title?: string
+  valueClassName?: string
+}) {
+  return (
+    <span className="inline-flex min-w-0 items-baseline gap-1 text-muted-foreground">
+      <span className="shrink-0">{label}</span>
+      <span className={cn('min-w-0 truncate text-foreground', valueClassName)} title={title}>
+        {children}
+      </span>
+    </span>
+  )
+}
+
+function formatMarketplaceOrderDate(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  const parsed = dayjs(trimmed)
+  if (!parsed.isValid()) return trimmed
+  const hasTime = /(?:T|\s)\d{1,2}:\d{2}/.test(trimmed)
+  return parsed.format(hasTime ? 'DD/MM/YYYY HH:mm' : 'DD/MM/YYYY')
 }

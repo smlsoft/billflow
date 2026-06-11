@@ -263,7 +263,7 @@ func TestPurchaseOrderHeaderFromBillUsesMarketplaceSellerRemark(t *testing.T) {
 			wantRemark5:   "1107473377495692",
 		},
 		{
-			name: "lazada card puts paid total in doc ref and order id in remark5",
+			name: "lazada card leaves doc ref for charge group resolver and order id in remark5",
 			bill: &models.Bill{
 				Source:   "lazada_email",
 				BillType: "purchase",
@@ -277,10 +277,9 @@ func TestPurchaseOrderHeaderFromBillUsesMarketplaceSellerRemark(t *testing.T) {
 			requestRemark: "user typed wrong remark",
 			wantRemark:    "Lucky Store*",
 			wantRemark5:   "1108153962788966",
-			wantDocRef:    "1015.75",
 		},
 		{
-			name: "lazada card with string paid total formats doc ref",
+			name: "lazada card with string paid total still leaves doc ref for charge group resolver",
 			bill: &models.Bill{
 				Source:   "lazada_email",
 				BillType: "purchase",
@@ -294,7 +293,6 @@ func TestPurchaseOrderHeaderFromBillUsesMarketplaceSellerRemark(t *testing.T) {
 			requestRemark: "user typed wrong remark",
 			wantRemark:    "Lazada Shop",
 			wantRemark5:   "1107000000000000",
-			wantDocRef:    "1015",
 		},
 		{
 			name: "lazada card without paid total keeps doc ref empty",
