@@ -285,43 +285,12 @@ function decoratePrintableDocument(
   } catch { /* best-effort */ }
 
   const printOrders = normalizePrintOrders(printContext)
-  const topLines = topPrintLines(printOrders)
   const paymentLines = paymentPrintLines(printOrders)
   const orderDocMap = Object.fromEntries(
     printOrders
       .filter((order) => order.orderId && order.smlDocNo)
       .map((order) => [order.orderId!, order.smlDocNo!]),
   )
-
-  if (topLines.length > 0 && doc.body) {
-    const banner = doc.createElement('div')
-    banner.setAttribute('data-billflow-print', 'true')
-    banner.style.cssText = [
-      'font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      'font-size: 13px',
-      'font-weight: 700',
-      'line-height: 1.45',
-      'padding: 8px 10px',
-      'background: #f3f4f6',
-      'border-bottom: 2px solid #374151',
-      'margin-bottom: 10px',
-      'color: #111827',
-      'print-color-adjust: exact',
-      '-webkit-print-color-adjust: exact',
-    ].join(';')
-    if (topLines.length > 1) {
-      banner.textContent = 'เลขเอกสาร SML / วิธีการชำระเงิน'
-      topLines.forEach((lineText) => {
-        const line = doc.createElement('div')
-        line.style.cssText = 'padding-left:12px;font-size:12px;font-weight:500'
-        line.textContent = lineText
-        banner.appendChild(line)
-      })
-    } else {
-      banner.textContent = topLines[0]
-    }
-    doc.body.insertBefore(banner, doc.body.firstChild)
-  }
 
   if (paymentLines.length > 0 && doc.body) {
     const stamp = doc.createElement('div')
@@ -385,23 +354,6 @@ function normalizePrintOrders(printContext?: ArtifactPrintContext): ArtifactPrin
   return out
 }
 
-function topPrintLines(orders: ArtifactPrintOrderContext[]): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const order of orders) {
-    const smlDocNo = (order.smlDocNo ?? '').trim()
-    if (!smlDocNo) continue
-    const orderID = (order.orderId ?? '').trim()
-    const payment = formatCreditCardPaymentMethod(order.paymentMethod)
-    const line = `${orderID ? `${orderID} → ` : ''}${smlDocNo}${payment ? ` · ${payment}` : ''}`
-    const key = orderID || smlDocNo
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(line)
-  }
-  return out
-}
-
 function paymentPrintLines(orders: ArtifactPrintOrderContext[]): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -436,21 +388,128 @@ function trimMarketplacePrintFooter(doc: Document): void {
   }
 }
 
+interface OrderDocPrintEntry {
+  key: string
+  docNo: string
+  variants: string[]
+}
+
 function injectOrderDocTextLabels(doc: Document, orderDocMap: Record<string, string>): void {
   if (!doc.body) return
-  const entries = Object.entries(orderDocMap).filter(([orderID, docNo]) => orderID && docNo)
+  const entries = orderDocPrintEntries(orderDocMap)
   if (entries.length === 0) return
 
   const annotated = new Set<string>()
+  injectOrderDocLabelsInDetailRows(doc, entries, annotated)
+  injectOrderDocLabelsInFallbackText(doc, entries, annotated)
+}
+
+function orderDocPrintEntries(orderDocMap: Record<string, string>): OrderDocPrintEntry[] {
+  const seen = new Set<string>()
+  const entries: OrderDocPrintEntry[] = []
+  for (const [orderIdValue, docNoValue] of Object.entries(orderDocMap)) {
+    const orderId = orderIdValue.trim()
+    const docNo = docNoValue.trim()
+    const key = canonicalOrderID(orderId)
+    if (!orderId || !docNo || !key || seen.has(key)) continue
+    seen.add(key)
+    entries.push({
+      key,
+      docNo,
+      variants: orderIDPrintVariants(orderId),
+    })
+  }
+  return entries
+}
+
+function canonicalOrderID(orderId: string): string {
+  return orderId.trim().replace(/^#+/, '').toUpperCase()
+}
+
+function orderIDPrintVariants(orderId: string): string[] {
+  const clean = orderId.trim()
+  const withoutHash = clean.replace(/^#+/, '')
+  const withHash = withoutHash ? `#${withoutHash}` : ''
+  return [clean, withHash, withoutHash]
+    .map((value) => value.trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .sort((a, b) => b.length - a.length)
+}
+
+function injectOrderDocLabelsInDetailRows(
+  doc: Document,
+  entries: OrderDocPrintEntry[],
+  annotated: Set<string>,
+): void {
+  if (!doc.body) return
+  const rows = Array.from(doc.body.querySelectorAll('tr'))
+  for (const row of rows) {
+    if (hiddenPrintAncestor(row) || row.closest('[data-billflow-print="true"],[data-billflow-order-label="true"]')) {
+      continue
+    }
+
+    const cells = Array.from(row.children).filter(isTableCellElement)
+    if (cells.length < 2) continue
+
+    const labelCellIndex = cells.findIndex(isOrderIDLabelCell)
+    if (labelCellIndex < 0) continue
+
+    const valueCells = cells.slice(labelCellIndex + 1)
+    for (const entry of entries) {
+      if (annotated.has(entry.key)) continue
+      for (const cell of valueCells) {
+        if (insertOrderDocLabelAfterOrderInElement(doc, cell, entry, true)) {
+          annotated.add(entry.key)
+          break
+        }
+      }
+    }
+  }
+}
+
+function injectOrderDocLabelsInFallbackText(
+  doc: Document,
+  entries: OrderDocPrintEntry[],
+  annotated: Set<string>,
+): void {
+  if (!doc.body) return
+  for (const entry of entries) {
+    if (annotated.has(entry.key)) continue
+    if (insertOrderDocLabelAfterOrderInElement(doc, doc.body, entry, true)) {
+      annotated.add(entry.key)
+    }
+  }
+}
+
+function isTableCellElement(element: Element): element is HTMLElement {
+  const tagName = element.tagName.toLowerCase()
+  return tagName === 'td' || tagName === 'th'
+}
+
+function isOrderIDLabelCell(element: Element): boolean {
+  const text = normalizeElementText(element)
+  return text.includes('หมายเลขคำสั่งซื้อ') || text.includes('เลขคำสั่งซื้อ')
+}
+
+function normalizeElementText(element: Element): string {
+  return (element.textContent ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function insertOrderDocLabelAfterOrderInElement(
+  doc: Document,
+  element: Element,
+  entry: OrderDocPrintEntry,
+  allowLinkedOrderText: boolean,
+): boolean {
   const walker = doc.createTreeWalker(
-    doc.body,
+    element,
     NodeFilter.SHOW_TEXT,
     {
       acceptNode(node) {
         if (!node.nodeValue) return NodeFilter.FILTER_REJECT
         const parent = node.parentElement
-        if (!parent || shouldSkipOrderDocLabelNode(parent)) return NodeFilter.FILTER_REJECT
-        return entries.some(([orderID]) => node.nodeValue?.includes(orderID))
+        if (!parent || shouldSkipOrderDocLabelNode(parent, allowLinkedOrderText)) return NodeFilter.FILTER_REJECT
+        return findOrderTextMatch(node.nodeValue, entry) !== null
           ? NodeFilter.FILTER_ACCEPT
           : NodeFilter.FILTER_REJECT
       },
@@ -465,22 +524,40 @@ function injectOrderDocTextLabels(doc: Document, orderDocMap: Record<string, str
   }
 
   for (const textNode of textNodes) {
-    let cursor: Text | null = textNode
-    for (const [orderID, docNo] of entries) {
-      if (annotated.has(orderID) || !cursor?.nodeValue?.includes(orderID)) continue
-      const afterOrderIndex = cursor.nodeValue.indexOf(orderID) + orderID.length
-      const afterNode = cursor.splitText(afterOrderIndex)
-      afterNode.parentNode?.insertBefore(createOrderDocLabel(doc, docNo), afterNode)
-      annotated.add(orderID)
-      cursor = afterNode
+    const match = findOrderTextMatch(textNode.nodeValue ?? '', entry)
+    if (!match) continue
+
+    const link = allowLinkedOrderText ? textNode.parentElement?.closest('a') : null
+    if (link && element.contains(link)) {
+      if (link.nextElementSibling?.getAttribute('data-billflow-order-label') !== 'true') {
+        link.insertAdjacentElement('afterend', createOrderDocLabel(doc, entry.docNo))
+      }
+      return true
     }
+
+    const afterNode = textNode.splitText(match.index + match.length)
+    afterNode.parentNode?.insertBefore(createOrderDocLabel(doc, entry.docNo), afterNode)
+    return true
   }
+  return false
 }
 
-function shouldSkipOrderDocLabelNode(element: Element): boolean {
+function findOrderTextMatch(text: string, entry: OrderDocPrintEntry): { index: number; length: number } | null {
+  const upperText = text.toUpperCase()
+  for (const variant of entry.variants) {
+    const index = upperText.indexOf(variant.toUpperCase())
+    if (index >= 0) {
+      return { index, length: variant.length }
+    }
+  }
+  return null
+}
+
+function shouldSkipOrderDocLabelNode(element: Element, allowLinkedOrderText: boolean): boolean {
   const tagName = element.tagName.toLowerCase()
-  if (['a', 'button', 'script', 'style', 'noscript'].includes(tagName)) return true
-  if (element.closest('a,button,[data-billflow-print="true"],[data-billflow-order-label="true"]')) return true
+  if (['button', 'script', 'style', 'noscript'].includes(tagName)) return true
+  if (!allowLinkedOrderText && element.closest('a')) return true
+  if (element.closest('button,[data-billflow-print="true"],[data-billflow-order-label="true"]')) return true
   return Boolean(hiddenPrintAncestor(element))
 }
 
