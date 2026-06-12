@@ -480,6 +480,7 @@ func main() {
 		api.POST("/bills/:id/retry", middleware.RequireRole("admin", "staff"), billH.Retry)
 		api.PATCH("/bills/:id/purchase-creditor", middleware.RequireRole("admin"), billH.UpdatePurchaseCreditor)
 		api.PATCH("/bills/:id/print-payment-method", middleware.RequireRole("admin", "staff"), billH.UpdatePrintPaymentMethod)
+		api.PATCH("/bills/:id/sml-doc-ref", middleware.RequireRole("admin"), billH.PatchBillSMLDocRef)
 		api.POST("/bills/:id/ensure-shopee-shipping-line", middleware.RequireRole("admin", "staff"), billH.EnsureShopeeShippingLine)
 		api.GET("/bills/:id/latest-doc-no", middleware.RequireRole("admin", "staff"), billH.LatestDocNo)
 		api.POST("/bills/:id/regenerate-doc-no", middleware.RequireRole("admin", "staff"), billH.RegenerateDocNo)

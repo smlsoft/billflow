@@ -156,6 +156,32 @@ type PurchaseOrderCreditorUpdateResponse struct {
 	Data    PurchaseOrderCreditorUpdateResult `json:"data"`
 }
 
+type PurchaseOrderDocRefUpdateRequest struct {
+	DocRef            string `json:"doc_ref"`
+	ExpectedOldDocRef string `json:"expected_old_doc_ref,omitempty"`
+	ExpectedRemark5   string `json:"expected_remark_5,omitempty"`
+	DryRun            bool   `json:"dry_run"`
+}
+
+type PurchaseOrderDocRefUpdateResult struct {
+	DocNo             string `json:"doc_no"`
+	OldDocRef         string `json:"old_doc_ref"`
+	NewDocRef         string `json:"new_doc_ref"`
+	OldRemark5        string `json:"old_remark_5,omitempty"`
+	UpdatedDetailRows int64  `json:"updated_detail_rows"`
+	Changed           bool   `json:"changed"`
+	DryRun            bool   `json:"dry_run"`
+}
+
+type PurchaseOrderDocRefUpdateResponse struct {
+	Success bool                            `json:"success"`
+	Status  string                          `json:"status"`
+	Message string                          `json:"message"`
+	Code    string                          `json:"code,omitempty"`
+	Error   any                             `json:"error,omitempty"`
+	Data    PurchaseOrderDocRefUpdateResult `json:"data"`
+}
+
 // ─── Response ─────────────────────────────────────────────────────────────────
 
 // PurchaseOrderResponse handles both v3 and legacy formats.
@@ -325,6 +351,50 @@ func (c *PurchaseOrderClient) UpdatePurchaseOrderCreditor(docNo string, payload 
 			c.logger.Info("sml_purchaseorder_creditor_update_response", fields...)
 		} else {
 			c.logger.Warn("sml_purchaseorder_creditor_update_failed", append(fields, zap.String("body", string(respBody)))...)
+		}
+	}
+	return resp.StatusCode, &parsed, nil
+}
+
+func (c *PurchaseOrderClient) UpdatePurchaseOrderDocRef(docNo string, payload PurchaseOrderDocRefUpdateRequest, urlOverride string) (int, *PurchaseOrderDocRefUpdateResponse, error) {
+	body, err := marshalASCII(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	path := "/api/v1/ic/purchase-orders/" + url.PathEscape(strings.TrimSpace(docNo)) + "/doc-ref"
+	targetURL := resolveSMLURL(c.cfg.BaseURL, path, urlOverride)
+	req, err := http.NewRequest(http.MethodPatch, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	for k, v := range c.headers() {
+		req.Header.Set(k, v)
+	}
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("sml purchaseorder doc_ref update: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var parsed PurchaseOrderDocRefUpdateResponse
+	_ = json.Unmarshal(respBody, &parsed)
+	if c.logger != nil {
+		fields := []zap.Field{
+			zap.String("url", targetURL),
+			zap.String("doc_no", docNo),
+			zap.String("new_doc_ref", payload.DocRef),
+			zap.Bool("dry_run", payload.DryRun),
+			zap.Int("status_code", resp.StatusCode),
+			zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			c.logger.Info("sml_purchaseorder_doc_ref_update_response", fields...)
+		} else {
+			c.logger.Warn("sml_purchaseorder_doc_ref_update_failed", append(fields, zap.String("body", string(respBody)))...)
 		}
 	}
 	return resp.StatusCode, &parsed, nil

@@ -9,6 +9,7 @@ import (
 
 type LazadaChargeGroup struct {
 	EmailDate                string
+	GroupKey                 string // lazada_charge_group_key when available; empty for legacy email_date groups
 	GroupCount               int
 	GroupTotal               float64
 	OrderIDs                 []string
@@ -53,6 +54,70 @@ func (r *BillRepo) GetLazadaChargeGroupByEmailDate(emailDate string) (*LazadaCha
 	defer rows.Close()
 
 	group := &LazadaChargeGroup{EmailDate: emailDate}
+	for rows.Next() {
+		var order LazadaChargeGroupOrder
+		var paidText string
+		if err := rows.Scan(&order.BillID, &order.OrderID, &order.PaymentMethod, &paidText, &order.ReconciliationStatus); err != nil {
+			return nil, err
+		}
+		order.OrderID = strings.TrimSpace(order.OrderID)
+		if order.OrderID == "" {
+			order.OrderID = order.BillID
+		}
+		order.PaymentMethod = strings.TrimSpace(order.PaymentMethod)
+		order.ReconciliationStatus = strings.TrimSpace(order.ReconciliationStatus)
+		if paidTotal, ok := parseBillMoneyText(paidText); ok {
+			order.PaidTotal = paidTotal
+			order.HasPaidTotal = true
+			group.GroupTotal = roundBillMoney(group.GroupTotal + paidTotal)
+		} else {
+			group.MissingPaidTotalOrderIDs = append(group.MissingPaidTotalOrderIDs, order.OrderID)
+		}
+		if !IsCreditDebitCardPaymentMethod(order.PaymentMethod) {
+			group.NonCardPaymentOrderIDs = append(group.NonCardPaymentOrderIDs, order.OrderID)
+		}
+		if order.ReconciliationStatus != LazadaReconciliationOK {
+			group.NotReconciledOrderIDs = append(group.NotReconciledOrderIDs, order.OrderID)
+		}
+		group.OrderIDs = append(group.OrderIDs, order.OrderID)
+		group.Orders = append(group.Orders, order)
+		group.GroupCount++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return group, nil
+}
+
+// GetLazadaChargeGroupByGroupKey fetches all active lazada_email purchase bills
+// sharing the given lazada_charge_group_key (the minute-level group from body text).
+// This is the preferred lookup for bills created after migration 063.
+func (r *BillRepo) GetLazadaChargeGroupByGroupKey(groupKey string) (*LazadaChargeGroup, error) {
+	groupKey = strings.TrimSpace(groupKey)
+	if groupKey == "" {
+		return nil, fmt.Errorf("lazada charge group key is empty")
+	}
+
+	rows, err := r.db.Query(
+		`SELECT b.id::text,
+		        COALESCE(NULLIF(b.raw_data->>'order_id', ''), NULLIF(b.raw_data->>'lazada_order_id', ''), b.id::text) AS order_id,
+		        COALESCE(b.raw_data->>'payment_method', '') AS payment_method,
+		        COALESCE(b.raw_data->>'paid_total_amount', '') AS paid_total_amount,
+		        COALESCE(b.raw_data->>'amount_reconciliation_status', '') AS amount_reconciliation_status
+		   FROM bills b
+		  WHERE b.source = 'lazada_email'
+		    AND b.bill_type = 'purchase'
+		    AND b.archived_at IS NULL
+		    AND b.raw_data->>'lazada_charge_group_key' = $1
+		  ORDER BY b.created_at ASC, b.id ASC`,
+		groupKey,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get lazada charge group by key: %w", err)
+	}
+	defer rows.Close()
+
+	group := &LazadaChargeGroup{GroupKey: groupKey}
 	for rows.Next() {
 		var order LazadaChargeGroupOrder
 		var paidText string

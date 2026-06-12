@@ -270,6 +270,11 @@ export function BulkSendDialog({
   const [remark, setRemark] = useState('')
   const [printPaymentMethod, setPrintPaymentMethod] = useState('')
   const [marketplacePrintPolicy, setMarketplacePrintPolicy] = useState(() => normalizeMarketplacePrintPolicy())
+
+  const autoPaymentMethod = useMemo(() => {
+    const code = (party?.code ?? '').trim().toUpperCase()
+    return code.startsWith('TT') ? (party?.code ?? '').trim() : ''
+  }, [party])
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [totalPending, setTotalPending] = useState(0)
   const [job, setJob] = useState<BulkSendJob | null>(null)
@@ -278,6 +283,19 @@ export function BulkSendDialog({
   const [mode, setMode] = useState<BulkDialogMode>('setup')
   const { readiness: smlReadiness, loading: smlReadinessLoading } = useSMLReadiness()
   const storageKey = useMemo(() => bulkJobStorageKey(filters), [filters.source, filters.bill_type, filters.document_route, filters.shopee_shop_id])
+
+  // Sync payment method to TT supplier code when party changes; clear if party becomes non-TT.
+  useEffect(() => {
+    if (autoPaymentMethod !== '') {
+      setPrintPaymentMethod(autoPaymentMethod)
+    } else {
+      setPrintPaymentMethod((prev) => {
+        const prevUpper = prev.trim().toUpperCase()
+        return prevUpper.startsWith('TT') ? '' : prev
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPaymentMethod])
 
   const readyCount = candidates.filter((c) => c.ready).length
   const skippedCount = candidates.length - readyCount
@@ -1143,7 +1161,10 @@ export function BulkSendDialog({
                   </SelectContent>
                 </Select>
                 <div className="text-[10px] text-muted-foreground">
-                  ไม่บังคับสำหรับส่ง SML และไม่ดึงจากผู้ขายอัตโนมัติ หากเลือก จะบันทึกให้รายการพร้อมส่งทุกใบในรอบนี้ตามกลุ่มอีเมล
+                  {autoPaymentMethod !== ''
+                    ? `ล็อกอัตโนมัติตามผู้ขาย ${autoPaymentMethod} — เปลี่ยนได้หากต้องการ`
+                    : 'ไม่บังคับสำหรับส่ง SML'}
+                  {' '}หากเลือก จะบันทึกให้รายการพร้อมส่งทุกใบในรอบนี้ตามกลุ่มอีเมล
                 </div>
                 {selectedPrintPaymentMethod && !printPaymentMethodReadyForPrint && (
                   <div className="text-[10px] text-warning">

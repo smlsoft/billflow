@@ -984,6 +984,17 @@ func (r *BillRepo) UpdateSMLPayloadCreditor(id, partyCode, partyName string) (js
 	return json.RawMessage(raw), nil
 }
 
+func (r *BillRepo) UpdateSMLPayloadDocRef(id, docRef string) error {
+	_, err := r.db.Exec(`
+		UPDATE bills
+		   SET sml_payload = COALESCE(sml_payload, '{}'::jsonb)
+		     || jsonb_build_object('doc_ref', $2::text)
+		 WHERE id = $1`,
+		id, docRef,
+	)
+	return err
+}
+
 func (r *BillRepo) UpdateRemark(id, remark string) error {
 	_, err := r.db.Exec(`UPDATE bills SET remark = $1 WHERE id = $2`, remark, id)
 	return err

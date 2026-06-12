@@ -229,6 +229,11 @@ export function SendPurchaseDialog({
   const [printPaymentMethod, setPrintPaymentMethod] = useState("");
   const [savingPrintPaymentMethod, setSavingPrintPaymentMethod] = useState(false);
 
+  const autoPaymentMethod = useMemo(() => {
+    const code = (party?.code ?? "").trim().toUpperCase();
+    return code.startsWith("TT") ? (party?.code ?? "").trim() : "";
+  }, [party]);
+
   const effectivePartyCode = party?.code ?? "";
   const smlDocDate = (bill.preview?.sml_doc_date || "").trim();
   const smlDocDateError = (bill.preview?.sml_doc_date_error || "").trim();
@@ -448,7 +453,13 @@ export function SendPurchaseDialog({
           : "",
     );
     setSavingPrintPaymentMethod(false);
-    setPrintPaymentMethod((bill.print_payment_method || "").trim());
+    const storedMethod = (bill.print_payment_method || "").trim();
+    const initialPartyCode = payloadString(payload, "cust_code") ||
+      (defaults?.party_code ?? "");
+    const initialPartyIsAutoTT = initialPartyCode.toUpperCase().startsWith("TT");
+    setPrintPaymentMethod(
+      storedMethod !== "" ? storedMethod : initialPartyIsAutoTT ? initialPartyCode.trim() : "",
+    );
   }, [
     open,
     bill.id,
@@ -458,6 +469,20 @@ export function SendPurchaseDialog({
     bill.sml_payload,
     defaults,
   ]);
+
+  // When party changes after mount, sync payment method to TT code or clear if non-TT.
+  useEffect(() => {
+    if (!open) return;
+    if (autoPaymentMethod !== "") {
+      setPrintPaymentMethod(autoPaymentMethod);
+    } else {
+      setPrintPaymentMethod((prev) => {
+        const prevUpper = prev.trim().toUpperCase();
+        return prevUpper.startsWith("TT") ? "" : prev;
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPaymentMethod]);
 
   const handleConfirm = async () => {
     if (!canConfirm) return;
@@ -634,7 +659,9 @@ export function SendPurchaseDialog({
                   </SelectContent>
                 </Select>
                 <div className="text-[10px] text-muted-foreground">
-                  ไม่บังคับสำหรับส่ง SML และไม่ดึงจากผู้ขายอัตโนมัติ
+                  {autoPaymentMethod !== ""
+                    ? `ล็อกอัตโนมัติตามผู้ขาย ${autoPaymentMethod} — เปลี่ยนได้หากต้องการ`
+                    : "ไม่บังคับสำหรับส่ง SML"}
                   {bill.email_group?.order_count && bill.email_group.order_count > 1
                     ? " หากเลือก จะบันทึกให้ทุกคำสั่งซื้อในอีเมลเดียวกัน"
                     : ""}

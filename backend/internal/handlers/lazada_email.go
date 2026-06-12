@@ -246,6 +246,10 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		rawDataMap["total_amount"] = *order.TotalAmount
 	}
 	applyMailSource(rawDataMap, source)
+	if confirmedAt, groupKey := ExtractLazadaConfirmedAt(plainText, bodyHTML, source.AccountID); confirmedAt != "" {
+		rawDataMap["lazada_confirmed_at"] = confirmedAt
+		rawDataMap["lazada_charge_group_key"] = groupKey
+	}
 	rawDataBytes, _ := json.Marshal(rawDataMap)
 
 	conf := order.Confidence

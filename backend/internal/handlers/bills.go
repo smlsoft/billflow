@@ -1270,6 +1270,126 @@ func (h *BillHandler) UpdatePrintPaymentMethod(c *gin.Context) {
 	})
 }
 
+type patchBillSMLDocRefRequest struct {
+	DocRef            string `json:"doc_ref"`
+	ExpectedOldDocRef string `json:"expected_old_doc_ref"`
+	ExpectedRemark5   string `json:"expected_remark_5"`
+	DryRun            bool   `json:"dry_run"`
+}
+
+// PatchBillSMLDocRef corrects the doc_ref on an already-sent Lazada purchase order
+// in both SML (via PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref) and the local
+// sml_payload snapshot. Requires admin role. Supports dry_run.
+func (h *BillHandler) PatchBillSMLDocRef(c *gin.Context) {
+	id := c.Param("id")
+	if h.billRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "bill repository not configured"})
+		return
+	}
+
+	var req patchBillSMLDocRefRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "payload ไม่ถูกต้อง: " + err.Error()})
+		return
+	}
+	req.DocRef = strings.TrimSpace(req.DocRef)
+	req.ExpectedOldDocRef = strings.TrimSpace(req.ExpectedOldDocRef)
+	req.ExpectedRemark5 = strings.TrimSpace(req.ExpectedRemark5)
+	if req.DocRef == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "doc_ref is required"})
+		return
+	}
+
+	bill, err := h.billRepo.FindByID(id)
+	if err != nil || bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if !isLazadaEmailPurchaseBill(bill) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "รองรับเฉพาะ lazada_email purchase bill"})
+		return
+	}
+	smlDocNo := ""
+	if bill.SMLDocNo != nil {
+		smlDocNo = strings.TrimSpace(*bill.SMLDocNo)
+	}
+	if bill.Status != "sent" || smlDocNo == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bill ยังไม่ได้ส่งเข้า SML (status ต้องเป็น sent และมี sml_doc_no)"})
+		return
+	}
+	if h.poClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SML purchaseorder client not configured"})
+		return
+	}
+
+	smlReq := sml.PurchaseOrderDocRefUpdateRequest{
+		DocRef:            req.DocRef,
+		ExpectedOldDocRef: req.ExpectedOldDocRef,
+		ExpectedRemark5:   req.ExpectedRemark5,
+		DryRun:            req.DryRun,
+	}
+	statusCode, smlResp, err := h.poClient.UpdatePurchaseOrderDocRef(smlDocNo, smlReq, "")
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "SML request failed: " + err.Error()})
+		return
+	}
+	if statusCode >= 400 {
+		msg := ""
+		if smlResp != nil {
+			msg = smlResp.Message
+		}
+		c.JSON(statusCode, gin.H{"error": msg, "sml_status": statusCode})
+		return
+	}
+
+	if !req.DryRun && smlResp != nil && smlResp.Data.Changed {
+		if err := h.billRepo.UpdateSMLPayloadDocRef(id, req.DocRef); err != nil {
+			// Non-fatal: log and continue — SML is the source of truth.
+			if h.log != nil {
+				h.log.Warn("patch_bill_sml_doc_ref: sml_payload sync failed",
+					zap.String("bill_id", id),
+					zap.String("sml_doc_no", smlDocNo),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		targetID := id
+		detail := map[string]interface{}{
+			"sml_doc_no":          smlDocNo,
+			"doc_ref":             req.DocRef,
+			"expected_old_doc_ref": req.ExpectedOldDocRef,
+			"expected_remark_5":   req.ExpectedRemark5,
+			"dry_run":             req.DryRun,
+		}
+		if smlResp != nil {
+			detail["changed"] = smlResp.Data.Changed
+			detail["old_doc_ref"] = smlResp.Data.OldDocRef
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "sml_doc_ref_patched",
+			TargetID: &targetID,
+			UserID:   userID,
+			Source:   "lazada_email",
+			Level:    "info",
+			Detail:   detail,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"bill_id":    id,
+		"sml_doc_no": smlDocNo,
+		"dry_run":    req.DryRun,
+		"sml":        smlResp,
+	})
+}
+
 func (h *BillHandler) RegenerateDocNo(c *gin.Context) {
 	id := c.Param("id")
 	bill, err := h.billRepo.FindByID(id)
@@ -3430,6 +3550,36 @@ func (h *BillHandler) resolveLazadaCardChargeGroupForSend(bill *models.Bill, opt
 	if rd == nil {
 		return nil, fmt.Errorf("Lazada bill ไม่มี raw data สำหรับรวมยอดรูดบัตร")
 	}
+	if h == nil || h.billRepo == nil {
+		return nil, fmt.Errorf("ตรวจ Lazada charge group ไม่ได้: bill repository not configured")
+	}
+
+	// Prefer minute-level group key (bills created after migration 063).
+	groupKey := strings.TrimSpace(fmt.Sprint(rd["lazada_charge_group_key"]))
+	if groupKey != "" && groupKey != "<nil>" {
+		cacheKey := "gk:" + groupKey
+		if opts.LazadaChargeGroups != nil {
+			if cached := opts.LazadaChargeGroups[cacheKey]; cached != nil {
+				if err := validateLazadaChargeGroupForDocRef(cached); err != nil {
+					return nil, err
+				}
+				return cached, nil
+			}
+		}
+		group, err := h.billRepo.GetLazadaChargeGroupByGroupKey(groupKey)
+		if err != nil {
+			return nil, err
+		}
+		if opts.LazadaChargeGroups != nil {
+			opts.LazadaChargeGroups[cacheKey] = group
+		}
+		if err := validateLazadaChargeGroupForDocRef(group); err != nil {
+			return nil, err
+		}
+		return group, nil
+	}
+
+	// Legacy fallback: group by exact email_date (envelope second) for older bills.
 	emailDate := strings.TrimSpace(fmt.Sprint(rd["email_date"]))
 	if emailDate == "" || emailDate == "<nil>" {
 		return nil, fmt.Errorf("Lazada order %s ไม่มีวันที่อีเมลสำหรับรวมยอดรูดบัตร", marketplaceOrderIDFromRawData(rd))
@@ -3441,9 +3591,6 @@ func (h *BillHandler) resolveLazadaCardChargeGroupForSend(bill *models.Bill, opt
 			}
 			return cached, nil
 		}
-	}
-	if h == nil || h.billRepo == nil {
-		return nil, fmt.Errorf("ตรวจ Lazada charge group ไม่ได้: bill repository not configured")
 	}
 	group, err := h.billRepo.GetLazadaChargeGroupByEmailDate(emailDate)
 	if err != nil {
