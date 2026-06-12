@@ -230,8 +230,13 @@ export function SendPurchaseDialog({
   const [savingPrintPaymentMethod, setSavingPrintPaymentMethod] = useState(false);
 
   const autoPaymentMethod = useMemo(() => {
-    const code = (party?.code ?? "").trim().toUpperCase();
-    return code.startsWith("TT") ? (party?.code ?? "").trim() : "";
+    const code = (party?.code ?? "").trim();
+    const name = (party?.name ?? "").trim();
+    const codeUpper = code.toUpperCase();
+    const nameUpper = name.toUpperCase();
+    if (codeUpper.startsWith("TT")) return code;
+    if (nameUpper.startsWith("TT")) return name;
+    return "";
   }, [party]);
 
   const effectivePartyCode = party?.code ?? "";
