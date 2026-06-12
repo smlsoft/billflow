@@ -648,7 +648,9 @@ export function SendPurchaseDialog({
                   onValueChange={setPrintPaymentMethod}
                 >
                   <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="ไม่บังคับ เลือกเองถ้าต้องการ" />
+                    <span className={printPaymentMethod ? "text-foreground" : "text-muted-foreground"}>
+                      {printPaymentMethod || "ไม่บังคับ เลือกเองถ้าต้องการ"}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
                     {paymentMethodOptions.map((method) => (
