@@ -346,7 +346,8 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 			}
 
 			messageID := envelope.MessageID
-			if strings.TrimSpace(messageID) != "" && duplicateMessages[messageID] {
+			bypassDuplicatePrecheck := shouldBypassDuplicatePrecheck(cfg, envelope.Subject)
+			if strings.TrimSpace(messageID) != "" && duplicateMessages[messageID] && !bypassDuplicatePrecheck {
 				logger.Debug("imap_message_duplicate_prechecked",
 					zap.String("trace_id", res.TraceID),
 					zap.String("message_id", messageID),
@@ -358,7 +359,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				res.Skipped++
 				continue
 			}
-			if p != nil && p.DuplicateMessages == nil && p.DuplicateMessage != nil && strings.TrimSpace(messageID) != "" {
+			if p != nil && p.DuplicateMessages == nil && p.DuplicateMessage != nil && strings.TrimSpace(messageID) != "" && !bypassDuplicatePrecheck {
 				duplicate, err := p.DuplicateMessage(messageID)
 				if err != nil {
 					warning := fmt.Sprintf("check duplicate message %s: %v", messageID, err)
@@ -663,6 +664,10 @@ func messageIDsFromSummaries(summaries []imapMessageSummary) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+func shouldBypassDuplicatePrecheck(cfg PollConfig, subject string) bool {
+	return cfg.Channel == "shopee" && isShippedSubject(subject)
 }
 
 func fetchBodyForUID(c *imapclient.Client, uid imap.UID) ([]byte, error) {

@@ -24,6 +24,21 @@ const (
 
 var shopeeOrderIDTokenPattern = regexp.MustCompile(`#([0-9A-Za-z]{8,})`)
 
+type shopeeOrderExtractor interface {
+	ExtractOrdersCompact(text string) ([]ai.ExtractedOrder, error)
+	ExtractOrdersWithHTML(text, html string) ([]ai.ExtractedOrder, error)
+}
+
+func (h *EmailHandler) shopeeOrderExtractor() shopeeOrderExtractor {
+	if h.shopeeAI != nil {
+		return h.shopeeAI
+	}
+	if h.aiClient != nil {
+		return h.aiClient
+	}
+	return nil
+}
+
 // ProcessShopeeShippedEmailBody handles Shopee shipping-confirmation emails
 // (subject contains "ถูกจัดส่งแล้ว" or "ยืนยันการชำระเงิน").
 // One email may contain multiple Shopee orders (one per seller) — this
@@ -33,7 +48,16 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	traceID := fmt.Sprintf("shopee-shipped-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 
-	if messageID != "" {
+	// bodyText is already plain text (extractBodyText prefers text/plain).
+	// htmlToText is a no-op when input has no HTML tags, so it's safe to call.
+	plainText := htmlToText(bodyText)
+	if strings.TrimSpace(plainText) == "" {
+		plainText = htmlToText(bodyHTML)
+	}
+	detectedOrderIDs := detectedShopeeBodyOrderIDs(plainText, bodyHTML)
+	isMultiOrderEmail := len(detectedOrderIDs) > 1
+
+	if messageID != "" && !isMultiOrderEmail {
 		var count int
 		_ = h.billRepo.DB().QueryRow(
 			`SELECT
@@ -55,24 +79,21 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 		}
 	}
 
-	// bodyText is already plain text (extractBodyText prefers text/plain).
-	// htmlToText is a no-op when input has no HTML tags, so it's safe to call.
-	plainText := htmlToText(bodyText)
-	if strings.TrimSpace(plainText) == "" {
-		plainText = htmlToText(bodyHTML)
-	}
-
-	if updated, err := h.recordShopeeStatusEventBeforeAI(subject, from, plainText, bodyHTML, messageID, source); err != nil {
+	statusEventUpdated := false
+	if updated, err := h.recordShopeeStatusEventBeforeAI(subject, from, plainText, bodyHTML, messageID, source, !isMultiOrderEmail); err != nil {
 		return emailservice.ProcessOutcome{}, err
 	} else if updated {
-		return emailservice.UpdatedExistingOutcome("status_event_recorded", "บันทึกสถานะบนบิลเดิมแล้ว"), nil
+		statusEventUpdated = true
+		if !isMultiOrderEmail {
+			return emailservice.UpdatedExistingOutcome("status_event_recorded", "บันทึกสถานะบนบิลเดิมแล้ว"), nil
+		}
 	}
 
 	if h.catalogSvc == nil {
 		h.logger.Warn("shopee_shipped: catalog service not configured — skipping")
 		return emailservice.ProcessOutcome{}, fmt.Errorf("catalog service not configured")
 	}
-	if h.aiClient == nil {
+	if h.shopeeOrderExtractor() == nil {
 		return emailservice.ProcessOutcome{}, fmt.Errorf("AI client not configured")
 	}
 
@@ -86,6 +107,15 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 			return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: empty orders")
 		}
 		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: %w", err)
+	}
+	if missing := missingShopeeExtractedOrderIDs(detectedOrderIDs, orders); len(missing) > 0 {
+		h.logger.Warn("shopee_shipped: AI extract incomplete",
+			zap.String("trace_id", traceID),
+			zap.Int("detected_order_count", len(detectedOrderIDs)),
+			zap.Int("extracted_order_count", len(orders)),
+			zap.Strings("missing_order_ids", missing),
+		)
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: incomplete orders, missing %s", strings.Join(missing, ","))
 	}
 
 	h.logger.Info("shopee_shipped: orders extracted",
@@ -124,13 +154,16 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	if messageID != "" && failedCount == 0 {
 		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
 	}
+	if createdCount == 0 && statusEventUpdated && failedCount == 0 {
+		return emailservice.UpdatedExistingOutcome("status_event_recorded", "บันทึกสถานะบนบิลเดิมแล้ว"), nil
+	}
 	if createdCount == 0 && skippedCount > 0 && failedCount == 0 {
 		return emailservice.ProcessOutcome{}, emailservice.SkipMessage("duplicate_or_empty", "ไม่มีบิลใหม่จากเมลนี้ อาจซ้ำหรือไม่มีรายการสินค้าที่ใช้ได้")
 	}
 	return emailservice.CreatedBillOutcome(), nil
 }
 
-func (h *EmailHandler) recordShopeeStatusEventBeforeAI(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) (bool, error) {
+func (h *EmailHandler) recordShopeeStatusEventBeforeAI(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource, markEmailProcessed bool) (bool, error) {
 	eventType, _, subjectOrderID, ok := shopeeOrderEventFromSubject(subject)
 	if !ok || subjectOrderID == "" {
 		return false, nil
@@ -175,7 +208,9 @@ func (h *EmailHandler) recordShopeeStatusEventBeforeAI(subject, from, bodyText, 
 	}
 	if messageID != "" {
 		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, subjectOrderID)
-		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+		if markEmailProcessed {
+			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+		}
 	}
 	h.logger.Info("shopee_shipped: recorded status event on existing bill before AI",
 		zap.String("message_id", messageID),
@@ -198,6 +233,10 @@ func (h *EmailHandler) extractShopeeOrdersBounded(subject, plainText, bodyHTML, 
 	if len(jobs) == 0 {
 		return nil, fmt.Errorf("AI extract shopee_shipped: empty extraction input")
 	}
+	extractor := h.shopeeOrderExtractor()
+	if extractor == nil {
+		return nil, fmt.Errorf("AI client not configured")
+	}
 	ordersByID := map[string]ai.ExtractedOrder{}
 	orderSequence := []string{}
 	for i, job := range jobs {
@@ -215,9 +254,9 @@ func (h *EmailHandler) extractShopeeOrdersBounded(subject, plainText, bodyHTML, 
 			err    error
 		)
 		if job.Compact {
-			orders, err = h.aiClient.ExtractOrdersCompact(job.Text)
+			orders, err = extractor.ExtractOrdersCompact(job.Text)
 		} else {
-			orders, err = h.aiClient.ExtractOrdersWithHTML(job.Text, job.HTML)
+			orders, err = extractor.ExtractOrdersWithHTML(job.Text, job.HTML)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("job %d/%d: %w", i+1, len(jobs), err)
@@ -244,27 +283,12 @@ func (h *EmailHandler) extractShopeeOrdersBounded(subject, plainText, bodyHTML, 
 func buildShopeeExtractionJobs(subject, plainText, bodyHTML string) []shopeeExtractionJob {
 	plainText = strings.TrimSpace(plainText)
 	bodyHTML = strings.TrimSpace(bodyHTML)
-	subjectOrderID := normalizeShopeeOrderID(extractShopeeOrderID(subject))
-	if subjectOrderID != "" {
-		scopedText := scopeShopeeTextToOrder(plainText, subjectOrderID)
-		if scopedText == "" {
-			scopedText = plainText
-		}
-		scopedText, textClipped := clampRunes(scopedText, shopeeAITextBudgetChars)
-		scopedHTML, htmlClipped := clampRunes(scopeShopeeHTMLToOrder(bodyHTML, subjectOrderID), shopeeAIHTMLBudgetChars)
-		compact := textClipped || htmlClipped || scopedHTML == ""
-		if compact {
-			scopedHTML = ""
-		}
-		return []shopeeExtractionJob{{
-			Text:    scopedText,
-			HTML:    scopedHTML,
-			Compact: compact,
-			OrderID: subjectOrderID,
-		}}
+	detectionText := shopeeOrderDetectionText(plainText, bodyHTML)
+	if plainText == "" {
+		plainText = detectionText
 	}
 
-	matches := uniqueShopeeOrderIDMatches(plainText)
+	matches := uniqueShopeeOrderIDMatches(detectionText)
 	if len(matches) > 1 {
 		jobs := []shopeeExtractionJob{}
 		for start := 0; start < len(matches); start += shopeeAIChunkOrderLimit {
@@ -275,7 +299,7 @@ func buildShopeeExtractionJobs(subject, plainText, bodyHTML string) []shopeeExtr
 			parts := []string{}
 			orderIDs := []string{}
 			for _, m := range matches[start:end] {
-				block := scopeShopeeTextToOrder(plainText, m.id)
+				block := scopeShopeeTextToOrder(detectionText, m.id)
 				if block == "" {
 					continue
 				}
@@ -296,6 +320,29 @@ func buildShopeeExtractionJobs(subject, plainText, bodyHTML string) []shopeeExtr
 		if len(jobs) > 0 {
 			return jobs
 		}
+	}
+
+	subjectOrderID := normalizeShopeeOrderID(extractShopeeOrderID(subject))
+	if subjectOrderID != "" {
+		scopedText := scopeShopeeTextToOrder(plainText, subjectOrderID)
+		if scopedText == "" {
+			scopedText = scopeShopeeTextToOrder(detectionText, subjectOrderID)
+		}
+		if scopedText == "" {
+			scopedText = plainText
+		}
+		scopedText, textClipped := clampRunes(scopedText, shopeeAITextBudgetChars)
+		scopedHTML, htmlClipped := clampRunes(scopeShopeeHTMLToOrder(bodyHTML, subjectOrderID), shopeeAIHTMLBudgetChars)
+		compact := textClipped || htmlClipped || scopedHTML == ""
+		if compact {
+			scopedHTML = ""
+		}
+		return []shopeeExtractionJob{{
+			Text:    scopedText,
+			HTML:    scopedHTML,
+			Compact: compact,
+			OrderID: subjectOrderID,
+		}}
 	}
 
 	text, textClipped := clampRunes(plainText, shopeeAITextBudgetChars)
@@ -329,6 +376,52 @@ func uniqueShopeeOrderIDMatches(text string) []shopeeOrderIDMatch {
 		out = append(out, shopeeOrderIDMatch{id: id, start: m[0], end: m[1]})
 	}
 	return out
+}
+
+func shopeeOrderDetectionText(plainText, bodyHTML string) string {
+	plainText = strings.TrimSpace(plainText)
+	htmlText := strings.TrimSpace(htmlToText(bodyHTML))
+	switch {
+	case plainText == "":
+		return htmlText
+	case htmlText == "":
+		return plainText
+	default:
+		return plainText + "\n" + htmlText
+	}
+}
+
+func detectedShopeeBodyOrderIDs(plainText, bodyHTML string) []string {
+	matches := uniqueShopeeOrderIDMatches(shopeeOrderDetectionText(plainText, bodyHTML))
+	ids := make([]string, 0, len(matches))
+	for _, m := range matches {
+		ids = append(ids, m.id)
+	}
+	return ids
+}
+
+func DetectShopeeBodyOrderIDs(plainText, bodyHTML string) []string {
+	return detectedShopeeBodyOrderIDs(plainText, bodyHTML)
+}
+
+func missingShopeeExtractedOrderIDs(expected []string, orders []ai.ExtractedOrder) []string {
+	if len(expected) <= 1 {
+		return nil
+	}
+	extracted := map[string]bool{}
+	for _, order := range orders {
+		id := normalizeShopeeOrderID(order.OrderID)
+		if id != "" {
+			extracted[id] = true
+		}
+	}
+	missing := []string{}
+	for _, id := range expected {
+		if id != "" && !extracted[id] {
+			missing = append(missing, id)
+		}
+	}
+	return missing
 }
 
 func scopeShopeeTextToOrder(text, orderID string) string {

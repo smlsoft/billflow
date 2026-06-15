@@ -183,7 +183,7 @@ func TestProcessShopeeShippedEmailBodyRecordsPaymentEventBeforeAI(t *testing.T) 
 	}
 }
 
-func TestBuildShopeeExtractionJobsScopesSubjectOrder(t *testing.T) {
+func TestBuildShopeeExtractionJobsChunksMultiOrderEvenWhenSubjectHasOneOrder(t *testing.T) {
 	body := strings.Join([]string{
 		"หมายเลขคำสั่งซื้อ #260608AAAAAAA",
 		"สินค้า A",
@@ -192,12 +192,33 @@ func TestBuildShopeeExtractionJobsScopesSubjectOrder(t *testing.T) {
 	}, "\n")
 	jobs := buildShopeeExtractionJobs("ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #260608BBBBBBB", body, strings.Repeat("<div>html</div>", 2000))
 	if len(jobs) != 1 {
+		t.Fatalf("len(jobs) = %d, want 1 compact chunk", len(jobs))
+	}
+	if jobs[0].OrderID != "260608AAAAAAA,260608BBBBBBB" {
+		t.Fatalf("OrderID = %q", jobs[0].OrderID)
+	}
+	if !strings.Contains(jobs[0].Text, "สินค้า A") || !strings.Contains(jobs[0].Text, "สินค้า B") {
+		t.Fatalf("multi-order text = %q", jobs[0].Text)
+	}
+	if !jobs[0].Compact || jobs[0].HTML != "" {
+		t.Fatalf("large html should use compact text-only job: %#v", jobs[0])
+	}
+}
+
+func TestBuildShopeeExtractionJobsScopesSubjectOrderWhenBodyHasSingleOrder(t *testing.T) {
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260608BBBBBBB",
+		"สินค้า B",
+		"รายละเอียดอื่นที่ไม่ใช่ออเดอร์",
+	}, "\n")
+	jobs := buildShopeeExtractionJobs("ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #260608BBBBBBB", body, strings.Repeat("<div>html</div>", 2000))
+	if len(jobs) != 1 {
 		t.Fatalf("len(jobs) = %d, want 1", len(jobs))
 	}
 	if jobs[0].OrderID != "260608BBBBBBB" {
 		t.Fatalf("OrderID = %q", jobs[0].OrderID)
 	}
-	if strings.Contains(jobs[0].Text, "สินค้า A") || !strings.Contains(jobs[0].Text, "สินค้า B") {
+	if !strings.Contains(jobs[0].Text, "สินค้า B") {
 		t.Fatalf("subject-scoped text = %q", jobs[0].Text)
 	}
 	if !jobs[0].Compact || jobs[0].HTML != "" {
@@ -223,6 +244,21 @@ func TestBuildShopeeExtractionJobsChunksLargeMultiOrderEmail(t *testing.T) {
 	}
 	if strings.Contains(jobs[0].Text, "สินค้า D") {
 		t.Fatalf("first chunk should not contain fourth order: %q", jobs[0].Text)
+	}
+}
+
+func TestMissingShopeeExtractedOrderIDsRequiresAllDetectedMultiOrders(t *testing.T) {
+	expected := []string{"260608AAAAAAA", "260608BBBBBBB", "260608CCCCCCC"}
+	orders := []ai.ExtractedOrder{
+		{OrderID: "#260608AAAAAAA"},
+		{OrderID: "260608CCCCCCC"},
+	}
+	missing := missingShopeeExtractedOrderIDs(expected, orders)
+	if len(missing) != 1 || missing[0] != "260608BBBBBBB" {
+		t.Fatalf("missing = %#v", missing)
+	}
+	if got := missingShopeeExtractedOrderIDs([]string{"260608AAAAAAA"}, nil); len(got) != 0 {
+		t.Fatalf("single-order expected should not enforce completeness, got %#v", got)
 	}
 }
 

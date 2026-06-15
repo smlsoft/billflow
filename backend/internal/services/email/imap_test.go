@@ -65,6 +65,47 @@ func TestClassifyDispatchWarning(t *testing.T) {
 	}
 }
 
+func TestShouldBypassDuplicatePrecheckForShopeeShippedPayment(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     PollConfig
+		subject string
+		want    bool
+	}{
+		{
+			name:    "shopee payment confirmation",
+			cfg:     PollConfig{Channel: "shopee"},
+			subject: "ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #26061316DWD4GG",
+			want:    true,
+		},
+		{
+			name:    "shopee shipped confirmation",
+			cfg:     PollConfig{Channel: "shopee"},
+			subject: "คำสั่งซื้อ #2601AAA ถูกจัดส่งแล้ว",
+			want:    true,
+		},
+		{
+			name:    "shopee non shipped order email keeps precheck",
+			cfg:     PollConfig{Channel: "shopee"},
+			subject: "ยืนยันคำสั่งซื้อ Shopee",
+			want:    false,
+		},
+		{
+			name:    "lazada payment text does not bypass",
+			cfg:     PollConfig{Channel: "lazada"},
+			subject: "ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #26061316DWD4GG",
+			want:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldBypassDuplicatePrecheck(tt.cfg, tt.subject); got != tt.want {
+				t.Fatalf("shouldBypassDuplicatePrecheck = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPollResultStatus(t *testing.T) {
 	tests := []struct {
 		name string

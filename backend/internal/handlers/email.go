@@ -124,6 +124,7 @@ type EmailHandler struct {
 	catalogIdx      *catalog.CatalogIndex
 	catalogRepo     *repository.SMLCatalogRepo
 	channelDefaults *repository.ChannelDefaultRepo
+	shopeeAI        shopeeOrderExtractor
 	// Source-artifact storage (PDF/HTML/envelope)
 	artifactSvc *artifact.Service
 }
