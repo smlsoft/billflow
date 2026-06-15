@@ -985,14 +985,48 @@ func (r *BillRepo) UpdateSMLPayloadCreditor(id, partyCode, partyName string) (js
 }
 
 func (r *BillRepo) UpdateSMLPayloadDocRef(id, docRef string) error {
-	_, err := r.db.Exec(`
-		UPDATE bills
-		   SET sml_payload = COALESCE(sml_payload, '{}'::jsonb)
-		     || jsonb_build_object('doc_ref', $2::text)
-		 WHERE id = $1`,
-		id, docRef,
-	)
+	var raw []byte
+	if err := r.db.QueryRow(
+		`SELECT COALESCE(sml_payload, '{}'::jsonb) FROM bills WHERE id = $1`,
+		id,
+	).Scan(&raw); err != nil {
+		return err
+	}
+	patched, err := patchSMLPayloadDocRef(raw, docRef)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(`UPDATE bills SET sml_payload = $2 WHERE id = $1`, id, patched)
 	return err
+}
+
+func patchSMLPayloadDocRef(raw json.RawMessage, docRef string) (json.RawMessage, error) {
+	var payload map[string]interface{}
+	if len(raw) == 0 {
+		payload = map[string]interface{}{}
+	} else if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	if payload == nil {
+		payload = map[string]interface{}{}
+	}
+	payload["doc_ref"] = docRef
+	for _, key := range []string{"items", "details"} {
+		rows, ok := payload[key].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, row := range rows {
+			if m, ok := row.(map[string]interface{}); ok {
+				m["doc_ref"] = docRef
+			}
+		}
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(out), nil
 }
 
 func (r *BillRepo) UpdateRemark(id, remark string) error {

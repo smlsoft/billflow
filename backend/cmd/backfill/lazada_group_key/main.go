@@ -32,6 +32,8 @@ type backfillTarget struct {
 	ID             string
 	OrderID        string
 	EmailMessageID string
+	IMAPAccountID  string
+	IMAPUsername   string
 }
 
 func main() {
@@ -68,7 +70,7 @@ func main() {
 
 	var updated, noArtifact, noMatch int
 	for _, t := range targets {
-		plainText, bodyHTML, accountID, ok := loadArtifactText(artifactSvc, artifactRepo, t.ID, t.EmailMessageID)
+		plainText, bodyHTML, accountID, ok := loadArtifactText(artifactSvc, artifactRepo, t)
 		if !ok {
 			noArtifact++
 			if *dryRun {
@@ -134,8 +136,10 @@ func main() {
 func listGroupKeyBackfillTargets(db *sql.DB) ([]backfillTarget, error) {
 	rows, err := db.Query(
 		`SELECT id::text,
-		        COALESCE(NULLIF(raw_data->>'order_id',''), NULLIF(raw_data->>'lazada_order_id',''), id::text),
-		        COALESCE(raw_data->>'email_message_id','')
+			        COALESCE(NULLIF(raw_data->>'order_id',''), NULLIF(raw_data->>'lazada_order_id',''), id::text),
+			        COALESCE(raw_data->>'email_message_id',''),
+			        COALESCE(raw_data->>'imap_account_id',''),
+			        COALESCE(raw_data->>'imap_username','')
 		   FROM bills
 		  WHERE source = 'lazada_email'
 		    AND bill_type = 'purchase'
@@ -151,7 +155,7 @@ func listGroupKeyBackfillTargets(db *sql.DB) ([]backfillTarget, error) {
 	var out []backfillTarget
 	for rows.Next() {
 		var t backfillTarget
-		if err := rows.Scan(&t.ID, &t.OrderID, &t.EmailMessageID); err != nil {
+		if err := rows.Scan(&t.ID, &t.OrderID, &t.EmailMessageID, &t.IMAPAccountID, &t.IMAPUsername); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -162,13 +166,13 @@ func listGroupKeyBackfillTargets(db *sql.DB) ([]backfillTarget, error) {
 func loadArtifactText(
 	svc *artifact.Service,
 	artifactRepo *repository.BillArtifactRepo,
-	billID, emailMessageID string,
+	t backfillTarget,
 ) (plainText, bodyHTML, accountID string, ok bool) {
-	artifacts, err := artifactRepo.ListByBill(billID)
+	artifacts, err := artifactRepo.ListByBill(t.ID)
 	if err != nil || len(artifacts) == 0 {
 		return "", "", "", false
 	}
-	emailMessageID = strings.TrimSpace(emailMessageID)
+	emailMessageID := strings.TrimSpace(t.EmailMessageID)
 
 	type candidate struct {
 		id   string
@@ -178,7 +182,21 @@ func loadArtifactText(
 	seen := map[string]bool{}
 	if emailMessageID != "" {
 		for _, a := range artifacts {
-			if (a.Kind == "email_html" || a.Kind == "email_text") && lazadaArtifactMsgID(a) == emailMessageID {
+			if (a.Kind == "email_html" || a.Kind == "email_text") && lazadaArtifactMsgID(a) == emailMessageID && lazadaArtifactIsConfirmation(a) {
+				candidates = append(candidates, candidate{a.ID, a.Kind})
+				seen[a.ID] = true
+			}
+		}
+	}
+	for _, a := range artifacts {
+		if (a.Kind == "email_html" || a.Kind == "email_text") && lazadaArtifactIsConfirmation(a) && !seen[a.ID] {
+			candidates = append(candidates, candidate{a.ID, a.Kind})
+			seen[a.ID] = true
+		}
+	}
+	if emailMessageID != "" {
+		for _, a := range artifacts {
+			if (a.Kind == "email_html" || a.Kind == "email_text") && lazadaArtifactMsgID(a) == emailMessageID && !seen[a.ID] {
 				candidates = append(candidates, candidate{a.ID, a.Kind})
 				seen[a.ID] = true
 			}
@@ -187,15 +205,22 @@ func loadArtifactText(
 	for _, a := range artifacts {
 		if (a.Kind == "email_html" || a.Kind == "email_text") && !seen[a.ID] {
 			candidates = append(candidates, candidate{a.ID, a.Kind})
+			seen[a.ID] = true
 		}
 	}
 	if len(candidates) == 0 {
 		return "", "", "", false
 	}
+	accountID = strings.TrimSpace(t.IMAPAccountID)
+	if accountID == "" {
+		accountID = strings.TrimSpace(t.IMAPUsername)
+	}
 	for _, a := range artifacts {
-		if id := lazadaArtifactAccountID(a); id != "" {
-			accountID = id
-			break
+		if accountID == "" {
+			if id := lazadaArtifactAccountID(a); id != "" {
+				accountID = id
+				break
+			}
 		}
 	}
 	for _, c := range candidates {
@@ -214,6 +239,24 @@ func loadArtifactText(
 		}
 	}
 	return "", "", "", false
+}
+
+func lazadaArtifactIsConfirmation(a models.BillArtifact) bool {
+	subject := lazadaArtifactSubject(a)
+	return strings.Contains(subject, "ยืนยันคำสั่งซื้อ")
+}
+
+func lazadaArtifactSubject(a models.BillArtifact) string {
+	if len(a.SourceMeta) == 0 {
+		return ""
+	}
+	var meta struct {
+		Subject string `json:"subject"`
+	}
+	if err := json.Unmarshal(a.SourceMeta, &meta); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(meta.Subject)
 }
 
 func lazadaArtifactMsgID(a models.BillArtifact) string {

@@ -81,8 +81,8 @@ This applies to normal retry and bulk send.
 
 - `remark` uses the seller/supplier name from the Lazada email, not user-entered text.
 - `remark_5` stores the Lazada order id, matching the Shopee purchase behavior.
-- If the Lazada email payment method is Credit/Debit Card, `doc_ref` stores the total card charge for every active Lazada purchase bill with the exact same `raw_data.email_date`.
-- Before send, BillFlow blocks Lazada card PO creation when the group is missing `email_date`, paid totals, card payment method, or `amount_reconciliation_status='ok'`; the PO line total must also match the order paid total after the `SHIP_CUS` fee line is present.
+- If the Lazada email payment method is Credit/Debit Card, `doc_ref` stores the total card charge for every active Lazada purchase bill with the same `raw_data.lazada_charge_group_key`, parsed from the Thai confirmation time in the email body.
+- Before send, BillFlow blocks Lazada card PO creation when the group key is missing, paid totals are missing, payment is not card, or `amount_reconciliation_status!='ok'`; the PO line total must also match the order paid total after the `SHIP_CUS` fee line is present.
 - Purchase send dialogs do not show a free-form `remark` field, to avoid overwriting the SML remark that must carry the shop/seller name.
 
 ## Print And Payment Method
@@ -92,7 +92,7 @@ Lazada purchase email print readiness now uses the shared marketplace print/paym
 - every active order in the same email group must have an SML POL number
 - effective payment method must start with `TT` by default
 - payment method is stored only in BillFlow as `bills.print_payment_method`
-- single and bulk SML send dialogs require choosing `วิธีการชำระเงิน` before send
+- single and bulk SML send dialogs do not require `วิธีการชำระเงิน`; supplier code/name starting with `TT` auto-syncs and locks the method, while non-TT suppliers start blank
 - the selected payment method is not sent to SML
 
 Details: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).

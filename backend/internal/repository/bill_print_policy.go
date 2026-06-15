@@ -95,10 +95,20 @@ func marketplacePrintReadySQL(alias string) string {
 			     )
 			     OR (
 			       pol.effective_payment_method = ''
-			       OR NOT EXISTS (
-			         SELECT 1
-			           FROM jsonb_array_elements_text(pol.payment_methods) AS method(value)
-			          WHERE method.value = pol.effective_payment_method
+			       OR (
+			         NOT EXISTS (
+			           SELECT 1
+			             FROM jsonb_array_elements_text(pol.payment_methods) AS method(value)
+			            WHERE method.value = pol.effective_payment_method
+			         )
+			         AND NOT (
+			           pol.payment_method_prefix_enabled
+			           AND EXISTS (
+			             SELECT 1
+			               FROM jsonb_array_elements_text(pol.payment_method_prefixes) AS prefix(value)
+			              WHERE UPPER(pol.effective_payment_method) LIKE UPPER(prefix.value) || '%%'
+			           )
+			         )
 			       )
 			     )
 			     OR (
@@ -231,11 +241,36 @@ func (r *BillRepo) listMarketplacePrintRowsByMessageIDs(messageIDs []string) (ma
 
 func rowMatchesPaymentPolicy(row marketplacePrintRow, policy models.MarketplacePrintPolicy) bool {
 	paymentMethod := strings.TrimSpace(row.EffectivePrintPaymentMethod)
-	if paymentMethod == "" || !paymentMethodAllowedInList(paymentMethod, policy.PaymentMethods) {
+	if paymentMethod == "" || !paymentMethodAllowedForPolicy(paymentMethod, policy) {
 		return false
 	}
 	if !policy.PaymentMethodPrefixEnabled {
 		return true
+	}
+	prefixes := policy.PaymentMethodPrefixes
+	if len(prefixes) == 0 {
+		prefixes = []string{"TT"}
+	}
+	upperPayment := strings.ToUpper(paymentMethod)
+	for _, prefix := range prefixes {
+		p := strings.ToUpper(strings.TrimSpace(prefix))
+		if p != "" && strings.HasPrefix(upperPayment, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func paymentMethodAllowedForPolicy(paymentMethod string, policy models.MarketplacePrintPolicy) bool {
+	paymentMethod = strings.TrimSpace(paymentMethod)
+	if paymentMethod == "" {
+		return false
+	}
+	if paymentMethodAllowedInList(paymentMethod, policy.PaymentMethods) {
+		return true
+	}
+	if !policy.PaymentMethodPrefixEnabled {
+		return false
 	}
 	prefixes := policy.PaymentMethodPrefixes
 	if len(prefixes) == 0 {

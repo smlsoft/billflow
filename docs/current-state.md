@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-06-09 +07
+> Updated: 2026-06-12 +07
 > Source of truth checked: local code/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow` main + `billflow-thaisunsport`.
 
 ## Latest Handoff For New Chat
@@ -9,17 +9,32 @@
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
-- **Post-v1.0 marketplace purchase work deployed through 2026-06-09** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
+- **Post-v1.0 marketplace purchase work deployed through 2026-06-12** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
-- Migration ล่าสุดใน code/deployed main + thaisunsport: `060_marketplace_print_perf_indexes.sql`.
+- Migration ล่าสุดใน code/deployed main + thaisunsport: `063_lazada_charge_group_key.sql`.
 - Lazada email purchase is live on thaisunsport with review-first flow; 3 Lazada IMAP accounts enabled, `lookback_days=1`, `poll_interval_seconds=600`.
 - Marketplace purchase print readiness now depends on POL completeness plus BillFlow-only payment method rules, not creditor prefix.
-- Single-bill and bulk SML send dialogs now require `วิธีการชำระเงิน` for Shopee/Lazada purchase email; value is stored in BillFlow only and not sent to SML.
+- Single-bill and bulk SML send dialogs do **not** require `วิธีการชำระเงิน`; if supplier code/name starts with `TTxxxx`, BillFlow auto-syncs and locks the method to that `TTxxxx`.
+- **TT payment auto-sync**: เมื่อเลือก supplier ที่ code หรือ name ขึ้นต้น TT จะ auto-fill วิธีการชำระเงินทันที (ตรวจทั้ง code และ name เพราะ SML อาจใช้ code AF00001 แต่ name = TT2789); ถ้า supplier ไม่ใช่ TT จะ clear ค่าและ user เลือกเองได้.
+- **Lazada group key**: Lazada card doc_ref uses `raw_data.lazada_charge_group_key` parsed from the email body confirmation minute; legacy `email_date` fallback is blocked for send because envelope seconds can split one card charge.
+- **sml-api-bybos**: เพิ่ม `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` + BillFlow `PATCH /api/bills/:id/sml-doc-ref` (admin) สำหรับแก้ doc_ref ย้อนหลัง
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
+
+## Latest Deploy 2026-06-12 — TT Auto-Sync + Lazada Group Key + SML Doc-Ref Patch
+
+- Deploy targets: `billflow` main (`3010/8090`) and `billflow-thaisunsport` (`3020/8100`).
+- Commits: `a2b4927` (feat), `9341cc0` (fix Radix Select visual), `f329cac` (fix TT auto-sync root cause).
+- **TT payment auto-sync** — `SendPurchaseDialog` + `BulkSendDialog`: เมื่อเลือก supplier ที่ code หรือ name ขึ้นต้น `TT` จะ auto-fill วิธีการชำระเงินทันที; ตรวจ name ด้วยเพราะ SML อาจ code = `AF00001`, name = `TT2789`
+- **Lazada confirmed-at group key** — email ใหม่จะเก็บ `lazada_charge_group_key = "lazada_card_<accountID>_YYYYMMDD_HHMM"` ใน `raw_data`; SML send now requires this key for Lazada card purchases and blocks missing-key rows until backfill/repair runs.
+- Migration `063_lazada_charge_group_key.sql` — CONCURRENTLY partial index on group key
+- Backfill `cmd/backfill/lazada_group_key` (idempotent `--dry-run`) is packaged into the backend Docker image as `./lazada_group_key`; run inside the container so it can see `/app/artifacts` and `DATABASE_URL`.
+- Production audit found Lazada HTML artifacts on thaisunsport; backfill must prefer the matching confirmation email artifact and use `raw_data.imap_account_id` when artifact `source_meta.account_id` is absent.
+- **PATCH `/api/bills/:id/sml-doc-ref`** (admin) — proxy to sml-api-bybos + sync `sml_payload.doc_ref` and item/detail row `doc_ref` + audit.
+- sml-api-bybos: `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` optimistic lock + `dry_run`
+- Verification: `go test ./...` ✅, `npm run build` ✅, health `8090`+`8100` ok, TT auto-sync confirmed on thaisunsport
 
 ## Latest Marketplace Purchase Rollout 2026-06-09
 
-### Scope
 - Deploy targets: `billflow` main (`3010/8090`) and `billflow-thaisunsport` (`3020/8100`).
 - No automatic source backup was taken in this round.
 - Migrations deployed through `060_marketplace_print_perf_indexes.sql`.
@@ -676,7 +691,7 @@ Production PostgreSQL also contains `system_settings` and `sml_settings`. These 
 - Applies only to `shopee_shipped` and `lazada_email` purchase email bills.
 - `bills.print_payment_method` is BillFlow-only data and is not sent to SML.
 - If `print_payment_method` is blank and `sml_payload.supplier_name` starts with `TT`, that supplier name becomes the effective payment method.
-- Single-bill and bulk SML send dialogs require selecting `วิธีการชำระเงิน` before send.
+- Single-bill and bulk SML send dialogs do not require selecting `วิธีการชำระเงิน`; TT suppliers auto-sync/lock the method and non-TT suppliers start blank.
 - Current default print policy:
   - all active orders in the same email group must have `sml_doc_no`
   - effective payment method must start with `TT`
@@ -695,7 +710,7 @@ Phase 1 initially focused on Shopee purchase bills from email. The same review/s
 4. Bill is created as purchase bill and appears in `/bills`.
 5. Admin reviews item rows, maps or creates SML products when needed.
 6. Admin clicks send from Bill Detail or starts bulk send from `/bills`.
-7. Confirmation dialog requires supplier, warehouse, shelf, VAT type, VAT rate, inquiry type, and for marketplace purchase email also `วิธีการชำระเงิน`.
+7. Confirmation dialog requires supplier, warehouse, shelf, VAT type, VAT rate, and inquiry type. For marketplace purchase email, `วิธีการชำระเงิน` is optional unless the selected supplier is `TT`, in which case it auto-syncs and locks to that TT value.
 8. VAT rate is locked/read-only in purchase send dialogs and must come from channel config/preview.
 9. Purchase send dialogs do not expose free-form `remark`; backend uses source seller/supplier name for SML `remark`.
 10. Payment method is saved in BillFlow before SML send and is not sent to SML.

@@ -1362,11 +1362,11 @@ func (h *BillHandler) PatchBillSMLDocRef(c *gin.Context) {
 		}
 		targetID := id
 		detail := map[string]interface{}{
-			"sml_doc_no":          smlDocNo,
-			"doc_ref":             req.DocRef,
+			"sml_doc_no":           smlDocNo,
+			"doc_ref":              req.DocRef,
 			"expected_old_doc_ref": req.ExpectedOldDocRef,
-			"expected_remark_5":   req.ExpectedRemark5,
-			"dry_run":             req.DryRun,
+			"expected_remark_5":    req.ExpectedRemark5,
+			"dry_run":              req.DryRun,
 		}
 		if smlResp != nil {
 			detail["changed"] = smlResp.Data.Changed
@@ -2378,9 +2378,9 @@ func validateMarketplaceAmountReadyForSend(bill *models.Bill) error {
 	}
 	rd := rawDataMapFromBill(bill)
 	orderID := marketplaceOrderIDFromRawData(rd)
-	emailDate := strings.TrimSpace(fmt.Sprint(rd["email_date"]))
-	if emailDate == "" || emailDate == "<nil>" {
-		return &marketplaceAmountReconciliationError{message: fmt.Sprintf("Lazada order %s ไม่มีวันที่อีเมลสำหรับรวมยอดรูดบัตร — กรุณา poll/import อีเมลใหม่หรือตรวจ raw data", orderID)}
+	groupKey := strings.TrimSpace(fmt.Sprint(rd["lazada_charge_group_key"]))
+	if groupKey == "" || groupKey == "<nil>" {
+		return &marketplaceAmountReconciliationError{message: fmt.Sprintf("Lazada order %s ยังไม่มี group key จากเวลาในเนื้อหาอีเมลสำหรับรวมยอดรูดบัตร — กรุณา run lazada_group_key backfill ก่อนส่ง SML", orderID)}
 	}
 	method := strings.TrimSpace(fmt.Sprint(rd["payment_method"]))
 	if !isCardPaymentMethod(method) {
@@ -3579,30 +3579,7 @@ func (h *BillHandler) resolveLazadaCardChargeGroupForSend(bill *models.Bill, opt
 		return group, nil
 	}
 
-	// Legacy fallback: group by exact email_date (envelope second) for older bills.
-	emailDate := strings.TrimSpace(fmt.Sprint(rd["email_date"]))
-	if emailDate == "" || emailDate == "<nil>" {
-		return nil, fmt.Errorf("Lazada order %s ไม่มีวันที่อีเมลสำหรับรวมยอดรูดบัตร", marketplaceOrderIDFromRawData(rd))
-	}
-	if opts.LazadaChargeGroups != nil {
-		if cached := opts.LazadaChargeGroups[emailDate]; cached != nil {
-			if err := validateLazadaChargeGroupForDocRef(cached); err != nil {
-				return nil, err
-			}
-			return cached, nil
-		}
-	}
-	group, err := h.billRepo.GetLazadaChargeGroupByEmailDate(emailDate)
-	if err != nil {
-		return nil, err
-	}
-	if opts.LazadaChargeGroups != nil {
-		opts.LazadaChargeGroups[emailDate] = group
-	}
-	if err := validateLazadaChargeGroupForDocRef(group); err != nil {
-		return nil, err
-	}
-	return group, nil
+	return nil, fmt.Errorf("Lazada order %s ยังไม่มี group key จากเวลาในเนื้อหาอีเมลสำหรับรวมยอดรูดบัตร — กรุณา run lazada_group_key backfill ก่อนส่ง SML", marketplaceOrderIDFromRawData(rd))
 }
 
 func validateLazadaChargeGroupForDocRef(group *repository.LazadaChargeGroup) error {
@@ -3619,11 +3596,15 @@ func validateLazadaChargeGroupForDocRef(group *repository.LazadaChargeGroup) err
 	if len(group.NotReconciledOrderIDs) > 0 {
 		problems = append(problems, "reconcile ไม่ผ่าน: "+strings.Join(group.NotReconciledOrderIDs, ", "))
 	}
+	groupLabel := strings.TrimSpace(group.GroupKey)
+	if groupLabel == "" {
+		groupLabel = strings.TrimSpace(group.EmailDate)
+	}
 	if len(problems) > 0 {
-		return fmt.Errorf("ยอดรูดบัตร Lazada group %s ยังไม่พร้อมสำหรับ doc_ref (%s)", group.EmailDate, strings.Join(problems, "; "))
+		return fmt.Errorf("ยอดรูดบัตร Lazada group %s ยังไม่พร้อมสำหรับ doc_ref (%s)", groupLabel, strings.Join(problems, "; "))
 	}
 	if group.GroupTotal <= 0 {
-		return fmt.Errorf("ยอดรูดบัตร Lazada group %s ต้องมากกว่า 0", group.EmailDate)
+		return fmt.Errorf("ยอดรูดบัตร Lazada group %s ต้องมากกว่า 0", groupLabel)
 	}
 	return nil
 }

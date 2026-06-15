@@ -33,10 +33,6 @@ func (r *BillRepo) UpdatePrintPaymentMethod(id, paymentMethod string, applyToEma
 	if id == "" {
 		return nil, fmt.Errorf("bill id is required")
 	}
-	if paymentMethod == "" {
-		return nil, fmt.Errorf("กรุณาเลือกวิธีการชำระเงิน")
-	}
-
 	tx, err := r.db.Begin()
 	if err != nil {
 		return nil, err
@@ -68,7 +64,7 @@ func (r *BillRepo) UpdatePrintPaymentMethod(id, paymentMethod string, applyToEma
 	}
 
 	policy := r.channelPrintPolicy(source, billType)
-	if !paymentMethodAllowedInList(paymentMethod, policy.PaymentMethods) {
+	if paymentMethod != "" && !paymentMethodAllowedForPolicy(paymentMethod, policy) {
 		return nil, fmt.Errorf("วิธีการชำระเงินนี้ไม่อยู่ในรายการที่ตั้งค่าไว้ใน Channels")
 	}
 

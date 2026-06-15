@@ -9,7 +9,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o server ./cmd/server \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o lazada_group_key ./cmd/backfill/lazada_group_key
 
 # Runtime stage
 FROM alpine:3.19
@@ -20,6 +21,7 @@ RUN apk add --no-cache ca-certificates tzdata postgresql16-client
 WORKDIR /app
 
 COPY --from=builder /app/server .
+COPY --from=builder /app/lazada_group_key .
 
 EXPOSE 8090
 

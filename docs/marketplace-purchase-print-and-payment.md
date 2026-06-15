@@ -54,12 +54,12 @@ Values that do not start with `TT` can be saved for future use, but they are not
 
 ## Send To SML Dialogs
 
-Both single-bill and bulk-send dialogs include a required `วิธีการชำระเงิน` dropdown for marketplace purchase email bills.
+Both single-bill and bulk-send dialogs include an optional `วิธีการชำระเงิน` dropdown for marketplace purchase email bills.
 
 Behavior:
 
-- The dropdown defaults from the selected supplier when supplier code/name starts with `TT`.
-- If a bill already has `print_payment_method`, that explicit value wins.
+- The dropdown auto-syncs and locks to the selected supplier when supplier code/name starts with `TT`.
+- If the selected supplier is not `TT`, the dialog starts blank and the user can choose manually only when needed.
 - Before sending SML, frontend calls `PATCH /api/bills/:id/print-payment-method`.
 - Single-bill send applies to the whole email group when the bill has an email group.
 - Bulk send dedupes by email group and saves the selected method before creating the bulk SML job.
@@ -117,7 +117,7 @@ For purchase orders sent to SML:
 
 - `remark` uses seller/supplier name from the source email guard.
 - Shopee and Lazada order ids go to `remark_5`.
-- Lazada card `doc_ref` stores the summed paid total for every active Lazada purchase order with the exact same `raw_data.email_date`, because Lazada can split one card charge across multiple order emails.
+- Lazada card `doc_ref` stores the summed paid total for every active Lazada purchase order with the same `raw_data.lazada_charge_group_key`, because Lazada can split one card charge across multiple order emails whose envelope seconds differ.
 - Lazada send blocks if the card-charge group is incomplete or if the current PO total does not match the order paid total after the `SHIP_CUS` fee line is present.
 - User-entered `remark` is not available in purchase send dialogs to avoid overwriting the SML remark field.
 - `remark_2` remains available because it is a separate SML field.

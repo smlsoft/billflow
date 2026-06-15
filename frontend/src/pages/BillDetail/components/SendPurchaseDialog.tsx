@@ -28,6 +28,12 @@ import {
 } from "@/lib/smlRemark2";
 import { ENABLE_REMARK2 } from "@/lib/featureFlags";
 import { isSMLReady, smlBlockedMessage } from "@/lib/sml-readiness";
+import {
+  deriveTTPrintPaymentMethod,
+  isPrintPaymentMethodAllowed,
+  paymentMethodMatchesPrefixes,
+  withDerivedPaymentMethodOption,
+} from "@/lib/marketplacePaymentMethod";
 import { DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS, normalizeMarketplacePrintPolicy } from "@/pages/ChannelDefaults/labels";
 import { PartyPicker, type Party } from "@/pages/ChannelDefaults/PartyPicker";
 import { SMLMasterCodePicker } from "./SMLMasterCodePicker";
@@ -158,11 +164,6 @@ function isCardPaymentMethod(method: string) {
   );
 }
 
-function isPaymentMethodPrintable(method: string, prefixes: string[]) {
-  const normalized = method.trim().toUpperCase();
-  return normalized !== "" && prefixes.some((prefix) => normalized.startsWith(prefix));
-}
-
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -230,13 +231,7 @@ export function SendPurchaseDialog({
   const [savingPrintPaymentMethod, setSavingPrintPaymentMethod] = useState(false);
 
   const autoPaymentMethod = useMemo(() => {
-    const code = (party?.code ?? "").trim();
-    const name = (party?.name ?? "").trim();
-    const codeUpper = code.toUpperCase();
-    const nameUpper = name.toUpperCase();
-    if (codeUpper.startsWith("TT")) return code;
-    if (nameUpper.startsWith("TT")) return name;
-    return "";
+    return deriveTTPrintPaymentMethod(party);
   }, [party]);
 
   const effectivePartyCode = party?.code ?? "";
@@ -247,18 +242,26 @@ export function SendPurchaseDialog({
     () => normalizeMarketplacePrintPolicy(bill.email_group?.print_policy),
     [bill.email_group?.print_policy],
   );
-  const paymentMethodOptions =
+  const basePaymentMethodOptions =
     marketplacePrintPolicy.payment_methods.length > 0
       ? marketplacePrintPolicy.payment_methods
       : DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS;
+  const paymentMethodOptions = useMemo(
+    () => withDerivedPaymentMethodOption(basePaymentMethodOptions, autoPaymentMethod),
+    [basePaymentMethodOptions, autoPaymentMethod],
+  );
   const selectedPrintPaymentMethod = printPaymentMethod.trim();
   const printPaymentMethodAllowed =
     !isMarketplacePurchaseEmail ||
-    selectedPrintPaymentMethod === "" ||
-    paymentMethodOptions.includes(selectedPrintPaymentMethod);
+    isPrintPaymentMethodAllowed(
+      selectedPrintPaymentMethod,
+      basePaymentMethodOptions,
+      marketplacePrintPolicy.payment_method_prefix_enabled,
+      marketplacePrintPolicy.payment_method_prefixes,
+    );
   const printPaymentMethodReadyForPrint =
     !marketplacePrintPolicy.payment_method_prefix_enabled ||
-    isPaymentMethodPrintable(
+    paymentMethodMatchesPrefixes(
       selectedPrintPaymentMethod,
       marketplacePrintPolicy.payment_method_prefixes,
     );
@@ -461,9 +464,14 @@ export function SendPurchaseDialog({
     const storedMethod = (bill.print_payment_method || "").trim();
     const initialPartyCode = payloadString(payload, "cust_code") ||
       (defaults?.party_code ?? "");
-    const initialPartyIsAutoTT = initialPartyCode.toUpperCase().startsWith("TT");
+    const initialPartyName = payloadString(payload, "supplier_name") ||
+      (defaults?.party_name ?? "");
+    const initialAutoPaymentMethod = deriveTTPrintPaymentMethod({
+      code: initialPartyCode,
+      name: initialPartyName,
+    });
     setPrintPaymentMethod(
-      storedMethod !== "" ? storedMethod : initialPartyIsAutoTT ? initialPartyCode.trim() : "",
+      initialAutoPaymentMethod !== "" ? initialAutoPaymentMethod : storedMethod,
     );
   }, [
     open,
@@ -481,17 +489,15 @@ export function SendPurchaseDialog({
     if (autoPaymentMethod !== "") {
       setPrintPaymentMethod(autoPaymentMethod);
     } else {
-      setPrintPaymentMethod((prev) => {
-        const prevUpper = prev.trim().toUpperCase();
-        return prevUpper.startsWith("TT") ? "" : prev;
-      });
+      setPrintPaymentMethod("");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoPaymentMethod]);
 
   const handleConfirm = async () => {
     if (!canConfirm) return;
-    if (isMarketplacePurchaseEmail && selectedPrintPaymentMethod !== "") {
+    const storedPrintPaymentMethod = (bill.print_payment_method || "").trim();
+    if (isMarketplacePurchaseEmail && selectedPrintPaymentMethod !== storedPrintPaymentMethod) {
       setSavingPrintPaymentMethod(true);
       try {
         await updateBillPrintPaymentMethod(bill.id, {
@@ -651,6 +657,7 @@ export function SendPurchaseDialog({
                 <Select
                   value={printPaymentMethod}
                   onValueChange={setPrintPaymentMethod}
+                  disabled={autoPaymentMethod !== ""}
                 >
                   <SelectTrigger className="h-9 text-sm">
                     <span className={printPaymentMethod ? "text-foreground" : "text-muted-foreground"}>
@@ -667,7 +674,7 @@ export function SendPurchaseDialog({
                 </Select>
                 <div className="text-[10px] text-muted-foreground">
                   {autoPaymentMethod !== ""
-                    ? `ล็อกอัตโนมัติตามผู้ขาย ${autoPaymentMethod} — เปลี่ยนได้หากต้องการ`
+                    ? `ใช้ตามผู้ขาย ${autoPaymentMethod} อัตโนมัติ`
                     : "ไม่บังคับสำหรับส่ง SML"}
                   {bill.email_group?.order_count && bill.email_group.order_count > 1
                     ? " หากเลือก จะบันทึกให้ทุกคำสั่งซื้อในอีเมลเดียวกัน"

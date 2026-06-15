@@ -55,7 +55,8 @@ export function UpdatePrintPaymentMethodDialog({
     [bill?.email_group?.print_policy],
   )
   const methods = policy.payment_methods.length > 0 ? policy.payment_methods : DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS
-  const currentMethod = (bill?.print_payment_method || bill?.effective_print_payment_method || '').trim()
+  const currentMethod = (bill?.print_payment_method || '').trim()
+  const effectiveMethod = (bill?.effective_print_payment_method || '').trim()
   const [paymentMethod, setPaymentMethod] = useState(currentMethod)
   const [applyToEmailGroup, setApplyToEmailGroup] = useState(false)
 
@@ -67,7 +68,7 @@ export function UpdatePrintPaymentMethodDialog({
 
   const selectedIsTT = paymentMethod.toUpperCase().startsWith('TT')
   const sameMethod = paymentMethod === currentMethod && !applyToEmailGroup
-  const canSubmit = !!paymentMethod && !sameMethod && !submitting
+  const canSubmit = !sameMethod && !submitting
   const docNo = bill?.sml_doc_no || ''
   const orderID = marketplaceOrderID(bill)
   const sourceLabel = bill?.source ? BILL_SOURCE_LABEL[bill.source] || bill.source : ''
@@ -88,30 +89,40 @@ export function UpdatePrintPaymentMethodDialog({
             <InfoLine label="เอกสาร SML" value={docNo || '-'} mono />
             <InfoLine label="คำสั่งซื้อ" value={orderID || '-'} mono />
             <InfoLine label="ช่องทาง" value={sourceLabel || '-'} />
-            <InfoLine label="วิธีชำระปัจจุบัน" value={currentMethod || 'ยังไม่ได้เลือก'} mono={!!currentMethod} />
+            <InfoLine label="วิธีชำระที่บันทึกไว้" value={currentMethod || 'ยังไม่ได้เลือก'} mono={!!currentMethod} />
+            {effectiveMethod && effectiveMethod !== currentMethod && (
+              <InfoLine label="ค่าที่ระบบใช้ตอนนี้" value={effectiveMethod} mono />
+            )}
           </div>
 
           <div className="space-y-2">
             <Label>เลือกวิธีการชำระเงิน</Label>
-            <Select value={paymentMethod} onValueChange={setPaymentMethod} disabled={submitting}>
-              <SelectTrigger>
-                <SelectValue placeholder="เลือกวิธีการชำระเงิน" />
-              </SelectTrigger>
-              <SelectContent>
-                {methods.map((method) => {
-                  const ready = method.toUpperCase().startsWith('TT')
-                  return (
-                    <SelectItem key={method} value={method}>
-                      {method}{ready ? '' : ' · ยังไม่พร้อมปริ้น'}
-                    </SelectItem>
-                  )
-                })}
-              </SelectContent>
-            </Select>
-            <p className={selectedIsTT ? 'text-xs text-emerald-600 dark:text-emerald-300' : 'text-xs text-warning'}>
-              {selectedIsTT
-                ? `เลือก ${paymentMethod} แล้วจะผ่านเงื่อนไขวิธีชำระเงินสำหรับปริ้น`
-                : 'ค่าที่ไม่ขึ้นต้นด้วย TT บันทึกได้ แต่ยังไม่พร้อมปริ้นในรอบนี้'}
+            <div className="flex gap-2">
+              <Select value={paymentMethod} onValueChange={setPaymentMethod} disabled={submitting}>
+                <SelectTrigger>
+                  <SelectValue placeholder="เลือกวิธีการชำระเงิน" />
+                </SelectTrigger>
+                <SelectContent>
+                  {methods.map((method) => {
+                    const ready = method.toUpperCase().startsWith('TT')
+                    return (
+                      <SelectItem key={method} value={method}>
+                        {method}{ready ? '' : ' · ยังไม่พร้อมปริ้น'}
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+              <Button type="button" variant="outline" onClick={() => setPaymentMethod('')} disabled={submitting || !paymentMethod}>
+                ล้างค่า
+              </Button>
+            </div>
+            <p className={paymentMethod === '' ? 'text-xs text-muted-foreground' : selectedIsTT ? 'text-xs text-emerald-600 dark:text-emerald-300' : 'text-xs text-warning'}>
+              {paymentMethod === ''
+                ? 'ยังไม่เลือกวิธีชำระเงิน ระบบจะไม่บังคับสำหรับส่ง SML'
+                : selectedIsTT
+                  ? `เลือก ${paymentMethod} แล้วจะผ่านเงื่อนไขวิธีชำระเงินสำหรับปริ้น`
+                  : 'ค่าที่ไม่ขึ้นต้นด้วย TT บันทึกได้ แต่ยังไม่พร้อมปริ้นในรอบนี้'}
             </p>
           </div>
 

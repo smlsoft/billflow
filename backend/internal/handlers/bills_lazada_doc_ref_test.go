@@ -11,16 +11,16 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestResolveLazadaCardChargeGroupForSendUsesEmailDateGroup(t *testing.T) {
+func TestResolveLazadaCardChargeGroupForSendUsesGroupKey(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
 	defer db.Close()
 
-	emailDate := "2026-06-10T17:56:30+08:00"
+	groupKey := "lazada_card_acc-1_20260611_1645"
 	mock.ExpectQuery("FROM bills b").
-		WithArgs(emailDate).
+		WithArgs(groupKey).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "order_id", "payment_method", "paid_total_amount", "amount_reconciliation_status",
 		}).
@@ -32,7 +32,7 @@ func TestResolveLazadaCardChargeGroupForSendUsesEmailDateGroup(t *testing.T) {
 	h := &BillHandler{billRepo: repository.NewBillRepo(db)}
 	bill := lazadaBillForDocRefTest(`{
 		"order_id":"1100887410495692",
-		"email_date":"2026-06-10T17:56:30+08:00",
+		"lazada_charge_group_key":"lazada_card_acc-1_20260611_1645",
 		"payment_method":"Credit or Debit Card",
 		"paid_total_amount":1021.45,
 		"amount_reconciliation_status":"ok"
@@ -45,11 +45,31 @@ func TestResolveLazadaCardChargeGroupForSendUsesEmailDateGroup(t *testing.T) {
 	if group.GroupCount != 4 || group.GroupTotal != 2216.14 {
 		t.Fatalf("group = count %d total %v, want 4/2216.14", group.GroupCount, group.GroupTotal)
 	}
-	if cached := cache[emailDate]; cached == nil || cached.GroupTotal != 2216.14 {
+	if cached := cache["gk:"+groupKey]; cached == nil || cached.GroupTotal != 2216.14 {
 		t.Fatalf("cache = %#v", cache)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestResolveLazadaCardChargeGroupForSendBlocksMissingGroupKey(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	h := &BillHandler{billRepo: repository.NewBillRepo(db)}
+	bill := lazadaBillForDocRefTest(`{
+		"order_id":"1100887410495692",
+		"email_date":"2026-06-10T17:56:30+08:00",
+		"payment_method":"Credit or Debit Card",
+		"paid_total_amount":1021.45,
+		"amount_reconciliation_status":"ok"
+	}`)
+	_, err = h.resolveLazadaCardChargeGroupForSend(bill, retrySendOptions{})
+	if err == nil || !strings.Contains(err.Error(), "ยังไม่มี group key") {
+		t.Fatalf("err = %v, want missing group key block", err)
 	}
 }
 
@@ -81,23 +101,23 @@ func TestValidateMarketplaceAmountReadyForSendRequiresLazadaCardInputs(t *testin
 		want string
 	}{
 		{
-			name: "missing email date",
+			name: "missing group key",
 			raw:  `{"order_id":"1101","payment_method":"Credit or Debit Card","paid_total_amount":100,"amount_reconciliation_status":"ok"}`,
-			want: "ไม่มีวันที่อีเมล",
+			want: "ยังไม่มี group key",
 		},
 		{
 			name: "non card",
-			raw:  `{"order_id":"1102","email_date":"2026-06-10T17:56:30+08:00","payment_method":"Cash on Delivery","paid_total_amount":100,"amount_reconciliation_status":"ok"}`,
+			raw:  `{"order_id":"1102","lazada_charge_group_key":"lazada_card_acc_20260611_1645","payment_method":"Cash on Delivery","paid_total_amount":100,"amount_reconciliation_status":"ok"}`,
 			want: "ไม่ใช่การชำระด้วยบัตร",
 		},
 		{
 			name: "missing paid total",
-			raw:  `{"order_id":"1103","email_date":"2026-06-10T17:56:30+08:00","payment_method":"Credit or Debit Card","amount_reconciliation_status":"ok"}`,
+			raw:  `{"order_id":"1103","lazada_charge_group_key":"lazada_card_acc_20260611_1645","payment_method":"Credit or Debit Card","amount_reconciliation_status":"ok"}`,
 			want: "ไม่มียอดชำระ",
 		},
 		{
 			name: "not reconciled",
-			raw:  `{"order_id":"1104","email_date":"2026-06-10T17:56:30+08:00","payment_method":"Credit or Debit Card","paid_total_amount":100,"amount_reconciliation_status":"mismatch","amount_reconciliation_delta":1.23}`,
+			raw:  `{"order_id":"1104","lazada_charge_group_key":"lazada_card_acc_20260611_1645","payment_method":"Credit or Debit Card","paid_total_amount":100,"amount_reconciliation_status":"mismatch","amount_reconciliation_delta":1.23}`,
 			want: "reconcile ไม่ผ่าน",
 		},
 	}

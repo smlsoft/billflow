@@ -28,6 +28,7 @@ backups/*.sql
 .vscode/settings.json
 *.swp
 backend/server
+backend/lazada_group_key
 
 # Claude Code per-project state (agents, plans, settings)
 .claude/
