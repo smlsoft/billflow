@@ -92,6 +92,9 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	mock.ExpectExec("INSERT INTO shopee_order_events").
 		WithArgs(existingBillID, "2604294EP99PKT", shopeeEventShipped, "ถูกจัดส่งแล้ว", "คำสั่งซื้อ #2604294EP99PKT ถูกจัดส่งแล้ว", "info@mail.shopee.co.th", messageID, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE shopee_order_events").
+		WithArgs("2604294EP99PKT", existingBillID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("INSERT INTO bill_artifacts").
 		WithArgs(existingBillID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8", int64(len(htmlBody)), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", time.Now()))
@@ -125,6 +128,115 @@ func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	}
 }
 
+func TestProcessShopeeShippedEmailBodySkipsShippingWithoutPaymentBill(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &EmailHandler{
+		billRepo: repository.NewBillRepo(db),
+		logger:   zap.NewNop(),
+	}
+	messageID := "shipping-only-message@example.test"
+	subject := "คำสั่งซื้อ #260611SACGW9M8 ถูกจัดส่งแล้ว"
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ: #260611SACGW9M8",
+		"ยอดที่ต้องชำระทั้งหมด ฿772",
+		"Shopee",
+	}, "\n")
+
+	mock.ExpectQuery("FROM bills").
+		WithArgs("260611SACGW9M8").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO shopee_order_events").
+		WithArgs("", "260611SACGW9M8", shopeeEventShipped, "ถูกจัดส่งแล้ว", subject, "info@mail.shopee.co.th", messageID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO processed_email_keys").
+		WithArgs("shopee_shipped", messageID, "260611SACGW9M8").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO processed_email_keys").
+		WithArgs("shopee_shipped", messageID, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	outcome, err := h.ProcessShopeeShippedEmailBody(
+		subject,
+		"info@mail.shopee.co.th",
+		body,
+		"",
+		messageID,
+		mailSourceForTest(),
+	)
+	if err != nil {
+		t.Fatalf("ProcessShopeeShippedEmailBody: %v", err)
+	}
+	if outcome.Kind != emailservice.ProcessOutcomeSkipped || outcome.Code != "shopee_shipped_without_payment_bill" {
+		t.Fatalf("outcome = %#v, want skipped shipping-only", outcome)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestProcessShopeeShippedEmailBodyRecordsShippingOnExistingBillWithoutAI(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	h := &EmailHandler{
+		billRepo:    repository.NewBillRepo(db),
+		artifactSvc: artifact.New(t.TempDir(), 10<<20, repository.NewBillArtifactRepo(db), zap.NewNop()),
+		logger:      zap.NewNop(),
+	}
+	messageID := "shipping-existing-message@example.test"
+	existingBillID := "768a0068-cad3-4b6e-b229-a5d2ce2ede73"
+	subject := "คำสั่งซื้อ #260611SACGW9M8 ถูกจัดส่งแล้ว"
+	htmlBody := "<html><body>ถูกจัดส่งแล้ว</body></html>"
+
+	mock.ExpectQuery("FROM bills").
+		WithArgs("260611SACGW9M8").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(existingBillID))
+	mock.ExpectExec("INSERT INTO shopee_order_events").
+		WithArgs(existingBillID, "260611SACGW9M8", shopeeEventShipped, "ถูกจัดส่งแล้ว", subject, "info@mail.shopee.co.th", messageID, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE shopee_order_events").
+		WithArgs("260611SACGW9M8", existingBillID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("INSERT INTO bill_artifacts").
+		WithArgs(existingBillID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8", int64(len(htmlBody)), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", time.Now()))
+	mock.ExpectQuery("INSERT INTO bill_artifacts").
+		WithArgs(existingBillID, "email_envelope", "envelope.json", "application/json", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", time.Now()))
+	mock.ExpectExec("INSERT INTO processed_email_keys").
+		WithArgs("shopee_shipped", messageID, "260611SACGW9M8").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO processed_email_keys").
+		WithArgs("shopee_shipped", messageID, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	outcome, err := h.ProcessShopeeShippedEmailBody(
+		subject,
+		"info@mail.shopee.co.th",
+		"",
+		htmlBody,
+		messageID,
+		mailSourceForTest(),
+	)
+	if err != nil {
+		t.Fatalf("ProcessShopeeShippedEmailBody: %v", err)
+	}
+	if outcome.Kind != emailservice.ProcessOutcomeUpdatedExisting || outcome.Code != "shopee_shipping_status_recorded" {
+		t.Fatalf("outcome = %#v, want updated shipping status", outcome)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
 func TestProcessShopeeShippedEmailBodyRecordsPaymentEventBeforeAI(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -151,6 +263,9 @@ func TestProcessShopeeShippedEmailBodyRecordsPaymentEventBeforeAI(t *testing.T) 
 	mock.ExpectExec("INSERT INTO shopee_order_events").
 		WithArgs(existingBillID, "260608HPC8A42A", shopeeEventPaymentConfirmed, "ยืนยันการชำระเงินแล้ว", subject, "info@mail.shopee.co.th", messageID, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE shopee_order_events").
+		WithArgs("260608HPC8A42A", existingBillID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("INSERT INTO bill_artifacts").
 		WithArgs(existingBillID, "email_text", "shopee-shipped.txt", "text/plain; charset=utf-8", int64(len(body)), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", time.Now()))

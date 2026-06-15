@@ -515,6 +515,24 @@ func (r *BillRepo) InsertShopeeOrderEvent(event *models.ShopeeOrderEvent) error 
 	return err
 }
 
+func (r *BillRepo) LinkShopeeOrderEventsToBill(orderID, billID string) (int64, error) {
+	orderID = strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(orderID, "#")))
+	if orderID == "" || billID == "" {
+		return 0, nil
+	}
+	res, err := r.db.Exec(`
+		UPDATE shopee_order_events
+		   SET bill_id = $2::uuid
+		 WHERE bill_id IS NULL
+		   AND UPPER(TRIM(LEADING '#' FROM order_id)) = $1`,
+		orderID, billID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (r *BillRepo) EnrichLatestShopeeStatuses(bills []models.Bill) error {
 	if len(bills) == 0 {
 		return nil

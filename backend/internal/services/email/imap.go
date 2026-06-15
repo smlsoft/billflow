@@ -432,6 +432,16 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					if label == "" {
 						label = "อัปเดตข้อมูลบนบิลเดิมแล้ว"
 					}
+				case ProcessOutcomeSkipped:
+					res.Summary.SkippedUser++
+					if code == "" {
+						code = "skipped"
+					}
+					if label == "" {
+						label = "ไม่สร้างบิลใหม่จากเมลนี้"
+					}
+					res.addDetail(summary, "skipped", code, label)
+					continue
 				default:
 					res.Summary.Created++
 					if code == "" {
@@ -667,7 +677,7 @@ func messageIDsFromSummaries(summaries []imapMessageSummary) []string {
 }
 
 func shouldBypassDuplicatePrecheck(cfg PollConfig, subject string) bool {
-	return cfg.Channel == "shopee" && isShippedSubject(subject)
+	return cfg.Channel == "shopee" && isShopeePaymentSubject(subject)
 }
 
 func fetchBodyForUID(c *imapclient.Client, uid imap.UID) ([]byte, error) {
@@ -756,7 +766,7 @@ func dispatch(
 		if plainText == "" {
 			plainText = bodyHTML
 		}
-		if isShippedSubject(envelope.Subject) && p.ShopeeShipped != nil {
+		if (isShopeePaymentSubject(envelope.Subject) || isShopeeShippingSubject(envelope.Subject)) && p.ShopeeShipped != nil {
 			outcome, err := p.ShopeeShipped(envelope.Subject, fromAddr, plainText, bodyHTML, messageID, source)
 			if err != nil {
 				if skip, ok := err.(*MessageSkipError); ok {
@@ -929,16 +939,12 @@ func subjectSearchCriteria(filters []string) imap.SearchCriteria {
 	return imap.SearchCriteria{Or: [][2]imap.SearchCriteria{{first, rest}}}
 }
 
-// isShippedSubject returns true if the subject indicates a Shopee
-// payment-or-shipping confirmation — both should produce a purchase-order
-// bill in SML. The two channels Shopee uses are:
-//   - เก็บเงินปลายทาง (cash on delivery): subject contains "ถูกจัดส่งแล้ว"
-//     when the package ships
-//   - ชำระเงินทันที (pay now): subject contains "ยืนยันการชำระเงิน"
-//     when the buyer pays — this is the equivalent trigger for COD-shipped
-func isShippedSubject(subject string) bool {
-	return strings.Contains(subject, "ถูกจัดส่งแล้ว") ||
-		strings.Contains(subject, "ยืนยันการชำระเงิน")
+func isShopeePaymentSubject(subject string) bool {
+	return strings.Contains(subject, "ยืนยันการชำระเงิน")
+}
+
+func isShopeeShippingSubject(subject string) bool {
+	return strings.Contains(subject, "ถูกจัดส่งแล้ว")
 }
 
 func classifyLazadaEnvelope(subject, from string, allowed []string) (code, label string, ok bool) {

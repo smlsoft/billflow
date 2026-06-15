@@ -93,3 +93,25 @@ func (h *EmailHandler) recordShopeeOrderEvent(
 		)
 	}
 }
+
+func (h *EmailHandler) linkShopeeOrphanEventsToBill(billID, orderID string) {
+	if h == nil || h.billRepo == nil || billID == "" || orderID == "" {
+		return
+	}
+	affected, err := h.billRepo.LinkShopeeOrderEventsToBill(orderID, billID)
+	if err != nil {
+		h.logger.Warn("shopee_order_event: link orphan events failed",
+			zap.String("bill_id", billID),
+			zap.String("order_id", orderID),
+			zap.Error(err),
+		)
+		return
+	}
+	if affected > 0 {
+		h.logger.Info("shopee_order_event: linked orphan events",
+			zap.String("bill_id", billID),
+			zap.String("order_id", orderID),
+			zap.Int64("events", affected),
+		)
+	}
+}

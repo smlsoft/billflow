@@ -39,11 +39,10 @@ func (h *EmailHandler) shopeeOrderExtractor() shopeeOrderExtractor {
 	return nil
 }
 
-// ProcessShopeeShippedEmailBody handles Shopee shipping-confirmation emails
-// (subject contains "ถูกจัดส่งแล้ว" or "ยืนยันการชำระเงิน").
-// One email may contain multiple Shopee orders (one per seller) — this
-// function creates a separate purchase bill for each order_id found by AI.
-// Bills are never auto-sent — status is always pending or needs_review.
+// ProcessShopeeShippedEmailBody handles Shopee purchase-related emails.
+// Payment confirmations create purchase bills. Shipping confirmations are
+// status-only and never create bills because they are not reliable PO source
+// documents.
 func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) (emailservice.ProcessOutcome, error) {
 	traceID := fmt.Sprintf("shopee-shipped-%d", time.Now().UnixMilli())
 	startTime := time.Now()
@@ -53,6 +52,10 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	plainText := htmlToText(bodyText)
 	if strings.TrimSpace(plainText) == "" {
 		plainText = htmlToText(bodyHTML)
+	}
+	eventType, _, subjectOrderID, _ := shopeeOrderEventFromSubject(subject)
+	if eventType == shopeeEventShipped {
+		return h.processShopeeShippingStatusEmail(subject, from, bodyText, bodyHTML, messageID, source, subjectOrderID)
 	}
 	detectedOrderIDs := detectedShopeeBodyOrderIDs(plainText, bodyHTML)
 	isMultiOrderEmail := len(detectedOrderIDs) > 1
@@ -163,6 +166,47 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	return emailservice.CreatedBillOutcome(), nil
 }
 
+func (h *EmailHandler) processShopeeShippingStatusEmail(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource, orderID string) (emailservice.ProcessOutcome, error) {
+	orderID = normalizeShopeeOrderID(orderID)
+	if orderID == "" {
+		if messageID != "" {
+			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+		}
+		return emailservice.SkippedOutcome("shopee_shipping_missing_order_id", "อีเมลจัดส่ง Shopee ไม่มีเลขคำสั่งซื้อที่ระบบอ่านได้"), nil
+	}
+
+	existingBillID, exists, err := h.findExistingShopeeShippedBillID(orderID)
+	if err != nil {
+		return emailservice.ProcessOutcome{}, fmt.Errorf("lookup existing shopee_shipped order for shipping event: %w", err)
+	}
+	if exists {
+		h.recordShopeeOrderEvent(existingBillID, subject, from, messageID, source, orderID)
+		h.linkShopeeOrphanEventsToBill(existingBillID, orderID)
+		h.saveShopeeShippedEmailArtifacts(existingBillID, subject, from, bodyText, bodyHTML, messageID)
+		if messageID != "" {
+			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
+			_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+		}
+		h.logger.Info("shopee_shipped: recorded shipping status on existing bill",
+			zap.String("message_id", messageID),
+			zap.String("order_id", orderID),
+			zap.String("bill_id", existingBillID),
+		)
+		return emailservice.UpdatedExistingOutcome("shopee_shipping_status_recorded", "บันทึกสถานะจัดส่งบนบิลเดิมแล้ว"), nil
+	}
+
+	h.recordShopeeOrderEvent("", subject, from, messageID, source, orderID)
+	if messageID != "" {
+		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
+		_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, "")
+	}
+	h.logger.Info("shopee_shipped: skipped shipping email without payment bill",
+		zap.String("message_id", messageID),
+		zap.String("order_id", orderID),
+	)
+	return emailservice.SkippedOutcome("shopee_shipped_without_payment_bill", "อีเมลจัดส่ง: รออีเมลยืนยันการชำระเงินก่อนสร้างบิล"), nil
+}
+
 func (h *EmailHandler) recordShopeeStatusEventBeforeAI(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource, markEmailProcessed bool) (bool, error) {
 	eventType, _, subjectOrderID, ok := shopeeOrderEventFromSubject(subject)
 	if !ok || subjectOrderID == "" {
@@ -177,6 +221,7 @@ func (h *EmailHandler) recordShopeeStatusEventBeforeAI(subject, from, bodyText, 
 	}
 
 	h.recordShopeeOrderEvent(existingBillID, subject, from, messageID, source, subjectOrderID)
+	h.linkShopeeOrphanEventsToBill(existingBillID, subjectOrderID)
 	h.saveShopeeShippedEmailArtifacts(existingBillID, subject, from, bodyText, bodyHTML, messageID)
 	discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, subjectOrderID)
 	if ok, err := h.billRepo.ApplyShopeePurchaseDiscountsToBill(existingBillID, discountSummary); err != nil {
@@ -556,6 +601,7 @@ func (h *EmailHandler) processOneShippedOrder(
 		return false, fmt.Errorf("lookup existing shopee_shipped order: %w", err)
 	} else if exists {
 		h.recordShopeeOrderEvent(existingBillID, subject, from, messageID, source, orderID)
+		h.linkShopeeOrphanEventsToBill(existingBillID, orderID)
 		h.saveShopeeShippedEmailArtifacts(existingBillID, subject, from, bodyText, bodyHTML, messageID)
 		discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID)
 		if ok, err := h.billRepo.ApplyShopeePurchaseDiscountsToBill(existingBillID, discountSummary); err != nil {
@@ -744,6 +790,7 @@ func (h *EmailHandler) processOneShippedOrder(
 		return false, fmt.Errorf("create shopee_shipped bill: %w", err)
 	}
 	h.recordShopeeOrderEvent(bill.ID, subject, from, messageID, source, orderID)
+	h.linkShopeeOrphanEventsToBill(bill.ID, orderID)
 	_ = h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, orderID)
 
 	// Save original email body as artifact on the first order only to avoid

@@ -81,9 +81,9 @@ type Processors struct {
 	// "ถูกจัดส่งแล้ว".
 	ShopeeOrder ShopeeBodyProcessor
 
-	// ShopeeShipped handles Shopee email shipping confirmations
-	// (purchaseorder flow). Used for channel="shopee" when the subject
-	// contains "ถูกจัดส่งแล้ว".
+	// ShopeeShipped handles Shopee purchase-related status emails. Payment
+	// confirmations create purchase bills; shipping confirmations only record
+	// status events.
 	ShopeeShipped ShopeeBodyProcessor
 
 	// LazadaPurchase handles Lazada order confirmation / shipped emails

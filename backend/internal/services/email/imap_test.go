@@ -65,7 +65,7 @@ func TestClassifyDispatchWarning(t *testing.T) {
 	}
 }
 
-func TestShouldBypassDuplicatePrecheckForShopeeShippedPayment(t *testing.T) {
+func TestShouldBypassDuplicatePrecheckForShopeePaymentOnly(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     PollConfig
@@ -79,10 +79,10 @@ func TestShouldBypassDuplicatePrecheckForShopeeShippedPayment(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "shopee shipped confirmation",
+			name:    "shopee shipped confirmation keeps precheck",
 			cfg:     PollConfig{Channel: "shopee"},
 			subject: "คำสั่งซื้อ #2601AAA ถูกจัดส่งแล้ว",
-			want:    true,
+			want:    false,
 		},
 		{
 			name:    "shopee non shipped order email keeps precheck",
