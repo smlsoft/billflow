@@ -564,8 +564,9 @@ goods_total + shipping + service_fee - coupon_discount = paid_total
 The parser stores the summary in `bills.raw_data`, distributes Lazada coupon discount into `bill_items.discount_amount`, and blocks SML send when reconciliation is not `ok` or when Lazada shipping/fee exists but `/settings/channels` has no fee item config. On thaisunsport, `channel_defaults/lazada_email/purchase` is set to `SHIP_CUS` / unit `บาท`; bill detail auto-adds the fee line when each Lazada bill is opened.
 
 Marketplace purchase email print/payment rules:
-- Single-bill and bulk SML send dialogs require `วิธีการชำระเงิน` for Shopee/Lazada purchase email.
-- The value is stored in BillFlow (`bills.print_payment_method`) before SML send.
+- Single-bill and bulk SML send dialogs do not require `วิธีการชำระเงิน` for Shopee/Lazada purchase email.
+- If the selected supplier code/name starts with `TT`, BillFlow auto-syncs and locks the method to that same `TTxxxx`; non-TT suppliers can remain blank.
+- The value is stored in BillFlow (`bills.print_payment_method`) before SML send when present.
 - The value is not sent to SML.
 - Ready-to-print requires all active orders in the same email group to have POL and the effective payment method to pass the configured prefix rule, currently `TT`.
 
@@ -943,7 +944,7 @@ sudo systemctl start cloudflared
 | 7 | Background jobs: insight cron, backup cron (verified), token checker, disk monitor | ✅ Done |
 | 8 | Production: Cloudflared named tunnel + systemd | ⏳ cloudflared installed, not configured (needs domain) |
 
-### Latest Thaisunsport Lazada Email Check (2026-06-09)
+### Latest Thaisunsport Lazada Email Check (2026-06-15)
 
 ```
 Server folder: /home/bosscatdog/billflow-thaisunsport
@@ -953,13 +954,18 @@ Ports:
   postgres :5448
 Migration:
   057_lazada_email_purchase.sql deployed
-  latest marketplace print/payment migration: 060_marketplace_print_perf_indexes.sql
+  latest marketplace print/payment/group-key migration: 063_lazada_charge_group_key.sql
 DB backup:
   historical amount-backfill backup: manual-backups/lazada-amount-20260605_112633
+  latest pre-repair backup: backups/manual-backups/pre-tt-lazada-group-key-20260615-103944.sql
+  latest repair manifest: backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv
 Current Lazada email purchase rows:
   initial 7 bills were backfilled and reconciled ok
   customer confirmed numbers and one Lazada PO sent to SML successfully
   active rows now continue through needs_review/pending/sent as auto poll runs
+  2026-06-15 group-key backfill updated 28 Lazada rows
+  8-order group confirmed at 2026-06-11 16:45 totals 7417.69
+  sent POL docs POL26060022..POL26060028 were repaired to doc_ref=7417.69
 Runtime config:
   channel_defaults/lazada_email/purchase fee item:
     shipping_item_enabled=true
@@ -970,7 +976,9 @@ Runtime config:
     lookback_days=1
     poll_interval_seconds=600
   marketplace print/payment:
-    payment method saved in BillFlow only
+    payment method saved in BillFlow only when present
+    TT supplier auto-syncs/locks the same TT payment method
+    non-TT supplier can leave payment method blank
     ready-to-print requires POL completeness + payment method prefix TT
 Safety:
   Lazada email remains review-first and does not auto-send to SML.

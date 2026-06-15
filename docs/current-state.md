@@ -1,7 +1,7 @@
 # BillFlow — Current State
 
-> Updated: 2026-06-12 +07
-> Source of truth checked: local code/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow` main + `billflow-thaisunsport`.
+> Updated: 2026-06-15 +07
+> Source of truth checked: local code/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB/SML repair queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
 ## Latest Handoff For New Chat
 
@@ -9,7 +9,7 @@
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
-- **Post-v1.0 marketplace purchase work deployed through 2026-06-12** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
+- **Post-v1.0 marketplace purchase work deployed through 2026-06-15 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
 - Migration ล่าสุดใน code/deployed main + thaisunsport: `063_lazada_charge_group_key.sql`.
 - Lazada email purchase is live on thaisunsport with review-first flow; 3 Lazada IMAP accounts enabled, `lookback_days=1`, `poll_interval_seconds=600`.
@@ -17,21 +17,29 @@
 - Single-bill and bulk SML send dialogs do **not** require `วิธีการชำระเงิน`; if supplier code/name starts with `TTxxxx`, BillFlow auto-syncs and locks the method to that `TTxxxx`.
 - **TT payment auto-sync**: เมื่อเลือก supplier ที่ code หรือ name ขึ้นต้น TT จะ auto-fill วิธีการชำระเงินทันที (ตรวจทั้ง code และ name เพราะ SML อาจใช้ code AF00001 แต่ name = TT2789); ถ้า supplier ไม่ใช่ TT จะ clear ค่าและ user เลือกเองได้.
 - **Lazada group key**: Lazada card doc_ref uses `raw_data.lazada_charge_group_key` parsed from the email body confirmation minute; legacy `email_date` fallback is blocked for send because envelope seconds can split one card charge.
-- **sml-api-bybos**: เพิ่ม `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` + BillFlow `PATCH /api/bills/:id/sml-doc-ref` (admin) สำหรับแก้ doc_ref ย้อนหลัง
+- **sml-api-bybos**: เพิ่มและ deploy `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` + BillFlow `PATCH /api/bills/:id/sml-doc-ref` (admin) สำหรับแก้ doc_ref ย้อนหลัง
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
 
-## Latest Deploy 2026-06-12 — TT Auto-Sync + Lazada Group Key + SML Doc-Ref Patch
+## Latest Deploy 2026-06-15 — TT Auto-Sync + Lazada Group Key + SML Doc-Ref Patch
 
-- Deploy targets: `billflow` main (`3010/8090`) and `billflow-thaisunsport` (`3020/8100`).
-- Commits: `a2b4927` (feat), `9341cc0` (fix Radix Select visual), `f329cac` (fix TT auto-sync root cause).
+- Deploy targets: `billflow-thaisunsport` (`3020/8100`) + shared `sml-api-bybos` gateway (`8200`). `billflow` main was not redeployed in this round.
+- Commit deployed to BillFlow thaisunsport: `691d01b fix: harden TT payments and Lazada doc ref grouping`.
+- Earlier related commits: `a2b4927` (feat), `9341cc0` (fix Radix Select visual), `f329cac` (fix TT auto-sync root cause).
 - **TT payment auto-sync** — `SendPurchaseDialog` + `BulkSendDialog`: เมื่อเลือก supplier ที่ code หรือ name ขึ้นต้น `TT` จะ auto-fill วิธีการชำระเงินทันที; ตรวจ name ด้วยเพราะ SML อาจ code = `AF00001`, name = `TT2789`
 - **Lazada confirmed-at group key** — email ใหม่จะเก็บ `lazada_charge_group_key = "lazada_card_<accountID>_YYYYMMDD_HHMM"` ใน `raw_data`; SML send now requires this key for Lazada card purchases and blocks missing-key rows until backfill/repair runs.
 - Migration `063_lazada_charge_group_key.sql` — CONCURRENTLY partial index on group key
 - Backfill `cmd/backfill/lazada_group_key` (idempotent `--dry-run`) is packaged into the backend Docker image as `./lazada_group_key`; run inside the container so it can see `/app/artifacts` and `DATABASE_URL`.
 - Production audit found Lazada HTML artifacts on thaisunsport; backfill must prefer the matching confirmation email artifact and use `raw_data.imap_account_id` when artifact `source_meta.account_id` is absent.
 - **PATCH `/api/bills/:id/sml-doc-ref`** (admin) — proxy to sml-api-bybos + sync `sml_payload.doc_ref` and item/detail row `doc_ref` + audit.
-- sml-api-bybos: `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` optimistic lock + `dry_run`
-- Verification: `go test ./...` ✅, `npm run build` ✅, health `8090`+`8100` ok, TT auto-sync confirmed on thaisunsport
+- sml-api-bybos: `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` optimistic lock + `dry_run`; production gateway was rebuilt/recreated on 2026-06-15 because the route was missing in the previously deployed image.
+- Pre-repair DB backup: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/pre-tt-lazada-group-key-20260615-103944.sql`.
+- Repair manifest: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv`.
+- Backfill result on thaisunsport: `updated=28`, `no_artifact=0`, `no_match=0`.
+- Lazada target group `lazada_card_1e3ba826-f525-42b5-a5c0-79eafb318d79_20260611_1645` contains 8 active orders and totals `7417.69`.
+- Historical SML doc_ref repair applied for 7 already-sent POL docs in that group: `POL26060022`, `POL26060023`, `POL26060024`, `POL26060025`, `POL26060026`, `POL26060027`, `POL26060028`.
+- Post-repair verification: BillFlow local `sml_payload.doc_ref` and item row `doc_ref` are `7417.69` for the 7 sent bills; SML dry-run recheck returned `actual_old=7417.69`, `changed=false` for all 7.
+- The remaining 1 order in that 8-order group is still `needs_review`; when sent later, current send logic should use the same group `doc_ref=7417.69`.
+- Verification: `go test ./...` ✅, `npm run build` ✅, `sml-api-bybos go test ./...` ✅, health `8100`, `3020`, and `8200` ok.
 
 ## Latest Marketplace Purchase Rollout 2026-06-09
 
@@ -59,12 +67,17 @@
 
 Runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).
 
-## Latest Thaisunsport Lazada Email State 2026-06-09
+## Latest Thaisunsport Lazada Email State 2026-06-15
 
 ### Current production data
 - Initial manual poll/backfill created 7 `source='lazada_email'`, `bill_type='purchase'` bills and reconciled `ok`.
 - Customer confirmed numbers were correct and one Lazada PO was sent to SML successfully.
 - As of the latest DB check, active Lazada email purchase bills exist across `needs_review`, `pending`, and `sent` statuses as testing continues.
+- Latest charge-group backfill updated 28 Lazada rows with `raw_data.lazada_charge_group_key`; no stored email artifacts were missing and no parse misses occurred.
+- The 8-order group confirmed in email body at `2026-06-11 16:45` totals `7417.69`.
+- Already-sent docs `POL26060022` through `POL26060028` in that group were patched in SML and BillFlow local payload to `doc_ref=7417.69`.
+- Pre-repair backup: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/pre-tt-lazada-group-key-20260615-103944.sql`.
+- Repair manifest: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv`.
 - Lazada fee config is now set in `channel_defaults/lazada_email/purchase`:
   - `shipping_item_enabled=true`
   - `shipping_item_code=SHIP_CUS`
@@ -79,10 +92,11 @@ Runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-pr
 
 ### Production behavior
 - Lazada email purchase uses deterministic HTML summary parsing for amounts; AI is not trusted for money totals.
-- Raw data includes `goods_total_amount`, `shipping_amount`, `coupon_discount_amount`, `service_fee_amount`, `paid_total_amount`, `shipping_method`, `payment_method`, `amount_reconciliation_status`, and `amount_reconciliation_delta`.
+- Raw data includes `goods_total_amount`, `shipping_amount`, `coupon_discount_amount`, `service_fee_amount`, `paid_total_amount`, `shipping_method`, `payment_method`, `lazada_charge_group_key`, `amount_reconciliation_status`, and `amount_reconciliation_delta`.
 - `bill_items.discount_amount` stores Lazada coupon allocation, proportional by goods gross and excluding fee/shipping lines.
 - Sending to SML is blocked if Lazada amount reconciliation is not `ok`.
 - Sending to SML is blocked if a Lazada paid total needs shipping/fee but the fee item config is missing.
+- Lazada card send is blocked if `lazada_charge_group_key` is missing; envelope `email_date` is not a safe fallback for card-charge grouping.
 - Admin still reviews/maps items manually; no Lazada email bill is auto-sent to SML.
 
 Runbook: [Lazada Email Purchase Intake](lazada-email-purchase.md).
@@ -413,6 +427,27 @@ Runbook: [Lazada Email Purchase Intake](lazada-email-purchase.md).
 
 ## Latest Deploy Notes
 
+### 2026-06-15 — Thaisunsport TT Payment + Lazada Group-Key Doc Ref Repair
+
+- Deploy targets: `billflow-thaisunsport` only, plus shared `sml-api-bybos` gateway. `billflow` main was intentionally not redeployed.
+- Commit: `691d01b fix: harden TT payments and Lazada doc ref grouping`.
+- Scope:
+  - Single and bulk purchase send dialogs auto-sync and lock BillFlow-only payment method when the selected supplier code/name starts with `TT`.
+  - Non-TT suppliers clear the BillFlow-only payment method and can remain blank; the field is not required to send SML.
+  - Lazada card `doc_ref` now depends on `raw_data.lazada_charge_group_key` parsed from the confirmation time in the email body. Missing group key blocks SML send instead of falling back to envelope `email_date`.
+  - Backend Docker image packages `/app/lazada_group_key` for production dry-run/apply backfill.
+  - Admin repair endpoint syncs sent Lazada PO `doc_ref` in both SML and BillFlow local payload with expected-value guards.
+- Production actions:
+  - Pre-repair backup: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/pre-tt-lazada-group-key-20260615-103944.sql`.
+  - Backfill `lazada_charge_group_key`: `updated=28`, `no_artifact=0`, `no_match=0`.
+  - Target Lazada group `2026-06-11 16:45` has 8 active orders and total `7417.69`.
+  - Patched already-sent docs `POL26060022` through `POL26060028` in that group to `doc_ref=7417.69`.
+  - Repair manifest: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv`.
+- Verification:
+  - Local BillFlow `go test ./...`, `npm run build`, and `sml-api-bybos go test ./...` passed before deploy.
+  - Thaisunsport backend `8100/health`, frontend `3020`, and SML gateway `8200/health` passed after deploy.
+  - SML dry-run recheck after repair returned `actual_old=7417.69`, `changed=false` for all 7 sent POL docs.
+
 ### 2026-06-09 — Marketplace Purchase Payment/Print + Bills List Performance
 
 - Deploy targets: `billflow` main and `billflow-thaisunsport`.
@@ -710,24 +745,24 @@ Phase 1 initially focused on Shopee purchase bills from email. The same review/s
 4. Bill is created as purchase bill and appears in `/bills`.
 5. Admin reviews item rows, maps or creates SML products when needed.
 6. Admin clicks send from Bill Detail or starts bulk send from `/bills`.
-7. Confirmation dialog requires supplier, warehouse, shelf, VAT type, VAT rate, and inquiry type. For marketplace purchase email, `วิธีการชำระเงิน` is optional unless the selected supplier is `TT`, in which case it auto-syncs and locks to that TT value.
+7. Confirmation dialog requires supplier, warehouse, shelf, VAT type, VAT rate, and inquiry type. For marketplace purchase email, `วิธีการชำระเงิน` is optional; when the selected supplier code/name is `TTxxxx`, it auto-syncs and locks to that TT value.
 8. VAT rate is locked/read-only in purchase send dialogs and must come from channel config/preview.
 9. Purchase send dialogs do not expose free-form `remark`; backend uses source seller/supplier name for SML `remark`.
 10. Payment method is saved in BillFlow before SML send and is not sent to SML.
-11. Backend posts to SML REST:
+11. Backend posts to SML through the configured route. Current thaisunsport purchase flow uses the shared SML gateway:
 
 ```text
-POST http://192.168.2.248:8080/SMLJavaRESTService/v3/api/purchaseorder
+POST http://192.168.2.109:8200/api/v1/ic/purchase-orders
 ```
 
-Required SML headers are read from production config:
+Required SML headers are read from production config. For thaisunsport, BillFlow sends `guid` plus tenant/database `data1_test`; main still uses its own SML tenant/config.
 
 | Header | Current value |
 |---|---|
 | `guid` | `smlx` |
-| `provider` | `SMLGOH` |
-| `configFileName` | `SMLConfigSMLGOH.xml` |
-| `databaseName` | `SML1_2026` |
+| `provider` | `SMLGOH` where legacy/direct route still needs it |
+| `configFileName` | `SMLConfigSMLGOH.xml` where legacy/direct route still needs it |
+| `databaseName` / tenant | thaisunsport: `data1_test`; main: `SML1_2026` / `sml1_2026` |
 | `Content-Type` | `application/json; charset=utf-8` |
 
 Purchase payload shape now follows SML v3 transaction attributes:

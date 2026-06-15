@@ -1,4 +1,4 @@
-# SML API Migration — billflow main + henna
+# SML API Migration — billflow instances
 
 ## เป้าหมาย
 เปลี่ยนจากเรียก SML REST API (192.168.2.248:8080) โดยตรง  
@@ -9,7 +9,7 @@ Swagger docs: http://192.168.2.109:8200/docs
 
 ---
 
-## สถานะ (2026-05-22) — ✅ พร้อมใช้งานบน BillFlow main และ BillFlow Henna
+## สถานะ (2026-06-15) — ✅ พร้อมใช้งานบน BillFlow main และ BillFlow thaisunsport
 
 ### การเปลี่ยนแปลงที่ทำแล้ว
 
@@ -22,8 +22,9 @@ Swagger docs: http://192.168.2.109:8200/docs
 | `services/sml/party_client.go` | path: customer/supplier → `/api/v1/ar/customers`, `/api/v1/ap/suppliers` |
 | `services/sml/warehouse_client.go` | path: `/SMLJavaRESTService/warehouse/v4` → `/api/v1/ic/warehouses` |
 | `services/catalog/service.go` | path: `/product/v4` → `/api/v1/ic/products` |
+| `services/sml/purchaseorder_client.go` | patch sent PO `doc_ref` → `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` |
 | `config/config.go` | default `ShopeeSMLURL` ยังเป็น 192.168.2.248 (fallback) |
-| **runtime app settings** | `sml.rest_base_url=http://172.24.0.1:8200` บน main + henna ✅ |
+| **runtime app settings** | main uses `sml.rest_base_url=http://172.24.0.1:8200`; thaisunsport uses its configured SML gateway route to `http://192.168.2.109:8200` ✅ |
 | **server `.env`** | ยังอาจมีค่าประวัติเดิมได้ แต่ runtime ใช้ค่าใน `app_settings` ก่อน |
 
 ### Auth headers — ไม่ต้องเปลี่ยน
@@ -41,6 +42,7 @@ billflow ส่ง `guid` + `databaseName` — sml-api-bybos รับทั้�
 | `POST /SMLJavaRESTService/v3/api/saleorder` | `POST /api/v1/ic/sale-orders` |
 | `POST /SMLJavaRESTService/restapi/saleinvoice` | `POST /api/v1/ic/sale-invoices` |
 | `POST /SMLJavaRESTService/v3/api/purchaseorder` | `POST /api/v1/ic/purchase-orders` |
+| sent PO doc_ref repair | `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` |
 | `POST /SMLJavaRESTService/v3/api/product` | `POST /api/v1/ic/products` |
 | `GET /SMLJavaRESTService/v3/api/product/{code}` | `GET /api/v1/ic/products/{code}` |
 | `GET /SMLJavaRESTService/v3/api/customer` | `GET /api/v1/ar/customers` |
@@ -84,10 +86,10 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
 | Project | URL | สถานะ |
 |---|---|---|
 | billflow (main) | :3010 | ใช้ `sml-api-bybos` ผ่าน `sml.rest_base_url=http://172.24.0.1:8200` |
-| billflow-henna | :3030 | ใช้ `sml-api-bybos` ผ่าน `sml.rest_base_url=http://172.24.0.1:8200` |
-| billflow-thaisunsport | :3020 | ยังไม่ migrate รอบนี้ (คงสถานะเดิม Phase 1) |
+| billflow-thaisunsport | :3020 | ใช้ `sml-api-bybos` สำหรับ purchase flow / tenant `data1_test` |
+| billflow-henna | :3030 | ย้ายเป็น Nexflow repo แล้ว; อย่า deploy BillFlow ไป folder นี้ |
 
-หมายเหตุ: Thaisunsport จะ migrate เมื่อเปิด scope Phase 1+ ฝั่งขายและมี UAT ตามแผน
+หมายเหตุ: thaisunsport ยังเป็น Phase 1 ฝั่งซื้อ แต่ purchase flow ใช้ gateway แล้วเพื่อรองรับ PO create และ sent PO `doc_ref` repair.
 
 ---
 
@@ -112,6 +114,14 @@ docker logs billflow-backend --tail=50 | grep -i "sml\|retry\|error"
   - PO `BF-APIQA-PO-260518-001` (`trans_flag=6`)
 - Product create passed: `BFAPIQAPRD260518001`; duplicate returns `duplicate_product_code`.
 - BillFlow main backend was rebuilt/restarted with the new response parser; startup cache shows `warehouse_cache_refreshed warehouses=4 shelves=4` and `party_cache_refreshed customers=1004 suppliers=500`.
+
+## Latest verification — 2026-06-15
+
+- Deployed `sml-api-bybos` to `192.168.2.109:8200` with `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref`.
+- `go test ./...` passed locally before deploy.
+- Container `sml-api-bybos-sml-api-1` was rebuilt and force-recreated; `/health` returned `{"status":"ok"}`.
+- BillFlow thaisunsport used the patch endpoint via `PATCH /api/bills/:id/sml-doc-ref` to repair 7 Lazada sent POL docs to `doc_ref=7417.69`.
+- Post-repair dry-run recheck returned `actual_old=7417.69`, `changed=false` for all repaired docs.
 
 ## Product image DB operations — 2026-05-20
 

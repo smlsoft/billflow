@@ -1,17 +1,21 @@
 # Lazada Email Purchase Intake
 
-> Updated: 2026-06-09 +07
-> Current prod scope: `billflow-thaisunsport`; shared marketplace print/payment UI is also deployed to `billflow` main.
+> Updated: 2026-06-15 +07
+> Current prod scope: `billflow-thaisunsport`; shared marketplace print/payment UI also exists on `billflow` main, but the latest 2026-06-15 repair/backfill was deployed to thaisunsport only.
 
 ## Status
 
 - Deployed to thaisunsport: frontend `3020`, backend `8100`, PostgreSQL `5448`.
 - Migration deployed for intake: `057_lazada_email_purchase.sql`.
-- Latest deployed migrations include print/payment support through `060_marketplace_print_perf_indexes.sql`.
+- Latest deployed migrations include print/payment and charge-group support through `063_lazada_charge_group_key.sql`.
 - Lazada IMAP accounts are enabled on thaisunsport with `lookback_days=1` and `poll_interval_seconds=600`.
 - Initial 7 Lazada email bills were backfilled from stored email HTML artifacts; customer later confirmed the numbers were correct and one Lazada PO was sent to SML successfully.
+- Latest group-key backfill on 2026-06-15 updated 28 Lazada bills from stored email artifacts with `raw_data.lazada_charge_group_key` (`no_artifact=0`, `no_match=0`).
+- The 8-order card charge group confirmed at `2026-06-11 16:45` totals `7417.69`; already-sent docs `POL26060022` through `POL26060028` were patched in SML and in BillFlow local `sml_payload` to `doc_ref=7417.69`.
 - Current flow remains review-first. Lazada email bills are not auto-sent to SML.
 - Historical backup before the amount backfill: `/home/bosscatdog/billflow-thaisunsport/manual-backups/lazada-amount-20260605_112633`.
+- Latest pre-repair backup: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/pre-tt-lazada-group-key-20260615-103944.sql`.
+- Latest repair manifest: `/home/bosscatdog/billflow-thaisunsport/backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv`.
 
 ## Business Rule
 
@@ -38,6 +42,7 @@ The PO target is the real Lazada paid amount. AI output is not trusted for money
 - `shipping_method`
 - `payment_method`
 - `lazada_fee_amount`
+- `lazada_charge_group_key`
 - `amount_reconciliation_status`
 - `amount_reconciliation_delta`
 - `discount_summary.platform = "lazada"`
@@ -82,6 +87,7 @@ This applies to normal retry and bulk send.
 - `remark` uses the seller/supplier name from the Lazada email, not user-entered text.
 - `remark_5` stores the Lazada order id, matching the Shopee purchase behavior.
 - If the Lazada email payment method is Credit/Debit Card, `doc_ref` stores the total card charge for every active Lazada purchase bill with the same `raw_data.lazada_charge_group_key`, parsed from the Thai confirmation time in the email body.
+- The group key is the source of truth for card-charge grouping. Do not fallback to IMAP/Gmail envelope `email_date`; envelope seconds can split one card charge that Lazada shows as the same confirmation minute in the email body.
 - Before send, BillFlow blocks Lazada card PO creation when the group key is missing, paid totals are missing, payment is not card, or `amount_reconciliation_status!='ok'`; the PO line total must also match the order paid total after the `SHIP_CUS` fee line is present.
 - Purchase send dialogs do not show a free-form `remark` field, to avoid overwriting the SML remark that must carry the shop/seller name.
 
@@ -133,6 +139,36 @@ For each bill detail:
 
 Do not send all 7 at once. After user confirms the 7 bills look right, send only 1 bill to SML first.
 
+## 2026-06-15 Group-Key Repair Snapshot
+
+Known thaisunsport production repair:
+
+```text
+group_key = lazada_card_1e3ba826-f525-42b5-a5c0-79eafb318d79_20260611_1645
+orders    = 8
+total     = 7417.69
+```
+
+Sent SML docs patched to `doc_ref=7417.69`:
+
+```text
+POL26060022
+POL26060023
+POL26060024
+POL26060025
+POL26060026
+POL26060027
+POL26060028
+```
+
+One order in the same group remained `needs_review` at repair time and should receive the same group `doc_ref=7417.69` when sent later.
+
+Verification after patch:
+
+- BillFlow local `sml_payload.doc_ref` is `7417.69` for all 7 sent bills.
+- BillFlow local `items[].doc_ref` is `7417.69` for all 7 sent bills.
+- SML dry-run recheck returned `actual_old=7417.69` and `changed=false` for all 7 sent docs.
+
 ## Rollout / Rollback
 
 Original rollout order:
@@ -151,12 +187,15 @@ Current thaisunsport production state:
 - Each account uses `lookback_days=1` to limit AI/token cost.
 - Poll interval is 600 seconds.
 - Seller-name startup backfill is idempotent: it reads stored `email_html`/`email_text` artifacts, updates only `raw_data.seller_name`, writes an audit event, and does not modify historical SML documents.
+- Charge-group backfill is idempotent: run `/app/lazada_group_key --dry-run` inside the backend container first, then `/app/lazada_group_key` only after confirming `no_artifact=0` and `no_match=0` for target rows.
+- Historical sent SML doc_ref repair must use the admin endpoint with `dry_run=true` and `expected_old_doc_ref`/`expected_remark_5` before applying. Do not update SML or `sml_payload` directly in SQL.
 - Rollback remains disabling the Lazada IMAP accounts in `/settings/email`.
 
 Rollback:
 
 - Disable Lazada IMAP accounts.
 - If data rollback is needed, restore from `manual-backups/lazada-amount-20260605_112633`.
+- For the 2026-06-15 repair, rollback should use the repair manifest and the same doc_ref patch endpoint with expected current value `7417.69`, not a direct SML DB edit.
 - No schema rollback is normally required; migration is additive/idempotent.
 
 ## Useful Checks

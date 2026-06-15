@@ -1,15 +1,16 @@
 # Marketplace Purchase Print And Payment Method
 
-> Updated: 2026-06-09 +07
+> Updated: 2026-06-15 +07
 > Scope: `source='shopee_shipped'` and `source='lazada_email'`, `bill_type='purchase'`.
 
 ## Status
 
-- Deployed to `billflow` main and `billflow-thaisunsport`.
+- Deployed to `billflow` main and `billflow-thaisunsport` for the base print/payment workflow. Latest TT auto-sync/clear-blank hardening was deployed to `billflow-thaisunsport` on 2026-06-15.
 - Current migrations include:
   - `058_channel_default_print_policy.sql`
   - `059_marketplace_print_payment_method.sql`
   - `060_marketplace_print_perf_indexes.sql`
+  - `063_lazada_charge_group_key.sql`
 - Payment method is stored in BillFlow only. It is not sent to SML.
 - Print readiness is controlled by `/settings/channels` per channel and defaults to strict:
   - every order in the same email group must have an SML POL number
@@ -52,6 +53,8 @@ TT8456
 
 Values that do not start with `TT` can be saved for future use, but they are not printable in the current business rule.
 
+Dynamic `TTxxxx` values derived from selected supplier code/name are allowed even when they are not in the static dropdown config. This prevents SML supplier master drift from blocking users.
+
 ## Send To SML Dialogs
 
 Both single-bill and bulk-send dialogs include an optional `วิธีการชำระเงิน` dropdown for marketplace purchase email bills.
@@ -59,7 +62,8 @@ Both single-bill and bulk-send dialogs include an optional `วิธีกา�
 Behavior:
 
 - The dropdown auto-syncs and locks to the selected supplier when supplier code/name starts with `TT`.
-- If the selected supplier is not `TT`, the dialog starts blank and the user can choose manually only when needed.
+- If the selected supplier is not `TT`, the dialog clears to blank and the user can choose manually only when needed.
+- The field is optional for sending SML. Blank is valid and is persisted as blank when the user clears a previous value.
 - Before sending SML, frontend calls `PATCH /api/bills/:id/print-payment-method`.
 - Single-bill send applies to the whole email group when the bill has an email group.
 - Bulk send dedupes by email group and saves the selected method before creating the bulk SML job.
@@ -70,7 +74,8 @@ Backend guards:
 - Only admin/staff can update the payment method.
 - Only `shopee_shipped` and `lazada_email` purchase bills can be updated.
 - Archived bills cannot be updated.
-- The selected method must be in the channel print policy method list.
+- Empty string is accepted to clear the saved method.
+- Non-empty selected method must be in the channel print policy method list, or match the dynamic `TTxxxx` prefix policy.
 - Updating before SML send is allowed so staff can choose the method while sending the POL.
 
 ## Print Readiness
@@ -131,6 +136,8 @@ Admins can update the creditor for sent marketplace PO bills:
 - BillFlow then syncs `sml_payload.cust_code` and `sml_payload.supplier_name`.
 - If `print_payment_method` is blank and the new supplier name starts with `TT`, that supplier name becomes the effective payment method.
 - If `print_payment_method` is explicitly set, it remains unchanged.
+
+Current hardening note: when a supplier is changed back to another `TTxxxx` supplier, the dialogs sync the payment method to the new TT value again; they do not keep the stale previous TT.
 
 ## Performance Notes
 

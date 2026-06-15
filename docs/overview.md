@@ -1,6 +1,6 @@
 # BillFlow — ภาพรวมการทำงาน
 
-> อัพเดตล่าสุด: 2026-06-09 +07
+> อัพเดตล่าสุด: 2026-06-15 +07
 > ดู snapshot จาก server จริงเพิ่มที่ [current-state.md](current-state.md)
 
 ---
@@ -9,7 +9,7 @@
 
 BillFlow รับบิล/ออเดอร์จาก LINE OA, Email IMAP, Shopee Email, Lazada Email, Shopee Excel, Lazada Excel และ TikTok Excel/CSV แล้วช่วย admin ตรวจข้อมูลก่อนส่งเข้า SML ERP อัตโนมัติ จุดสำคัญของระบบตอนนี้คือ workflow แบบ human-in-the-loop: AI ช่วยอ่านเอกสารและจับคู่สินค้า แต่ admin ยังเห็นสถานะ, route, error, source artifact และกด Retry ได้จากหน้าเว็บ
 
-สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee/Lazada email purchase flow, marketplace Excel sale flow, และ Shopee Open API direct preview แบบ multi-shop: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Lazada email purchase ใช้ HTML summary parser ตรวจสูตรยอดจริงก่อนส่ง, กระจายคูปองเป็น line discount, และ block การส่งถ้า reconcile หรือ fee config ไม่พร้อม. Shopee/Lazada purchase email ยังมีกติกา print readiness ที่ตั้งค่าได้จาก `/settings/channels`: ต้องมี POL ครบทั้ง email group และวิธีการชำระเงินที่เก็บใน BillFlow ต้องขึ้นต้นด้วย `TT` ใน policy ปัจจุบัน. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API live ใช้งานบน BillFlow main แล้ว โดยยังคง confirm แบบ review-first และไม่ auto-send เข้า SML.
+สำหรับ customer test ปัจจุบัน BillFlow รองรับทั้ง Shopee/Lazada email purchase flow, marketplace Excel sale flow, และ Shopee Open API direct preview แบบ multi-shop: ดึงข้อมูลเข้าเป็นเอกสาร local, review รายการสินค้า, เลือกลูกค้า/ผู้ขาย/คลัง/ภาษีก่อนส่ง, และส่งเข้า SML REST ตามเส้นทางเอกสารที่ตั้งไว้. Lazada email purchase ใช้ HTML summary parser ตรวจสูตรยอดจริงก่อนส่ง, กระจายคูปองเป็น line discount, และ block การส่งถ้า reconcile หรือ fee config ไม่พร้อม. Shopee/Lazada purchase email ยังมีกติกา print readiness ที่ตั้งค่าได้จาก `/settings/channels`: ต้องมี POL ครบทั้ง email group และวิธีการชำระเงินที่เก็บใน BillFlow ต้องขึ้นต้นด้วย `TT` ใน policy ปัจจุบัน; วิธีการชำระเงินไม่บังคับสำหรับการส่ง SML และจะ auto-sync/lock เมื่อผู้ขายเป็น `TTxxxx`. Bulk send ตอนนี้เป็น async job ที่ backend เก็บสถานะจริง เห็น progress, ปิด dialog แล้วกลับมาดูต่อได้, และ retry เฉพาะรายการที่ fail ได้. Shopee Open API live ใช้งานบน BillFlow main แล้ว โดยยังคง confirm แบบ review-first และไม่ auto-send เข้า SML.
 
 ---
 

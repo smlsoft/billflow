@@ -152,7 +152,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Thaisunsport Notes
 
-- Latest deploy verified: 2026-06-09 +07 (marketplace payment-method send dialogs, ready-to-print rules, bills list performance/UI).
+- Latest deploy verified: 2026-06-15 +07 (TT payment auto-sync, Lazada charge group key backfill, SML doc_ref repair, and SML gateway doc_ref patch endpoint).
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
   - `VITE_PHASE=1`
@@ -167,21 +167,33 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - Verified after latest deploy:
   - backend health on `8100` is ok
   - frontend on `3020` serves HTML
+  - public Quick Tunnel `/login` on `https://pets-mini-museums-ships.trycloudflare.com/login` returns HTTP 200; the tunnel was not restarted in the latest deploy
+  - shared `sml-api-bybos` gateway on `8200` is healthy after force-recreate
   - frontend flags remain `VITE_PHASE=1`, `VITE_ENABLE_SALES_ORDERS=false`, `VITE_ENABLE_SHOPEE_EXCEL=false`, `VITE_ENABLE_LAZADA_EXCEL=false`, `VITE_ENABLE_TIKTOK_EXCEL=false`, `VITE_ENABLE_CHAT=false`
   - containers `billflow-thaisunsport-frontend`, `billflow-thaisunsport-backend`, and `billflow-thaisunsport-postgres` are up
 - Lazada email purchase status:
   - `lazada_email` source/channel deployed via migration `057_lazada_email_purchase.sql`
-  - Marketplace print/payment migrations deployed through `060_marketplace_print_perf_indexes.sql`
+  - Marketplace print/payment migrations deployed through `063_lazada_charge_group_key.sql`
   - 7 initial Lazada email bills were backfilled: reconciliation `ok` = `7/7`; customer confirmed numbers and one Lazada PO sent to SML successfully
+  - Latest group-key backfill updated 28 Lazada bills with `raw_data.lazada_charge_group_key`; no artifacts were missing and no parse misses occurred
+  - Lazada 8-order group `2026-06-11 16:45` totals `7417.69`; sent docs `POL26060022` through `POL26060028` were patched in SML and BillFlow local payload to `doc_ref=7417.69`
   - Lazada IMAP accounts are enabled for three thaisunsport inboxes with `lookback_days=1` and `poll_interval_seconds=600`
   - Fee item config is set: `channel_defaults/lazada_email/purchase` → `SHIP_CUS`, unit `บาท`
   - Opening each Lazada bill detail auto-adds the `SHIP_CUS` fee line when needed
   - Historical backup before amount backfill: `manual-backups/lazada-amount-20260605_112633`
+  - Latest pre-repair backup: `backups/manual-backups/pre-tt-lazada-group-key-20260615-103944.sql`
+  - Latest repair manifest: `backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv`
 
 ## Latest Shared Deploy
 
+- 2026-06-15 +07: TT payment auto-sync + Lazada charge-group doc_ref repair deployed to `billflow-thaisunsport` and `sml-api-bybos`.
+- Scope: (1) purchase send dialogs auto-sync/lock payment method when selected supplier code/name starts with `TT`; (2) non-TT suppliers can leave payment method blank and still send SML; (3) Lazada card send requires `raw_data.lazada_charge_group_key`; (4) backend Docker image includes `/app/lazada_group_key`; (5) `sml-api-bybos` exposes `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` with dry-run/expected-value guards.
+- Production actions: DB backup taken, `lazada_group_key --dry-run` then apply updated 28 rows, SML doc_ref patch dry-run passed for 7 sent POL docs, then apply changed them to `7417.69`, and post-patch dry-run verified `changed=false`.
+- Verification: BillFlow `go test ./...` ✅, `npm run build` ✅, `sml-api-bybos go test ./...` ✅, backend health `8100` ok, frontend `3020`/public login HTTP 200, SML gateway `8200` ok.
+- Deploy target note: `billflow` main was not redeployed in this round; Henna remains Nexflow and was not touched.
+
 - 2026-06-09 +07: Marketplace purchase payment/print workflow and Bills list performance deployed to `billflow` (main) and `billflow-thaisunsport`.
-- Scope: (1) single-bill and bulk SML dialogs now require `วิธีการชำระเงิน` for Shopee/Lazada purchase email and save it in BillFlow only before sending SML; (2) backend allows payment method update before POL while still limiting to marketplace purchase email and channel method list; (3) print readiness uses POL completeness plus payment method prefix rule from `/settings/channels` instead of creditor prefix; (4) row/bulk print readiness batches by email group and migration `060` adds indexes; (5) Bills list rows were compacted and secondary row actions were moved into a menu.
+- Scope at that time: (1) single-bill and bulk SML dialogs added `วิธีการชำระเงิน` for Shopee/Lazada purchase email and saved it in BillFlow only before sending SML; (2) backend allows payment method update before POL while still limiting to marketplace purchase email and channel method list; (3) print readiness uses POL completeness plus payment method prefix rule from `/settings/channels` instead of creditor prefix; (4) row/bulk print readiness batches by email group and migration `060` adds indexes; (5) Bills list rows were compacted and secondary row actions were moved into a menu. Superseded on 2026-06-15: payment method is no longer required to send SML, and TT suppliers auto-sync/lock it.
 - Verification: local `npm run build` ✅, `go test ./internal/repository ./internal/handlers` ✅, Docker build/restart on both instances, backend health `8090` + `8100` ok, frontend `3010` + `3020` HTTP 200.
 
 - 2026-06-08 +07: Audit log UX improvements deployed to `billflow` (main) and `billflow-thaisunsport`.

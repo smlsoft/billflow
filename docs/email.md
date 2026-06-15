@@ -1,6 +1,6 @@
 # Email IMAP — การทำงานของ Email Pipeline
 
-> อัพเดตล่าสุด: 2026-06-09
+> อัพเดตล่าสุด: 2026-06-15
 > สถานะ: ✅ multi-account IMAP deployed; config อยู่ใน `/settings/email` และ `imap_accounts` table. Marketplace purchase email ใช้ manual-review flow ไม่ auto-send SML.
 
 ---
@@ -162,6 +162,7 @@ Fields ที่เก็บใน `bills.raw_data`:
 
 - Backfilled 7 Lazada bills: reconciliation `ok` ทั้ง 7; customer confirmed the numbers and at least one Lazada PO sent to SML successfully.
 - Current active Lazada email purchase rows are mixed across `needs_review`, `pending`, and `sent` as customer testing continues.
+- Latest Lazada charge-group backfill updated 28 rows. The 8-order group confirmed at `2026-06-11 16:45` totals `7417.69`; already-sent POL docs in that group were repaired to `doc_ref=7417.69`.
 - `channel_defaults/lazada_email/purchase` ตั้ง fee item แล้ว: `SHIP_CUS`, unit `บาท`.
 - User ต้องเปิดแต่ละ Bill Detail เพื่อให้ระบบเติม `SHIP_CUS` ก่อนตรวจยอดและก่อนส่ง SML.
 
@@ -171,7 +172,9 @@ Runbook เพิ่มเติม: [Lazada Email Purchase Intake](lazada-email
 
 Shopee/Lazada purchase email print is controlled by BillFlow-only payment method rules:
 
-- single and bulk SML send dialogs require choosing `วิธีการชำระเงิน`
+- single and bulk SML send dialogs do not require choosing `วิธีการชำระเงิน`
+- when selected supplier code/name starts with `TT`, the method auto-syncs and locks to that TT value
+- when selected supplier is non-TT, the saved method can be blank
 - value is saved in `bills.print_payment_method`
 - value is not sent to SML
 - default effective value comes from `sml_payload.supplier_name` only when it starts with `TT`

@@ -1,7 +1,7 @@
 # BillFlow Phase 1 — Test Checklist
 
 > ใช้ก่อนส่งให้ลูกค้าทดสอบ
-> อัปเดตล่าสุด: 2026-06-09
+> อัปเดตล่าสุด: 2026-06-15
 > Scope: Shopee/Lazada email purchase bill → BillFlow review → SML `purchaseorder`
 
 ---
@@ -159,8 +159,9 @@ select * from ic_trans_detail where doc_no = '<DOC_NO>';
 - [ ] เปิด `/bills?status=pending`
 - [ ] กด `ส่ง SML ทั้งหมด`
 - [ ] ตรวจ preview ว่ารายการพร้อมส่ง/ต้องข้ามถูกต้อง
-- [ ] สำหรับ Shopee/Lazada purchase email เลือก `วิธีการชำระเงิน` ใน dialog ก่อนเริ่มส่ง
-- [ ] ตรวจว่า `วิธีการชำระเงิน` ถูกเก็บใน BillFlow เท่านั้น และไม่อยู่ใน SML payload
+- [ ] สำหรับ Shopee/Lazada purchase email ตรวจว่า `วิธีการชำระเงิน` ไม่บังคับส่ง SML
+- [ ] ถ้าเลือกผู้ขาย `TTxxxx` ตรวจว่าวิธีการชำระเงิน auto-sync/lock เป็นค่า TT เดียวกัน
+- [ ] ถ้าเลือกผู้ขาย non-TT ตรวจว่าวิธีการชำระเงินว่างได้ และไม่อยู่ใน SML payload
 - [ ] เริ่มจาก 1 บิล หรือ 5-10 บิลก่อน ไม่เริ่มที่ 100 ทันที
 - [ ] ระหว่างส่ง เห็น progress sent/failed/skipped/remaining
 - [ ] ปิด dialog แล้วเปิดใหม่ ยังเห็นสถานะ job เดิมหรือผลล่าสุด
