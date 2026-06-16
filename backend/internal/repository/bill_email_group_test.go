@@ -226,6 +226,48 @@ func TestRecordEmailPrintEventAllowsConfiguredPaymentMethodPrefix(t *testing.T) 
 	}
 }
 
+func TestRecordEmailPrintEventsBulkBlocksAlreadyPrintedGroup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewBillRepo(db)
+	billID := "768a0068-cad3-4b6e-b229-a5d2ce2ede73"
+	artifactID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	messageID := "lazada-message@example.test"
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE").
+		WithArgs(billID, artifactID).
+		WillReturnRows(sqlmock.NewRows([]string{"message_id", "subject", "from_addr", "kind"}).
+			AddRow(messageID, "Lazada order", "noreply@lazada.co.th", "email_html"))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(messageID).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	events, err := repo.RecordEmailPrintEventsBulk(
+		[]EmailPrintEventRequest{{BillID: billID, ArtifactID: artifactID}},
+		"11111111-1111-1111-1111-111111111111",
+		"admin@example.test",
+	)
+	if events != nil {
+		t.Fatalf("events = %#v, want nil", events)
+	}
+	var alreadyPrintedErr *EmailPrintAlreadyPrintedError
+	if !errors.As(err, &alreadyPrintedErr) {
+		t.Fatalf("err = %T %v, want EmailPrintAlreadyPrintedError", err, err)
+	}
+	if len(alreadyPrintedErr.MessageIDs) != 1 || alreadyPrintedErr.MessageIDs[0] != messageID {
+		t.Fatalf("message ids = %#v, want %q", alreadyPrintedErr.MessageIDs, messageID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
 func TestAttachEmailGroupsIncludesNoPrintSummary(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

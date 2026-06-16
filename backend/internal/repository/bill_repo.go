@@ -329,7 +329,7 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 		argN++
 	}
 	if f.PrintReady {
-		where += " AND " + marketplacePrintReadySQL("b")
+		where += " AND " + marketplacePrintPendingSQL("b")
 	}
 	if f.EmailAccountID != "" {
 		where += fmt.Sprintf(" AND b.raw_data->>'imap_account_id' = $%d", argN)

@@ -730,7 +730,9 @@ Production PostgreSQL also contains `system_settings` and `sml_settings`. These 
 - Current default print policy:
   - all active orders in the same email group must have `sml_doc_no`
   - effective payment method must start with `TT`
-- `/bills?print_ready=1`, row print, bulk print, and Bill Detail print use backend readiness.
+- Row print and Bill Detail print use backend readiness and can intentionally reprint groups with print history.
+- `/bills?print_ready=1`, counts, and bulk print candidates show only groups that are ready and do not yet have an `email_print_events` record.
+- "Printed" means BillFlow recorded a print request/event; browser print dialogs do not reliably report whether the user completed or cancelled printing.
 - `recordArtifactPrint` rejects stale/non-ready print requests even if the frontend button looked enabled.
 
 Detailed runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).

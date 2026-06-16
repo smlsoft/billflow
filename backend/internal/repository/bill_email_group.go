@@ -400,18 +400,25 @@ func (r *BillRepo) RecordEmailPrintEvent(billID, artifactID, userID, userEmail s
 	return r.recordEmailPrintEventWithExecutor(r.db, billID, artifactID, userID, userEmail)
 }
 
+type printableEmailMetadata struct {
+	MessageID string
+	Subject   string
+	FromAddr  string
+	Kind      string
+}
+
 type emailPrintEventExecutor interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-func (r *BillRepo) recordEmailPrintEventWithExecutor(exec emailPrintEventExecutor, billID, artifactID, userID, userEmail string) (*models.EmailPrintEvent, error) {
+func (r *BillRepo) printableEmailMetadataWithExecutor(exec emailPrintEventExecutor, billID, artifactID string) (*printableEmailMetadata, error) {
 	billID = strings.TrimSpace(billID)
 	artifactID = strings.TrimSpace(artifactID)
 	if billID == "" || artifactID == "" {
 		return nil, fmt.Errorf("bill_id and artifact_id are required")
 	}
 
-	var messageID, subject, fromAddr, kind string
+	meta := &printableEmailMetadata{}
 	err := exec.QueryRow(`
 		SELECT COALESCE(NULLIF(ba.source_meta->>'message_id', ''), NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) AS message_id,
 		       COALESCE(NULLIF(ba.source_meta->>'subject', ''), b.raw_data->>'subject', '') AS subject,
@@ -421,22 +428,59 @@ func (r *BillRepo) recordEmailPrintEventWithExecutor(exec emailPrintEventExecuto
 		  JOIN bill_artifacts ba ON ba.bill_id = b.id
 		 WHERE b.id = $1 AND ba.id = $2`,
 		billID, artifactID,
-	).Scan(&messageID, &subject, &fromAddr, &kind)
+	).Scan(&meta.MessageID, &meta.Subject, &meta.FromAddr, &meta.Kind)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !isPrintableEmailKind(kind) {
+	if !isPrintableEmailKind(meta.Kind) {
 		return nil, fmt.Errorf("artifact is not a printable email")
 	}
-	messageID = strings.TrimSpace(messageID)
-	if messageID == "" {
+	meta.MessageID = strings.TrimSpace(meta.MessageID)
+	if meta.MessageID == "" {
 		return nil, fmt.Errorf("bill has no email message id")
 	}
+	return meta, nil
+}
 
-	relatedOrderCount, smlDocCount, err := r.validateMarketplaceEmailPrintReady(billID, messageID)
+func (r *BillRepo) emailMessageAlreadyPrintedWithExecutor(exec emailPrintEventExecutor, messageID string) (bool, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return false, nil
+	}
+	var printed bool
+	err := exec.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1
+			  FROM email_print_events e
+			 WHERE e.email_message_id = $1
+		)`, messageID).Scan(&printed)
+	return printed, err
+}
+
+func (r *BillRepo) recordEmailPrintEventWithExecutor(exec emailPrintEventExecutor, billID, artifactID, userID, userEmail string) (*models.EmailPrintEvent, error) {
+	meta, err := r.printableEmailMetadataWithExecutor(exec, billID, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if meta == nil {
+		return nil, nil
+	}
+	return r.recordEmailPrintEventForMetadata(exec, billID, artifactID, meta, userID, userEmail)
+}
+
+func (r *BillRepo) recordEmailPrintEventForMetadata(exec emailPrintEventExecutor, billID, artifactID string, meta *printableEmailMetadata, userID, userEmail string) (*models.EmailPrintEvent, error) {
+	if meta == nil {
+		return nil, nil
+	}
+	billID = strings.TrimSpace(billID)
+	artifactID = strings.TrimSpace(artifactID)
+	if billID == "" || artifactID == "" {
+		return nil, fmt.Errorf("bill_id and artifact_id are required")
+	}
+	relatedOrderCount, smlDocCount, err := r.validateMarketplaceEmailPrintReady(billID, meta.MessageID)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +493,7 @@ func (r *BillRepo) recordEmailPrintEventWithExecutor(exec emailPrintEventExecuto
 		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid, $8)
 		RETURNING id::text, bill_id::text, artifact_id::text, email_message_id, email_group_key,
 		          subject, from_addr, COALESCE(requested_by::text, ''), requested_by_email, created_at`,
-		billID, artifactID, messageID, emailGroupKey(messageID), subject, fromAddr, requestedBy, strings.TrimSpace(userEmail),
+		billID, artifactID, meta.MessageID, emailGroupKey(meta.MessageID), meta.Subject, meta.FromAddr, requestedBy, strings.TrimSpace(userEmail),
 	).Scan(
 		&event.ID, &event.BillID, &event.ArtifactID, &event.EmailMessageID,
 		&event.EmailGroupKey, &event.Subject, &event.From, &event.RequestedBy,

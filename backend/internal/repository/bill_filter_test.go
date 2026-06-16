@@ -106,6 +106,24 @@ func TestBillWherePrintPaymentMethodFilterUsesEffectiveMethod(t *testing.T) {
 	}
 }
 
+func TestBillWherePrintReadyExcludesAlreadyPrintedEmailGroups(t *testing.T) {
+	where, args, _ := billWhere(models.BillListFilter{PrintReady: true})
+	for _, want := range []string{
+		"b.source IN ('shopee_shipped', 'lazada_email')",
+		"b.bill_type = 'purchase'",
+		"email_print_events",
+		"e.email_message_id",
+		"NOT EXISTS",
+	} {
+		if !strings.Contains(where, want) {
+			t.Fatalf("where = %q, missing %q", where, want)
+		}
+	}
+	if len(args) != 0 {
+		t.Fatalf("args = %#v, want none", args)
+	}
+}
+
 func TestBillWhereFreeTextSearchIncludesEmailMetadata(t *testing.T) {
 	where, args, _ := billWhere(models.BillListFilter{Search: "info@mail.shopee.co.th"})
 	for _, want := range []string{

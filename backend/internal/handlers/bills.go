@@ -731,6 +731,14 @@ func (h *BillHandler) RecordEmailPrintEventsBulk(c *gin.Context) {
 		c.GetString("user_email"),
 	)
 	if err != nil {
+		var alreadyPrintedErr *repository.EmailPrintAlreadyPrintedError
+		if errors.As(err, &alreadyPrintedErr) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":       alreadyPrintedErr.Error(),
+				"message_ids": alreadyPrintedErr.MessageIDs,
+			})
+			return
+		}
 		var readinessErr *repository.EmailPrintReadinessError
 		if errors.As(err, &readinessErr) {
 			c.JSON(http.StatusBadRequest, gin.H{

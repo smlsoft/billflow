@@ -123,6 +123,18 @@ func marketplacePrintReadySQL(alias string) string {
 		)`, alias, alias, alias, alias, alias, effectivePayment, relatedMsg, msg)
 }
 
+func marketplacePrintPendingSQL(alias string) string {
+	msg := marketplaceEmailMessageExpr(alias)
+	return fmt.Sprintf(`(
+		%s
+		AND NOT EXISTS (
+			SELECT 1
+			  FROM email_print_events e
+			 WHERE e.email_message_id = %s
+		)
+	)`, marketplacePrintReadySQL(alias), msg)
+}
+
 func (r *BillRepo) channelPrintPolicy(channel, billType string) models.MarketplacePrintPolicy {
 	if !models.SupportsMarketplacePrintPolicy(channel, billType) {
 		return models.DefaultMarketplacePrintPolicy(channel, billType)
@@ -541,6 +553,17 @@ type EmailPrintEventRequest struct {
 	ArtifactID string `json:"artifact_id"`
 }
 
+type EmailPrintAlreadyPrintedError struct {
+	MessageIDs []string
+}
+
+func (e *EmailPrintAlreadyPrintedError) Error() string {
+	if e == nil || len(e.MessageIDs) == 0 {
+		return "มีรายการที่พิมพ์แล้ว กรุณาโหลดรายการพร้อมพิมพ์ใหม่"
+	}
+	return "มีรายการที่พิมพ์แล้ว กรุณาโหลดรายการพร้อมพิมพ์ใหม่"
+}
+
 func (r *BillRepo) RecordEmailPrintEventsBulk(requests []EmailPrintEventRequest, userID, userEmail string) ([]models.EmailPrintEvent, error) {
 	if len(requests) == 0 {
 		return []models.EmailPrintEvent{}, nil
@@ -556,12 +579,23 @@ func (r *BillRepo) RecordEmailPrintEventsBulk(requests []EmailPrintEventRequest,
 
 	events := []models.EmailPrintEvent{}
 	for _, req := range requests {
-		event, err := r.recordEmailPrintEventWithExecutor(tx, req.BillID, req.ArtifactID, userID, userEmail)
+		meta, err := r.printableEmailMetadataWithExecutor(tx, req.BillID, req.ArtifactID)
 		if err != nil {
 			return nil, err
 		}
-		if event == nil {
+		if meta == nil {
 			return nil, fmt.Errorf("artifact not found for bill %s", req.BillID)
+		}
+		printed, err := r.emailMessageAlreadyPrintedWithExecutor(tx, meta.MessageID)
+		if err != nil {
+			return nil, err
+		}
+		if printed {
+			return nil, &EmailPrintAlreadyPrintedError{MessageIDs: []string{meta.MessageID}}
+		}
+		event, err := r.recordEmailPrintEventForMetadata(tx, req.BillID, req.ArtifactID, meta, userID, userEmail)
+		if err != nil {
+			return nil, err
 		}
 		events = append(events, *event)
 	}

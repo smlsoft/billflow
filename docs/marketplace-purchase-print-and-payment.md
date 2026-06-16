@@ -89,12 +89,16 @@ A marketplace email group is ready to print when:
 3. Every order has an effective payment method.
 4. The effective payment method passes the configured prefix rule, currently `TT`.
 
-The UI exposes this through:
+The row/detail `email_group.print_ready` flag means the group passes those readiness rules. The `/bills?print_ready=1` queue is narrower: it shows only groups that are ready and do not yet have an `email_print_events` record.
+
+The UI exposes the unprinted-ready queue through:
 
 - `/bills?print_ready=1`
-- list row print action
-- bulk "พิมพ์ทั้งหมดที่พร้อม" flow
-- Bill Detail artifact print button
+- bulk print flow on `/bills`
+
+The list row print action and Bill Detail artifact print button can still print a ready group that has print history when the user intentionally reprints it.
+
+BillFlow treats an email as "printed" after a print event/request is recorded. Browsers do not reliably tell the app whether the user completed or cancelled the native print dialog.
 
 `recordArtifactPrint` still re-validates the rules before recording a print event. This prevents stale UI from printing when another user changes the bill or payment method.
 
@@ -142,6 +146,8 @@ Current hardening note: when a supplier is changed back to another `TTxxxx` supp
 ## Performance Notes
 
 `/api/bills` list enrichment batches print readiness by `email_message_id` per request. It must not call print readiness validation per row.
+
+`/bills?print_ready=1`, counts, and email print candidates all use the same ready-and-unprinted predicate. The predicate reuses `idx_email_print_events_message_created` to exclude email groups that already have print events.
 
 Migration `060_marketplace_print_perf_indexes.sql` adds idempotent indexes for marketplace email groups and printable artifact lookup. The strict `recordArtifactPrint` guard remains separate from list readiness for safety.
 
