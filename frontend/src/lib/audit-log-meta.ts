@@ -73,6 +73,9 @@ export const ACTION_META: Record<string, ActionMeta> = {
   shopee_shipped_received: { label: 'รับอีเมล Shopee Shipped', emoji: '📦', tone: 'info' },
   lazada_email_received: { label: 'รับอีเมล Lazada', emoji: '📧', tone: 'info' },
   email_print_requested: { label: 'พิมพ์อีเมลต้นทาง', emoji: '🖨️', tone: 'info' },
+  credit_card_report_run_created: { label: 'สร้างรอบรายงานบัตรเครดิต', emoji: '📊', tone: 'primary' },
+  credit_card_report_exported: { label: 'Export รายงานบัตรเครดิต', emoji: '📤', tone: 'success' },
+  credit_card_report_print_requested: { label: 'พิมพ์ตามรายงานบัตรเครดิต', emoji: '🖨️', tone: 'info' },
   shopee_shipping_line_ensured: { label: 'เติมค่าขนส่ง Shopee', emoji: '🚚', tone: 'info' },
   marketplace_fee_line_ensured: { label: 'เติม Fee Marketplace', emoji: '🏷️', tone: 'info' },
   // Shopee Excel import
@@ -155,6 +158,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   catalog: 'สินค้า SML',
   shopee_api: 'Shopee API',
   shopee_settlement: 'รับชำระ Shopee',
+  credit_card_report: 'รายงานบัตรเครดิต',
 }
 
 export const SOURCE_TONE: Record<string, string> = {
@@ -176,6 +180,7 @@ export const SOURCE_TONE: Record<string, string> = {
   ui: 'bg-primary/10 text-primary',
   shopee_api: 'bg-warning/10 text-warning',
   shopee_settlement: 'bg-success/10 text-success',
+  credit_card_report: 'bg-primary/10 text-primary',
 }
 
 export const TONE_DOT: Record<Tone, string> = {
@@ -322,6 +327,30 @@ export function summarize(log: AuditLog): string {
       return d.subject ? String(d.subject) : ''
     case 'email_print_requested':
       return d.email_group_key ? `Email #${d.email_group_key}` : ''
+    case 'credit_card_report_run_created':
+      return [
+        d.report_name,
+        d.group_count != null ? `${Number(d.group_count).toLocaleString('th-TH')} ยอดรูด` : '',
+        d.order_count != null ? `${Number(d.order_count).toLocaleString('th-TH')} คำสั่งซื้อ` : '',
+        d.issue_group_count != null && Number(d.issue_group_count) > 0
+          ? `ต้องตรวจ ${Number(d.issue_group_count).toLocaleString('th-TH')}`
+          : '',
+      ].filter(Boolean).join(' · ')
+    case 'credit_card_report_exported':
+      return [
+        d.report_name,
+        d.group_count != null ? `${Number(d.group_count).toLocaleString('th-TH')} ยอดรูด` : '',
+        d.order_count != null ? `${Number(d.order_count).toLocaleString('th-TH')} คำสั่งซื้อ` : '',
+        d.charge_total != null ? `ยอดรูด ${Number(d.charge_total).toLocaleString('th-TH')}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'credit_card_report_print_requested':
+      return [
+        d.group_count != null ? `${Number(d.group_count).toLocaleString('th-TH')} ยอดรูด` : '',
+        d.event_count != null ? `พิมพ์ ${Number(d.event_count).toLocaleString('th-TH')} ชุด` : '',
+        d.skipped_count != null && Number(d.skipped_count) > 0
+          ? `ข้าม ${Number(d.skipped_count).toLocaleString('th-TH')}`
+          : '',
+      ].filter(Boolean).join(' · ')
     case 'shopee_shipping_line_ensured':
     case 'marketplace_fee_line_ensured':
       return [d.item_code, d.price != null ? `ราคา ${Number(d.price).toLocaleString()}` : ''].filter(Boolean).join(' · ')

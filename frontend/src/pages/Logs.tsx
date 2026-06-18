@@ -109,8 +109,13 @@ function isShopeeSettlementLog(log: AuditLog): boolean {
   return log.action.startsWith('shopee_settlement_')
 }
 
+function isCreditCardReportLog(log: AuditLog): boolean {
+  return log.source === 'credit_card_report' || log.action.startsWith('credit_card_report_')
+}
+
 function displaySourceKey(log: AuditLog): string {
   if (isShopeeSettlementLog(log)) return 'shopee_settlement'
+  if (isCreditCardReportLog(log)) return 'credit_card_report'
   return log.source ?? ''
 }
 
@@ -434,6 +439,20 @@ function makeFacts(log: AuditLog): LogFact[] {
       ),
       copyValue: log.target_id,
     })
+  } else if (log.target_id && isCreditCardReportLog(log)) {
+    facts.push({
+      label: 'รอบรายงาน',
+      value: (
+        <Link
+          to="/credit-card-reports"
+          className="font-mono text-primary hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {log.target_id.slice(0, 8)}…
+        </Link>
+      ),
+      copyValue: log.target_id,
+    })
   } else if (log.target_id) {
     facts.push({
       label: 'บิล',
@@ -514,6 +533,41 @@ function makeFacts(log: AuditLog): LogFact[] {
     facts.push({ label: 'เลขรันเอกสาร', value: d.reset_doc_counter ? 'รีเซ็ตแล้ว' : 'ไม่ได้รีเซ็ต' })
     facts.push({ label: 'ประวัติอีเมลซ้ำ', value: d.reset_email_dedup ? 'ล้างแล้ว' : 'ไม่ได้ล้าง' })
     facts.push({ label: 'ตำแหน่งอ่านอีเมล', value: d.reset_email_cursor ? 'ย้อนกลับไปอ่านเมลเก่าได้' : 'ไม่ได้รีเซ็ต' })
+  }
+
+  if (isCreditCardReportLog(log)) {
+    if (d.report_name) facts.push({ label: 'ชื่อรอบ', value: compact(d.report_name, 160) })
+    if (d.date_from || d.date_to) {
+      facts.push({
+        label: 'ช่วงวันที่',
+        value: [d.date_from, d.date_to].filter(Boolean).join(' - '),
+        mono: true,
+      })
+    }
+    if (d.payment_method) facts.push({ label: 'บัตร', value: d.payment_method })
+    if (d.group_count != null) facts.push({ label: 'ยอดรูด', value: `${Number(d.group_count).toLocaleString('th-TH')} รายการ` })
+    if (d.order_count != null) facts.push({ label: 'คำสั่งซื้อ', value: `${Number(d.order_count).toLocaleString('th-TH')} รายการ` })
+    if (d.charge_total != null) {
+      facts.push({
+        label: 'ยอดรูดรวม',
+        value: Number(d.charge_total).toLocaleString('th-TH', { style: 'currency', currency: 'THB' }),
+      })
+    }
+    if (d.issue_group_count != null) {
+      facts.push({
+        label: 'ต้องตรวจ',
+        value: `${Number(d.issue_group_count).toLocaleString('th-TH')} ยอดรูด`,
+        tone: Number(d.issue_group_count) > 0 ? 'muted' : 'normal',
+      })
+    }
+    if (d.event_count != null) facts.push({ label: 'ชุดที่พิมพ์', value: `${Number(d.event_count).toLocaleString('th-TH')} ชุด` })
+    if (d.skipped_count != null) {
+      facts.push({
+        label: 'ข้าม',
+        value: `${Number(d.skipped_count).toLocaleString('th-TH')} ชุด`,
+        tone: Number(d.skipped_count) > 0 ? 'muted' : 'normal',
+      })
+    }
   }
 
   if (isShopeeSettlementLog(log)) {
@@ -1493,6 +1547,7 @@ export default function Logs() {
                   <SelectItem value="lazada_email">Lazada Email</SelectItem>
 	                  {PHASE >= 2 && <SelectItem value="shopee_excel">Shopee Excel</SelectItem>}
                   <SelectItem value="shopee_settlement">รับชำระ Shopee</SelectItem>
+                  <SelectItem value="credit_card_report">รายงานบัตรเครดิต</SelectItem>
 	                  {PHASE >= 2 && <SelectItem value="lazada">Lazada</SelectItem>}
 	                  {PHASE >= 2 && <SelectItem value="tiktok">TikTok Excel</SelectItem>}
 	                  <SelectItem value="sml">SML</SelectItem>
