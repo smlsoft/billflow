@@ -408,100 +408,97 @@ export default function CreditCardReports() {
   const anyBusy = Boolean(busy) || loadingPreview
 
   return (
-    <div className="flex h-[calc(100vh-6rem)] min-h-[560px] flex-col gap-3">
-      <div className="flex shrink-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">รายงานบัตรเครดิต</h1>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5 shrink-0" />
-            <span>ข้อมูลจาก BillFlow สำหรับเทียบ statement เอง เลือกวันหัว-ท้ายรอบได้ก่อน Export</span>
-            <span className="text-muted-foreground/70">ยอดคืนใน statement ยังไม่สร้างเป็นบิล</span>
-          </div>
-        </div>
-        <div className="relative flex shrink-0 items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowRuns((value) => !value)}>
-            <History className="mr-2 h-4 w-4" />
-            รอบล่าสุด
-          </Button>
-          <Button variant="outline" size="sm" onClick={refreshRuns} disabled={loadingRuns}>
-            <RefreshCw className={cn('mr-2 h-4 w-4', loadingRuns && 'animate-spin')} />
-            รีเฟรช
-          </Button>
-          {showRuns && (
-            <div className="absolute right-0 top-10 z-40 w-[min(620px,calc(100vw-18rem))] rounded-md border bg-popover p-2 text-popover-foreground shadow-lg">
-              <div className="mb-2 flex items-center justify-between gap-2 px-1">
-                <div className="text-sm font-semibold">รอบรายงานล่าสุด</div>
-                {loadingRuns && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-              </div>
-              {runs.length === 0 && !loadingRuns ? (
-                <div className="px-2 py-6 text-center text-sm text-muted-foreground">ยังไม่มีรอบรายงานที่บันทึกไว้</div>
-              ) : (
-                <div className="max-h-[360px] space-y-1 overflow-y-auto">
-                  {runs.map((run) => (
-                    <div
-                      key={run.id}
-                      className={cn(
-                        'flex items-center justify-between gap-3 rounded-md border px-2 py-2 text-sm',
-                        activeRun?.id === run.id && 'border-primary/40 bg-primary/5',
-                      )}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <div className="truncate font-medium">{run.report_name || 'รายงานบัตรเครดิต'}</div>
-                          {run.exported_at && (
-                            <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px] border-success/30 bg-success/10 text-success">
-                              <CheckCircle2 className="mr-1 h-3 w-3" />
-                              export
-                            </Badge>
-                          )}
-                          {run.printed_at && <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px]">พิมพ์</Badge>}
-                        </div>
-                        <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                          {run.filters.date_from} ถึง {run.filters.date_to} · {run.filters.payment_method || 'ทุกบัตร'} · {numberLabel(run.summary.group_count)} ยอดรูด · {money(run.summary.charge_total)}
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 gap-1">
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => openRun(run)}>เปิด</Button>
-                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => printRun(run)} disabled={Boolean(busy)}>
-                          <Printer className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button size="sm" className="h-7 px-2 text-xs" onClick={() => exportRun(run)} disabled={Boolean(busy)}>
-                          <Download className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+    <div className="flex h-[calc(100vh-6rem)] min-h-[560px] flex-col gap-2">
+      <div className="shrink-0 rounded-lg border bg-card shadow-none">
+        <div className="flex min-h-10 items-center justify-between gap-3 border-b px-3 py-1.5">
+          <div className="flex min-w-0 items-center gap-3">
+            <h1 className="shrink-0 text-lg font-semibold tracking-tight text-foreground">รายงานบัตรเครดิต</h1>
+            <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">ข้อมูลจาก BillFlow สำหรับเทียบ statement เอง, ไม่รวมยอดคืนใน statement</span>
             </div>
-          )}
+          </div>
+          <div className="relative flex shrink-0 items-center gap-2">
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={() => setShowRuns((value) => !value)}>
+              <History className="mr-1.5 h-3.5 w-3.5" />
+              รอบล่าสุด
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={refreshRuns} disabled={loadingRuns}>
+              <RefreshCw className={cn('mr-1.5 h-3.5 w-3.5', loadingRuns && 'animate-spin')} />
+              รีเฟรช
+            </Button>
+            {showRuns && (
+              <div className="absolute right-0 top-9 z-40 w-[min(620px,calc(100vw-18rem))] rounded-md border bg-popover p-2 text-popover-foreground shadow-lg">
+                <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                  <div className="text-sm font-semibold">รอบรายงานล่าสุด</div>
+                  {loadingRuns && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                </div>
+                {runs.length === 0 && !loadingRuns ? (
+                  <div className="px-2 py-6 text-center text-sm text-muted-foreground">ยังไม่มีรอบรายงานที่บันทึกไว้</div>
+                ) : (
+                  <div className="max-h-[360px] space-y-1 overflow-y-auto">
+                    {runs.map((run) => (
+                      <div
+                        key={run.id}
+                        className={cn(
+                          'flex items-center justify-between gap-3 rounded-md border px-2 py-2 text-sm',
+                          activeRun?.id === run.id && 'border-primary/40 bg-primary/5',
+                        )}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <div className="truncate font-medium">{run.report_name || 'รายงานบัตรเครดิต'}</div>
+                            {run.exported_at && (
+                              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px] border-success/30 bg-success/10 text-success">
+                                <CheckCircle2 className="mr-1 h-3 w-3" />
+                                export
+                              </Badge>
+                            )}
+                            {run.printed_at && <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px]">พิมพ์</Badge>}
+                          </div>
+                          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {run.filters.date_from} ถึง {run.filters.date_to} · {run.filters.payment_method || 'ทุกบัตร'} · {numberLabel(run.summary.group_count)} ยอดรูด · {money(run.summary.charge_total)}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => openRun(run)}>เปิด</Button>
+                          <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => printRun(run)} disabled={Boolean(busy)}>
+                            <Printer className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button size="sm" className="h-7 px-2 text-xs" onClick={() => exportRun(run)} disabled={Boolean(busy)}>
+                            <Download className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
 
-      <div className="shrink-0 rounded-lg border bg-card px-3 py-2 shadow-none">
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="w-[132px]">
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">วันที่เริ่ม</label>
-              <Input
-                type="date"
-                value={filter.date_from}
-                className="h-8 text-xs"
-                onChange={(e) => setFilterValue('date_from', e.target.value)}
-              />
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-medium text-muted-foreground">ช่วงวันที่</span>
+            <Input
+              type="date"
+              value={filter.date_from}
+              className="h-7 w-[124px] px-2 text-xs"
+              onChange={(e) => setFilterValue('date_from', e.target.value)}
+            />
+            <span className="text-[11px] text-muted-foreground">ถึง</span>
+            <Input
+              type="date"
+              value={filter.date_to}
+              className="h-7 w-[124px] px-2 text-xs"
+              onChange={(e) => setFilterValue('date_to', e.target.value)}
+            />
           </div>
-          <div className="w-[132px]">
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">วันที่สิ้นสุด</label>
-              <Input
-                type="date"
-                value={filter.date_to}
-                className="h-8 text-xs"
-                onChange={(e) => setFilterValue('date_to', e.target.value)}
-              />
-          </div>
-          <div className="w-[148px]">
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">บัตร</label>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-medium text-muted-foreground">บัตร</span>
             <Select value={filter.payment_method || ALL} onValueChange={(value) => setFilterValue('payment_method', value)}>
-              <SelectTrigger className="h-8 text-xs">
+              <SelectTrigger className="h-7 w-[132px] px-2 text-xs">
                 <SelectValue placeholder="ทุกบัตร" />
               </SelectTrigger>
               <SelectContent>
@@ -512,10 +509,10 @@ export default function CreditCardReports() {
               </SelectContent>
             </Select>
           </div>
-          <div className="w-[136px]">
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">ช่องทาง</label>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-medium text-muted-foreground">ช่องทาง</span>
             <Select value={filter.source || ALL} onValueChange={(value) => setFilterValue('source', value)}>
-              <SelectTrigger className="h-8 text-xs">
+              <SelectTrigger className="h-7 w-[128px] px-2 text-xs">
                 <SelectValue placeholder="ทุกช่องทาง" />
               </SelectTrigger>
               <SelectContent>
@@ -525,19 +522,19 @@ export default function CreditCardReports() {
               </SelectContent>
             </Select>
           </div>
-          <label className="flex h-8 min-w-[172px] items-center gap-2 rounded-md border px-2 text-xs">
+          <label className="flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs">
             <Switch
               checked={Boolean(filter.include_incomplete)}
               onCheckedChange={(checked) => setFilterValue('include_incomplete', checked)}
             />
             <span>รวมข้อมูลไม่ครบ</span>
           </label>
-          <Button className="h-8 px-3 text-xs" onClick={loadPreview} disabled={loadingPreview}>
-            {loadingPreview ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+          <Button className="h-7 px-3 text-xs" onClick={loadPreview} disabled={loadingPreview}>
+            {loadingPreview ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
             Preview
           </Button>
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t bg-muted/20 px-3 py-1.5">
           <SummaryItem label="เลือก" value={`${numberLabel(selectedRows.length)}/${numberLabel(preview?.summary.group_count ?? 0)} ยอดรูด`} />
           <SummaryItem label="คำสั่งซื้อ" value={numberLabel(selectedRows.reduce((sum, group) => sum + group.order_count, 0))} />
           <SummaryItem label="ยอดรูด" value={money(selectedChargeTotal)} />
