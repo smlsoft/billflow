@@ -1,6 +1,6 @@
 # Marketplace Purchase Print And Payment Method
 
-> Updated: 2026-06-15 +07
+> Updated: 2026-06-18 +07
 > Scope: `source='shopee_shipped'` and `source='lazada_email'`, `bill_type='purchase'`.
 
 ## Status
@@ -11,6 +11,7 @@
   - `059_marketplace_print_payment_method.sql`
   - `060_marketplace_print_perf_indexes.sql`
   - `063_lazada_charge_group_key.sql`
+  - `064_credit_card_report_runs.sql` (code ready; deploy status should be checked per instance)
 - Payment method is stored in BillFlow only. It is not sent to SML.
 - Print readiness is controlled by `/settings/channels` per channel and defaults to strict:
   - every order in the same email group must have an SML POL number
@@ -130,6 +131,39 @@ For purchase orders sent to SML:
 - Lazada send blocks if the card-charge group is incomplete or if the current PO total does not match the order paid total after the `SHIP_CUS` fee line is present.
 - User-entered `remark` is not available in purchase send dialogs to avoid overwriting the SML remark field.
 - `remark_2` remains available because it is a separate SML field.
+
+## Credit Card Report
+
+`/credit-card-reports` is a BillFlow-only report for reconciling card statement rows manually. It does not import statement files, upload to Google Drive, or use AI to read bank statements.
+
+Workflow:
+
+1. User selects `date_from`, `date_to`, optional `TTxxxx` payment method, optional source, and whether to include incomplete groups.
+2. Backend returns a preview at card-charge group level, not order level.
+3. User selects/deselects whole charge groups. This is how users handle statement periods where the first/last day only partially belongs to the card cycle.
+4. User creates a report run. The run stores filters, selected group ids, snapshot JSON, and summary JSON.
+5. Excel export and report-order print use the stored snapshot only.
+
+Grouping rules:
+
+- Scope is active marketplace purchase bills only: `shopee_shipped` and `lazada_email`.
+- Shopee group id is `shopee:<email_message_id>` and charge amount comes from `raw_data.payment_summary.doc_ref_amount`, falling back to `payment_paid_amount`.
+- Shopee shipped-only legacy rows without payment summary are excluded by default, unless `include_incomplete=true`.
+- Lazada group id is `lazada:<raw_data.lazada_charge_group_key>` and charge amount is the sum of `raw_data.paid_total_amount` in the group.
+- Lazada does not fall back to `email_date`; missing group key is an issue because envelope time can split one card charge.
+- `payment_method=TTxxxx` filters at group level: if any order in a charge group matches the selected card, the whole group stays together.
+
+Excel output:
+
+- `รายงานบัตรเครดิต`: one row per POL/order, repeating charge group data.
+- `สรุปยอด`: totals by source/platform plus run summary.
+- `ต้องตรวจสอบ`: groups with issues such as missing POL, missing charge amount, amount mismatch, missing payment method, or mixed payment method.
+
+Print behavior:
+
+- `พิมพ์รายการที่เลือกตามลำดับรายงาน` uses existing email artifact print rendering.
+- Print order follows the report snapshot.
+- Groups that are not ready to print are skipped with a reason and do not receive fake print events.
 
 ## Update Creditor After SML Send
 

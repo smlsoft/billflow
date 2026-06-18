@@ -93,6 +93,7 @@ func main() {
 	artifactRepo := repository.NewBillArtifactRepo(db)
 	channelDefaultRepo := repository.NewChannelDefaultRepo(db)
 	docCounterRepo := repository.NewDocCounterRepo(db)
+	creditCardReportRepo := repository.NewCreditCardReportRepo(db)
 	chatConvRepo := repository.NewChatConversationRepo(db)
 	chatMessageRepo := repository.NewChatMessageRepo(db)
 	chatMediaRepo := repository.NewChatMediaRepo(db, cfg.ArtifactsDir, cfg.ArtifactsMaxBytes)
@@ -361,6 +362,7 @@ func main() {
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
 	billH := handlers.NewBillHandler(billRepo, userRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
 	billH.RecoverInterruptedBulkSendJobs()
+	creditCardReportH := handlers.NewCreditCardReportHandler(creditCardReportRepo, billRepo, auditLogRepo, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, catalogRepo, auditLogRepo, logger)
 	dashH := handlers.NewDashboardHandler(billRepo, insightRepo, chatConvRepo, imapAccountRepo, lineOARepo, insightSvc, logger)
 	dashH.SetSMLReadiness(smlReadiness)
@@ -494,6 +496,14 @@ func main() {
 		api.GET("/bills/:id/artifacts/:artifact_id/download", billH.DownloadArtifact)
 		api.GET("/bills/:id/artifacts/:artifact_id/preview", billH.PreviewArtifact)
 		api.POST("/bills/:id/artifacts/:artifact_id/print-events", billH.RecordArtifactPrint)
+
+		// Credit card report snapshots
+		api.GET("/credit-card-reports/preview", middleware.RequireRole("admin", "staff"), creditCardReportH.Preview)
+		api.GET("/credit-card-reports/runs", middleware.RequireRole("admin", "staff"), creditCardReportH.ListRuns)
+		api.POST("/credit-card-reports/runs", middleware.RequireRole("admin", "staff"), creditCardReportH.CreateRun)
+		api.GET("/credit-card-reports/runs/:id/export.xlsx", middleware.RequireRole("admin", "staff"), creditCardReportH.ExportXLSX)
+		api.POST("/credit-card-reports/runs/:id/print-events", middleware.RequireRole("admin", "staff"), creditCardReportH.RecordPrintEvents)
+		api.GET("/credit-card-reports/runs/:id", middleware.RequireRole("admin", "staff"), creditCardReportH.GetRun)
 
 		// Mappings
 		api.GET("/mappings", mappingH.List)

@@ -3,6 +3,7 @@ import {
   Bot,
   Building2,
   ClipboardCheck,
+  CreditCard,
   Database,
   FileText,
   LayoutDashboard,
@@ -73,6 +74,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'งานฝั่งซื้อ',
     items: [
       { to: '/bills', label: 'ใบสั่งซื้อ', icon: FileText, hasBadge: 'purchase', hint: 'Email → ซื้อ -> ใบสั่งซื้อ' },
+      { to: '/credit-card-reports', label: 'รายงานบัตรเครดิต', icon: CreditCard, hint: 'Export ยอดรูดจาก BillFlow' },
     ],
   },
   {

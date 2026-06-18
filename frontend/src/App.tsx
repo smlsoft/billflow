@@ -16,6 +16,7 @@ import MarketplaceAliases from './pages/MarketplaceAliases'
 import OldDataSettings from './pages/OldDataSettings'
 import Logs from './pages/Logs'
 import BulkSendJobs from './pages/BulkSendJobs'
+import CreditCardReports from './pages/CreditCardReports'
 import CatalogSettings from './pages/CatalogSettings'
 import EmailAccounts from './pages/EmailAccounts'
 import ChannelDefaults from './pages/ChannelDefaults'
@@ -75,6 +76,7 @@ export default function App() {
           <Route path="settings" element={<Navigate to="/settings/instance" replace />} />
           <Route path="logs" element={<Logs />} />
           <Route path="bulk-send-jobs" element={<BulkSendJobs />} />
+          <Route path="credit-card-reports" element={<CreditCardReports />} />
           <Route path="settings/catalog" element={<CatalogSettings />} />
           <Route path="settings/email" element={<EmailAccounts />} />
           <Route path="settings/channels" element={<ChannelDefaults />} />

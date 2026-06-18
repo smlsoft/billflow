@@ -289,6 +289,109 @@ export interface EmailPrintCandidate {
   print_policy_note?: string
 }
 
+export interface CreditCardReportFilter {
+  date_from: string
+  date_to: string
+  payment_method?: string
+  source?: string
+  include_incomplete?: boolean
+}
+
+export interface CreditCardReportSummary {
+  group_count: number
+  order_count: number
+  selected_count?: number
+  charge_total: number
+  order_total: number
+  issue_group_count: number
+  missing_pol_count: number
+  missing_charge_count: number
+  ready_print_groups: number
+}
+
+export interface CreditCardReportIssue {
+  code: string
+  severity: 'info' | 'warn' | 'error' | string
+  message: string
+}
+
+export interface CreditCardReportOrder {
+  bill_id: string
+  order_id: string
+  seller_name: string
+  sml_doc_no?: string
+  status: BillStatus | string
+  print_payment_method?: string
+  effective_print_payment_method?: string
+  order_total: number
+  doc_ref?: string
+  email_message_id?: string
+  created_at?: string
+}
+
+export interface CreditCardReportPrintOrderContext {
+  order_id?: string
+  sml_doc_no?: string
+  party_name?: string
+  payment_method?: string
+}
+
+export interface CreditCardReportPrintArtifact {
+  message_id: string
+  bill_id: string
+  artifact_id: string
+  filename: string
+  orders: CreditCardReportPrintOrderContext[]
+}
+
+export interface CreditCardReportGroup {
+  group_id: string
+  source: string
+  source_label: string
+  charge_time: string
+  charge_date: string
+  sort_time: string
+  payment_methods: string[]
+  charge_amount?: number | null
+  order_total: number
+  diff?: number | null
+  order_count: number
+  pol_count: number
+  sent_count: number
+  printable_count: number
+  print_ready: boolean
+  print_block_reason?: string
+  issues: CreditCardReportIssue[]
+  orders: CreditCardReportOrder[]
+  print_artifacts?: CreditCardReportPrintArtifact[]
+}
+
+export interface CreditCardReportPreview {
+  filters: CreditCardReportFilter
+  groups: CreditCardReportGroup[]
+  summary: CreditCardReportSummary
+  limit: number
+  truncated: boolean
+  generated_at: string
+  selected_group_ids?: string[]
+}
+
+export interface CreditCardReportRun {
+  id: string
+  report_name: string
+  filters: CreditCardReportFilter
+  selected_group_ids: string[]
+  snapshot: CreditCardReportPreview
+  summary: CreditCardReportSummary
+  created_by?: string
+  created_by_email?: string
+  exported_at?: string | null
+  printed_at?: string | null
+  print_summary?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
 // ─── Mapping ─────────────────────────────────────────────────────────────────
 export interface Mapping {
   id: string

@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-06-15 +07
+> Updated: 2026-06-18 +07
 > Source of truth checked: local code/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB/SML repair queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
 ## Latest Handoff For New Chat
@@ -11,14 +11,37 @@
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
 - **Post-v1.0 marketplace purchase work deployed through 2026-06-15 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
-- Migration ล่าสุดใน code/deployed main + thaisunsport: `063_lazada_charge_group_key.sql`.
+- Migration ล่าสุดใน code: `064_credit_card_report_runs.sql`. Production main + thaisunsport ที่บันทึกล่าสุดยังอยู่ที่ `063_lazada_charge_group_key.sql` จนกว่าจะ deploy รอบรายงานบัตรเครดิต.
 - Lazada email purchase is live on thaisunsport with review-first flow; 3 Lazada IMAP accounts enabled, `lookback_days=1`, `poll_interval_seconds=600`.
 - Marketplace purchase print readiness now depends on POL completeness plus BillFlow-only payment method rules, not creditor prefix.
 - Single-bill and bulk SML send dialogs do **not** require `วิธีการชำระเงิน`; if supplier code/name starts with `TTxxxx`, BillFlow auto-syncs and locks the method to that `TTxxxx`.
 - **TT payment auto-sync**: เมื่อเลือก supplier ที่ code หรือ name ขึ้นต้น TT จะ auto-fill วิธีการชำระเงินทันที (ตรวจทั้ง code และ name เพราะ SML อาจใช้ code AF00001 แต่ name = TT2789); ถ้า supplier ไม่ใช่ TT จะ clear ค่าและ user เลือกเองได้.
 - **Lazada group key**: Lazada card doc_ref uses `raw_data.lazada_charge_group_key` parsed from the email body confirmation minute; legacy `email_date` fallback is blocked for send because envelope seconds can split one card charge.
+- **Credit card report v1 (code ready, pending deploy)**: เพิ่มหน้า `/credit-card-reports` สำหรับ export รายงานยอดรูดจาก BillFlow เท่านั้น; user เลือกช่วงวันที่/บัตร TT/ช่องทาง แล้วเลือกกลุ่มยอดรูดเอง โดยเฉพาะวันหัว-ท้ายรอบ statement.
 - **sml-api-bybos**: เพิ่มและ deploy `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` + BillFlow `PATCH /api/bills/:id/sml-doc-ref` (admin) สำหรับแก้ doc_ref ย้อนหลัง
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
+
+## Latest Local Implementation 2026-06-18 — Credit Card Report From BillFlow
+
+- Status: implemented locally and verified by targeted backend tests + frontend production build; deploy not yet recorded in this file.
+- New route: `/credit-card-reports` under `งานฝั่งซื้อ`.
+- New migration: `064_credit_card_report_runs.sql`.
+- New APIs for admin/staff:
+  - `GET /api/credit-card-reports/preview`
+  - `POST /api/credit-card-reports/runs`
+  - `GET /api/credit-card-reports/runs`
+  - `GET /api/credit-card-reports/runs/:id`
+  - `GET /api/credit-card-reports/runs/:id/export.xlsx`
+  - `POST /api/credit-card-reports/runs/:id/print-events`
+- Report scope:
+  - active marketplace purchase bills only: `shopee_shipped` and `lazada_email`
+  - Shopee groups by `email_message_id` and uses `payment_summary.doc_ref_amount`, fallback `payment_paid_amount`
+  - Lazada groups by `raw_data.lazada_charge_group_key`; no fallback to `email_date`
+  - payment method filter applies at group level so one card charge is not split incorrectly
+- Report runs store a snapshot before export/print. Export and print always read that snapshot, not fresh rows, so preview/export/print stay consistent even if bills change later.
+- Excel export has 3 sheets: `รายงานบัตรเครดิต`, `สรุปยอด`, and `ต้องตรวจสอบ`.
+- Print action uses existing email artifact print flow and prints in snapshot order. Groups not ready to print are skipped with a reason; no PDF generation and no fake print event for blocked groups.
+- This feature intentionally does not import bank statements, does not upload to Google Drive, does not use AI to read statements, and does not create refund bills from negative statement rows.
 
 ## Latest Deploy 2026-06-15 — TT Auto-Sync + Lazada Group Key + SML Doc-Ref Patch
 
