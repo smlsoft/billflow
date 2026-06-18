@@ -90,7 +90,7 @@ func (r *CreditCardReportRepo) Preview(f models.CreditCardReportFilter) (*models
 
 func (r *CreditCardReportRepo) CreateRun(f models.CreditCardReportFilter, reportName string, selectedGroupIDs []string, userID, userEmail string) (*models.CreditCardReportRun, error) {
 	if len(selectedGroupIDs) == 0 {
-		return nil, fmt.Errorf("กรุณาเลือกรายการอย่างน้อย 1 ยอดรูด")
+		return nil, fmt.Errorf("กรุณาเลือกรายการอย่างน้อย 1 ยอดรูดบัตร")
 	}
 	preview, err := r.Preview(f)
 	if err != nil {
@@ -104,7 +104,7 @@ func (r *CreditCardReportRepo) CreateRun(f models.CreditCardReportFilter, report
 		}
 	}
 	if len(selected) == 0 {
-		return nil, fmt.Errorf("กรุณาเลือกรายการอย่างน้อย 1 ยอดรูด")
+		return nil, fmt.Errorf("กรุณาเลือกรายการอย่างน้อย 1 ยอดรูดบัตร")
 	}
 	allowed := map[string]models.CreditCardReportGroup{}
 	for _, group := range preview.Groups {
@@ -118,7 +118,7 @@ func (r *CreditCardReportRepo) CreateRun(f models.CreditCardReportFilter, report
 		}
 		group, ok := allowed[id]
 		if !ok {
-			return nil, fmt.Errorf("ยอดรูด %s ไม่อยู่ในผล preview ปัจจุบัน กรุณาโหลดข้อมูลใหม่", id)
+			return nil, fmt.Errorf("ยอดรูดบัตร %s ไม่อยู่ในผล preview ปัจจุบัน กรุณาโหลดข้อมูลใหม่", id)
 		}
 		outGroups = append(outGroups, group)
 	}
@@ -595,7 +595,7 @@ func creditCardReportIssues(group models.CreditCardReportGroup, rows []creditCar
 		add("missing_charge_amount", "warn", "ข้อมูลยอดรูดบัตรไม่ครบ")
 	}
 	if group.ChargeAmount != nil && group.Diff != nil && math.Abs(*group.Diff) > 0.01 {
-		add("amount_mismatch", "warn", "ยอดรวมบิลไม่ตรงกับยอดรูด")
+		add("amount_mismatch", "warn", "ยอดรวมบิลใน BillFlow ไม่ตรงกับยอดรูดบัตร")
 	}
 	if group.POLCount != group.OrderCount {
 		add("missing_pol", "warn", "ยังไม่มีเลข POL ครบทุกคำสั่งซื้อ")

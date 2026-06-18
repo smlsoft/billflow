@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   CheckCircle2,
@@ -68,7 +69,13 @@ const SOURCE_OPTIONS = [
 ]
 
 const INCLUDE_INCOMPLETE_HELP =
-  'ปิดไว้จะแสดงเฉพาะยอดรูดที่พร้อมเทียบ statement. เปิดเพื่อรวมรายการที่ยังไม่มียอดรูดหรือยังจัดกลุ่มยอดรูดไม่ได้ สำหรับตรวจแก้ข้อมูลก่อน export.'
+  'ปิดไว้จะแสดงเฉพาะยอดรูดบัตรที่พร้อมเทียบ statement. เปิดเพื่อรวมรายการที่ยังไม่มียอดรูดบัตรหรือยังจัดกลุ่มยอดรูดไม่ได้ สำหรับตรวจแก้ข้อมูลก่อน export.'
+
+const CHARGE_AMOUNT_HELP =
+  'ยอดรูดบัตรคือยอดรวมของกลุ่มจากอีเมล ไม่ใช่ผลรวมเฉพาะคำสั่งซื้อที่มี POL แล้ว และยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement.'
+
+const EMAIL_TIME_HELP =
+  'วันที่/เวลาจากอีเมลที่ BillFlow ใช้เรียงและจับกลุ่มยอดรูดบัตร ไม่ใช่เวลาจาก statement ธนาคาร.'
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -87,6 +94,10 @@ function money(value?: number | null) {
 
 function numberLabel(value: number) {
   return value.toLocaleString('th-TH')
+}
+
+function displayOrderID(value?: string) {
+  return (value ?? '').trim().replace(/^#+/, '')
 }
 
 function dateTimeLabel(value?: string) {
@@ -153,13 +164,32 @@ function issueTone(issueCode: string) {
 }
 
 function issueShortLabel(issue: CreditCardReportIssue) {
-  if (issue.code === 'amount_mismatch') return 'ยอดต่าง'
+  if (issue.code === 'amount_mismatch') return 'ยอดไม่ตรง'
   if (issue.code === 'missing_pol') return 'ยังไม่มี POL'
-  if (issue.code === 'missing_charge_amount') return 'ไม่มียอดรูด'
+  if (issue.code === 'missing_charge_amount') return 'ไม่มียอดรูดบัตร'
   if (issue.code === 'missing_group_key') return 'ยังไม่จัดกลุ่ม'
   if (issue.code === 'missing_payment_method') return 'วิธีชำระ'
   if (issue.code === 'mixed_payment_method') return 'หลายวิธีชำระ'
   return issue.message
+}
+
+function HeaderHelp({ children, help, align = 'left' }: { children: ReactNode; help?: string; align?: 'left' | 'right' }) {
+  if (!help) return <>{children}</>
+  return (
+    <div className={cn('inline-flex items-center gap-1', align === 'right' && 'justify-end')}>
+      <span>{children}</span>
+      <TooltipProvider delayDuration={120}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Info className="h-3.5 w-3.5 cursor-help text-muted-foreground" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs text-xs leading-relaxed">
+            {help}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
+  )
 }
 
 function IssueChips({ group }: { group: CreditCardReportGroup }) {
@@ -311,7 +341,7 @@ export default function CreditCardReports() {
 
   const createSnapshotRun = async (options: { skipIssueConfirm?: boolean } = {}) => {
     if (!preview || selected.size === 0) {
-      toast.error('กรุณาเลือกรายการอย่างน้อย 1 ยอดรูด')
+      toast.error('กรุณาเลือกรายการอย่างน้อย 1 ยอดรูดบัตร')
       return null
     }
     if (selectedIssueCount > 0 && !options.skipIssueConfirm) {
@@ -440,7 +470,7 @@ export default function CreditCardReports() {
             <h1 className="shrink-0 text-lg font-semibold tracking-tight text-foreground">รายงานบัตรเครดิต</h1>
             <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
               <Info className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">ข้อมูลจาก BillFlow สำหรับเทียบ statement เอง, ไม่รวมยอดคืนใน statement</span>
+              <span className="truncate">ข้อมูลจาก BillFlow สำหรับเทียบ statement เอง, ยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement</span>
             </div>
           </div>
           <div className="relative flex shrink-0 items-center gap-2">
@@ -482,7 +512,7 @@ export default function CreditCardReports() {
                             {run.printed_at && <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px]">พิมพ์</Badge>}
                           </div>
                           <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                            {run.filters.date_from} ถึง {run.filters.date_to} · {run.filters.payment_method || 'ทุกบัตร'} · {numberLabel(run.summary.group_count)} ยอดรูด · {money(run.summary.charge_total)}
+                            {run.filters.date_from} ถึง {run.filters.date_to} · {run.filters.payment_method || 'ทุกบัตร'} · {numberLabel(run.summary.group_count)} ยอดรูดบัตร · {money(run.summary.charge_total)}
                           </div>
                         </div>
                         <div className="flex shrink-0 gap-1">
@@ -511,7 +541,7 @@ export default function CreditCardReports() {
               onFromChange={(value) => setFilterValue('date_from', value)}
               onToChange={(value) => setFilterValue('date_to', value)}
               className="h-7 w-full min-w-0 text-xs"
-              description="ใช้กรองรายการยอดรูดตามวันที่ใน BillFlow"
+              description="ใช้กรองรายการยอดรูดบัตรตามวันที่/เวลาจากอีเมล"
               clearLabel="ล้างช่วงวันที่รายงาน"
             />
           </div>
@@ -571,10 +601,10 @@ export default function CreditCardReports() {
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t bg-muted/20 px-3 py-1.5">
-          <SummaryItem label="เลือก" value={`${numberLabel(selectedRows.length)}/${numberLabel(preview?.summary.group_count ?? 0)} ยอดรูด`} />
+          <SummaryItem label="เลือก" value={`${numberLabel(selectedRows.length)}/${numberLabel(preview?.summary.group_count ?? 0)} ยอดรูดบัตร`} />
           <SummaryItem label="คำสั่งซื้อ" value={numberLabel(selectedOrderCount)} />
-          <SummaryItem label="ยอดรูด" value={money(selectedChargeTotal)} />
-          <SummaryItem label="ยอดบิล" value={money(selectedOrderTotal)} />
+          <SummaryItem label="ยอดรูดบัตร" value={money(selectedChargeTotal)} />
+          <SummaryItem label="ยอดรวมบิลใน BillFlow" value={money(selectedOrderTotal)} />
           <SummaryItem label="ต้องตรวจ" value={numberLabel(selectedIssueCount)} tone={selectedIssueCount > 0 ? 'warn' : undefined} />
           {activeRun && (
             <div className="min-w-0 truncate text-xs text-muted-foreground">
@@ -587,8 +617,8 @@ export default function CreditCardReports() {
       <div className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card shadow-none">
         <div className="flex shrink-0 items-center justify-between gap-3 border-b px-3 py-2">
           <div className="min-w-0">
-            <div className="text-sm font-semibold">รายการยอดรูด</div>
-            <div className="truncate text-xs text-muted-foreground">เลือกทั้งยอดรูด เพื่อไม่ให้ยอด statement แตกเป็นราย order</div>
+            <div className="text-sm font-semibold">รายการยอดรูดบัตร</div>
+            <div className="truncate text-xs text-muted-foreground">เลือกทั้งยอดรูดบัตร เพื่อไม่ให้ยอด statement แตกเป็นราย order</div>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
             <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={selectAllPreview} disabled={!preview || preview.groups.length === 0}>
@@ -613,7 +643,7 @@ export default function CreditCardReports() {
               <EmptyState
                 icon={FileSpreadsheet}
                 title="ยังไม่มี preview รายงาน"
-                description="เลือกช่วงวันที่และบัตร แล้วกด Preview เพื่อดูยอดรูดจาก BillFlow"
+                description="เลือกช่วงวันที่และบัตร แล้วกด Preview เพื่อดูยอดรูดบัตรจาก BillFlow"
               />
             </div>
           )}
@@ -629,7 +659,7 @@ export default function CreditCardReports() {
             <div className="flex h-full items-center justify-center p-6">
               <EmptyState
                 icon={FileSpreadsheet}
-                title="ไม่พบรายการยอดรูดในช่วงนี้"
+                title="ไม่พบรายการยอดรูดบัตรในช่วงนี้"
                 description="ลองขยายช่วงวันที่ เปลี่ยนบัตร หรือเปิดแสดงรายการต้องตรวจเพิ่ม"
               />
             </div>
@@ -640,12 +670,16 @@ export default function CreditCardReports() {
                 <tr>
                   <th className="h-8 w-8 px-2 text-left font-medium text-muted-foreground"></th>
                   <th className="h-8 w-8 px-1 text-left font-medium text-muted-foreground"></th>
-                  <th className="h-8 w-[150px] px-2 text-left font-medium text-muted-foreground">วันที่/เวลา</th>
+                  <th className="h-8 w-[162px] px-2 text-left font-medium text-muted-foreground">
+                    <HeaderHelp help={EMAIL_TIME_HELP}>วันที่/เวลาจากอีเมล</HeaderHelp>
+                  </th>
                   <th className="h-8 w-[84px] px-2 text-left font-medium text-muted-foreground">ช่องทาง</th>
                   <th className="h-8 w-[110px] px-2 text-left font-medium text-muted-foreground">วิธีชำระ</th>
-                  <th className="h-8 w-[112px] px-2 text-right font-medium text-muted-foreground">ยอดรูด</th>
-                  <th className="h-8 w-[112px] px-2 text-right font-medium text-muted-foreground">ยอดบิล</th>
-                  <th className="h-8 w-[96px] px-2 text-right font-medium text-muted-foreground">ส่วนต่าง</th>
+                  <th className="h-8 w-[120px] px-2 text-right font-medium text-muted-foreground">
+                    <HeaderHelp help={CHARGE_AMOUNT_HELP} align="right">ยอดรูดบัตร</HeaderHelp>
+                  </th>
+                  <th className="h-8 w-[138px] px-2 text-right font-medium text-muted-foreground">ยอดรวมบิลใน BillFlow</th>
+                  <th className="h-8 w-[112px] px-2 text-right font-medium text-muted-foreground">ต่างจากยอดรูด</th>
                   <th className="h-8 w-[88px] px-2 text-left font-medium text-muted-foreground">POL</th>
                   <th className="h-8 w-[170px] px-2 text-left font-medium text-muted-foreground">สถานะ</th>
                 </tr>
@@ -665,7 +699,7 @@ export default function CreditCardReports() {
                             <Checkbox
                               checked={isSelected}
                               onCheckedChange={(checked) => toggleSelected(group.group_id, Boolean(checked))}
-                              aria-label={`เลือกยอดรูด ${idx + 1}`}
+                              aria-label={`เลือกยอดรูดบัตร ${idx + 1}`}
                             />
                           </td>
                           <td className="px-1 py-1.5 align-middle">
@@ -724,7 +758,7 @@ export default function CreditCardReports() {
                                         <th className="h-8 px-2 text-left font-medium text-muted-foreground">เลขคำสั่งซื้อ</th>
                                         <th className="h-8 px-2 text-left font-medium text-muted-foreground">ผู้ขาย</th>
                                         <th className="h-8 px-2 text-left font-medium text-muted-foreground">วิธีชำระ</th>
-                                        <th className="h-8 px-2 text-right font-medium text-muted-foreground">ยอดบิล</th>
+                                        <th className="h-8 px-2 text-right font-medium text-muted-foreground">ยอดรวมบิลใน BillFlow</th>
                                         <th className="h-8 px-2 text-left font-medium text-muted-foreground">doc_ref</th>
                                         <th className="h-8 px-2 text-left font-medium text-muted-foreground">สถานะ</th>
                                       </tr>
@@ -737,7 +771,7 @@ export default function CreditCardReports() {
                                           </td>
                                           <td className="px-2 py-2">
                                             <Link className="font-mono text-primary hover:underline" to={`/bills/${order.bill_id}`}>
-                                              {order.order_id || order.bill_id.slice(0, 8)}
+                                              {displayOrderID(order.order_id) || order.bill_id.slice(0, 8)}
                                             </Link>
                                           </td>
                                           <td className="max-w-[220px] truncate px-2 py-2" title={order.seller_name}>
@@ -785,7 +819,7 @@ export default function CreditCardReports() {
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
               <div className="rounded-md border px-3 py-2">
-                <div className="text-[11px] text-muted-foreground">ยอดรูด</div>
+                <div className="text-[11px] text-muted-foreground">ยอดรูดบัตร</div>
                 <div className="mt-1 font-semibold tabular-nums">{numberLabel(selectedRows.length)}</div>
               </div>
               <div className="rounded-md border px-3 py-2">
@@ -793,7 +827,7 @@ export default function CreditCardReports() {
                 <div className="mt-1 font-semibold tabular-nums">{numberLabel(selectedOrderCount)}</div>
               </div>
               <div className="rounded-md border px-3 py-2">
-                <div className="text-[11px] text-muted-foreground">ยอดรูดรวม</div>
+                <div className="text-[11px] text-muted-foreground">ยอดรูดบัตรรวม</div>
                 <div className="mt-1 font-semibold tabular-nums">{money(selectedChargeTotal)}</div>
               </div>
               <div className="rounded-md border px-3 py-2">

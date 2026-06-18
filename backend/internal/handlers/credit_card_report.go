@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -263,8 +264,8 @@ func buildCreditCardReportWorkbook(run *models.CreditCardReportRun) ([]byte, err
 
 func writeReportDetails(f *excelize.File, sheet string, run *models.CreditCardReportRun, headerStyle, moneyStyle, warnStyle int) {
 	headers := []string{
-		"ลำดับยอดรูด", "วันที่/เวลา BillFlow", "ช่องทาง", "วิธีชำระเงิน", "ยอดรูดบัตร",
-		"ยอดรวมบิล", "ส่วนต่าง", "POL", "เลขคำสั่งซื้อ", "ผู้ขาย", "ยอดบิล", "สถานะ SML", "doc_ref", "หมายเหตุ",
+		"ลำดับยอดรูดบัตร", "วันที่/เวลาจากอีเมล", "ช่องทาง", "วิธีชำระเงิน", "ยอดรูดบัตร",
+		"ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "POL", "เลขคำสั่งซื้อ", "ผู้ขาย", "ยอดบิล", "สถานะ SML", "doc_ref", "หมายเหตุ",
 	}
 	writeHeader(f, sheet, headers, headerStyle)
 	row := 2
@@ -281,7 +282,7 @@ func writeReportDetails(f *excelize.File, sheet string, run *models.CreditCardRe
 				group.OrderTotal,
 				nullableFloat(group.Diff),
 				order.SMLDocNo,
-				order.OrderID,
+				creditCardReportDisplayOrderID(order.OrderID),
 				order.SellerName,
 				order.OrderTotal,
 				order.Status,
@@ -307,10 +308,10 @@ func writeReportSummary(f *excelize.File, sheet string, run *models.CreditCardRe
 		{"วันที่", run.Filters.DateFrom + " ถึง " + run.Filters.DateTo},
 		{"วิธีชำระเงิน", emptyDash(run.Filters.PaymentMethod)},
 		{"ช่องทาง", emptyDash(run.Filters.Source)},
-		{"จำนวนยอดรูด", run.Summary.GroupCount},
+		{"จำนวนยอดรูดบัตร", run.Summary.GroupCount},
 		{"จำนวนคำสั่งซื้อ", run.Summary.OrderCount},
-		{"ยอดรูดรวม", run.Summary.ChargeTotal},
-		{"ยอดบิลรวม", run.Summary.OrderTotal},
+		{"ยอดรูดบัตรรวม", run.Summary.ChargeTotal},
+		{"ยอดรวมบิลใน BillFlow", run.Summary.OrderTotal},
 		{"กลุ่มที่ต้องตรวจสอบ", run.Summary.IssueGroupCount},
 		{"สร้างเมื่อ", run.CreatedAt.Format(time.RFC3339)},
 	}
@@ -322,12 +323,17 @@ func writeReportSummary(f *excelize.File, sheet string, run *models.CreditCardRe
 	_ = f.SetColWidth(sheet, "A", "A", 28)
 	_ = f.SetColWidth(sheet, "B", "B", 34)
 
-	platformHeaderRow := 12
+	noteRow := len(rows) + 2
+	_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", noteRow), "หมายเหตุ")
+	_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", noteRow), "รายงานนี้ยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement")
+	_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", noteRow), fmt.Sprintf("A%d", noteRow), headerStyle)
+
+	platformHeaderRow := noteRow + 2
 	_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", platformHeaderRow), "ช่องทาง")
-	_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", platformHeaderRow), "จำนวนยอดรูด")
+	_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", platformHeaderRow), "จำนวนยอดรูดบัตร")
 	_ = f.SetCellValue(sheet, fmt.Sprintf("C%d", platformHeaderRow), "จำนวนคำสั่งซื้อ")
-	_ = f.SetCellValue(sheet, fmt.Sprintf("D%d", platformHeaderRow), "ยอดรูดรวม")
-	_ = f.SetCellValue(sheet, fmt.Sprintf("E%d", platformHeaderRow), "ยอดบิลรวม")
+	_ = f.SetCellValue(sheet, fmt.Sprintf("D%d", platformHeaderRow), "ยอดรูดบัตรรวม")
+	_ = f.SetCellValue(sheet, fmt.Sprintf("E%d", platformHeaderRow), "ยอดรวมบิลใน BillFlow")
 	_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", platformHeaderRow), fmt.Sprintf("E%d", platformHeaderRow), headerStyle)
 	type agg struct {
 		Groups int
@@ -358,10 +364,42 @@ func writeReportSummary(f *excelize.File, sheet string, run *models.CreditCardRe
 	if len(keys) > 0 {
 		_ = f.SetCellStyle(sheet, fmt.Sprintf("D%d", platformHeaderRow+1), fmt.Sprintf("E%d", platformHeaderRow+len(keys)), moneyStyle)
 	}
+
+	dailyTitleRow := platformHeaderRow + len(keys) + 3
+	_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", dailyTitleRow), "สรุปรายวันจาก BillFlow")
+	_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", dailyTitleRow), fmt.Sprintf("A%d", dailyTitleRow), headerStyle)
+	dailyHeaderRow := dailyTitleRow + 1
+	dailyHeaders := []string{
+		"วันที่จากอีเมล", "วิธีชำระเงิน", "จำนวนยอดรูดบัตร", "จำนวนคำสั่งซื้อ",
+		"ยอดรูดบัตรรวม", "ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "จำนวนกลุ่มที่ต้องตรวจ",
+	}
+	for i, header := range dailyHeaders {
+		cell, _ := excelize.CoordinatesToCellName(i+1, dailyHeaderRow)
+		_ = f.SetCellValue(sheet, cell, header)
+	}
+	lastDailyHeader, _ := excelize.CoordinatesToCellName(len(dailyHeaders), dailyHeaderRow)
+	_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", dailyHeaderRow), lastDailyHeader, headerStyle)
+	dailyRows := buildCreditCardReportDailySummaries(run.Snapshot.Groups)
+	for i, row := range dailyRows {
+		writeRow(f, sheet, dailyHeaderRow+1+i, []interface{}{
+			row.Date,
+			row.PaymentMethod,
+			row.GroupCount,
+			row.OrderCount,
+			row.ChargeTotal,
+			row.OrderTotal,
+			row.Diff,
+			row.IssueGroupCount,
+		})
+	}
+	if len(dailyRows) > 0 {
+		_ = f.SetCellStyle(sheet, fmt.Sprintf("E%d", dailyHeaderRow+1), fmt.Sprintf("G%d", dailyHeaderRow+len(dailyRows)), moneyStyle)
+	}
+	_ = f.SetColWidth(sheet, "C", "H", 18)
 }
 
 func writeReportIssues(f *excelize.File, sheet string, run *models.CreditCardReportRun, headerStyle, moneyStyle int) {
-	headers := []string{"ลำดับยอดรูด", "วันที่/เวลา", "ช่องทาง", "ยอดรูด", "ยอดรวมบิล", "ส่วนต่าง", "จำนวน order", "หมายเหตุ"}
+	headers := []string{"ลำดับยอดรูดบัตร", "วันที่/เวลาจากอีเมล", "ช่องทาง", "ยอดรูดบัตร", "ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "จำนวนคำสั่งซื้อ", "หมายเหตุ"}
 	writeHeader(f, sheet, headers, headerStyle)
 	row := 2
 	for i, group := range run.Snapshot.Groups {
@@ -420,6 +458,76 @@ func issueMessages(issues []models.CreditCardReportIssue) string {
 		out = append(out, issue.Message)
 	}
 	return strings.Join(out, "; ")
+}
+
+type creditCardReportDailySummary struct {
+	Date            string
+	PaymentMethod   string
+	GroupCount      int
+	OrderCount      int
+	ChargeTotal     float64
+	OrderTotal      float64
+	Diff            float64
+	IssueGroupCount int
+}
+
+func buildCreditCardReportDailySummaries(groups []models.CreditCardReportGroup) []creditCardReportDailySummary {
+	type key struct {
+		date   string
+		method string
+	}
+	byKey := map[key]creditCardReportDailySummary{}
+	for _, group := range groups {
+		date := creditCardReportGroupDateLabel(group)
+		method := strings.Join(group.PaymentMethods, ", ")
+		if strings.TrimSpace(method) == "" {
+			method = "-"
+		}
+		k := key{date: date, method: method}
+		row := byKey[k]
+		row.Date = date
+		row.PaymentMethod = method
+		row.GroupCount++
+		row.OrderCount += group.OrderCount
+		if group.ChargeAmount != nil {
+			row.ChargeTotal = roundCreditCardReportAmount(row.ChargeTotal + *group.ChargeAmount)
+		}
+		row.OrderTotal = roundCreditCardReportAmount(row.OrderTotal + group.OrderTotal)
+		row.Diff = roundCreditCardReportAmount(row.ChargeTotal - row.OrderTotal)
+		if len(group.Issues) > 0 {
+			row.IssueGroupCount++
+		}
+		byKey[k] = row
+	}
+	out := make([]creditCardReportDailySummary, 0, len(byKey))
+	for _, row := range byKey {
+		out = append(out, row)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Date != out[j].Date {
+			return out[i].Date < out[j].Date
+		}
+		return out[i].PaymentMethod < out[j].PaymentMethod
+	})
+	return out
+}
+
+func creditCardReportGroupDateLabel(group models.CreditCardReportGroup) string {
+	if v := strings.TrimSpace(group.ChargeDate); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(group.ChargeTime); len(v) >= 10 {
+		return v[:10]
+	}
+	return "-"
+}
+
+func creditCardReportDisplayOrderID(value string) string {
+	return strings.TrimLeft(strings.TrimSpace(value), "#")
+}
+
+func roundCreditCardReportAmount(v float64) float64 {
+	return math.Round(v*100) / 100
 }
 
 func nullableFloat(v *float64) interface{} {

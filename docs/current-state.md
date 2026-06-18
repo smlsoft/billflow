@@ -40,9 +40,9 @@
   - Lazada groups by `raw_data.lazada_charge_group_key`; no fallback to `email_date`
   - payment method filter applies at group level so one card charge is not split incorrectly
 - Report runs store a snapshot before export/print. Export and print always read that snapshot, not fresh rows, so preview/export/print stay consistent even if bills change later.
-- Excel export has 3 sheets: `รายงานบัตรเครดิต`, `สรุปยอด`, and `ต้องตรวจสอบ`.
+- Excel export has 3 sheets: `รายงานบัตรเครดิต`, `สรุปยอด`, and `ต้องตรวจสอบ`. The detail sheet now labels group time as `วันที่/เวลาจากอีเมล`, exports marketplace order ids without a leading `#`, and the summary sheet includes a charge-group-level `สรุปรายวันจาก BillFlow` table.
 - Print action uses existing email artifact print flow and prints in snapshot order. Groups not ready to print are skipped with a reason; no PDF generation and no fake print event for blocked groups.
-- This feature intentionally does not import bank statements, does not upload to Google Drive, does not use AI to read statements, and does not create refund bills from negative statement rows.
+- This feature intentionally does not import bank statements, does not upload to Google Drive, does not use AI to read statements, and does not create or insert refund/negative statement rows. Refund matching remains a separate future scope.
 - Verification: local `go test ./...`, local `npm run build`, server Docker build backend+frontend, migration `064` applied, backend health `8100` ok, frontend `3020/credit-card-reports` HTTP 200, public `https://pets-mini-museums-ships.trycloudflare.com/credit-card-reports` HTTP 200.
 
 ## Latest Deploy 2026-06-15 — TT Auto-Sync + Lazada Group Key + SML Doc-Ref Patch

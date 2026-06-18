@@ -156,8 +156,10 @@ Grouping rules:
 Excel output:
 
 - `รายงานบัตรเครดิต`: one row per POL/order, repeating charge group data.
-- `สรุปยอด`: totals by source/platform plus run summary.
+- `รายงานบัตรเครดิต` labels the group time as `วันที่/เวลาจากอีเมล`, labels the card charge as `ยอดรูดบัตร`, and exports order ids without a leading `#`.
+- `สรุปยอด`: totals by source/platform, run summary, and a `สรุปรายวันจาก BillFlow` table aggregated at charge-group level so repeated order rows do not inflate card-charge totals.
 - `ต้องตรวจสอบ`: groups with issues such as missing POL, missing charge amount, amount mismatch, missing payment method, or mixed payment method.
+- The report still does not include refund/negative statement rows. Matching or inserting statement refunds requires a separate statement import or manual-adjustment scope.
 
 Print behavior:
 

@@ -31,22 +31,30 @@ func TestBuildCreditCardReportWorkbookHasExpectedSheets(t *testing.T) {
 				ChargeAmount:   &charge,
 				OrderTotal:     7417.69,
 				Diff:           &diff,
-				OrderCount:     1,
-				POLCount:       1,
+				OrderCount:     2,
+				POLCount:       2,
 				Orders: []models.CreditCardReportOrder{{
 					BillID:     "bill-1",
-					OrderID:    "1109337756759692",
+					OrderID:    "#1109337756759692",
 					SellerName: "seller",
 					SMLDocNo:   "POL26060022",
 					Status:     "sent",
-					OrderTotal: 7417.69,
+					OrderTotal: 3000,
+					DocRef:     "7417.69",
+				}, {
+					BillID:     "bill-2",
+					OrderID:    "#1109337756759693",
+					SellerName: "seller two",
+					SMLDocNo:   "POL26060023",
+					Status:     "sent",
+					OrderTotal: 4417.69,
 					DocRef:     "7417.69",
 				}},
 			}},
 		},
 		Summary: models.CreditCardReportSummary{
 			GroupCount:  1,
-			OrderCount:  1,
+			OrderCount:  2,
 			ChargeTotal: 7417.69,
 			OrderTotal:  7417.69,
 		},
@@ -77,8 +85,62 @@ func TestBuildCreditCardReportWorkbookHasExpectedSheets(t *testing.T) {
 	if cell == "" {
 		t.Fatalf("cell E2 should contain charge amount")
 	}
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "B1", "วันที่/เวลาจากอีเมล")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "F1", "ยอดรวมบิลใน BillFlow")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "G1", "ต่างจากยอดรูด")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "I2", "1109337756759692")
+
+	dailyTitleRow := findCellRow(t, f, "สรุปยอด", "สรุปรายวันจาก BillFlow")
+	if dailyTitleRow == 0 {
+		t.Fatalf("daily summary title not found")
+	}
+	dailyHeaderRow := dailyTitleRow + 1
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 1, dailyHeaderRow), "วันที่จากอีเมล")
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 5, dailyHeaderRow), "ยอดรูดบัตรรวม")
+	dailyDataRow := dailyHeaderRow + 1
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 1, dailyDataRow), "2026-06-11")
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 3, dailyDataRow), "1")
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 4, dailyDataRow), "2")
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 5, dailyDataRow), "7417.69")
+	assertCellValue(t, f, "สรุปยอด", "B12", "รายงานนี้ยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement")
 }
 
 func bytesReader(data []byte) *bytes.Reader {
 	return bytes.NewReader(data)
+}
+
+func assertCellValue(t *testing.T, f *excelize.File, sheet, cell, want string) {
+	t.Helper()
+	got, err := f.GetCellValue(sheet, cell, excelize.Options{RawCellValue: true})
+	if err != nil {
+		t.Fatalf("cell %s!%s: %v", sheet, cell, err)
+	}
+	if got != want {
+		t.Fatalf("cell %s!%s = %q, want %q", sheet, cell, got, want)
+	}
+}
+
+func findCellRow(t *testing.T, f *excelize.File, sheet, want string) int {
+	t.Helper()
+	rows, err := f.GetRows(sheet)
+	if err != nil {
+		t.Fatalf("get rows %s: %v", sheet, err)
+	}
+	for r, row := range rows {
+		for _, value := range row {
+			if value == want {
+				return r + 1
+			}
+		}
+	}
+	return 0
+}
+
+func cellName(t *testing.T, col, row int) string {
+	t.Helper()
+	cell, err := excelize.CoordinatesToCellName(col, row)
+	if err != nil {
+		t.Fatalf("cell name col=%d row=%d: %v", col, row, err)
+	}
+	return cell
 }
