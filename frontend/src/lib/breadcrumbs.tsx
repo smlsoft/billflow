@@ -16,6 +16,7 @@ const ROUTES: Array<{ pattern: string; crumbs: BreadcrumbDef[] }> = [
   { pattern: '/dashboard', crumbs: [{ label: 'ภาพรวม' }] },
   { pattern: '/setup', crumbs: [{ label: 'เริ่มต้นใช้งาน' }] },
   { pattern: '/bills', crumbs: [{ label: 'งานฝั่งซื้อ' }, { label: 'ใบสั่งซื้อ' }] },
+  { pattern: '/credit-card-reports', crumbs: [{ label: 'งานฝั่งซื้อ' }, { label: 'รายงานบัตรเครดิต' }] },
   { pattern: '/sales-orders', crumbs: [{ label: 'งานฝั่งขาย' }, { label: 'ใบสั่งขาย' }] },
   { pattern: '/sale-invoices', crumbs: [{ label: 'งานฝั่งขาย' }, { label: 'ขายสินค้าและบริการ' }] },
   {
