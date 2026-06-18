@@ -28,6 +28,12 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
   createCreditCardReportRun,
   exportCreditCardReportRun,
   listCreditCardReportRuns,
@@ -52,6 +58,9 @@ const SOURCE_OPTIONS = [
   { value: 'shopee_shipped', label: 'Shopee' },
   { value: 'lazada_email', label: 'Lazada' },
 ]
+
+const INCLUDE_INCOMPLETE_HELP =
+  'ปิดไว้จะแสดงเฉพาะยอดรูดที่พร้อมเทียบ statement. เปิดเพื่อรวมรายการที่ยังไม่มียอดรูดหรือยังจัดกลุ่มยอดรูดไม่ได้ สำหรับตรวจแก้ข้อมูลก่อน export.'
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -517,13 +526,29 @@ export default function CreditCardReports() {
               </SelectContent>
             </Select>
           </div>
-          <label className="flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs">
-            <Switch
-              checked={Boolean(filter.include_incomplete)}
-              onCheckedChange={(checked) => setFilterValue('include_incomplete', checked)}
-            />
-            <span>รวมข้อมูลไม่ครบ</span>
-          </label>
+          <div
+            className="flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs"
+            title={INCLUDE_INCOMPLETE_HELP}
+          >
+            <label className="flex items-center gap-1.5">
+              <Switch
+                checked={Boolean(filter.include_incomplete)}
+                onCheckedChange={(checked) => setFilterValue('include_incomplete', checked)}
+                aria-label="แสดงรายการต้องตรวจเพิ่ม"
+              />
+              <span>แสดงรายการต้องตรวจเพิ่ม</span>
+            </label>
+            <TooltipProvider delayDuration={120}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="h-3.5 w-3.5 cursor-help text-muted-foreground" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs leading-relaxed">
+                  {INCLUDE_INCOMPLETE_HELP}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
           <Button className="h-7 px-3 text-xs" onClick={loadPreview} disabled={loadingPreview}>
             {loadingPreview ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
             Preview
@@ -589,7 +614,7 @@ export default function CreditCardReports() {
               <EmptyState
                 icon={FileSpreadsheet}
                 title="ไม่พบรายการยอดรูดในช่วงนี้"
-                description="ลองขยายช่วงวันที่ เปลี่ยนบัตร หรือเปิดรวมข้อมูลไม่ครบ"
+                description="ลองขยายช่วงวันที่ เปลี่ยนบัตร หรือเปิดแสดงรายการต้องตรวจเพิ่ม"
               />
             </div>
           )}
