@@ -1,24 +1,22 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Download,
   FileSpreadsheet,
+  History,
+  Info,
   Loader2,
   Printer,
   RefreshCw,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import {
@@ -29,14 +27,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import {
   createCreditCardReportRun,
   exportCreditCardReportRun,
@@ -50,6 +40,7 @@ import { cn } from '@/lib/utils'
 import type {
   CreditCardReportFilter,
   CreditCardReportGroup,
+  CreditCardReportIssue,
   CreditCardReportPreview,
   CreditCardReportRun,
 } from '@/types'
@@ -94,6 +85,19 @@ function dateTimeLabel(value?: string) {
   })
 }
 
+function compactDateTimeLabel(value?: string) {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString('th-TH', {
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function groupSelectedDefaults(preview: CreditCardReportPreview) {
   return new Set(
     preview.groups
@@ -131,34 +135,59 @@ function issueTone(issueCode: string) {
   return 'border-muted-foreground/20 bg-muted text-muted-foreground'
 }
 
+function issueShortLabel(issue: CreditCardReportIssue) {
+  if (issue.code === 'amount_mismatch') return 'ยอดต่าง'
+  if (issue.code === 'missing_pol') return 'ยังไม่มี POL'
+  if (issue.code === 'missing_charge_amount') return 'ไม่มียอดรูด'
+  if (issue.code === 'missing_group_key') return 'ยังไม่จัดกลุ่ม'
+  if (issue.code === 'missing_payment_method') return 'วิธีชำระ'
+  if (issue.code === 'mixed_payment_method') return 'หลายวิธีชำระ'
+  return issue.message
+}
+
 function IssueChips({ group }: { group: CreditCardReportGroup }) {
   if (group.issues.length === 0) {
     return (
-      <Badge variant="outline" className="border-success/30 bg-success/10 text-success">
+      <Badge variant="outline" className="h-5 px-1.5 text-[11px] border-success/30 bg-success/10 text-success">
         พร้อม
       </Badge>
     )
   }
+  const visibleIssues = group.issues.slice(0, 2)
+  const hiddenIssueCount = group.issues.length - visibleIssues.length
   return (
-    <div className="flex flex-wrap gap-1">
-      {group.issues.map((issue) => (
-        <Badge key={`${group.group_id}-${issue.code}`} variant="outline" className={issueTone(issue.code)}>
-          {issue.message}
+    <div className="flex max-w-[160px] flex-wrap gap-1">
+      {visibleIssues.map((issue) => (
+        <Badge
+          key={`${group.group_id}-${issue.code}`}
+          variant="outline"
+          className={cn('h-5 max-w-full px-1.5 text-[11px]', issueTone(issue.code))}
+          title={issue.message}
+        >
+          <span className="truncate">{issueShortLabel(issue)}</span>
         </Badge>
       ))}
+      {hiddenIssueCount > 0 && (
+        <Badge
+          variant="outline"
+          className="h-5 px-1.5 text-[11px] text-muted-foreground"
+          title={group.issues.map((issue) => issue.message).join(', ')}
+        >
+          +{hiddenIssueCount}
+        </Badge>
+      )}
     </div>
   )
 }
 
-function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function SummaryItem({ label, value, tone }: { label: string; value: string; tone?: 'warn' }) {
   return (
-    <Card className="shadow-none">
-      <CardContent className="p-4">
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
-        {hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}
-      </CardContent>
-    </Card>
+    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <span className={cn('text-sm font-semibold tabular-nums text-foreground', tone === 'warn' && 'text-warning')}>
+        {value}
+      </span>
+    </div>
   )
 }
 
@@ -177,6 +206,7 @@ export default function CreditCardReports() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [loadingRuns, setLoadingRuns] = useState(false)
+  const [showRuns, setShowRuns] = useState(false)
   const [busy, setBusy] = useState('')
 
   const selectedRows = useMemo(() => selectedGroups(preview, selected), [preview, selected])
@@ -372,263 +402,324 @@ export default function CreditCardReports() {
     setFilter(run.filters)
     setSelected(new Set(run.snapshot.groups.map((group) => group.group_id)))
     setExpanded(new Set())
+    setShowRuns(false)
   }
 
   const anyBusy = Boolean(busy) || loadingPreview
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="รายงานบัตรเครดิต"
-        description="Export ข้อมูลยอดรูดจาก BillFlow เพื่อให้ทีมบัญชีนำไปเทียบ statement เอง โดยไม่ import statement เข้าระบบ"
-        actions={
-          <Button variant="outline" onClick={refreshRuns} disabled={loadingRuns}>
+    <div className="flex h-[calc(100vh-6rem)] min-h-[560px] flex-col gap-3">
+      <div className="flex shrink-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">รายงานบัตรเครดิต</h1>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <Info className="h-3.5 w-3.5 shrink-0" />
+            <span>ข้อมูลจาก BillFlow สำหรับเทียบ statement เอง เลือกวันหัว-ท้ายรอบได้ก่อน Export</span>
+            <span className="text-muted-foreground/70">ยอดคืนใน statement ยังไม่สร้างเป็นบิล</span>
+          </div>
+        </div>
+        <div className="relative flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowRuns((value) => !value)}>
+            <History className="mr-2 h-4 w-4" />
+            รอบล่าสุด
+          </Button>
+          <Button variant="outline" size="sm" onClick={refreshRuns} disabled={loadingRuns}>
             <RefreshCw className={cn('mr-2 h-4 w-4', loadingRuns && 'animate-spin')} />
             รีเฟรช
           </Button>
-        }
-      />
+          {showRuns && (
+            <div className="absolute right-0 top-10 z-40 w-[min(620px,calc(100vw-18rem))] rounded-md border bg-popover p-2 text-popover-foreground shadow-lg">
+              <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                <div className="text-sm font-semibold">รอบรายงานล่าสุด</div>
+                {loadingRuns && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+              </div>
+              {runs.length === 0 && !loadingRuns ? (
+                <div className="px-2 py-6 text-center text-sm text-muted-foreground">ยังไม่มีรอบรายงานที่บันทึกไว้</div>
+              ) : (
+                <div className="max-h-[360px] space-y-1 overflow-y-auto">
+                  {runs.map((run) => (
+                    <div
+                      key={run.id}
+                      className={cn(
+                        'flex items-center justify-between gap-3 rounded-md border px-2 py-2 text-sm',
+                        activeRun?.id === run.id && 'border-primary/40 bg-primary/5',
+                      )}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="truncate font-medium">{run.report_name || 'รายงานบัตรเครดิต'}</div>
+                          {run.exported_at && (
+                            <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px] border-success/30 bg-success/10 text-success">
+                              <CheckCircle2 className="mr-1 h-3 w-3" />
+                              export
+                            </Badge>
+                          )}
+                          {run.printed_at && <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[11px]">พิมพ์</Badge>}
+                        </div>
+                        <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {run.filters.date_from} ถึง {run.filters.date_to} · {run.filters.payment_method || 'ทุกบัตร'} · {numberLabel(run.summary.group_count)} ยอดรูด · {money(run.summary.charge_total)}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => openRun(run)}>เปิด</Button>
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => printRun(run)} disabled={Boolean(busy)}>
+                          <Printer className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" className="h-7 px-2 text-xs" onClick={() => exportRun(run)} disabled={Boolean(busy)}>
+                          <Download className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
-      <Alert className="border-info/25 bg-info/5">
-        <AlertTriangle className="h-4 w-4" />
-        <AlertTitle>รายงานนี้อ้างอิงข้อมูล BillFlow เท่านั้น</AlertTitle>
-        <AlertDescription>
-          ยอดคืนสินค้า/ยอดติดลบที่มีเฉพาะใน statement ธนาคารจะไม่ถูกสร้างเป็นบิลในรอบนี้ และวันหัว-ท้ายรอบสามารถติ๊กเลือกเฉพาะกลุ่มยอดรูดที่ต้องการก่อน export ได้
-        </AlertDescription>
-      </Alert>
-
-      <Card className="shadow-none">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">ตัวกรองรายงาน</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 lg:grid-cols-[160px_160px_170px_170px_minmax(180px,1fr)_auto]">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">วันที่เริ่มต้น</label>
+      <div className="shrink-0 rounded-lg border bg-card px-3 py-2 shadow-none">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="w-[132px]">
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">วันที่เริ่ม</label>
               <Input
                 type="date"
                 value={filter.date_from}
+                className="h-8 text-xs"
                 onChange={(e) => setFilterValue('date_from', e.target.value)}
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">วันที่สิ้นสุด</label>
+          </div>
+          <div className="w-[132px]">
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">วันที่สิ้นสุด</label>
               <Input
                 type="date"
                 value={filter.date_to}
+                className="h-8 text-xs"
                 onChange={(e) => setFilterValue('date_to', e.target.value)}
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">บัตร / วิธีชำระเงิน</label>
-              <Select value={filter.payment_method || ALL} onValueChange={(value) => setFilterValue('payment_method', value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="ทุกบัตร" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL}>ทุกบัตร</SelectItem>
-                  {DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS.filter((method) => method.startsWith('TT')).map((method) => (
-                    <SelectItem key={method} value={method}>{method}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">ช่องทาง</label>
-              <Select value={filter.source || ALL} onValueChange={(value) => setFilterValue('source', value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="ทุกช่องทาง" />
-                </SelectTrigger>
-                <SelectContent>
-                  {SOURCE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <label className="flex min-h-10 items-center gap-3 rounded-md border px-3 py-2 text-sm">
-              <Switch
-                checked={Boolean(filter.include_incomplete)}
-                onCheckedChange={(checked) => setFilterValue('include_incomplete', checked)}
-              />
-              <span>
-                รวมข้อมูลไม่ครบ
-                <span className="block text-xs text-muted-foreground">เช่น ยังไม่มียอดรูดหรือ group key</span>
-              </span>
-            </label>
-            <div className="flex items-end">
-              <Button className="w-full" onClick={loadPreview} disabled={loadingPreview}>
-                {loadingPreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                Preview
-              </Button>
-            </div>
           </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="ยอดรูดที่เลือก" value={numberLabel(selectedRows.length)} hint={`จากทั้งหมด ${numberLabel(preview?.summary.group_count ?? 0)} กลุ่ม`} />
-        <StatCard label="คำสั่งซื้อที่เลือก" value={numberLabel(selectedRows.reduce((sum, group) => sum + group.order_count, 0))} />
-        <StatCard label="ยอดรูดรวม" value={money(selectedChargeTotal)} />
-        <StatCard label="ยอดบิลรวม" value={money(selectedOrderTotal)} />
-        <StatCard label="ต้องตรวจสอบ" value={numberLabel(selectedIssueCount)} hint="ยัง export ได้หลังยืนยัน" />
+          <div className="w-[148px]">
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">บัตร</label>
+            <Select value={filter.payment_method || ALL} onValueChange={(value) => setFilterValue('payment_method', value)}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="ทุกบัตร" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>ทุกบัตร</SelectItem>
+                {DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS.filter((method) => method.startsWith('TT')).map((method) => (
+                  <SelectItem key={method} value={method}>{method}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="w-[136px]">
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">ช่องทาง</label>
+            <Select value={filter.source || ALL} onValueChange={(value) => setFilterValue('source', value)}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="ทุกช่องทาง" />
+              </SelectTrigger>
+              <SelectContent>
+                {SOURCE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <label className="flex h-8 min-w-[172px] items-center gap-2 rounded-md border px-2 text-xs">
+            <Switch
+              checked={Boolean(filter.include_incomplete)}
+              onCheckedChange={(checked) => setFilterValue('include_incomplete', checked)}
+            />
+            <span>รวมข้อมูลไม่ครบ</span>
+          </label>
+          <Button className="h-8 px-3 text-xs" onClick={loadPreview} disabled={loadingPreview}>
+            {loadingPreview ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+            Preview
+          </Button>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-2">
+          <SummaryItem label="เลือก" value={`${numberLabel(selectedRows.length)}/${numberLabel(preview?.summary.group_count ?? 0)} ยอดรูด`} />
+          <SummaryItem label="คำสั่งซื้อ" value={numberLabel(selectedRows.reduce((sum, group) => sum + group.order_count, 0))} />
+          <SummaryItem label="ยอดรูด" value={money(selectedChargeTotal)} />
+          <SummaryItem label="ยอดบิล" value={money(selectedOrderTotal)} />
+          <SummaryItem label="ต้องตรวจ" value={numberLabel(selectedIssueCount)} tone={selectedIssueCount > 0 ? 'warn' : undefined} />
+          {activeRun && (
+            <div className="min-w-0 truncate text-xs text-muted-foreground">
+              snapshot: <span className="font-medium text-foreground">{activeRun.report_name || activeRun.id.slice(0, 8)}</span>
+            </div>
+          )}
+        </div>
       </div>
 
-      <Card className="shadow-none">
-        <CardHeader className="gap-3 pb-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <CardTitle className="text-base">กลุ่มยอดรูดจาก BillFlow</CardTitle>
-            <div className="mt-1 text-sm text-muted-foreground">
-              เลือกเป็นกลุ่มยอดรูดเท่านั้น เพื่อไม่ให้ยอดใน statement แตกเป็นราย order ผิดกลุ่ม
-            </div>
+      <div className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card shadow-none">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b px-3 py-2">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">รายการยอดรูด</div>
+            <div className="truncate text-xs text-muted-foreground">เลือกทั้งยอดรูด เพื่อไม่ให้ยอด statement แตกเป็นราย order</div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={selectAllPreview} disabled={!preview || preview.groups.length === 0}>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={selectAllPreview} disabled={!preview || preview.groups.length === 0}>
               เลือกทั้งหมด
             </Button>
-            <Button variant="outline" size="sm" onClick={clearSelection} disabled={selected.size === 0}>
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={clearSelection} disabled={selected.size === 0}>
               ล้างที่เลือก
             </Button>
-            <Button variant="outline" size="sm" onClick={handleCreateAndPrint} disabled={!preview || selected.size === 0 || anyBusy}>
-              {busy === 'create-print' || busy === 'print' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Printer className="mr-2 h-4 w-4" />}
-              พิมพ์ตามลำดับ
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={handleCreateAndPrint} disabled={!preview || selected.size === 0 || anyBusy}>
+              {busy === 'create-print' || busy === 'print' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Printer className="mr-2 h-3.5 w-3.5" />}
+              พิมพ์รายการที่เลือก
             </Button>
-            <Button size="sm" onClick={handleCreateAndExport} disabled={!preview || selected.size === 0 || anyBusy}>
-              {busy === 'create-export' || busy === 'export' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-              สร้างรอบและ Export
+            <Button size="sm" className="h-8 px-2.5 text-xs" onClick={handleCreateAndExport} disabled={!preview || selected.size === 0 || anyBusy}>
+              {busy === 'create-export' || busy === 'export' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-2 h-3.5 w-3.5" />}
+              Export Excel
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="pt-0">
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto">
           {!preview && !loadingPreview && (
-            <EmptyState
-              icon={FileSpreadsheet}
-              title="ยังไม่มี preview รายงาน"
-              description="เลือกช่วงวันที่และบัตร แล้วกด Preview เพื่อดูยอดรูดจาก BillFlow"
-            />
+            <div className="flex h-full items-center justify-center p-6">
+              <EmptyState
+                icon={FileSpreadsheet}
+                title="ยังไม่มี preview รายงาน"
+                description="เลือกช่วงวันที่และบัตร แล้วกด Preview เพื่อดูยอดรูดจาก BillFlow"
+              />
+            </div>
           )}
           {loadingPreview && (
-            <div className="py-12 text-center text-sm text-muted-foreground">
-              <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin" />
-              กำลังโหลดข้อมูลรายงาน...
+            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              <div className="text-center">
+                <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin" />
+                กำลังโหลดข้อมูลรายงาน...
+              </div>
             </div>
           )}
           {preview && preview.groups.length === 0 && !loadingPreview && (
-            <EmptyState
-              icon={FileSpreadsheet}
-              title="ไม่พบกลุ่มยอดรูดในช่วงนี้"
-              description="ลองขยายช่วงวันที่ เปลี่ยนบัตร หรือเปิดรวมข้อมูลไม่ครบ"
-            />
+            <div className="flex h-full items-center justify-center p-6">
+              <EmptyState
+                icon={FileSpreadsheet}
+                title="ไม่พบรายการยอดรูดในช่วงนี้"
+                description="ลองขยายช่วงวันที่ เปลี่ยนบัตร หรือเปิดรวมข้อมูลไม่ครบ"
+              />
+            </div>
           )}
           {preview && preview.groups.length > 0 && (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50">
-                    <TableHead className="w-10 px-3"></TableHead>
-                    <TableHead className="w-10 px-3"></TableHead>
-                    <TableHead>วันที่/เวลา BillFlow</TableHead>
-                    <TableHead>ช่องทาง</TableHead>
-                    <TableHead>วิธีชำระเงิน</TableHead>
-                    <TableHead className="text-right">ยอดรูด</TableHead>
-                    <TableHead className="text-right">ยอดบิล</TableHead>
-                    <TableHead className="text-right">ส่วนต่าง</TableHead>
-                    <TableHead>POL / Order</TableHead>
-                    <TableHead>สถานะ</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+            <table className="w-full min-w-[980px] border-collapse text-xs">
+              <thead className="sticky top-0 z-20 bg-muted/95 shadow-[0_1px_0_hsl(var(--border))]">
+                <tr>
+                  <th className="h-8 w-8 px-2 text-left font-medium text-muted-foreground"></th>
+                  <th className="h-8 w-8 px-1 text-left font-medium text-muted-foreground"></th>
+                  <th className="h-8 w-[150px] px-2 text-left font-medium text-muted-foreground">วันที่/เวลา</th>
+                  <th className="h-8 w-[84px] px-2 text-left font-medium text-muted-foreground">ช่องทาง</th>
+                  <th className="h-8 w-[110px] px-2 text-left font-medium text-muted-foreground">วิธีชำระ</th>
+                  <th className="h-8 w-[112px] px-2 text-right font-medium text-muted-foreground">ยอดรูด</th>
+                  <th className="h-8 w-[112px] px-2 text-right font-medium text-muted-foreground">ยอดบิล</th>
+                  <th className="h-8 w-[96px] px-2 text-right font-medium text-muted-foreground">ส่วนต่าง</th>
+                  <th className="h-8 w-[88px] px-2 text-left font-medium text-muted-foreground">POL</th>
+                  <th className="h-8 w-[170px] px-2 text-left font-medium text-muted-foreground">สถานะ</th>
+                </tr>
+              </thead>
+              <tbody>
                   {preview.groups.map((group, idx) => {
                     const isSelected = selected.has(group.group_id)
                     const isExpanded = expanded.has(group.group_id)
                     return (
                       <Fragment key={group.group_id}>
-                        <TableRow key={group.group_id} data-state={isSelected ? 'selected' : undefined}>
-                          <TableCell className="px-3">
+                        <tr
+                          key={group.group_id}
+                          data-state={isSelected ? 'selected' : undefined}
+                          className="border-b transition-colors hover:bg-muted/40 data-[state=selected]:bg-muted/60"
+                        >
+                          <td className="px-2 py-1.5 align-middle">
                             <Checkbox
                               checked={isSelected}
                               onCheckedChange={(checked) => toggleSelected(group.group_id, Boolean(checked))}
                               aria-label={`เลือกยอดรูด ${idx + 1}`}
                             />
-                          </TableCell>
-                          <TableCell className="px-3">
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleExpanded(group.group_id)}>
-                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          </td>
+                          <td className="px-1 py-1.5 align-middle">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggleExpanded(group.group_id)} title="ดูคำสั่งซื้อในยอดนี้">
+                              {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                             </Button>
-                          </TableCell>
-                          <TableCell className="min-w-[170px]">
-                            <div className="font-medium tabular-nums">{dateTimeLabel(group.charge_time)}</div>
-                            <div className="text-xs text-muted-foreground">ลำดับ {idx + 1}</div>
-                          </TableCell>
-                          <TableCell>
+                          </td>
+                          <td className="px-2 py-1.5 align-middle" title={dateTimeLabel(group.charge_time)}>
+                            <span className="font-medium tabular-nums">{compactDateTimeLabel(group.charge_time)}</span>
+                            <span className="ml-1 text-[11px] text-muted-foreground">#{idx + 1}</span>
+                          </td>
+                          <td className="px-2 py-1.5 align-middle">
                             <Badge variant="outline" className={cn(
+                              'h-5 px-1.5 text-[11px]',
                               group.source === 'lazada_email' && 'border-indigo-300 bg-indigo-50 text-indigo-700',
                               group.source === 'shopee_shipped' && 'border-orange-300 bg-orange-50 text-orange-700',
                             )}>
                               {group.source_label}
                             </Badge>
-                          </TableCell>
-                          <TableCell className="max-w-[180px]">
+                          </td>
+                          <td className="max-w-[110px] px-2 py-1.5 align-middle">
                             <div className="truncate font-medium" title={group.payment_methods.join(', ') || '-'}>
                               {group.payment_methods.join(', ') || '-'}
                             </div>
-                          </TableCell>
-                          <TableCell className="text-right font-semibold tabular-nums">{money(group.charge_amount)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{money(group.order_total)}</TableCell>
-                          <TableCell className={cn('text-right tabular-nums', Math.abs(group.diff ?? 0) > 0.01 && 'font-semibold text-warning')}>
+                          </td>
+                          <td className="px-2 py-1.5 text-right align-middle font-semibold tabular-nums">{money(group.charge_amount)}</td>
+                          <td className="px-2 py-1.5 text-right align-middle tabular-nums">{money(group.order_total)}</td>
+                          <td className={cn('px-2 py-1.5 text-right align-middle tabular-nums', Math.abs(group.diff ?? 0) > 0.01 && 'font-semibold text-warning')}>
                             {money(group.diff)}
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-medium tabular-nums">
-                              POL {numberLabel(group.pol_count)} / {numberLabel(group.order_count)}
-                            </div>
-                            <div className="text-xs text-muted-foreground">{numberLabel(group.order_count)} คำสั่งซื้อ</div>
-                          </TableCell>
-                          <TableCell className="min-w-[220px]">
+                          </td>
+                          <td className="px-2 py-1.5 align-middle" title={`${numberLabel(group.pol_count)} POL จาก ${numberLabel(group.order_count)} คำสั่งซื้อ`}>
+                            <span className="font-medium tabular-nums">POL {numberLabel(group.pol_count)}/{numberLabel(group.order_count)}</span>
+                          </td>
+                          <td className="px-2 py-1.5 align-middle">
                             <IssueChips group={group} />
-                          </TableCell>
-                        </TableRow>
+                          </td>
+                        </tr>
                         {isExpanded && (
-                          <TableRow key={`${group.group_id}-orders`} className="bg-muted/20 hover:bg-muted/20">
-                            <TableCell colSpan={10} className="p-0">
-                              <div className="px-12 py-3">
-                                <div className="rounded-md border bg-background">
-                                  <Table>
-                                    <TableHeader>
-                                      <TableRow>
-                                        <TableHead>POL</TableHead>
-                                        <TableHead>เลขคำสั่งซื้อ</TableHead>
-                                        <TableHead>ผู้ขาย</TableHead>
-                                        <TableHead>วิธีชำระเงิน</TableHead>
-                                        <TableHead className="text-right">ยอดบิล</TableHead>
-                                        <TableHead>doc_ref</TableHead>
-                                        <TableHead>สถานะ</TableHead>
-                                      </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
+                          <tr key={`${group.group_id}-orders`} className="border-b bg-muted/20">
+                            <td colSpan={10} className="p-0">
+                              <div className="px-10 py-2">
+                                {group.issues.length > 0 && (
+                                  <div className="mb-2 flex flex-wrap gap-1">
+                                    {group.issues.map((issue) => (
+                                      <Badge key={`${group.group_id}-detail-${issue.code}`} variant="outline" className={cn('h-5 px-1.5 text-[11px]', issueTone(issue.code))}>
+                                        {issue.message}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className="max-h-56 overflow-auto rounded-md border bg-background">
+                                  <table className="w-full min-w-[840px] border-collapse text-xs">
+                                    <thead className="sticky top-0 z-10 bg-background shadow-[0_1px_0_hsl(var(--border))]">
+                                      <tr>
+                                        <th className="h-8 px-2 text-left font-medium text-muted-foreground">POL</th>
+                                        <th className="h-8 px-2 text-left font-medium text-muted-foreground">เลขคำสั่งซื้อ</th>
+                                        <th className="h-8 px-2 text-left font-medium text-muted-foreground">ผู้ขาย</th>
+                                        <th className="h-8 px-2 text-left font-medium text-muted-foreground">วิธีชำระ</th>
+                                        <th className="h-8 px-2 text-right font-medium text-muted-foreground">ยอดบิล</th>
+                                        <th className="h-8 px-2 text-left font-medium text-muted-foreground">doc_ref</th>
+                                        <th className="h-8 px-2 text-left font-medium text-muted-foreground">สถานะ</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
                                       {group.orders.map((order) => (
-                                        <TableRow key={order.bill_id}>
-                                          <TableCell className="font-mono">
+                                        <tr key={order.bill_id} className="border-b last:border-0">
+                                          <td className="px-2 py-2 font-mono">
                                             {order.sml_doc_no || <span className="text-muted-foreground">ยังไม่มี POL</span>}
-                                          </TableCell>
-                                          <TableCell>
+                                          </td>
+                                          <td className="px-2 py-2">
                                             <Link className="font-mono text-primary hover:underline" to={`/bills/${order.bill_id}`}>
                                               {order.order_id || order.bill_id.slice(0, 8)}
                                             </Link>
-                                          </TableCell>
-                                          <TableCell className="max-w-[260px] truncate" title={order.seller_name}>
+                                          </td>
+                                          <td className="max-w-[220px] truncate px-2 py-2" title={order.seller_name}>
                                             {order.seller_name || '-'}
-                                          </TableCell>
-                                          <TableCell>
+                                          </td>
+                                          <td className="px-2 py-2">
                                             {order.effective_print_payment_method || order.print_payment_method || '-'}
-                                          </TableCell>
-                                          <TableCell className="text-right tabular-nums">{money(order.order_total)}</TableCell>
-                                          <TableCell className="font-mono">{order.doc_ref || '-'}</TableCell>
-                                          <TableCell>{order.status}</TableCell>
-                                        </TableRow>
+                                          </td>
+                                          <td className="px-2 py-2 text-right tabular-nums">{money(order.order_total)}</td>
+                                          <td className="px-2 py-2 font-mono">{order.doc_ref || '-'}</td>
+                                          <td className="px-2 py-2">{order.status}</td>
+                                        </tr>
                                       ))}
-                                    </TableBody>
-                                  </Table>
+                                    </tbody>
+                                  </table>
                                 </div>
                                 {!group.print_ready && (
                                   <div className="mt-2 text-xs text-muted-foreground">
@@ -636,63 +727,17 @@ export default function CreditCardReports() {
                                   </div>
                                 )}
                               </div>
-                            </TableCell>
-                          </TableRow>
+                            </td>
+                          </tr>
                         )}
                       </Fragment>
                     )
                   })}
-                </TableBody>
-              </Table>
-            </div>
+              </tbody>
+            </table>
           )}
-        </CardContent>
-      </Card>
-
-      <Card className="shadow-none">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">รอบรายงานล่าสุด</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {runs.length === 0 && !loadingRuns ? (
-            <div className="text-sm text-muted-foreground">ยังไม่มีรอบรายงานที่บันทึกไว้</div>
-          ) : (
-            <div className="space-y-2">
-              {runs.map((run) => (
-                <div
-                  key={run.id}
-                  className={cn(
-                    'flex flex-col gap-3 rounded-md border p-3 md:flex-row md:items-center md:justify-between',
-                    activeRun?.id === run.id && 'border-primary/40 bg-primary/5',
-                  )}
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="truncate font-medium">{run.report_name || 'รายงานบัตรเครดิต'}</div>
-                      {run.exported_at && <Badge variant="outline" className="border-success/30 bg-success/10 text-success"><CheckCircle2 className="mr-1 h-3 w-3" />export แล้ว</Badge>}
-                      {run.printed_at && <Badge variant="outline">พิมพ์แล้ว</Badge>}
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {run.filters.date_from} ถึง {run.filters.date_to} · {run.filters.payment_method || 'ทุกบัตร'} · {numberLabel(run.summary.group_count)} ยอดรูด · {money(run.summary.charge_total)}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" size="sm" onClick={() => openRun(run)}>เปิด snapshot</Button>
-                    <Button variant="outline" size="sm" onClick={() => printRun(run)} disabled={Boolean(busy)}>
-                      <Printer className="mr-2 h-4 w-4" />
-                      พิมพ์
-                    </Button>
-                    <Button size="sm" onClick={() => exportRun(run)} disabled={Boolean(busy)}>
-                      <Download className="mr-2 h-4 w-4" />
-                      Export
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   )
 }
