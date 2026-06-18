@@ -1,17 +1,19 @@
-import { ArrowLeft } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { ArrowLeft, Copy } from 'lucide-react'
 import dayjs from 'dayjs'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import BillStatusBadge from '@/components/BillStatusBadge'
 import type { Bill } from '@/types'
+import { billDetailURL } from '@/lib/billLinks'
 import { isShopeeSalesBill, rawNumber, rawString, shopeeOrderID } from '@/lib/shopeeBill'
 import { SOURCE_LABELS } from '../utils/formatters'
 import { hasInvalidPrice } from '../utils/validation'
 
 interface Props {
   bill: Bill
+  onBack?: () => void
 }
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -25,8 +27,7 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-export function BillHeader({ bill }: Props) {
-  const navigate = useNavigate()
+export function BillHeader({ bill, onBack }: Props) {
   const rawData = bill.raw_data as Record<string, unknown> | null
   const isPurchase = bill.bill_type === 'purchase'
   const isShopeeSale = isShopeeSalesBill(bill)
@@ -44,6 +45,30 @@ export function BillHeader({ bill }: Props) {
   const issueCount = (bill.items ?? []).filter((item) => {
     return !item.item_code || !item.unit_code || !item.qty || item.qty <= 0 || hasInvalidPrice(item)
   }).length
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(billDetailURL(bill))
+      toast.success('คัดลอกลิงก์บิลแล้ว')
+    } catch {
+      toast.error('คัดลอกลิงก์ไม่สำเร็จ')
+    }
+  }
+  const orderIDValue = (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <span className="truncate font-mono text-xs">{orderID}</span>
+      <Button
+        type="button"
+        size="icon"
+        variant="outline"
+        className="h-6 w-6 shrink-0"
+        onClick={handleCopyLink}
+        title="คัดลอกลิงก์บิล"
+        aria-label="คัดลอกลิงก์บิล"
+      >
+        <Copy className="h-3 w-3" />
+      </Button>
+    </span>
+  )
 
   return (
     <div className="space-y-2">
@@ -52,7 +77,7 @@ export function BillHeader({ bill }: Props) {
         variant="ghost"
         size="sm"
         className="gap-1.5 text-muted-foreground hover:text-foreground -ml-2 h-8"
-        onClick={() => navigate(-1)}
+        onClick={onBack}
       >
         <ArrowLeft className="h-4 w-4" />
         กลับ
@@ -113,13 +138,13 @@ export function BillHeader({ bill }: Props) {
             {isPurchase && orderID && (
               <InfoRow
                 label="เลขคำสั่งซื้อ"
-                value={<span className="font-mono text-xs">{orderID}</span>}
+                value={orderIDValue}
               />
             )}
             {isShopeeSale && orderID && (
               <InfoRow
                 label="เลขคำสั่งซื้อ"
-                value={<span className="font-mono text-xs">{orderID}</span>}
+                value={orderIDValue}
               />
             )}
             {(isPurchase || isShopeeSale) && orderDateTime && (

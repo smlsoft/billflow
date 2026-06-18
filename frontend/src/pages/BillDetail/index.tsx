@@ -40,6 +40,20 @@ type SendProgressState = {
   error: string | null
 }
 
+type BillDetailLocationState = {
+  returnTo?: unknown
+}
+
+function validateBillReturnTo(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const path = value.trim()
+  if (!path || !path.startsWith('/') || path.startsWith('//')) return null
+  const allowedListPaths = ['/bills', '/sales-orders', '/sale-invoices']
+  return allowedListPaths.some((prefix) => path === prefix || path.startsWith(`${prefix}?`))
+    ? path
+    : null
+}
+
 export default function BillDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -94,6 +108,19 @@ export default function BillDetail() {
     () => (bill ? validateForSML(bill) : { canSend: false, issues: [], firstBlockingItemId: null }),
     [bill],
   )
+  const returnTo = useMemo(() => {
+    const fromState = validateBillReturnTo((location.state as BillDetailLocationState | null)?.returnTo)
+    if (fromState) return fromState
+    if (!id) return null
+    return validateBillReturnTo(window.sessionStorage.getItem(`billflow:return:${id}`))
+  }, [id, location.state])
+  const handleBack = () => {
+    if (returnTo) {
+      navigate(returnTo)
+      return
+    }
+    navigate(-1)
+  }
 
   useEffect(() => {
     if (!bill || !id) return
@@ -233,7 +260,7 @@ export default function BillDetail() {
           variant="ghost"
           size="sm"
           className="gap-1.5 -ml-2 text-muted-foreground"
-          onClick={() => navigate(-1)}
+          onClick={handleBack}
         >
           <ArrowLeft className="h-4 w-4" />
           กลับ
@@ -298,7 +325,7 @@ export default function BillDetail() {
 
   return (
     <div className="space-y-4">
-      <BillHeader bill={bill} />
+      <BillHeader bill={bill} onBack={handleBack} />
 
       {(bill.error_msg || retryError) && (
         <BillFailureCard

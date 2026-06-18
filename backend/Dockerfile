@@ -11,6 +11,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o server ./cmd/server \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o lazada_group_key ./cmd/backfill/lazada_group_key \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o lazada_fee_line ./cmd/backfill/lazada_fee_line \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o shopee_multi_order_repair ./cmd/backfill/shopee_multi_order_repair
 
 # Runtime stage
@@ -23,6 +24,7 @@ WORKDIR /app
 
 COPY --from=builder /app/server .
 COPY --from=builder /app/lazada_group_key .
+COPY --from=builder /app/lazada_fee_line .
 COPY --from=builder /app/shopee_multi_order_repair .
 
 EXPOSE 8090

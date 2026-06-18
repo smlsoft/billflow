@@ -36,6 +36,7 @@ interface Props {
   onUpdated: (updated: BillItem) => void
   onDeleted: (itemId: string) => void
   onRefresh: () => Promise<unknown>
+  lockSourceAmounts?: boolean
   // When true, briefly flash this row (1.5s) so the admin's eye lands on
   // it. Triggered by the BillTotal warning card's "ดู →" link.
   highlighted?: boolean
@@ -84,6 +85,7 @@ export function BillItemRow({
   onUpdated,
   onDeleted,
   onRefresh,
+  lockSourceAmounts = false,
   highlighted,
   rawNameLabel = 'ชื่อสินค้าจากต้นทาง',
   showDiscountColumn = false,
@@ -132,12 +134,20 @@ export function BillItemRow({
   const handleSave = async () => {
     setSaving(true)
     try {
-      await api.put(`/api/bills/${billId}/items/${item.id}`, {
+      const payload: {
+        item_code: string
+        unit_code: string
+        qty?: number
+        price?: number
+      } = {
         item_code: draft.item_code,
         unit_code: draft.unit_code,
-        qty: Number(draft.qty),
-        price: Number(draft.price),
-      })
+      }
+      if (!lockSourceAmounts) {
+        payload.qty = Number(draft.qty)
+        payload.price = Number(draft.price)
+      }
+      await api.put(`/api/bills/${billId}/items/${item.id}`, payload)
 
       // F1 learning: backend registers ai_learned mapping if item_code changed.
       const prevCode = item.item_code ?? ''
@@ -160,8 +170,8 @@ export function BillItemRow({
         ...item,
         item_code: draft.item_code,
         unit_code: draft.unit_code,
-        qty: Number(draft.qty),
-        price: Number(draft.price),
+        qty: lockSourceAmounts ? item.qty : Number(draft.qty),
+        price: lockSourceAmounts ? item.price : Number(draft.price),
         mapped: draft.item_code !== '',
         candidates,
       })
@@ -179,12 +189,20 @@ export function BillItemRow({
     if (!item.item_code) return
     setConfirming(true)
     try {
-      await api.put(`/api/bills/${billId}/items/${item.id}`, {
+      const payload: {
+        item_code: string
+        unit_code?: string
+        qty?: number
+        price?: number
+      } = {
         item_code: item.item_code,
         unit_code: item.unit_code ?? undefined,
-        qty: item.qty,
-        price: item.price ?? undefined,
-      })
+      }
+      if (!lockSourceAmounts) {
+        payload.qty = item.qty
+        payload.price = item.price ?? undefined
+      }
+      await api.put(`/api/bills/${billId}/items/${item.id}`, payload)
       await onRefresh()
       toast.success('ยืนยันการจับคู่สินค้าแล้ว', {
         description: 'ระบบจะจดจำและเปิดให้ส่ง SML เมื่อทุกรายการยืนยันครบ',
@@ -218,6 +236,8 @@ export function BillItemRow({
   const discountAmount = item.discount_amount ?? 0
   const grossAmount = (item.qty ?? 0) * billPrice
   const netAmount = Math.max(grossAmount - discountAmount, 0)
+  const editQty = lockSourceAmounts ? item.qty ?? 0 : Number(draft.qty || 0)
+  const editPrice = lockSourceAmounts ? item.price ?? 0 : Number(draft.price || 0)
 
   if (!editing) {
     return (
@@ -481,13 +501,22 @@ export function BillItemRow({
               <div className={cn('grid gap-3', showDiscountColumn ? 'grid-cols-4' : 'grid-cols-3')}>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">จำนวน</span>
-                  <Input
-                    type="number"
-                    step="any"
-                    value={draft.qty}
-                    onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
-                    className="h-10 text-right"
-                  />
+                  {lockSourceAmounts ? (
+                    <div className="flex h-10 items-center justify-end rounded-md border border-border bg-muted/40 px-3 text-sm tabular-nums text-foreground">
+                      {item.qty}
+                    </div>
+                  ) : (
+                    <Input
+                      type="number"
+                      step="any"
+                      value={draft.qty}
+                      onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
+                      className="h-10 text-right"
+                    />
+                  )}
+                  {lockSourceAmounts && (
+                    <span className="block text-[11px] text-muted-foreground">ดึงจากอีเมล</span>
+                  )}
                 </label>
                 <div className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">หน่วย</span>
@@ -501,13 +530,22 @@ export function BillItemRow({
                 </div>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">ราคา</span>
-                  <Input
-                    type="number"
-                    step="any"
-                    value={draft.price}
-                    onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
-                    className="h-10 text-right"
-                  />
+                  {lockSourceAmounts ? (
+                    <div className="flex h-10 items-center justify-end rounded-md border border-border bg-muted/40 px-3 text-sm tabular-nums text-foreground">
+                      ฿{(item.price ?? 0).toLocaleString()}
+                    </div>
+                  ) : (
+                    <Input
+                      type="number"
+                      step="any"
+                      value={draft.price}
+                      onChange={(e) => setDraft((d) => ({ ...d, price: e.target.value }))}
+                      className="h-10 text-right"
+                    />
+                  )}
+                  {lockSourceAmounts && (
+                    <span className="block text-[11px] text-muted-foreground">ดึงจากอีเมล</span>
+                  )}
                 </label>
                 {showDiscountColumn && (
                   <div className="space-y-1.5">
@@ -520,7 +558,7 @@ export function BillItemRow({
                 <div className={cn('flex items-center justify-between rounded-md bg-muted/50 px-3 py-2', showDiscountColumn ? 'col-span-4' : 'col-span-3')}>
                   <span className="text-xs font-medium text-muted-foreground">รวมรายการนี้</span>
                   <span className="tabular-nums text-sm font-semibold text-foreground">
-                    ฿{Math.max(Number(draft.qty || 0) * Number(draft.price || 0) - discountAmount, 0).toLocaleString()}
+                    ฿{Math.max(editQty * editPrice - discountAmount, 0).toLocaleString()}
                   </span>
                 </div>
                 <div className={cn('flex justify-end gap-2', showDiscountColumn ? 'col-span-4' : 'col-span-3')}>

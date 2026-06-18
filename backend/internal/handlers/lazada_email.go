@@ -216,11 +216,24 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 	if amountSummary.HasGoodsTotalAmount && itemsGrossDelta != nil && absFloat(*itemsGrossDelta) > 0.01 {
 		amountReady = false
 	}
+	applyLazadaEmailDiscounts(itemsWithCandidates, amountSummary)
+	feeLineAdded := false
+	feeLineReady := true
+	if feeAmount := amountSummary.FeeAmount(); feeAmount > 0 {
+		feeItem, ready := h.configuredLazadaFeeLine(orderID, feeAmount, true)
+		if feeItem != nil {
+			itemsWithCandidates = append(itemsWithCandidates, lazadaItemWithCandidates{item: *feeItem})
+			feeLineAdded = true
+			feeLineReady = ready
+		} else {
+			feeLineReady = false
+		}
+	}
+
 	status := "needs_review"
-	if allHighConfidence && configReady && feeConfigReady && amountReady && order.Confidence >= lazadaHighConfThreshold {
+	if allHighConfidence && configReady && feeConfigReady && feeLineReady && amountReady && order.Confidence >= lazadaHighConfThreshold {
 		status = "pending"
 	}
-	applyLazadaEmailDiscounts(itemsWithCandidates, amountSummary)
 
 	docDate := normalizeLazadaEmailDocDate(order.DocDate, source)
 	sellerName := resolveLazadaEmailSellerName(order.SellerName, plainText, bodyHTML)
@@ -238,6 +251,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		"ai_text_chars":    len([]rune(plainText)),
 		"config_ready":     configReady,
 		"fee_config_ready": feeConfigReady,
+		"fee_line_added":   feeLineAdded,
 	}
 	applyLazadaAmountSummaryRawData(rawDataMap, amountSummary, itemsGrossDelta)
 	if amountSummary.HasPaidTotalAmount {
@@ -284,17 +298,18 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 			TraceID:    traceID,
 			DurationMs: &durMs,
 			Detail: map[string]interface{}{
-				"subject":       subject,
-				"from":          from,
-				"message_id":    messageID,
-				"order_id":      orderID,
-				"seller_name":   sellerName,
-				"items_count":   len(itemsWithCandidates),
-				"all_high_conf": allHighConfidence,
-				"config_ready":  configReady,
-				"fee_ready":     feeConfigReady,
-				"amount_status": amountSummary.ReconciliationStatus,
-				"status":        status,
+				"subject":        subject,
+				"from":           from,
+				"message_id":     messageID,
+				"order_id":       orderID,
+				"seller_name":    sellerName,
+				"items_count":    len(itemsWithCandidates),
+				"all_high_conf":  allHighConfidence,
+				"config_ready":   configReady,
+				"fee_ready":      feeConfigReady,
+				"fee_line_added": feeLineAdded,
+				"amount_status":  amountSummary.ReconciliationStatus,
+				"status":         status,
 			},
 		})
 	}

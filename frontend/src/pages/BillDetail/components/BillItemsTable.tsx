@@ -226,6 +226,7 @@ export function BillItemsTable({
   const rawNameLabel = isShopeeSalesBill(bill) ? 'ชื่อสินค้าจาก Excel' : 'ชื่อสินค้าจากอีเมล'
   const isShopeePurchase = isShopeePurchaseBill(bill)
   const isLazadaPurchase = isLazadaEmailPurchaseBill(bill)
+  const lockSourceAmounts = isMarketplacePurchaseBill(bill)
   const showDiscountColumn = isMarketplacePurchaseBill(bill)
   const discountSummary = showDiscountColumn ? discountSummaryFromBill(bill) : null
   const totalDiscount = discountSummary?.total_discount_amount ?? 0
@@ -370,6 +371,7 @@ export function BillItemsTable({
                   item={item}
                   billId={bill.id}
                   editable={canEdit}
+                  lockSourceAmounts={lockSourceAmounts}
                   onUpdated={onItemUpdated}
                   onDeleted={onItemDeleted}
                   onRefresh={onRefresh}

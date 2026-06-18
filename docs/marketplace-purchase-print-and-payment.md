@@ -109,10 +109,13 @@ Print HTML keeps the original email content, with BillFlow context added:
 
 - Top banner keeps order/POL context.
 - In the original Lazada email body, the POL label is inserted next to the order id.
-- Bottom-right overlay shows only:
+- The payment badge is inserted near the email payment section when possible.
+  If the section cannot be found, BillFlow falls back to a small bottom-right
+  stamp. The badge is intentionally compact:
 
 ```text
-ชำระด้วยบัตรเครดิต TTxxxx
+จ่ายบัตรเครดิต
+TTxxxx
 ```
 
 For Lazada print cleanup:

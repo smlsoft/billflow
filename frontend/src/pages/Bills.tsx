@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Filter, Mail, Printer, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -200,7 +200,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const config = MODE_CONFIG[mode]
   const { user } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
+  const lastSearchStringRef = useRef(searchParams.toString())
+  const syncingFromURLRef = useRef(false)
   // Seed filters from the URL so deep-links/shared links keep the exact queue
   // view, including page and page size.
   const [page, setPage] = useState(() => readURLPage(searchParams))
@@ -389,6 +392,12 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       return
     }
     setPage(Math.min(next, totalPages))
+  }
+
+  const handleOpenBillDetail = (id: string) => {
+    const returnTo = `${location.pathname}${location.search}`
+    window.sessionStorage.setItem(`billflow:return:${id}`, returnTo)
+    navigate(`${detailBasePath}/${id}`, { state: { returnTo } })
   }
 
   const fetchCounts = async () => {
@@ -662,6 +671,49 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   }, [page])
 
   useEffect(() => {
+    const currentSearch = searchParams.toString()
+    if (currentSearch === lastSearchStringRef.current) return
+    lastSearchStringRef.current = currentSearch
+    syncingFromURLRef.current = true
+
+    const nextStatus = readURLFilter(searchParams, 'status', VALID_STATUSES)
+    const nextShopeeStatus = readURLFilter(searchParams, 'shopee_status', VALID_SHOPEE_STATUSES)
+    const nextSource = readURLFilter(searchParams, 'source', VALID_PURCHASE_SOURCES)
+    const nextSearchInput = searchParams.get('search') ?? ''
+    const nextPaymentMethod = searchParams.get('print_payment_method')?.trim() || ALL
+    const nextArchive = readURLArchive(searchParams)
+    const nextSortOrder = searchParams.get('sort_order') === 'asc' ? 'asc' : 'desc'
+    const nextDateFrom = searchParams.get('date_from') ?? ''
+    const nextDateTo = searchParams.get('date_to') ?? ''
+
+    setStatus((prev) => (prev === nextStatus ? prev : nextStatus))
+    setShopeeStatus((prev) => (prev === nextShopeeStatus ? prev : nextShopeeStatus))
+    setSourceFilter((prev) => (prev === nextSource ? prev : nextSource))
+    setPrintReadyOnly((prev) => (prev === (searchParams.get('print_ready') === '1') ? prev : searchParams.get('print_ready') === '1'))
+    setShopeeShopId((prev) => (prev === (searchParams.get('shopee_shop_id') || ALL) ? prev : searchParams.get('shopee_shop_id') || ALL))
+    setEmailAccountId((prev) => (prev === (searchParams.get('email_account_id') || ALL) ? prev : searchParams.get('email_account_id') || ALL))
+    setSearchInput((prev) => (prev === nextSearchInput ? prev : nextSearchInput))
+    setSearch((prev) => (prev === nextSearchInput.trim() ? prev : nextSearchInput.trim()))
+    setPaymentMethodFilter((prev) => (prev === nextPaymentMethod ? prev : nextPaymentMethod))
+    setArchiveMode((prev) => (prev === nextArchive ? prev : nextArchive))
+    setSortOrder((prev) => (prev === nextSortOrder ? prev : nextSortOrder))
+    setDateFrom((prev) => (prev === nextDateFrom ? prev : nextDateFrom))
+    setDateTo((prev) => (prev === nextDateTo ? prev : nextDateTo))
+    setPage((prev) => {
+      const nextPage = readURLPage(searchParams)
+      return prev === nextPage ? prev : nextPage
+    })
+    setPerPage((prev) => {
+      const nextPerPage = readURLPerPage(searchParams)
+      return prev === nextPerPage ? prev : nextPerPage
+    })
+  }, [searchParams])
+
+  useEffect(() => {
+    if (syncingFromURLRef.current) {
+      syncingFromURLRef.current = false
+      return
+    }
     const next = new URLSearchParams(searchParams)
     if (status === ALL) next.delete('status')
     else next.set('status', status)
@@ -693,6 +745,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.delete('per_page')
     const nextString = next.toString()
     if (nextString !== searchParams.toString()) {
+      lastSearchStringRef.current = nextString
       setSearchParams(next, { replace: true })
     }
   }, [
@@ -989,7 +1042,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           onUpdatePurchaseCreditor={handleOpenPurchaseCreditorDialog}
           onUpdatePrintPaymentMethod={handleOpenPrintPaymentMethodDialog}
           onPrintEmail={handlePrintEmailBill}
-          onRowClick={(id) => navigate(`${detailBasePath}/${id}`)}
+          onRowClick={handleOpenBillDetail}
         />
       )}
 

@@ -293,39 +293,7 @@ function decoratePrintableDocument(
   )
 
   if (paymentLines.length > 0 && doc.body) {
-    const stamp = doc.createElement('div')
-    stamp.setAttribute('data-billflow-print', 'true')
-    stamp.style.cssText = [
-      `position: ${stampPosition}`,
-      'right: 18px',
-      'bottom: 18px',
-      'z-index: 2147483647',
-      'max-width: 48%',
-      'padding: 10px 12px',
-      'background: #ffffff',
-      'border: 2px solid #111827',
-      'border-radius: 6px',
-      'box-shadow: 0 2px 8px rgba(0,0,0,.18)',
-      'color: #111827',
-      'font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      'font-size: 16px',
-      'font-weight: 800',
-      'line-height: 1.35',
-      'text-align: left',
-      'print-color-adjust: exact',
-      '-webkit-print-color-adjust: exact',
-    ].join(';')
-    if (paymentLines.length > 1) {
-      paymentLines.forEach((lineText) => {
-        const line = doc.createElement('div')
-        line.style.cssText = 'font-size:13px;font-weight:700'
-        line.textContent = lineText
-        stamp.appendChild(line)
-      })
-    } else {
-      stamp.textContent = paymentLines[0]
-    }
-    doc.body.appendChild(stamp)
+    insertPaymentPrintStamp(doc, paymentLines, stampPosition)
   }
 
   if (Object.keys(orderDocMap).length > 0 && doc.body) {
@@ -369,7 +337,88 @@ function paymentPrintLines(orders: ArtifactPrintOrderContext[]): string[] {
 function formatCreditCardPaymentMethod(paymentMethod?: string): string {
   const cleanPayment = (paymentMethod ?? '').trim()
   if (!cleanPayment || !cleanPayment.toUpperCase().startsWith('TT')) return ''
-  return `ชำระด้วยบัตรเครดิต ${cleanPayment}`
+  return cleanPayment
+}
+
+function insertPaymentPrintStamp(
+  doc: Document,
+  paymentMethods: string[],
+  stampPosition: 'fixed' | 'absolute',
+): void {
+  const inlineStamp = createPaymentPrintStamp(doc, paymentMethods, false)
+  const anchor = findPaymentSectionAnchor(doc)
+  if (anchor && anchor.parentElement) {
+    anchor.insertAdjacentElement('afterend', inlineStamp)
+    return
+  }
+
+  const floatingStamp = createPaymentPrintStamp(doc, paymentMethods, true)
+  floatingStamp.style.position = stampPosition
+  floatingStamp.style.right = '16px'
+  floatingStamp.style.bottom = '16px'
+  floatingStamp.style.zIndex = '2147483647'
+  floatingStamp.style.maxWidth = '180px'
+  floatingStamp.style.boxShadow = '0 1px 6px rgba(0,0,0,.14)'
+  doc.body?.appendChild(floatingStamp)
+}
+
+function createPaymentPrintStamp(
+  doc: Document,
+  paymentMethods: string[],
+  floating: boolean,
+): HTMLElement {
+  const stamp = doc.createElement('div')
+  stamp.setAttribute('data-billflow-print', 'true')
+  stamp.style.cssText = [
+    floating ? 'display:inline-flex' : 'display:flex',
+    'flex-direction:column',
+    'gap:3px',
+    floating ? '' : 'width:max-content',
+    floating ? '' : 'margin:6px 0 0 auto',
+    'padding:5px 8px',
+    'background:#ffffff',
+    'border:1.5px solid #111827',
+    'border-radius:6px',
+    'color:#111827',
+    'font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+    'line-height:1.15',
+    'text-align:center',
+    'print-color-adjust:exact',
+    '-webkit-print-color-adjust:exact',
+  ].filter(Boolean).join(';')
+
+  paymentMethods.forEach((method) => {
+    const block = doc.createElement('div')
+    block.style.cssText = 'display:flex;flex-direction:column;gap:1px;white-space:nowrap'
+
+    const label = doc.createElement('div')
+    label.style.cssText = 'font-size:10.5px;font-weight:700'
+    label.textContent = 'จ่ายบัตรเครดิต'
+
+    const value = doc.createElement('div')
+    value.style.cssText = 'font-size:12px;font-weight:800'
+    value.textContent = method
+
+    block.appendChild(label)
+    block.appendChild(value)
+    stamp.appendChild(block)
+  })
+  return stamp
+}
+
+function findPaymentSectionAnchor(doc: Document): Element | null {
+  if (!doc.body) return null
+  const markers = ['รายละเอียดการชำระเงิน', 'วิธีการชำระเงิน', 'วิธีชำระเงิน']
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+  let node: Node | null
+  while ((node = walker.nextNode())) {
+    const text = node.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+    if (!markers.some((marker) => text.includes(marker))) continue
+    const parent = node.parentElement
+    if (!parent) continue
+    return parent.closest('table,section,div,p') ?? parent
+  }
+  return null
 }
 
 function trimMarketplacePrintFooter(doc: Document): void {

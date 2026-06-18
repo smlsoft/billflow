@@ -70,7 +70,14 @@ shipping_item_code = SHIP_CUS
 shipping_item_unit_code = บาท
 ```
 
-Bill Detail auto-adds this fee line when the bill is opened and config is ready. The system does not add the line in bulk automatically outside that workflow.
+New Lazada bills add this fee line during email bill creation when config is ready. Older active unsent Lazada bills can be repaired with the `lazada_fee_line` backfill command:
+
+```bash
+./lazada_fee_line --dry-run
+./lazada_fee_line --apply
+```
+
+Bill Detail no longer auto-adds the line on page load, so the row count does not change simply because a user opens the bill.
 
 ## Send Guard
 
@@ -130,12 +137,11 @@ reconcile_ok = 7/7
 
 For each bill detail:
 
-1. Open the bill detail so `SHIP_CUS` fee line is added.
-2. Confirm item price is the Lazada goods price before coupon.
-3. Confirm Lazada coupon appears as item discount.
-4. Confirm `SHIP_CUS` line equals shipping + service fee.
-5. Confirm net total matches Lazada paid total.
-6. Map item code/unit and confirm match.
+1. Confirm item price is the Lazada goods price before coupon.
+2. Confirm Lazada coupon appears as item discount.
+3. Confirm `SHIP_CUS` line equals shipping + service fee when Lazada has shipping/fee.
+4. Confirm net total matches Lazada paid total.
+5. Map item code/unit and confirm match.
 
 Do not send all 7 at once. After user confirms the 7 bills look right, send only 1 bill to SML first.
 

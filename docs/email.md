@@ -156,7 +156,7 @@ Fields ที่เก็บใน `bills.raw_data`:
   - SML item config: `/settings/channels` row `lazada_email/purchase`
   - ใช้ fields เดิม `shipping_item_enabled`, `shipping_item_code`, `shipping_item_unit_code`
 - ถ้ายอด Lazada มีค่าส่ง/fee แต่ยังไม่ได้ตั้งค่าสินค้า SML สำหรับ fee line ระบบจะ block ส่ง SML.
-- เมื่อ config พร้อมแล้ว หน้า Bill Detail จะ auto-add fee line ตอนเปิดบิล.
+- เมื่อ config พร้อมแล้ว Lazada bill ใหม่จะเติม fee line ตั้งแต่ตอนสร้างบิล; หน้า Bill Detail จะไม่ auto-add ตอนเปิดหน้าแล้ว.
 
 ### Current thaisunsport rollout snapshot
 
@@ -164,7 +164,7 @@ Fields ที่เก็บใน `bills.raw_data`:
 - Current active Lazada email purchase rows are mixed across `needs_review`, `pending`, and `sent` as customer testing continues.
 - Latest Lazada charge-group backfill updated 28 rows. The 8-order group confirmed at `2026-06-11 16:45` totals `7417.69`; already-sent POL docs in that group were repaired to `doc_ref=7417.69`.
 - `channel_defaults/lazada_email/purchase` ตั้ง fee item แล้ว: `SHIP_CUS`, unit `บาท`.
-- User ต้องเปิดแต่ละ Bill Detail เพื่อให้ระบบเติม `SHIP_CUS` ก่อนตรวจยอดและก่อนส่ง SML.
+- บิล Lazada active unsent ที่สร้างก่อน behavior นี้ให้ซ่อมด้วย `./lazada_fee_line --dry-run` แล้ว `./lazada_fee_line --apply`; command เป็น idempotent และข้าม sent/archived.
 
 Runbook เพิ่มเติม: [Lazada Email Purchase Intake](lazada-email-purchase.md).
 

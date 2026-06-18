@@ -113,7 +113,9 @@ Runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-pr
   - `Lazada - pd.thaisunsport03@gmail.com`
   - all enabled with `lookback_days=1`, `poll_interval_seconds=600`
 - Fee line behavior:
-  - Bill detail auto-adds `__lazada_shipping_fee__`/`SHIP_CUS` when a user opens a Lazada bill and config is ready.
+  - New Lazada email purchase bills add `__lazada_shipping_fee__`/`SHIP_CUS` during bill creation when config is ready.
+  - Bill detail no longer auto-adds fee lines on page load, so row counts do not change just because a user opens a bill.
+  - Active unsent Lazada bills created before this behavior can be repaired with the in-container `./lazada_fee_line --dry-run` / `--apply` command; it skips sent/archived bills and is idempotent.
 
 ### Production behavior
 - Lazada email purchase uses deterministic HTML summary parsing for amounts; AI is not trusted for money totals.
@@ -385,6 +387,10 @@ Runbook: [Lazada Email Purchase Intake](lazada-email-purchase.md).
 - Bill Detail item mapping UI update:
   - ในหน้า detail ของบิล เมื่อกดแก้ไขรายการสินค้าแล้วเลือกสินค้าใหม่จาก SML ระบบแสดงรหัส/ชื่อ/คะแนนของสินค้าที่เลือกทันทีในแถวแก้ไข
   - หลังบันทึก ตารางรายการสินค้าจะอัปเดตชื่อสินค้า SML จากตัวเลือกใหม่ทันที ไม่ต้อง refresh หน้า
+  - Shopee/Lazada purchase rows lock source amount fields (`จำนวน`/`ราคา`) as read-only in the UI and backend rejects changed qty/price; users can edit only SML item/unit mapping.
+  - Bill detail shows a copy-link button near the order id; list rows also have a copy-link action that copies the canonical BillFlow bill URL without filters.
+  - `/bills` row navigation stores the current filtered list path as `returnTo`, so the detail back button returns to the same filter/search/date view.
+  - Marketplace email print badge is now compact two-line text (`จ่ายบัตรเครดิต` / `TTxxxx`) and tries to render near the payment section before falling back to a small stamp.
   - ใช้ร่วมกันกับ purchase, saleorder, และ saleinvoice เพราะเป็น component รายการสินค้าเดียวกัน
   - Deploy แล้วทั้ง `billflow`, `billflow-henna`, `billflow-thaisunsport`; verified health `8090`, `8110`, `8100` และ frontend `/bills` HTTP 200 ทั้ง `3010`, `3030`, `3020`
 - Verified Mapping Loop update:

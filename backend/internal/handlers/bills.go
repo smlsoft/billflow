@@ -4398,6 +4398,18 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 			}
 		}
 	}
+	if isMarketplacePurchaseEmailBill(bill) {
+		if req.Qty != nil && !sameMarketplaceNumber(*req.Qty, existingItem.Qty) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "บิลซื้อจาก Marketplace ต้องใช้จำนวนจากอีเมล ไม่อนุญาตให้แก้จำนวนจากหน้าจับคู่สินค้า"})
+			return
+		}
+		if req.Price != nil && !sameMarketplaceOptionalNumber(req.Price, existingItem.Price) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "บิลซื้อจาก Marketplace ต้องใช้ราคาจากอีเมล ไม่อนุญาตให้แก้ราคาจากหน้าจับคู่สินค้า"})
+			return
+		}
+		req.Qty = nil
+		req.Price = nil
+	}
 
 	// If user is changing item_code, fill unit_code from catalog if not provided.
 	// This makes the F1 feedback richer and the SML payload more correct.
@@ -4478,6 +4490,20 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "item updated"})
+}
+
+func sameMarketplaceNumber(a, b float64) bool {
+	return math.Abs(a-b) <= 0.000001
+}
+
+func sameMarketplaceOptionalNumber(in *float64, current *float64) bool {
+	if in == nil {
+		return true
+	}
+	if current == nil {
+		return math.Abs(*in) <= 0.000001
+	}
+	return sameMarketplaceNumber(*in, *current)
 }
 
 // ─── Source artifact endpoints ────────────────────────────────────────────────

@@ -561,7 +561,7 @@ Lazada email purchase uses a deterministic HTML summary parser for money totals:
 goods_total + shipping + service_fee - coupon_discount = paid_total
 ```
 
-The parser stores the summary in `bills.raw_data`, distributes Lazada coupon discount into `bill_items.discount_amount`, and blocks SML send when reconciliation is not `ok` or when Lazada shipping/fee exists but `/settings/channels` has no fee item config. On thaisunsport, `channel_defaults/lazada_email/purchase` is set to `SHIP_CUS` / unit `บาท`; bill detail auto-adds the fee line when each Lazada bill is opened.
+The parser stores the summary in `bills.raw_data`, distributes Lazada coupon discount into `bill_items.discount_amount`, and blocks SML send when reconciliation is not `ok` or when Lazada shipping/fee exists but `/settings/channels` has no fee item config. On thaisunsport, `channel_defaults/lazada_email/purchase` is set to `SHIP_CUS` / unit `บาท`; new Lazada bills add the fee line during email bill creation, while older active unsent bills can be repaired with the `lazada_fee_line` backfill command.
 
 Marketplace purchase email print/payment rules:
 - Single-bill and bulk SML send dialogs do not require `วิธีการชำระเงิน` for Shopee/Lazada purchase email.

@@ -856,13 +856,35 @@ func (h *EmailHandler) saveShopeeShippedEmailArtifacts(billID, subject, from, bo
 }
 
 func (h *EmailHandler) configuredShopeeShippingLine(orderID string, amount float64, hasAmount bool) (*models.BillItem, bool) {
+	return h.configuredMarketplaceFeeLine(
+		"shopee_shipped",
+		orderID,
+		"ค่าจัดส่งสินค้า",
+		models.ShopeeShippingSourceSKU,
+		amount,
+		hasAmount,
+	)
+}
+
+func (h *EmailHandler) configuredLazadaFeeLine(orderID string, amount float64, hasAmount bool) (*models.BillItem, bool) {
+	return h.configuredMarketplaceFeeLine(
+		lazadaEmailSource,
+		orderID,
+		"ค่าจัดส่ง/ค่าธรรมเนียม Lazada",
+		models.LazadaFeeSourceSKU,
+		amount,
+		hasAmount,
+	)
+}
+
+func (h *EmailHandler) configuredMarketplaceFeeLine(source, orderID, fallbackRawName, sourceSKU string, amount float64, hasAmount bool) (*models.BillItem, bool) {
 	if !hasAmount || amount < 0 || h.channelDefaults == nil {
 		return nil, false
 	}
-	def, err := h.channelDefaults.Get("shopee_shipped", "purchase")
+	def, err := h.channelDefaults.Get(source, "purchase")
 	if err != nil {
-		h.logger.Warn("shopee_shipped: shipping config lookup failed",
-			zap.String("order_id", orderID), zap.Error(err))
+		h.logger.Warn("marketplace fee config lookup failed",
+			zap.String("source", source), zap.String("order_id", orderID), zap.Error(err))
 		return nil, false
 	}
 	if def == nil || !def.ShippingItemEnabled {
@@ -870,17 +892,17 @@ func (h *EmailHandler) configuredShopeeShippingLine(orderID string, amount float
 	}
 	code := strings.TrimSpace(def.ShippingItemCode)
 	if code == "" {
-		h.logger.Warn("shopee_shipped: shipping config enabled without item code",
-			zap.String("order_id", orderID))
+		h.logger.Warn("marketplace fee config enabled without item code",
+			zap.String("source", source), zap.String("order_id", orderID))
 		return nil, false
 	}
 
-	rawName := "ค่าจัดส่งสินค้า"
+	rawName := fallbackRawName
 	unit := strings.TrimSpace(def.ShippingItemUnitCode)
 	if h.catalogRepo != nil {
 		if cat, err := h.catalogRepo.GetOne(code); err != nil {
-			h.logger.Warn("shopee_shipped: shipping catalog lookup failed",
-				zap.String("order_id", orderID), zap.String("item_code", code), zap.Error(err))
+			h.logger.Warn("marketplace fee catalog lookup failed",
+				zap.String("source", source), zap.String("order_id", orderID), zap.String("item_code", code), zap.Error(err))
 		} else if cat != nil {
 			if strings.TrimSpace(cat.ItemName) != "" {
 				rawName = strings.TrimSpace(cat.ItemName)
@@ -895,7 +917,7 @@ func (h *EmailHandler) configuredShopeeShippingLine(orderID string, amount float
 	price := amount
 	item := &models.BillItem{
 		RawName:   rawName,
-		SourceSKU: models.ShopeeShippingSourceSKU,
+		SourceSKU: sourceSKU,
 		ItemCode:  &itemCode,
 		Qty:       1,
 		Price:     &price,

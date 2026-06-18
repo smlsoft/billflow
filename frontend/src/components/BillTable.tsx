@@ -1,6 +1,7 @@
 import dayjs from 'dayjs'
 import { Fragment, type MouseEvent, type ReactNode } from 'react'
-import { Archive, CreditCard, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
+import { Archive, Copy, CreditCard, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BillSourceBadge } from '@/components/BillSourceBadge'
@@ -23,6 +24,7 @@ import {
   shopeePayableTotal,
 } from '@/lib/shopeeBill'
 import { cn } from '@/lib/utils'
+import { billDetailURL } from '@/lib/billLinks'
 import type { Bill, ShopeeOrderEvent } from '@/types'
 
 interface Props {
@@ -321,9 +323,16 @@ function BillRowActions({
   }
 
   if (bill.archived_at) {
-    if (!canManageLifecycle) return null
+    if (!canManageLifecycle) {
+      return (
+        <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+          <CopyBillLinkButton bill={bill} />
+        </div>
+      )
+    }
     return (
       <div className="flex justify-end gap-1.5">
+        <CopyBillLinkButton bill={bill} />
         <Button type="button" size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={stop(onRestore)}>
           <RotateCcw className="mr-1 h-3.5 w-3.5" />
           กู้คืน
@@ -357,6 +366,7 @@ function BillRowActions({
     const hasSecondaryActions = showUpdateCreditor || showUpdatePayment || showArchive
     return (
       <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <CopyBillLinkButton bill={bill} />
         {showPrint && (
           <Button
             type="button"
@@ -431,18 +441,53 @@ function BillRowActions({
     )
   }
 
-  if (!canManageLifecycle) return null
+  if (!canManageLifecycle) {
+    return (
+      <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
+        <CopyBillLinkButton bill={bill} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+      <CopyBillLinkButton bill={bill} />
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+        onClick={stop(onDelete)}
+      >
+        <Trash2 className="mr-1 h-3.5 w-3.5" />
+        ลบบิล
+      </Button>
+    </div>
+  )
+}
+
+function CopyBillLinkButton({ bill }: { bill: Bill }) {
+  const handleCopy = async (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(billDetailURL(bill))
+      toast.success('คัดลอกลิงก์บิลแล้ว')
+    } catch {
+      toast.error('คัดลอกลิงก์ไม่สำเร็จ')
+    }
+  }
 
   return (
     <Button
       type="button"
-      size="sm"
-      variant="ghost"
-      className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-      onClick={stop(onDelete)}
+      size="icon"
+      variant="outline"
+      className="h-7 w-8"
+      onClick={handleCopy}
+      title="คัดลอกลิงก์บิล"
+      aria-label="คัดลอกลิงก์บิล"
     >
-      <Trash2 className="mr-1 h-3.5 w-3.5" />
-      ลบบิล
+      <Copy className="h-3.5 w-3.5" />
     </Button>
   )
 }
