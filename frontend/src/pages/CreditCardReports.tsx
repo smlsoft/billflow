@@ -20,6 +20,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -216,9 +224,14 @@ export default function CreditCardReports() {
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [showRuns, setShowRuns] = useState(false)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [busy, setBusy] = useState('')
 
   const selectedRows = useMemo(() => selectedGroups(preview, selected), [preview, selected])
+  const selectedOrderCount = useMemo(
+    () => selectedRows.reduce((sum, group) => sum + group.order_count, 0),
+    [selectedRows],
+  )
   const selectedChargeTotal = useMemo(
     () => selectedRows.reduce((sum, group) => sum + (group.charge_amount ?? 0), 0),
     [selectedRows],
@@ -296,12 +309,12 @@ export default function CreditCardReports() {
 
   const clearSelection = () => setSelected(new Set())
 
-  const createSnapshotRun = async () => {
+  const createSnapshotRun = async (options: { skipIssueConfirm?: boolean } = {}) => {
     if (!preview || selected.size === 0) {
       toast.error('กรุณาเลือกรายการอย่างน้อย 1 ยอดรูด')
       return null
     }
-    if (selectedIssueCount > 0) {
+    if (selectedIssueCount > 0 && !options.skipIssueConfirm) {
       const ok = window.confirm(`มี ${numberLabel(selectedIssueCount)} กลุ่มที่ต้องตรวจสอบ ต้องการสร้างรอบรายงานต่อหรือไม่`)
       if (!ok) return null
     }
@@ -337,8 +350,11 @@ export default function CreditCardReports() {
   const handleCreateAndExport = async () => {
     setBusy('create-export')
     try {
-      const run = await createSnapshotRun()
-      if (run) await exportRun(run)
+      const run = await createSnapshotRun({ skipIssueConfirm: true })
+      if (run) {
+        await exportRun(run)
+        setExportDialogOpen(false)
+      }
     } catch (err) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
       toast.error(e?.response?.data?.error || e?.message || 'สร้างรอบรายงานไม่สำเร็จ')
@@ -556,7 +572,7 @@ export default function CreditCardReports() {
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t bg-muted/20 px-3 py-1.5">
           <SummaryItem label="เลือก" value={`${numberLabel(selectedRows.length)}/${numberLabel(preview?.summary.group_count ?? 0)} ยอดรูด`} />
-          <SummaryItem label="คำสั่งซื้อ" value={numberLabel(selectedRows.reduce((sum, group) => sum + group.order_count, 0))} />
+          <SummaryItem label="คำสั่งซื้อ" value={numberLabel(selectedOrderCount)} />
           <SummaryItem label="ยอดรูด" value={money(selectedChargeTotal)} />
           <SummaryItem label="ยอดบิล" value={money(selectedOrderTotal)} />
           <SummaryItem label="ต้องตรวจ" value={numberLabel(selectedIssueCount)} tone={selectedIssueCount > 0 ? 'warn' : undefined} />
@@ -585,7 +601,7 @@ export default function CreditCardReports() {
               {busy === 'create-print' || busy === 'print' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Printer className="mr-2 h-3.5 w-3.5" />}
               พิมพ์รายการที่เลือก
             </Button>
-            <Button size="sm" className="h-8 px-2.5 text-xs" onClick={handleCreateAndExport} disabled={!preview || selected.size === 0 || anyBusy}>
+            <Button size="sm" className="h-8 px-2.5 text-xs" onClick={() => setExportDialogOpen(true)} disabled={!preview || selected.size === 0 || anyBusy}>
               {busy === 'create-export' || busy === 'export' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-2 h-3.5 w-3.5" />}
               Export Excel
             </Button>
@@ -755,6 +771,65 @@ export default function CreditCardReports() {
           )}
         </div>
       </div>
+      <Dialog open={exportDialogOpen} onOpenChange={(open) => {
+        if (!anyBusy) setExportDialogOpen(open)
+      }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>ยืนยัน Export Excel</DialogTitle>
+            <DialogDescription className="leading-relaxed">
+              ระบบจะสร้าง snapshot รอบรายงานจากรายการที่เลือก แล้วดาวน์โหลดไฟล์ Excel จาก snapshot นี้
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <div className="rounded-md border px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">ยอดรูด</div>
+                <div className="mt-1 font-semibold tabular-nums">{numberLabel(selectedRows.length)}</div>
+              </div>
+              <div className="rounded-md border px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">คำสั่งซื้อ</div>
+                <div className="mt-1 font-semibold tabular-nums">{numberLabel(selectedOrderCount)}</div>
+              </div>
+              <div className="rounded-md border px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">ยอดรูดรวม</div>
+                <div className="mt-1 font-semibold tabular-nums">{money(selectedChargeTotal)}</div>
+              </div>
+              <div className="rounded-md border px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">ต้องตรวจ</div>
+                <div className={cn('mt-1 font-semibold tabular-nums', selectedIssueCount > 0 && 'text-warning')}>
+                  {numberLabel(selectedIssueCount)}
+                </div>
+              </div>
+            </div>
+
+            {selectedIssueCount > 0 ? (
+              <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning">
+                มีรายการที่ต้องตรวจอยู่ในชุดนี้ เช่น ยังไม่มี POL, ยอดต่าง, หรือข้อมูลวิธีชำระไม่ครบ รายการเหล่านี้จะถูกใส่ในไฟล์ Excel เพื่อให้บัญชีตรวจต่อ
+              </div>
+            ) : (
+              <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs leading-relaxed text-success">
+                รายการที่เลือกไม่มี issue ที่ระบบเตือนใน preview ปัจจุบัน
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button type="button" variant="outline" onClick={() => setExportDialogOpen(false)} disabled={anyBusy}>
+              ยกเลิก
+            </Button>
+            <Button type="button" onClick={handleCreateAndExport} disabled={anyBusy || selected.size === 0}>
+              {busy === 'create-export' || busy === 'export' ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="mr-2 h-4 w-4" />
+              )}
+              Export Excel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
