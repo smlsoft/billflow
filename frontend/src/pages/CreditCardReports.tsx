@@ -15,10 +15,10 @@ import {
 import { toast } from 'sonner'
 
 import { EmptyState } from '@/components/common/EmptyState'
+import { DateRangePicker } from '@/components/common/DateRangePicker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -479,20 +479,15 @@ export default function CreditCardReports() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-medium text-muted-foreground">ช่วงวันที่</span>
-            <Input
-              type="date"
-              value={filter.date_from}
-              className="h-7 w-[124px] px-2 text-xs"
-              onChange={(e) => setFilterValue('date_from', e.target.value)}
-            />
-            <span className="text-[11px] text-muted-foreground">ถึง</span>
-            <Input
-              type="date"
-              value={filter.date_to}
-              className="h-7 w-[124px] px-2 text-xs"
-              onChange={(e) => setFilterValue('date_to', e.target.value)}
+          <div className="w-full sm:w-[250px]">
+            <DateRangePicker
+              from={filter.date_from}
+              to={filter.date_to}
+              onFromChange={(value) => setFilterValue('date_from', value)}
+              onToChange={(value) => setFilterValue('date_to', value)}
+              className="h-7 w-full min-w-0 text-xs"
+              description="ใช้กรองรายการยอดรูดตามวันที่ใน BillFlow"
+              clearLabel="ล้างช่วงวันที่รายงาน"
             />
           </div>
           <div className="flex items-center gap-1.5">
