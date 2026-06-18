@@ -11,7 +11,7 @@
   - `059_marketplace_print_payment_method.sql`
   - `060_marketplace_print_perf_indexes.sql`
   - `063_lazada_charge_group_key.sql`
-  - `064_credit_card_report_runs.sql` (code ready; deploy status should be checked per instance)
+  - `064_credit_card_report_runs.sql` (deployed on `billflow-thaisunsport`; check main before using there)
 - Payment method is stored in BillFlow only. It is not sent to SML.
 - Print readiness is controlled by `/settings/channels` per channel and defaults to strict:
   - every order in the same email group must have an SML POL number

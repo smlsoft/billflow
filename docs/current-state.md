@@ -11,19 +11,20 @@
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
 - **Post-v1.0 marketplace purchase work deployed through 2026-06-15 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
-- Migration ล่าสุดใน code: `064_credit_card_report_runs.sql`. Production main + thaisunsport ที่บันทึกล่าสุดยังอยู่ที่ `063_lazada_charge_group_key.sql` จนกว่าจะ deploy รอบรายงานบัตรเครดิต.
+- Migration ล่าสุดใน code + `billflow-thaisunsport`: `064_credit_card_report_runs.sql`. Production main ที่บันทึกล่าสุดยังอยู่ที่ `063_lazada_charge_group_key.sql`.
 - Lazada email purchase is live on thaisunsport with review-first flow; 3 Lazada IMAP accounts enabled, `lookback_days=1`, `poll_interval_seconds=600`.
 - Marketplace purchase print readiness now depends on POL completeness plus BillFlow-only payment method rules, not creditor prefix.
 - Single-bill and bulk SML send dialogs do **not** require `วิธีการชำระเงิน`; if supplier code/name starts with `TTxxxx`, BillFlow auto-syncs and locks the method to that `TTxxxx`.
 - **TT payment auto-sync**: เมื่อเลือก supplier ที่ code หรือ name ขึ้นต้น TT จะ auto-fill วิธีการชำระเงินทันที (ตรวจทั้ง code และ name เพราะ SML อาจใช้ code AF00001 แต่ name = TT2789); ถ้า supplier ไม่ใช่ TT จะ clear ค่าและ user เลือกเองได้.
 - **Lazada group key**: Lazada card doc_ref uses `raw_data.lazada_charge_group_key` parsed from the email body confirmation minute; legacy `email_date` fallback is blocked for send because envelope seconds can split one card charge.
-- **Credit card report v1 (code ready, pending deploy)**: เพิ่มหน้า `/credit-card-reports` สำหรับ export รายงานยอดรูดจาก BillFlow เท่านั้น; user เลือกช่วงวันที่/บัตร TT/ช่องทาง แล้วเลือกกลุ่มยอดรูดเอง โดยเฉพาะวันหัว-ท้ายรอบ statement.
+- **Credit card report v1**: เพิ่มหน้า `/credit-card-reports` สำหรับ export รายงานยอดรูดจาก BillFlow เท่านั้น; user เลือกช่วงวันที่/บัตร TT/ช่องทาง แล้วเลือกกลุ่มยอดรูดเอง โดยเฉพาะวันหัว-ท้ายรอบ statement. Deployed to `billflow-thaisunsport` on 2026-06-18.
 - **sml-api-bybos**: เพิ่มและ deploy `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` + BillFlow `PATCH /api/bills/:id/sml-doc-ref` (admin) สำหรับแก้ doc_ref ย้อนหลัง
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
 
-## Latest Local Implementation 2026-06-18 — Credit Card Report From BillFlow
+## Latest Deploy 2026-06-18 — Credit Card Report From BillFlow
 
-- Status: implemented locally and verified by targeted backend tests + frontend production build; deploy not yet recorded in this file.
+- Deploy target: `billflow-thaisunsport` only (`3020/8100`). `billflow` main was not redeployed; Henna remains Nexflow and was not touched.
+- Commit: `2f8e097 feat: add credit card report snapshots`.
 - New route: `/credit-card-reports` under `งานฝั่งซื้อ`.
 - New migration: `064_credit_card_report_runs.sql`.
 - New APIs for admin/staff:
@@ -42,6 +43,7 @@
 - Excel export has 3 sheets: `รายงานบัตรเครดิต`, `สรุปยอด`, and `ต้องตรวจสอบ`.
 - Print action uses existing email artifact print flow and prints in snapshot order. Groups not ready to print are skipped with a reason; no PDF generation and no fake print event for blocked groups.
 - This feature intentionally does not import bank statements, does not upload to Google Drive, does not use AI to read statements, and does not create refund bills from negative statement rows.
+- Verification: local `go test ./...`, local `npm run build`, server Docker build backend+frontend, migration `064` applied, backend health `8100` ok, frontend `3020/credit-card-reports` HTTP 200, public `https://pets-mini-museums-ships.trycloudflare.com/credit-card-reports` HTTP 200.
 
 ## Latest Deploy 2026-06-15 — TT Auto-Sync + Lazada Group Key + SML Doc-Ref Patch
 
