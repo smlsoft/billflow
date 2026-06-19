@@ -403,6 +403,7 @@ function createPaymentPrintStamp(
 }
 
 function highlightMarketplacePrintAmounts(doc: Document): void {
+  ensurePrintHighlightStyle(doc)
   highlightPrintLabel(doc, 'ยอดที่ต้องชำระทั้งหมด', '#fef3c7', false)
   highlightPrintLabel(doc, 'จำนวนเงินที่จ่าย', '#dcfce7', false)
   highlightPrintLabel(doc, 'ยอดรวมทั้งหมด(รวม VAT)', '#fef3c7', true)
@@ -417,10 +418,11 @@ function highlightPrintLabel(
   if (!doc.body) return
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
   const matches: HTMLElement[] = []
+  const normalizedLabel = normalizePrintHighlightText(label)
   let node: Node | null = null
   while ((node = walker.nextNode())) {
-    const text = node.textContent?.replace(/\s+/g, ' ').trim() ?? ''
-    if (!text.includes(label)) continue
+    const text = normalizePrintHighlightText(node.textContent ?? '')
+    if (!text.includes(normalizedLabel)) continue
     const parent = node.parentElement
     if (!parent) continue
     if (parent.closest('[data-billflow-print-highlight="true"]')) continue
@@ -431,16 +433,7 @@ function highlightPrintLabel(
     if (target instanceof HTMLElement) matches.push(target)
   }
   for (const target of matches) {
-    target.setAttribute('data-billflow-print-highlight', 'true')
-    target.style.backgroundColor = background
-    target.style.setProperty('print-color-adjust', 'exact')
-    target.style.setProperty('-webkit-print-color-adjust', 'exact')
-    if (target.tagName.toLowerCase() !== 'tr') {
-      target.style.borderRadius = '3px'
-      target.style.padding = target.style.padding || '1px 3px'
-      target.style.setProperty('box-decoration-break', 'clone')
-      target.style.setProperty('-webkit-box-decoration-break', 'clone')
-    }
+    applyPrintHighlight(target, background)
   }
 }
 
@@ -452,6 +445,59 @@ function compactHighlightBlock(element: HTMLElement): HTMLElement | null {
     return block.parentElement
   }
   return block
+}
+
+function normalizePrintHighlightText(value: string): string {
+  return value
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, '')
+    .replace(/[:：]/g, '')
+    .trim()
+}
+
+function ensurePrintHighlightStyle(doc: Document): void {
+  if (!doc.head || doc.getElementById('billflow-print-highlight-style')) return
+  const style = doc.createElement('style')
+  style.id = 'billflow-print-highlight-style'
+  style.textContent = `
+    [data-billflow-print-highlight="true"],
+    [data-billflow-print-highlight="true"] > td,
+    [data-billflow-print-highlight="true"] > th,
+    [data-billflow-print-highlight-cell="true"] {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+    }
+  `
+  doc.head.appendChild(style)
+}
+
+function applyPrintHighlight(target: HTMLElement, background: string): void {
+  target.setAttribute('data-billflow-print-highlight', 'true')
+  paintPrintHighlight(target, background, target.tagName.toLowerCase() !== 'tr')
+
+  if (target.tagName.toLowerCase() === 'tr') {
+    const cells = Array.from(target.children).filter(isTableCellElement)
+    for (const cell of cells) {
+      cell.setAttribute('data-billflow-print-highlight-cell', 'true')
+      paintPrintHighlight(cell, background, false)
+    }
+  }
+}
+
+function paintPrintHighlight(element: HTMLElement, background: string, compact: boolean): void {
+  element.style.setProperty('background', background, 'important')
+  element.style.setProperty('background-color', background, 'important')
+  // Chrome's print preview can hide CSS backgrounds when background graphics are off.
+  // The inset shadow makes the highlight visible without requiring users to change print settings.
+  element.style.setProperty('box-shadow', `inset 0 0 0 9999px ${background}`, 'important')
+  element.style.setProperty('-webkit-print-color-adjust', 'exact', 'important')
+  element.style.setProperty('print-color-adjust', 'exact', 'important')
+  if (compact) {
+    element.style.borderRadius = element.style.borderRadius || '3px'
+    element.style.padding = element.style.padding || '1px 4px'
+  }
 }
 
 function trimMarketplacePrintFooter(doc: Document): void {
