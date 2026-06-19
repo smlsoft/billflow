@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Download, ExternalLink, Eye, History, Paperclip, Printer, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Eye, History, Loader2, Paperclip, Printer, Wrench, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import axios from 'axios'
 import { toast } from 'sonner'
 import dayjs from 'dayjs'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   Tooltip,
   TooltipContent,
@@ -30,6 +39,7 @@ interface Props {
   emailGroup?: BillEmailGroup | null
   smlPayload?: Record<string, unknown> | null
   onReload?: () => Promise<unknown>
+  canRepairShopeeEmail?: boolean
 }
 
 type PrintReadiness = {
@@ -42,6 +52,38 @@ type PrintAPIError = {
   message: string
   description?: string
   shouldReload?: boolean
+}
+
+type ShopeeEmailRepairPreview = {
+  bill_id: string
+  message_id: string
+  artifact_id: string
+  subject: string
+  detected_order_count: number
+  existing_count: number
+  missing_count: number
+  detected_order_ids: string[]
+  existing_order_ids: string[]
+  missing_order_ids: string[]
+  email_total: number
+  has_stale_tombstones?: boolean
+  stale_tombstone_order_ids?: string[]
+  warnings?: string[]
+  can_repair: boolean
+}
+
+type ShopeeEmailRepairJob = {
+  id: string
+  bill_id: string
+  message_id: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  error?: string
+  created_count?: number
+  skipped_count?: number
+  missing_count?: number
+  created_bill_ids?: string[]
+  created_order_ids?: string[]
+  missing_order_ids?: string[]
 }
 
 // EmailPreviewModal renders HTML email content in a sandboxed iframe so the
@@ -197,6 +239,277 @@ function EmailPreviewModal({
   )
 }
 
+function ShopeeEmailRepairDialog({
+  billId,
+  open,
+  onOpenChange,
+  onReload,
+}: {
+  billId: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onReload?: () => Promise<unknown>
+}) {
+  const [preview, setPreview] = useState<ShopeeEmailRepairPreview | null>(null)
+  const [job, setJob] = useState<ShopeeEmailRepairJob | null>(null)
+  const [loadingPreview, setLoadingPreview] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) {
+      setPreview(null)
+      setJob(null)
+      setError('')
+      return
+    }
+    let alive = true
+    setLoadingPreview(true)
+    setError('')
+    api
+      .get<{ data: ShopeeEmailRepairPreview }>(`/api/bills/${billId}/shopee-email-repair/preview`)
+      .then((res) => {
+        if (!alive) return
+        setPreview(res.data.data)
+      })
+      .catch((err) => {
+        if (!alive) return
+        setError(apiErrorMessage(err, 'ตรวจอีเมลต้นฉบับไม่สำเร็จ'))
+      })
+      .finally(() => {
+        if (alive) setLoadingPreview(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [billId, open])
+
+  const polling = job?.status === 'queued' || job?.status === 'running'
+  useEffect(() => {
+    if (!open || !job?.id || !polling) return
+    let alive = true
+    const timer = window.setInterval(() => {
+      api
+        .get<{ data: ShopeeEmailRepairJob }>(`/api/bills/${billId}/shopee-email-repair/jobs/${job.id}`)
+        .then((res) => {
+          if (!alive) return
+          setJob(res.data.data)
+          if (res.data.data.status === 'succeeded') {
+            void onReload?.()
+          }
+        })
+        .catch((err) => {
+          if (!alive) return
+          setError(apiErrorMessage(err, 'โหลดสถานะงานซ่อมไม่สำเร็จ'))
+        })
+    }, 1500)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [billId, job?.id, onReload, open, polling])
+
+  const handleCreateJob = async () => {
+    if (!preview || submitting || !preview.can_repair || preview.missing_count === 0) return
+    setSubmitting(true)
+    setError('')
+    try {
+      const res = await api.post<{ data: ShopeeEmailRepairJob }>(
+        `/api/bills/${billId}/shopee-email-repair/jobs`,
+        {
+          expected_order_count: preview.detected_order_count,
+          expected_total: preview.email_total,
+          expected_missing_order_ids: preview.missing_order_ids,
+        },
+      )
+      setJob(res.data.data)
+      toast.success('เริ่มซ่อมคำสั่งซื้อจากอีเมลแล้ว')
+    } catch (err) {
+      setError(apiErrorMessage(err, 'เริ่มงานซ่อมไม่สำเร็จ'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const createdBillIds = job?.created_bill_ids ?? []
+  const missingIDs = preview?.missing_order_ids ?? []
+  const hasWarnings = (preview?.warnings?.length ?? 0) > 0
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>ตรวจคำสั่งซื้อในอีเมลต้นฉบับ</DialogTitle>
+          <DialogDescription>
+            ใช้ซ่อมกรณีอีเมล Shopee มีหลายคำสั่งซื้อ แต่ BillFlow สร้างมาไม่ครบ
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {loadingPreview && (
+            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              กำลังตรวจอีเมลต้นฉบับ...
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {preview && (
+            <>
+              <div className="grid gap-2 sm:grid-cols-4">
+                <RepairMetric label="พบในอีเมล" value={preview.detected_order_count} suffix="คำสั่งซื้อ" />
+                <RepairMetric label="มีใน BillFlow แล้ว" value={preview.existing_count} suffix="ใบ" />
+                <RepairMetric label="ตกหล่น" value={preview.missing_count} suffix="ใบ" tone={preview.missing_count > 0 ? 'warning' : 'success'} />
+                <RepairMetric label="ยอดรวมในอีเมล" value={formatMoney(preview.email_total)} />
+              </div>
+
+              <div className="rounded-md border border-border bg-muted/20 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-foreground">รายการที่ตกหล่น</div>
+                  {preview.has_stale_tombstones && (
+                    <Badge variant="secondary" className="bg-warning/10 text-warning">
+                      มี processed เก่า
+                    </Badge>
+                  )}
+                </div>
+                {missingIDs.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {missingIDs.map((id) => (
+                      <span key={id} className="rounded border border-border bg-background px-2 py-1 font-mono text-xs">
+                        {id}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-300">
+                    <CheckCircle2 className="h-4 w-4" />
+                    อีเมลนี้มีบิลครบแล้ว
+                  </div>
+                )}
+              </div>
+
+              {hasWarnings && (
+                <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  {(preview.warnings ?? []).map((warning) => (
+                    <div key={warning}>{warning}</div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {job && (
+            <div className="rounded-md border border-border bg-background p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-medium text-foreground">สถานะงานซ่อม</div>
+                  <div className="font-mono text-[11px] text-muted-foreground">{job.id}</div>
+                </div>
+                <JobStatusBadge status={job.status} />
+              </div>
+              {job.status === 'failed' && job.error && (
+                <div className="mt-2 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">
+                  {job.error}
+                </div>
+              )}
+              {job.status === 'succeeded' && (
+                <div className="mt-3 space-y-2">
+                  <div className="text-sm text-muted-foreground">
+                    สร้างใหม่ {job.created_count ?? createdBillIds.length} ใบ, ข้ามใบที่มีอยู่แล้ว {job.skipped_count ?? 0} ใบ
+                  </div>
+                  {createdBillIds.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {createdBillIds.map((id, index) => (
+                        <Button
+                          key={id}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={() => window.open(`/bills/${id}`, '_blank', 'noopener,noreferrer')}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          เปิดบิลใหม่ {index + 1}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+            ปิด
+          </Button>
+          {preview && preview.missing_count > 0 && job?.status !== 'succeeded' && (
+            <Button
+              type="button"
+              className="gap-1.5"
+              onClick={handleCreateJob}
+              disabled={submitting || polling || !preview.can_repair}
+            >
+              {submitting || polling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
+              สร้างเฉพาะรายการที่ตกหล่น
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function RepairMetric({
+  label,
+  value,
+  suffix,
+  tone = 'default',
+}: {
+  label: string
+  value: number | string
+  suffix?: string
+  tone?: 'default' | 'warning' | 'success'
+}) {
+  const toneClass =
+    tone === 'warning'
+      ? 'text-warning'
+      : tone === 'success'
+        ? 'text-emerald-600 dark:text-emerald-300'
+        : 'text-foreground'
+  return (
+    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className={`mt-0.5 text-lg font-semibold tabular-nums ${toneClass}`}>
+        {typeof value === 'number' ? value.toLocaleString('th-TH') : value}
+        {suffix && <span className="ml-1 text-xs font-normal text-muted-foreground">{suffix}</span>}
+      </div>
+    </div>
+  )
+}
+
+function JobStatusBadge({ status }: { status: ShopeeEmailRepairJob['status'] }) {
+  if (status === 'succeeded') {
+    return <Badge className="bg-emerald-600 text-white">สำเร็จ</Badge>
+  }
+  if (status === 'failed') {
+    return <Badge variant="destructive">ไม่สำเร็จ</Badge>
+  }
+  return (
+    <Badge variant="secondary" className="gap-1">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      กำลังซ่อม
+    </Badge>
+  )
+}
+
 export function ArtifactList({
   billId,
   billStatus,
@@ -208,10 +521,12 @@ export function ArtifactList({
   emailGroup,
   smlPayload,
   onReload,
+  canRepairShopeeEmail = false,
 }: Props) {
   const { items, loading } = useArtifacts(billId)
   const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string; displayName: string } | null>(null)
   const [printEvents, setPrintEvents] = useState<EmailPrintEvent[]>(emailGroup?.print_events ?? [])
+  const [repairOpen, setRepairOpen] = useState(false)
 
   useEffect(() => {
     setPrintEvents(emailGroup?.print_events ?? [])
@@ -262,19 +577,37 @@ export function ArtifactList({
 
   if (visibleItems.length === 0) {
     return (
-      <Card className="rounded-2xl border-border/70 shadow-sm">
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-            <Paperclip className="h-4 w-4 text-muted-foreground" />
-            หลักฐานต้นฉบับ (0)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <p className="text-xs text-muted-foreground">
-            ไม่มีไฟล์หลักฐานสำหรับแสดง
-          </p>
-        </CardContent>
-      </Card>
+      <>
+        <Card className="rounded-2xl border-border/70 shadow-sm">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+                <Paperclip className="h-4 w-4 text-muted-foreground" />
+                หลักฐานต้นฉบับ (0)
+              </CardTitle>
+              {canRepairShopeeEmail && (
+                <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setRepairOpen(true)}>
+                  <Wrench className="h-3.5 w-3.5" />
+                  ตรวจคำสั่งซื้อในอีเมล
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <p className="text-xs text-muted-foreground">
+              ไม่มีไฟล์หลักฐานสำหรับแสดง
+            </p>
+          </CardContent>
+        </Card>
+        {canRepairShopeeEmail && (
+          <ShopeeEmailRepairDialog
+            billId={billId}
+            open={repairOpen}
+            onOpenChange={setRepairOpen}
+            onReload={onReload}
+          />
+        )}
+      </>
     )
   }
 
@@ -284,14 +617,22 @@ export function ArtifactList({
     <>
       <Card className="rounded-2xl border-border/70 shadow-sm">
         <CardHeader className="pb-3">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-              <Paperclip className="h-4 w-4 text-muted-foreground" />
-              หลักฐานต้นฉบับ ({visibleItems.length})
-            </CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
-              เปิดดูเฉพาะเมื่อต้องย้อนตรวจหลักฐานต้นฉบับ
-            </p>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+                <Paperclip className="h-4 w-4 text-muted-foreground" />
+                หลักฐานต้นฉบับ ({visibleItems.length})
+              </CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">
+                เปิดดูเฉพาะเมื่อต้องย้อนตรวจหลักฐานต้นฉบับ
+              </p>
+            </div>
+            {canRepairShopeeEmail && (
+              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setRepairOpen(true)}>
+                <Wrench className="h-3.5 w-3.5" />
+                ตรวจคำสั่งซื้อในอีเมล
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="space-y-3 pt-0">
@@ -423,6 +764,14 @@ export function ArtifactList({
           printReadiness={printReadiness}
           onPrinted={handlePrintArtifact}
           onClose={() => setPreviewArt(null)}
+        />
+      )}
+      {canRepairShopeeEmail && (
+        <ShopeeEmailRepairDialog
+          billId={billId}
+          open={repairOpen}
+          onOpenChange={setRepairOpen}
+          onReload={onReload}
         />
       )}
     </>
@@ -621,6 +970,14 @@ function parsePrintAPIError(err: unknown): PrintAPIError {
     return { message }
   }
   return { message: 'บันทึกประวัติการพิมพ์ไม่สำเร็จ' }
+}
+
+function apiErrorMessage(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as { error?: string; message?: string } | undefined
+    return data?.error || data?.message || fallback
+  }
+  return err instanceof Error && err.message ? err.message : fallback
 }
 
 function formatPaymentMethodMissingReason(orderIDs: string[]): string {

@@ -296,6 +296,11 @@ export default function BillDetail() {
     (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
     !!bill.sml_doc_no &&
     !bill.archived_at
+  const canRepairShopeeEmail =
+    user?.role === 'admin' &&
+    bill.source === 'shopee_shipped' &&
+    bill.bill_type === 'purchase' &&
+    !bill.archived_at
 
   const handleItemUpdated = (updated: BillItem) => {
     setBill((prev) => {
@@ -416,6 +421,7 @@ export default function BillDetail() {
             emailGroup={bill.email_group}
             smlPayload={bill.sml_payload}
             onReload={reloadBill}
+            canRepairShopeeEmail={canRepairShopeeEmail}
           />
           <BillTimeline billId={bill.id} shopeeEvents={bill.shopee_events ?? []} />
           <SmlPayloadSection
