@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import { Fragment, type MouseEvent, type ReactNode } from 'react'
-import { Archive, Copy, CreditCard, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
+import { Archive, Copy, CreditCard, ExternalLink, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,7 +24,7 @@ import {
   shopeePayableTotal,
 } from '@/lib/shopeeBill'
 import { cn } from '@/lib/utils'
-import { billDetailURL } from '@/lib/billLinks'
+import { copyURLForBill, marketplaceOrderURL } from '@/lib/billLinks'
 import type { Bill, ShopeeOrderEvent } from '@/types'
 
 interface Props {
@@ -469,14 +469,20 @@ function BillRowActions({
 function CopyBillLinkButton({ bill }: { bill: Bill }) {
   const handleCopy = async (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
+    const target = copyURLForBill(bill)
     try {
-      await navigator.clipboard.writeText(billDetailURL(bill))
-      toast.success('คัดลอกลิงก์บิลแล้ว')
+      await navigator.clipboard.writeText(target.url)
+      if (target.kind === 'marketplace') {
+        toast.success('คัดลอกลิงก์คำสั่งซื้อแล้ว')
+      } else {
+        toast.success('ยังไม่พบลิงก์ marketplace ในอีเมล จึงคัดลอกลิงก์ BillFlow แทน')
+      }
     } catch {
       toast.error('คัดลอกลิงก์ไม่สำเร็จ')
     }
   }
 
+  const hasMarketplaceURL = !!marketplaceOrderURL(bill)
   return (
     <Button
       type="button"
@@ -484,8 +490,8 @@ function CopyBillLinkButton({ bill }: { bill: Bill }) {
       variant="outline"
       className="h-7 w-8"
       onClick={handleCopy}
-      title="คัดลอกลิงก์บิล"
-      aria-label="คัดลอกลิงก์บิล"
+      title={hasMarketplaceURL ? 'คัดลอกลิงก์คำสั่งซื้อ' : 'คัดลอกลิงก์ BillFlow'}
+      aria-label={hasMarketplaceURL ? 'คัดลอกลิงก์คำสั่งซื้อ' : 'คัดลอกลิงก์ BillFlow'}
     >
       <Copy className="h-3.5 w-3.5" />
     </Button>
@@ -790,6 +796,7 @@ function ShopeeSalesSummary({ bill }: { bill: Bill }) {
 function MarketplacePurchaseSummary({ bill }: { bill: Bill }) {
   const raw = bill.raw_data
   const orderID = shopeeOrderID(raw)
+  const orderURL = marketplaceOrderURL(bill)
   const orderDate = formatMarketplaceOrderDate(rawString(raw, 'order_datetime') || rawString(raw, 'doc_date'))
   const seller = rawString(raw, 'seller_name')
   const itemCount = rawNumber(raw, 'item_count') ?? bill.items?.length ?? null
@@ -799,7 +806,19 @@ function MarketplacePurchaseSummary({ bill }: { bill: Bill }) {
       key: 'order',
       node: (
         <MarketplaceMetaField label="เลขคำสั่งซื้อ" valueClassName="max-w-[220px] font-mono">
-          {orderID}
+          {orderURL ? (
+            <a
+              href={orderURL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-w-0 items-center gap-1 text-primary hover:underline"
+              onClick={(e) => e.stopPropagation()}
+              title="เปิดคำสั่งซื้อใน marketplace"
+            >
+              <span className="min-w-0 truncate">{orderID}</span>
+              <ExternalLink className="h-3 w-3 shrink-0" />
+            </a>
+          ) : orderID}
         </MarketplaceMetaField>
       ),
     })

@@ -103,7 +103,7 @@ export default function Login() {
           </form>
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
-            Email · Shopee · Lazada · TikTok → SML
+            Shopee/Lazada Email → ใบสั่งซื้อ SML
           </p>
         </CardContent>
       </Card>

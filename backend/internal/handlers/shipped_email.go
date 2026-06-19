@@ -757,6 +757,10 @@ func (h *EmailHandler) processOneShippedOrder(
 		"body_text":        bodyText,
 		"body_html":        bodyHTML,
 	}
+	if orderURL := repository.ExtractShopeeMarketplaceOrderURL(bodyText, bodyHTML, orderID); orderURL != "" {
+		rawDataMap["marketplace_order_url"] = orderURL
+		rawDataMap["marketplace_order_url_source"] = "email_html"
+	}
 	if hasShippingAmount {
 		rawDataMap["shipping_amount"] = shippingAmount
 	}

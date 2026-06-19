@@ -358,7 +358,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const activeFilterSummary = [
     `ช่องทาง: ${sourceSummary}`,
     showShopeeStatusFilter ? `สถานะคำสั่งซื้อ: ${selectedShopeeStatus}` : '',
-    showPurchaseSourceFilter && printReadyOnly ? 'พร้อมปริ้นที่ยังไม่พิมพ์' : '',
+    showPurchaseSourceFilter && printReadyOnly ? 'รอพิมพ์อีเมล' : '',
     showPurchaseSourceFilter && activePaymentMethod ? `วิธีชำระ: ${selectedPaymentMethodLabel}` : '',
     `กล่อง/ร้าน: ${inboxSummary}`,
     `วันที่: ${dateSummary}`,
@@ -582,11 +582,11 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       setBulkPrintCandidates(res.data ?? [])
       setBulkPrintTruncated(Boolean(res.truncated))
       if (res.truncated) {
-        toast.warning(`พบคิวรอพิมพ์เกิน ${res.limit.toLocaleString('th-TH')} ชุด กรุณากรองวันที่หรือช่องทางให้แคบลง`)
+        toast.warning(`พบอีเมลพร้อมพิมพ์เกิน ${res.limit.toLocaleString('th-TH')} ชุด กรุณากรองวันที่หรือช่องทางให้แคบลง`)
       }
     } catch (err) {
       const e = err as { response?: { data?: { error?: string } }; message?: string }
-      toast.error(e?.response?.data?.error || e?.message || 'โหลดคิวรอพิมพ์ไม่สำเร็จ')
+      toast.error(e?.response?.data?.error || e?.message || 'โหลดอีเมลพร้อมพิมพ์ไม่สำเร็จ')
       setBulkPrintOpen(false)
     } finally {
       setBulkPrintLoading(false)
@@ -899,13 +899,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
                 size="sm"
                 className="h-9 gap-1.5 whitespace-nowrap"
                 onClick={() => resetPage(() => setPrintReadyOnly((v) => !v))}
-                title="แสดงเฉพาะอีเมลที่พร้อมพิมพ์และยังไม่มีประวัติพิมพ์"
+                title="แสดงเฉพาะอีเมลที่ส่ง SML ครบ และยังไม่เคยบันทึกพิมพ์"
               >
                 <Printer className="h-3.5 w-3.5" />
-                พร้อมปริ้น
-                <span className={printReadyOnly ? 'text-primary-foreground/80' : 'text-muted-foreground'}>
-                  ยังไม่พิมพ์
-                </span>
+                รอพิมพ์อีเมล
                 <span className={printReadyOnly ? 'text-primary-foreground/80' : 'text-muted-foreground'}>
                   {counts.print_ready_groups.toLocaleString('th-TH')}
                 </span>
@@ -954,48 +951,50 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           <div className="flex flex-col gap-2 border-t border-border/70 pt-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[11px] text-muted-foreground">
               {showPurchaseSourceFilter
-                ? `รอพิมพ์ ${counts.print_ready_groups.toLocaleString('th-TH')} ชุดอีเมล (${counts.print_ready_orders.toLocaleString('th-TH')} คำสั่งซื้อ) · ${printReadyNoteForList(bills)}`
+                ? `อีเมลพร้อมพิมพ์ ${counts.print_ready_groups.toLocaleString('th-TH')} ชุด (${counts.print_ready_orders.toLocaleString('th-TH')} คำสั่งซื้อ) · ${printReadyNoteForList(bills)}`
                 : counts.needs_review > 0 && archiveMode === 'active'
                   ? `ต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ไม่ถูกรวมใน bulk send`
                   : 'พร้อมทำงานจากตัวกรองปัจจุบัน'}
             </p>
-            {showPurchaseSourceFilter && (
+            <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+              {showPurchaseSourceFilter && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="w-full gap-1.5 whitespace-nowrap sm:w-auto"
+                  disabled={archiveMode !== 'active' || counts.print_ready_groups === 0 || bulkPrintLoading}
+                  onClick={handleOpenBulkPrint}
+                  title="พิมพ์เฉพาะอีเมลที่ส่ง SML ครบ และยังไม่เคยบันทึกพิมพ์จาก filter ปัจจุบัน"
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                  พิมพ์อีเมลที่พร้อม
+                </Button>
+              )}
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                className="w-full gap-1.5 whitespace-nowrap sm:ml-auto sm:w-auto"
-                disabled={archiveMode !== 'active' || counts.print_ready_groups === 0 || bulkPrintLoading}
-                onClick={handleOpenBulkPrint}
-                title="พิมพ์ทุก email group ที่พร้อมปริ้นและยังไม่เคยพิมพ์จาก filter ปัจจุบัน"
+                className="w-full gap-1.5 whitespace-nowrap sm:w-auto"
+                disabled={bulkDisabled}
+                onClick={() => setBulkOpen(true)}
+                title={
+                  !canBulkSend
+                    ? 'ส่ง SML แบบกลุ่มใช้ได้เฉพาะผู้ดูแลระบบ'
+                    : archiveMode !== 'active'
+                    ? 'Bulk send ปิดไว้เมื่อดูบิลที่เก็บแล้ว เพื่อไม่ส่งเอกสารย้อนหลังโดยไม่ตั้งใจ'
+                    : !bulkSourceAllowed
+                      ? 'เลือก Email บิลซื้อ Shopee หรือ Email บิลซื้อ Lazada ก่อน เพื่อไม่ส่งข้ามช่องทางโดยไม่ตั้งใจ'
+                    : !bulkStatusAllowed
+                      ? 'Bulk send ส่งเฉพาะเอกสารสถานะพร้อมส่ง จึงเปิดได้เมื่อเลือกทุกสถานะหรือสถานะพร้อมส่ง'
+                    : counts.needs_review > 0
+                      ? `มีรายการต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ปุ่มนี้ส่งเฉพาะเอกสารสถานะพร้อมส่ง`
+                      : undefined
+                }
               >
-                <Printer className="h-3.5 w-3.5" />
-                พิมพ์คิวที่ยังไม่พิมพ์
+                <Send className="h-3.5 w-3.5" />
+                <span className="truncate">{bulkButtonLabel}</span>
               </Button>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              className="w-full gap-1.5 whitespace-nowrap sm:ml-auto sm:w-auto"
-              disabled={bulkDisabled}
-              onClick={() => setBulkOpen(true)}
-              title={
-                !canBulkSend
-                  ? 'ส่ง SML แบบกลุ่มใช้ได้เฉพาะผู้ดูแลระบบ'
-                  : archiveMode !== 'active'
-                  ? 'Bulk send ปิดไว้เมื่อดูบิลที่เก็บแล้ว เพื่อไม่ส่งเอกสารย้อนหลังโดยไม่ตั้งใจ'
-                  : !bulkSourceAllowed
-                    ? 'เลือก Email บิลซื้อ Shopee หรือ Email บิลซื้อ Lazada ก่อน เพื่อไม่ส่งข้ามช่องทางโดยไม่ตั้งใจ'
-                  : !bulkStatusAllowed
-                    ? 'Bulk send ส่งเฉพาะเอกสารสถานะพร้อมส่ง จึงเปิดได้เมื่อเลือกทุกสถานะหรือสถานะพร้อมส่ง'
-                  : counts.needs_review > 0
-                    ? `มีรายการต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ปุ่มนี้ส่งเฉพาะเอกสารสถานะพร้อมส่ง`
-                    : undefined
-              }
-            >
-              <Send className="h-3.5 w-3.5" />
-              <span className="truncate">{bulkButtonLabel}</span>
-            </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -1163,9 +1162,9 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       }}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>พิมพ์คิวที่พร้อมและยังไม่พิมพ์</DialogTitle>
+            <DialogTitle>พิมพ์อีเมลที่พร้อม</DialogTitle>
             <DialogDescription>
-              ตรวจเลข POL และวิธีการชำระเงินก่อนยืนยัน ระบบจะพิมพ์เฉพาะอีเมลที่ยังไม่มีประวัติพิมพ์
+              ตรวจเลข POL และวิธีการชำระเงินก่อนยืนยัน ระบบจะพิมพ์เฉพาะอีเมลที่ส่ง SML ครบและยังไม่เคยบันทึกพิมพ์
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1174,14 +1173,14 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
             </div>
             {bulkPrintTruncated && (
               <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-xs text-warning">
-                พบคิวรอพิมพ์เกิน 100 ชุด กรุณากรองวันที่หรือช่องทางให้แคบลงก่อนพิมพ์ทั้งหมด เพื่อไม่พลาดบางชุดอีเมล
+                พบอีเมลพร้อมพิมพ์เกิน 100 ชุด กรุณากรองวันที่หรือช่องทางให้แคบลงก่อนพิมพ์ทั้งหมด เพื่อไม่พลาดบางชุดอีเมล
               </div>
             )}
             <div className="max-h-[420px] overflow-y-auto rounded-md border border-border">
               {bulkPrintLoading && bulkPrintCandidates.length === 0 ? (
-                <div className="p-4 text-sm text-muted-foreground">กำลังโหลดคิวรอพิมพ์...</div>
+                <div className="p-4 text-sm text-muted-foreground">กำลังโหลดอีเมลพร้อมพิมพ์...</div>
               ) : bulkPrintCandidates.length === 0 ? (
-                <div className="p-4 text-sm text-muted-foreground">ไม่มีรายการที่พร้อมพิมพ์และยังไม่พิมพ์จาก filter ปัจจุบัน</div>
+                <div className="p-4 text-sm text-muted-foreground">ไม่มีอีเมลที่พร้อมพิมพ์จาก filter ปัจจุบัน</div>
               ) : (
                 <div className="divide-y divide-border">
                   {bulkPrintCandidates.map((candidate) => (
@@ -1372,8 +1371,8 @@ function formatPrintPaymentMethod(method?: string): string {
 
 function printReadyNoteForList(bills: Bill[]): string {
   const policyNote = bills.find((bill) => bill.email_group?.print_policy_note)?.email_group?.print_policy_note
-  if (policyNote) return `${policyNote} และยังไม่มีประวัติพิมพ์`
-  return 'พร้อมปริ้น = ส่งเข้า SML ครบทุกคำสั่งซื้อในอีเมลเดียวกัน วิธีการชำระเงินขึ้นต้นด้วย TT และยังไม่มีประวัติพิมพ์'
+  if (policyNote) return `${policyNote} และยังไม่เคยบันทึกพิมพ์`
+  return 'พร้อมพิมพ์ = ส่งเข้า SML ครบทุกคำสั่งซื้อในอีเมลเดียวกัน วิธีการชำระเงินขึ้นต้นด้วย TT และยังไม่เคยบันทึกพิมพ์'
 }
 
 function QueueSummaryStrip({

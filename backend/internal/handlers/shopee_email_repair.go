@@ -515,6 +515,10 @@ func (s *ShopeeEmailRepairService) rebuildOneShopeeBillFromPaymentEmail(
 		"body_html":        body.HTML,
 		"repair_source":    "payment_email_rebuild",
 	}
+	if orderURL := repository.ExtractShopeeMarketplaceOrderURL(body.Text, body.HTML, orderID); orderURL != "" {
+		rawDataMap["marketplace_order_url"] = orderURL
+		rawDataMap["marketplace_order_url_source"] = "email_html"
+	}
 	if shippingAmount, hasShippingAmount := repository.ExtractShopeeShippingAmount(body.Text, body.HTML, orderID); hasShippingAmount {
 		rawDataMap["shipping_amount"] = shippingAmount
 	}
@@ -860,6 +864,10 @@ func (s *ShopeeEmailRepairService) rebuildOneLazadaBillFromConfirmation(
 		"fee_config_ready": feeConfigReady,
 		"fee_line_added":   feeLineAdded,
 		"repair_source":    "lazada_confirmation_rebuild",
+	}
+	if orderURL := repository.ExtractLazadaMarketplaceOrderURL(plainText, bodyHTML, orderID); orderURL != "" {
+		rawDataMap["marketplace_order_url"] = orderURL
+		rawDataMap["marketplace_order_url_source"] = "email_html"
 	}
 	applyLazadaAmountSummaryRawData(rawDataMap, amountSummary, itemsGrossDelta)
 	if amountSummary.HasPaidTotalAmount {

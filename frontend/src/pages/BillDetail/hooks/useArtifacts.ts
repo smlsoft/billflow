@@ -283,6 +283,9 @@ function decoratePrintableDocument(
   try {
     trimMarketplacePrintFooter(doc)
   } catch { /* best-effort */ }
+  try {
+    highlightMarketplacePrintAmounts(doc)
+  } catch { /* best-effort */ }
 
   const printOrders = normalizePrintOrders(printContext)
   const paymentLines = paymentPrintLines(printOrders)
@@ -345,19 +348,12 @@ function insertPaymentPrintStamp(
   paymentMethods: string[],
   stampPosition: 'fixed' | 'absolute',
 ): void {
-  const inlineStamp = createPaymentPrintStamp(doc, paymentMethods, false)
-  const anchor = findPaymentSectionAnchor(doc)
-  if (anchor && anchor.parentElement) {
-    anchor.insertAdjacentElement('afterend', inlineStamp)
-    return
-  }
-
   const floatingStamp = createPaymentPrintStamp(doc, paymentMethods, true)
   floatingStamp.style.position = stampPosition
-  floatingStamp.style.right = '16px'
-  floatingStamp.style.bottom = '16px'
+  floatingStamp.style.right = stampPosition === 'fixed' ? '10mm' : '10px'
+  floatingStamp.style.top = stampPosition === 'fixed' ? '8mm' : '10px'
   floatingStamp.style.zIndex = '2147483647'
-  floatingStamp.style.maxWidth = '180px'
+  floatingStamp.style.maxWidth = '150px'
   floatingStamp.style.boxShadow = '0 1px 6px rgba(0,0,0,.14)'
   doc.body?.appendChild(floatingStamp)
 }
@@ -406,19 +402,56 @@ function createPaymentPrintStamp(
   return stamp
 }
 
-function findPaymentSectionAnchor(doc: Document): Element | null {
-  if (!doc.body) return null
-  const markers = ['รายละเอียดการชำระเงิน', 'วิธีการชำระเงิน', 'วิธีชำระเงิน']
+function highlightMarketplacePrintAmounts(doc: Document): void {
+  highlightPrintLabel(doc, 'ยอดที่ต้องชำระทั้งหมด', '#fef3c7', false)
+  highlightPrintLabel(doc, 'จำนวนเงินที่จ่าย', '#dcfce7', false)
+  highlightPrintLabel(doc, 'ยอดรวมทั้งหมด(รวม VAT)', '#fef3c7', true)
+}
+
+function highlightPrintLabel(
+  doc: Document,
+  label: string,
+  background: string,
+  preferTableRow: boolean,
+): void {
+  if (!doc.body) return
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
-  let node: Node | null
+  const matches: HTMLElement[] = []
+  let node: Node | null = null
   while ((node = walker.nextNode())) {
     const text = node.textContent?.replace(/\s+/g, ' ').trim() ?? ''
-    if (!markers.some((marker) => text.includes(marker))) continue
+    if (!text.includes(label)) continue
     const parent = node.parentElement
     if (!parent) continue
-    return parent.closest('table,section,div,p') ?? parent
+    if (parent.closest('[data-billflow-print-highlight="true"]')) continue
+    const row = parent.closest('tr')
+    const target = preferTableRow && row
+      ? row
+      : row || compactHighlightBlock(parent) || parent
+    if (target instanceof HTMLElement) matches.push(target)
   }
-  return null
+  for (const target of matches) {
+    target.setAttribute('data-billflow-print-highlight', 'true')
+    target.style.backgroundColor = background
+    target.style.setProperty('print-color-adjust', 'exact')
+    target.style.setProperty('-webkit-print-color-adjust', 'exact')
+    if (target.tagName.toLowerCase() !== 'tr') {
+      target.style.borderRadius = '3px'
+      target.style.padding = target.style.padding || '1px 3px'
+      target.style.setProperty('box-decoration-break', 'clone')
+      target.style.setProperty('-webkit-box-decoration-break', 'clone')
+    }
+  }
+}
+
+function compactHighlightBlock(element: HTMLElement): HTMLElement | null {
+  const block = element.closest('td,th,p,li,span,div')
+  if (!(block instanceof HTMLElement)) return null
+  const textLength = (block.textContent ?? '').replace(/\s+/g, ' ').trim().length
+  if (textLength > 260 && block.parentElement instanceof HTMLElement) {
+    return block.parentElement
+  }
+  return block
 }
 
 function trimMarketplacePrintFooter(doc: Document): void {

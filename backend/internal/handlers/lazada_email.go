@@ -253,6 +253,10 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		"fee_config_ready": feeConfigReady,
 		"fee_line_added":   feeLineAdded,
 	}
+	if orderURL := repository.ExtractLazadaMarketplaceOrderURL(plainText, bodyHTML, orderID); orderURL != "" {
+		rawDataMap["marketplace_order_url"] = orderURL
+		rawDataMap["marketplace_order_url_source"] = "email_html"
+	}
 	applyLazadaAmountSummaryRawData(rawDataMap, amountSummary, itemsGrossDelta)
 	if amountSummary.HasPaidTotalAmount {
 		rawDataMap["total_amount"] = amountSummary.PaidTotalAmount

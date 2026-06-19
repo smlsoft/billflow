@@ -1,4 +1,4 @@
-import { ArrowLeft, Copy } from 'lucide-react'
+import { ArrowLeft, Copy, ExternalLink } from 'lucide-react'
 import dayjs from 'dayjs'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import BillStatusBadge from '@/components/BillStatusBadge'
 import type { Bill } from '@/types'
-import { billDetailURL } from '@/lib/billLinks'
+import { copyURLForBill, marketplaceOrderURL } from '@/lib/billLinks'
 import { isShopeeSalesBill, rawNumber, rawString, shopeeOrderID } from '@/lib/shopeeBill'
 import { SOURCE_LABELS } from '../utils/formatters'
 import { hasInvalidPrice } from '../utils/validation'
@@ -40,30 +40,49 @@ export function BillHeader({ bill, onBack }: Props) {
   const shopeeShopID = rawString(rawData, 'shopee_shop_id')
   const shopeeShopLabel = rawString(rawData, 'shopee_shop_label')
   const docDate = (rawData?.doc_date as string) || ''
+  const orderURL = marketplaceOrderURL(bill)
   const rawItemCount = rawNumber(rawData, 'item_count')
   const itemCount = bill.items?.length ?? 0
   const issueCount = (bill.items ?? []).filter((item) => {
     return !item.item_code || !item.unit_code || !item.qty || item.qty <= 0 || hasInvalidPrice(item)
   }).length
   const handleCopyLink = async () => {
+    const target = copyURLForBill(bill)
     try {
-      await navigator.clipboard.writeText(billDetailURL(bill))
-      toast.success('คัดลอกลิงก์บิลแล้ว')
+      await navigator.clipboard.writeText(target.url)
+      if (target.kind === 'marketplace') {
+        toast.success('คัดลอกลิงก์คำสั่งซื้อแล้ว')
+      } else {
+        toast.success('ยังไม่พบลิงก์ marketplace ในอีเมล จึงคัดลอกลิงก์ BillFlow แทน')
+      }
     } catch {
       toast.error('คัดลอกลิงก์ไม่สำเร็จ')
     }
   }
   const orderIDValue = (
     <span className="inline-flex min-w-0 items-center gap-1.5">
-      <span className="truncate font-mono text-xs">{orderID}</span>
+      {orderURL ? (
+        <a
+          href={orderURL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex min-w-0 items-center gap-1 font-mono text-xs text-primary hover:underline"
+          title="เปิดคำสั่งซื้อใน marketplace"
+        >
+          <span className="min-w-0 truncate">{orderID}</span>
+          <ExternalLink className="h-3 w-3 shrink-0" />
+        </a>
+      ) : (
+        <span className="truncate font-mono text-xs">{orderID}</span>
+      )}
       <Button
         type="button"
         size="icon"
         variant="outline"
         className="h-6 w-6 shrink-0"
         onClick={handleCopyLink}
-        title="คัดลอกลิงก์บิล"
-        aria-label="คัดลอกลิงก์บิล"
+        title={orderURL ? 'คัดลอกลิงก์คำสั่งซื้อ' : 'คัดลอกลิงก์ BillFlow'}
+        aria-label={orderURL ? 'คัดลอกลิงก์คำสั่งซื้อ' : 'คัดลอกลิงก์ BillFlow'}
       >
         <Copy className="h-3 w-3" />
       </Button>
