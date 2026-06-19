@@ -208,6 +208,21 @@ func (h *EmailHandler) saveEmailArtifacts(
 	}
 	// 1. The binary itself (PDF / HTML / etc.)
 	if len(data) > 0 {
+		if isEmailBodyArtifactKind(kind) && strings.TrimSpace(messageID) != "" {
+			existing, err := h.artifactSvc.FindEmailBodyByBillMessage(billID, strings.TrimSpace(messageID))
+			if err == nil && existing != nil {
+				h.logger.Info("artifact: skip duplicate email body",
+					zap.String("bill_id", billID),
+					zap.String("kind", kind),
+					zap.String("message_id", messageID),
+					zap.String("existing_artifact_id", existing.ID))
+				return
+			}
+			if err != nil {
+				h.logger.Warn("artifact: duplicate email body check failed",
+					zap.String("bill_id", billID), zap.String("kind", kind), zap.Error(err))
+			}
+		}
 		if _, err := h.artifactSvc.Save(billID, kind, filename, contentType, data, envelope); err != nil {
 			h.logger.Warn("artifact: save body failed",
 				zap.String("bill_id", billID), zap.String("kind", kind), zap.Error(err))
@@ -220,6 +235,10 @@ func (h *EmailHandler) saveEmailArtifacts(
 		h.logger.Warn("artifact: save envelope failed",
 			zap.String("bill_id", billID), zap.Error(err))
 	}
+}
+
+func isEmailBodyArtifactKind(kind string) bool {
+	return kind == "email_html" || kind == "email_text"
 }
 
 func applyMailSource(raw map[string]interface{}, source emailservice.MailSource) {

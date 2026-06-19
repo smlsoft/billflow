@@ -73,6 +73,12 @@ export const ACTION_META: Record<string, ActionMeta> = {
   shopee_shipped_received: { label: 'รับอีเมล Shopee Shipped', emoji: '📦', tone: 'info' },
   lazada_email_received: { label: 'รับอีเมล Lazada', emoji: '📧', tone: 'info' },
   email_print_requested: { label: 'พิมพ์อีเมลต้นทาง', emoji: '🖨️', tone: 'info' },
+  shopee_email_repair_previewed: { label: 'ตรวจอีเมลก่อนซ่อม', emoji: '🔎', tone: 'info' },
+  shopee_email_repair_started: { label: 'เริ่มซ่อมจากอีเมลยืนยัน', emoji: '🛠️', tone: 'warning' },
+  shopee_email_repair_completed: { label: 'ซ่อมจากอีเมลยืนยันเสร็จ', emoji: '✅', tone: 'success' },
+  shopee_email_repair_failed: { label: 'ซ่อมจากอีเมลยืนยันไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
+  shopee_email_repair_rebuilt_bill: { label: 'ซ่อมบิล Shopee จากอีเมลยืนยัน', emoji: '🛠️', tone: 'success' },
+  lazada_email_repair_rebuilt_bill: { label: 'ซ่อมบิล Lazada จากอีเมลยืนยัน', emoji: '🛠️', tone: 'success' },
   credit_card_report_run_created: { label: 'สร้างรอบรายงานบัตรเครดิต', emoji: '📊', tone: 'primary' },
   credit_card_report_exported: { label: 'Export รายงานบัตรเครดิต', emoji: '📤', tone: 'success' },
   credit_card_report_print_requested: { label: 'พิมพ์ตามรายงานบัตรเครดิต', emoji: '🖨️', tone: 'info' },
@@ -327,6 +333,38 @@ export function summarize(log: AuditLog): string {
       return d.subject ? String(d.subject) : ''
     case 'email_print_requested':
       return d.email_group_key ? `Email #${d.email_group_key}` : ''
+    case 'shopee_email_repair_previewed':
+      return [
+        repairPlatformLabel(d.source),
+        d.detected_order_count != null ? `พบ ${Number(d.detected_order_count).toLocaleString('th-TH')} คำสั่งซื้อ` : '',
+        d.missing_count != null ? `ตกหล่น ${Number(d.missing_count).toLocaleString('th-TH')}` : '',
+        d.rebuild_count != null && Number(d.rebuild_count) > 0 ? `ซ่อมเดิม ${Number(d.rebuild_count).toLocaleString('th-TH')}` : '',
+        d.blocked_count != null && Number(d.blocked_count) > 0 ? `ข้าม ${Number(d.blocked_count).toLocaleString('th-TH')}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'shopee_email_repair_started':
+      return [
+        repairPlatformLabel(d.source),
+        d.expected_order_count != null ? `คาดว่า ${Number(d.expected_order_count).toLocaleString('th-TH')} คำสั่งซื้อ` : '',
+        Array.isArray(d.expected_missing_ids) && d.expected_missing_ids.length > 0 ? `สร้างใหม่ ${d.expected_missing_ids.length}` : '',
+        Array.isArray(d.expected_rebuild_ids) && d.expected_rebuild_ids.length > 0 ? `ซ่อมเดิม ${d.expected_rebuild_ids.length}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'shopee_email_repair_completed':
+      return [
+        repairPlatformLabel(d.source),
+        d.created_count != null ? `สร้างใหม่ ${Number(d.created_count).toLocaleString('th-TH')}` : '',
+        d.rebuilt_count != null ? `ซ่อมเดิม ${Number(d.rebuilt_count).toLocaleString('th-TH')}` : '',
+        d.skipped_count != null ? `ข้าม ${Number(d.skipped_count).toLocaleString('th-TH')}` : '',
+      ].filter(Boolean).join(' · ')
+    case 'shopee_email_repair_failed':
+      return [repairPlatformLabel(d.source), humanizeAuditError(d.error)].filter(Boolean).join(' · ')
+    case 'shopee_email_repair_rebuilt_bill':
+    case 'lazada_email_repair_rebuilt_bill':
+      return [
+        d.order_id ? `คำสั่งซื้อ ${String(d.order_id).replace(/^#/, '')}` : '',
+        d.seller_name,
+        d.items_count != null ? `${Number(d.items_count).toLocaleString('th-TH')} รายการ` : '',
+        d.status ? `สถานะ ${d.status}` : '',
+      ].filter(Boolean).join(' · ')
     case 'credit_card_report_run_created':
       return [
         d.report_name,
@@ -530,6 +568,13 @@ export function summarize(log: AuditLog): string {
 
 function settlementShopLabel(d: Record<string, any>): string {
   return [d.shop_label, d.shop_id ? `ร้าน ${d.shop_id}` : ''].filter(Boolean).join(' · ')
+}
+
+function repairPlatformLabel(value: unknown): string {
+  const source = String(value ?? '')
+  if (source.includes('lazada')) return 'Lazada'
+  if (source.includes('shopee')) return 'Shopee'
+  return ''
 }
 
 function settlementReleaseRange(d: Record<string, any>): string {

@@ -113,6 +113,10 @@ function isCreditCardReportLog(log: AuditLog): boolean {
   return log.source === 'credit_card_report' || log.action.startsWith('credit_card_report_')
 }
 
+function isEmailRepairLog(log: AuditLog): boolean {
+  return log.action.startsWith('shopee_email_repair_') || log.action.startsWith('lazada_email_repair_')
+}
+
 function displaySourceKey(log: AuditLog): string {
   if (isShopeeSettlementLog(log)) return 'shopee_settlement'
   if (isCreditCardReportLog(log)) return 'credit_card_report'
@@ -484,6 +488,13 @@ function makeFacts(log: AuditLog): LogFact[] {
   if (d.via) facts.push({ label: 'วิธีส่ง', value: viaLabel(d.via), mono: false })
   if (d.subject) facts.push({ label: 'หัวข้ออีเมล', value: compact(d.subject, 140) })
   if (d.message_id) facts.push({ label: 'Message ID', value: compact(d.message_id, 64), mono: true, copyValue: String(d.message_id) })
+  if (isEmailRepairLog(log)) {
+    if (d.job_id) facts.push({ label: 'Repair job', value: String(d.job_id).slice(0, 8) + '…', mono: true, copyValue: String(d.job_id) })
+    if (orderIdOf(log)) facts.push({ label: 'เลขคำสั่งซื้อ', value: orderIdOf(log).replace(/^#/, ''), mono: true, copyValue: orderIdOf(log).replace(/^#/, '') })
+    if (d.created_count != null) facts.push({ label: 'สร้างใหม่', value: `${Number(d.created_count).toLocaleString('th-TH')} ใบ` })
+    if (d.rebuilt_count != null) facts.push({ label: 'ซ่อมบิลเดิม', value: `${Number(d.rebuilt_count).toLocaleString('th-TH')} ใบ` })
+    if (d.skipped_count != null) facts.push({ label: 'ข้าม', value: `${Number(d.skipped_count).toLocaleString('th-TH')} ใบ` })
+  }
   if (d.raw_name) facts.push({ label: 'ชื่อจากบิล', value: compact(d.raw_name, 140) })
   if (d.item_code ?? d.code) facts.push({ label: 'รหัสสินค้า', value: d.item_code ?? d.code, mono: true, copyValue: String(d.item_code ?? d.code) })
   if (d.unit_code) facts.push({ label: 'หน่วย', value: d.unit_code })

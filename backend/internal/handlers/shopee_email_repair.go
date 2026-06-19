@@ -70,21 +70,32 @@ type ShopeeEmailRepairJob struct {
 	RebuiltBillIDs  []string                 `json:"rebuilt_bill_ids,omitempty"`
 	RebuiltOrderIDs []string                 `json:"rebuilt_order_ids,omitempty"`
 	MissingOrderIDs []string                 `json:"missing_order_ids,omitempty"`
+	Progress        EmailRepairJobProgress   `json:"progress"`
 }
 
 type ShopeeEmailRepairResult struct {
-	CreatedCount    int      `json:"created_count"`
-	RebuiltCount    int      `json:"rebuilt_count,omitempty"`
-	SkippedCount    int      `json:"skipped_count"`
-	MissingCount    int      `json:"missing_count"`
-	CreatedBillIDs  []string `json:"created_bill_ids,omitempty"`
-	CreatedOrderIDs []string `json:"created_order_ids,omitempty"`
-	RebuiltBillIDs  []string `json:"rebuilt_bill_ids,omitempty"`
-	RebuiltOrderIDs []string `json:"rebuilt_order_ids,omitempty"`
-	MissingOrderIDs []string `json:"missing_order_ids,omitempty"`
-	StaleCleared    []string `json:"stale_tombstone_order_ids,omitempty"`
-	OutcomeKind     string   `json:"outcome_kind,omitempty"`
-	OutcomeCode     string   `json:"outcome_code,omitempty"`
+	CreatedCount    int                    `json:"created_count"`
+	RebuiltCount    int                    `json:"rebuilt_count,omitempty"`
+	SkippedCount    int                    `json:"skipped_count"`
+	MissingCount    int                    `json:"missing_count"`
+	CreatedBillIDs  []string               `json:"created_bill_ids,omitempty"`
+	CreatedOrderIDs []string               `json:"created_order_ids,omitempty"`
+	RebuiltBillIDs  []string               `json:"rebuilt_bill_ids,omitempty"`
+	RebuiltOrderIDs []string               `json:"rebuilt_order_ids,omitempty"`
+	MissingOrderIDs []string               `json:"missing_order_ids,omitempty"`
+	StaleCleared    []string               `json:"stale_tombstone_order_ids,omitempty"`
+	OutcomeKind     string                 `json:"outcome_kind,omitempty"`
+	OutcomeCode     string                 `json:"outcome_code,omitempty"`
+	Progress        EmailRepairJobProgress `json:"progress,omitempty"`
+}
+
+type EmailRepairJobProgress struct {
+	Percent        int    `json:"percent"`
+	Stage          string `json:"stage,omitempty"`
+	Label          string `json:"label,omitempty"`
+	Current        int    `json:"current,omitempty"`
+	Total          int    `json:"total,omitempty"`
+	CurrentOrderID string `json:"current_order_id,omitempty"`
 }
 
 type createShopeeEmailRepairJobRequest struct {
@@ -263,6 +274,7 @@ func (s *ShopeeEmailRepairService) runJob(jobID, billID string) {
 		s.logWarn("shopee_email_repair: mark running failed", zap.String("job_id", jobID), zap.Error(err))
 		return
 	}
+	s.updateJobProgress(jobID, EmailRepairJobProgress{Percent: 5, Stage: "started", Label: "เริ่มงานซ่อมจากอีเมลยืนยัน"})
 	job, err := s.getJob(jobID, billID)
 	if err != nil {
 		msg := truncateRepairError(err.Error())
@@ -273,7 +285,10 @@ func (s *ShopeeEmailRepairService) runJob(jobID, billID string) {
 		})
 		return
 	}
-	result, err := s.applyRepair(billID, job.Snapshot)
+	progress := func(p EmailRepairJobProgress) {
+		s.updateJobProgress(jobID, p)
+	}
+	result, err := s.applyRepairWithProgress(billID, job.Snapshot, progress)
 	if err != nil {
 		msg := truncateRepairError(err.Error())
 		_ = s.markJobFailed(jobID, msg)
@@ -302,6 +317,11 @@ func (s *ShopeeEmailRepairService) runJob(jobID, billID string) {
 }
 
 func (s *ShopeeEmailRepairService) applyRepair(billID string, snapshot ShopeeEmailRepairPreview) (ShopeeEmailRepairResult, error) {
+	return s.applyRepairWithProgress(billID, snapshot, nil)
+}
+
+func (s *ShopeeEmailRepairService) applyRepairWithProgress(billID string, snapshot ShopeeEmailRepairPreview, progress func(EmailRepairJobProgress)) (ShopeeEmailRepairResult, error) {
+	reportRepairProgress(progress, 10, "verify", "ตรวจข้อมูลอีเมลล่าสุดก่อนซ่อม", 0, 0, "")
 	before, err := s.Preview(billID, snapshot.Subject)
 	if err != nil {
 		return ShopeeEmailRepairResult{}, err
@@ -315,10 +335,12 @@ func (s *ShopeeEmailRepairService) applyRepair(billID string, snapshot ShopeeEma
 	if before.MissingCount == 0 && before.RebuildCount == 0 {
 		return ShopeeEmailRepairResult{SkippedCount: before.ExistingCount}, nil
 	}
+	reportRepairProgress(progress, 20, "dedupe", "ตรวจและล้างสถานะอีเมลซ้ำที่ค้างอยู่", 0, 0, "")
 	cleared, err := s.clearStaleTombstones(before.Source, before.MessageID, before.MissingOrderIDs)
 	if err != nil {
 		return ShopeeEmailRepairResult{}, fmt.Errorf("clear stale processed keys: %w", err)
 	}
+	reportRepairProgress(progress, 28, "load_email", "โหลดอีเมลต้นฉบับสำหรับซ่อม", 0, 0, "")
 	target, err := s.loadTarget(billID, before.Subject)
 	if err != nil {
 		return ShopeeEmailRepairResult{}, err
@@ -327,19 +349,21 @@ func (s *ShopeeEmailRepairService) applyRepair(billID string, snapshot ShopeeEma
 	if err != nil {
 		return ShopeeEmailRepairResult{}, err
 	}
+	reportRepairProgress(progress, 35, "prepare", "เตรียมตัวอ่านรายการคำสั่งซื้อจากอีเมล", 0, 0, "")
 	emailHandler, err := s.newEmailHandler()
 	if err != nil {
 		return ShopeeEmailRepairResult{}, err
 	}
 	var applied appliedShopeePaymentRepair
 	if before.Source == lazadaEmailSource {
-		applied, err = s.applyLazadaEmailRepairOrders(emailHandler, target, body, before.MissingOrderIDs, before.RebuildOrderIDs)
+		applied, err = s.applyLazadaEmailRepairOrders(emailHandler, target, body, before.MissingOrderIDs, before.RebuildOrderIDs, progress)
 	} else {
-		applied, err = s.applyPaymentEmailRepairOrders(emailHandler, target, body, before.MissingOrderIDs, before.RebuildOrderIDs)
+		applied, err = s.applyPaymentEmailRepairOrders(emailHandler, target, body, before.MissingOrderIDs, before.RebuildOrderIDs, progress)
 	}
 	if err != nil {
 		return ShopeeEmailRepairResult{}, err
 	}
+	reportRepairProgress(progress, 95, "verify_result", "ตรวจผลหลังซ่อมว่าครบทุกคำสั่งซื้อ", 0, 0, "")
 	after, err := s.Preview(billID, before.Subject)
 	if err != nil {
 		return ShopeeEmailRepairResult{}, err
@@ -364,6 +388,7 @@ func (s *ShopeeEmailRepairService) applyRepair(billID string, snapshot ShopeeEma
 		StaleCleared:    cleared,
 		OutcomeKind:     "repaired",
 		OutcomeCode:     "payment_email_repair_applied",
+		Progress:        EmailRepairJobProgress{Percent: 100, Stage: "succeeded", Label: "ซ่อมคำสั่งซื้อจากอีเมลเสร็จแล้ว", Current: after.DetectedOrderCount, Total: after.DetectedOrderCount},
 	}
 	if result.SkippedCount < 0 {
 		result.SkippedCount = 0
@@ -381,6 +406,7 @@ func (s *ShopeeEmailRepairService) applyPaymentEmailRepairOrders(
 	body shopeeRepairEmailBody,
 	missingOrderIDs []string,
 	rebuildOrderIDs []string,
+	progress func(EmailRepairJobProgress),
 ) (appliedShopeePaymentRepair, error) {
 	result := appliedShopeePaymentRepair{}
 	plainText := htmlToText(body.Text)
@@ -388,6 +414,8 @@ func (s *ShopeeEmailRepairService) applyPaymentEmailRepairOrders(
 		plainText = htmlToText(body.HTML)
 	}
 	traceID := fmt.Sprintf("shopee-email-repair-%d", time.Now().UnixMilli())
+	total := len(missingOrderIDs) + len(rebuildOrderIDs)
+	reportRepairProgress(progress, 42, "extract", "อ่านข้อมูลคำสั่งซื้อจากอีเมล Shopee", 0, total, "")
 	orders, err := emailHandler.extractShopeeOrdersBounded(target.Subject, plainText, body.HTML, traceID)
 	if err != nil {
 		return result, err
@@ -403,7 +431,9 @@ func (s *ShopeeEmailRepairService) applyPaymentEmailRepairOrders(
 	fallbackPrices := extractShopeePrices(plainText)
 	source := mailSourceFromRepairRaw(target.Raw)
 	start := time.Now()
+	processed := 0
 	for _, orderID := range missingOrderIDs {
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "create_order", "กำลังสร้างบิลที่ตกหล่น", processed, total, orderID)
 		order, ok := ordersByID[orderID]
 		if !ok {
 			return result, fmt.Errorf("AI extract missing order %s", orderID)
@@ -411,8 +441,11 @@ func (s *ShopeeEmailRepairService) applyPaymentEmailRepairOrders(
 		if _, err := emailHandler.processOneShippedOrder(order, target.Subject, target.FromAddr, body.Text, body.HTML, target.MessageID, fallbackPrices, traceID, start, source); err != nil {
 			return result, err
 		}
+		processed++
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "create_order", "สร้างบิลที่ตกหล่นแล้ว", processed, total, orderID)
 	}
 	for _, orderID := range rebuildOrderIDs {
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "rebuild_order", "กำลังซ่อมบิลเดิมจากอีเมลยืนยัน", processed, total, orderID)
 		order, ok := ordersByID[orderID]
 		if !ok {
 			return result, fmt.Errorf("AI extract missing rebuild order %s", orderID)
@@ -424,6 +457,8 @@ func (s *ShopeeEmailRepairService) applyPaymentEmailRepairOrders(
 		if billID != "" {
 			result.rebuilt = append(result.rebuilt, createdRepairBill{ID: billID, OrderID: orderID})
 		}
+		processed++
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "rebuild_order", "ซ่อมบิลเดิมแล้ว", processed, total, orderID)
 	}
 	if target.MessageID != "" {
 		_ = s.billRepo.MarkProcessedEmailKey("shopee_shipped", target.MessageID, "")
@@ -682,12 +717,15 @@ func (s *ShopeeEmailRepairService) applyLazadaEmailRepairOrders(
 	body shopeeRepairEmailBody,
 	missingOrderIDs []string,
 	rebuildOrderIDs []string,
+	progress func(EmailRepairJobProgress),
 ) (appliedShopeePaymentRepair, error) {
 	result := appliedShopeePaymentRepair{}
 	plainText := prepareLazadaEmailText(body.Text, body.HTML)
 	if strings.TrimSpace(plainText) == "" {
 		return result, badShopeeRepairRequest("ไม่พบเนื้อหาอีเมล Lazada สำหรับซ่อม")
 	}
+	total := len(missingOrderIDs) + len(rebuildOrderIDs)
+	reportRepairProgress(progress, 42, "extract", "อ่านข้อมูลคำสั่งซื้อจากอีเมล Lazada", 0, total, "")
 	releaseSlot := acquireLazadaAISlot()
 	orders, err := emailHandler.aiClient.ExtractLazadaOrders(plainText)
 	releaseSlot()
@@ -713,7 +751,9 @@ func (s *ShopeeEmailRepairService) applyLazadaEmailRepairOrders(
 	source := mailSourceFromRepairRaw(target.Raw)
 	traceID := fmt.Sprintf("lazada-email-repair-%d", time.Now().UnixMilli())
 	start := time.Now()
+	processed := 0
 	for _, orderID := range missingOrderIDs {
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "create_order", "กำลังสร้างบิล Lazada ที่ตกหล่น", processed, total, orderID)
 		order, ok := ordersByID[orderID]
 		if !ok {
 			return result, fmt.Errorf("AI extract missing Lazada order %s", orderID)
@@ -721,8 +761,11 @@ func (s *ShopeeEmailRepairService) applyLazadaEmailRepairOrders(
 		if _, err := emailHandler.processOneLazadaEmailOrder(order, target.Subject, target.FromAddr, plainText, body.HTML, target.MessageID, traceID, start, source); err != nil {
 			return result, err
 		}
+		processed++
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "create_order", "สร้างบิล Lazada ที่ตกหล่นแล้ว", processed, total, orderID)
 	}
 	for _, orderID := range rebuildOrderIDs {
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "rebuild_order", "กำลังซ่อมบิล Lazada จากอีเมลยืนยัน", processed, total, orderID)
 		order, ok := ordersByID[orderID]
 		if !ok {
 			return result, fmt.Errorf("AI extract missing Lazada rebuild order %s", orderID)
@@ -734,6 +777,8 @@ func (s *ShopeeEmailRepairService) applyLazadaEmailRepairOrders(
 		if billID != "" {
 			result.rebuilt = append(result.rebuilt, createdRepairBill{ID: billID, OrderID: orderID})
 		}
+		processed++
+		reportRepairProgress(progress, repairOrderPercent(processed, total), "rebuild_order", "ซ่อมบิล Lazada แล้ว", processed, total, orderID)
 	}
 	if target.MessageID != "" {
 		_ = s.billRepo.MarkProcessedEmailKey(lazadaEmailSource, target.MessageID, "")
@@ -1690,6 +1735,19 @@ func scanShopeeEmailRepairJob(row interface {
 	job.RebuiltBillIDs = job.Result.RebuiltBillIDs
 	job.RebuiltOrderIDs = job.Result.RebuiltOrderIDs
 	job.MissingOrderIDs = job.Result.MissingOrderIDs
+	job.Progress = job.Result.Progress
+	if job.Progress.Percent == 0 {
+		switch job.Status {
+		case "queued":
+			job.Progress = EmailRepairJobProgress{Percent: 0, Stage: "queued", Label: "รอเริ่มงานซ่อม"}
+		case "running":
+			job.Progress = EmailRepairJobProgress{Percent: 5, Stage: "started", Label: "เริ่มงานซ่อมจากอีเมลยืนยัน"}
+		case "succeeded":
+			job.Progress = EmailRepairJobProgress{Percent: 100, Stage: "succeeded", Label: "ซ่อมคำสั่งซื้อจากอีเมลเสร็จแล้ว"}
+		case "failed":
+			job.Progress = EmailRepairJobProgress{Percent: 100, Stage: "failed", Label: "งานซ่อมไม่สำเร็จ"}
+		}
+	}
 	return &job, nil
 }
 
@@ -1704,6 +1762,9 @@ func (s *ShopeeEmailRepairService) markJobRunning(jobID string) error {
 }
 
 func (s *ShopeeEmailRepairService) markJobSucceeded(jobID string, result ShopeeEmailRepairResult) error {
+	if result.Progress.Percent == 0 {
+		result.Progress = EmailRepairJobProgress{Percent: 100, Stage: "succeeded", Label: "ซ่อมคำสั่งซื้อจากอีเมลเสร็จแล้ว"}
+	}
 	raw, _ := json.Marshal(result)
 	_, err := s.db.Exec(
 		`UPDATE email_repair_jobs
@@ -1716,6 +1777,7 @@ func (s *ShopeeEmailRepairService) markJobSucceeded(jobID string, result ShopeeE
 }
 
 func (s *ShopeeEmailRepairService) markJobFailed(jobID, message string) error {
+	s.updateJobProgress(jobID, EmailRepairJobProgress{Percent: 100, Stage: "failed", Label: "งานซ่อมไม่สำเร็จ"})
 	_, err := s.db.Exec(
 		`UPDATE email_repair_jobs
 		    SET status = 'failed', error = $2, finished_at = now(), updated_at = now()
@@ -1723,6 +1785,61 @@ func (s *ShopeeEmailRepairService) markJobFailed(jobID, message string) error {
 		jobID, message,
 	)
 	return err
+}
+
+func (s *ShopeeEmailRepairService) updateJobProgress(jobID string, progress EmailRepairJobProgress) {
+	if s == nil || s.db == nil || strings.TrimSpace(jobID) == "" {
+		return
+	}
+	progress.Percent = clampRepairPercent(progress.Percent)
+	raw, _ := json.Marshal(map[string]interface{}{"progress": progress})
+	if _, err := s.db.Exec(
+		`UPDATE email_repair_jobs
+		    SET result = COALESCE(result, '{}'::jsonb) || $2::jsonb,
+		        updated_at = now()
+		  WHERE id = $1::uuid
+		    AND status IN ('queued','running')`,
+		jobID, string(raw),
+	); err != nil {
+		s.logWarn("shopee_email_repair: update progress failed", zap.String("job_id", jobID), zap.Error(err))
+	}
+}
+
+func reportRepairProgress(progress func(EmailRepairJobProgress), percent int, stage, label string, current, total int, orderID string) {
+	if progress == nil {
+		return
+	}
+	progress(EmailRepairJobProgress{
+		Percent:        clampRepairPercent(percent),
+		Stage:          stage,
+		Label:          label,
+		Current:        current,
+		Total:          total,
+		CurrentOrderID: orderID,
+	})
+}
+
+func repairOrderPercent(current, total int) int {
+	if total <= 0 {
+		return 80
+	}
+	if current < 0 {
+		current = 0
+	}
+	if current > total {
+		current = total
+	}
+	return 55 + int(math.Round((float64(current)/float64(total))*35))
+}
+
+func clampRepairPercent(percent int) int {
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
 }
 
 func (s *ShopeeEmailRepairService) auditJob(action, source, billID, jobID, level string, detail map[string]interface{}) {

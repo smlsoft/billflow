@@ -21,18 +21,18 @@ import (
 )
 
 type Service struct {
-	rootDir   string
-	maxBytes  int64
-	repo      *repository.BillArtifactRepo
-	logger    *zap.Logger
+	rootDir  string
+	maxBytes int64
+	repo     *repository.BillArtifactRepo
+	logger   *zap.Logger
 }
 
 func New(rootDir string, maxBytes int64, repo *repository.BillArtifactRepo, logger *zap.Logger) *Service {
 	return &Service{
-		rootDir:   rootDir,
-		maxBytes:  maxBytes,
-		repo:      repo,
-		logger:    logger,
+		rootDir:  rootDir,
+		maxBytes: maxBytes,
+		repo:     repo,
+		logger:   logger,
 	}
 }
 
@@ -160,4 +160,11 @@ func (s *Service) Read(artifactID string) ([]byte, *models.BillArtifact, error) 
 // ListByBill is a thin pass-through for handlers.
 func (s *Service) ListByBill(billID string) ([]models.BillArtifact, error) {
 	return s.repo.ListByBill(billID)
+}
+
+func (s *Service) FindEmailBodyByBillMessage(billID, messageID string) (*models.BillArtifact, error) {
+	if s == nil || s.repo == nil {
+		return nil, fmt.Errorf("artifact service not configured")
+	}
+	return s.repo.FindEmailBodyByBillMessage(billID, messageID)
 }

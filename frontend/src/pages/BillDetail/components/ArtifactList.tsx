@@ -94,6 +94,16 @@ type ShopeeEmailRepairJob = {
   rebuilt_bill_ids?: string[]
   rebuilt_order_ids?: string[]
   missing_order_ids?: string[]
+  progress?: EmailRepairJobProgress
+}
+
+type EmailRepairJobProgress = {
+  percent?: number
+  stage?: string
+  label?: string
+  current?: number
+  total?: number
+  current_order_id?: string
 }
 
 // EmailPreviewModal renders HTML email content in a sandboxed iframe so the
@@ -369,6 +379,7 @@ function ShopeeEmailRepairDialog({
 
   const createdBillIds = job?.created_bill_ids ?? []
   const rebuiltBillIds = job?.rebuilt_bill_ids ?? []
+  const jobProgress = repairJobProgress(job)
   const missingIDs = preview?.missing_order_ids ?? []
   const rebuildIDs = preview?.rebuild_order_ids ?? []
   const blockedIDs = preview?.blocked_order_ids ?? []
@@ -514,6 +525,34 @@ function ShopeeEmailRepairDialog({
                 </div>
                 <JobStatusBadge status={job.status} />
               </div>
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground">
+                    {jobProgress.label}
+                    {jobProgress.current_order_id ? (
+                      <span className="ml-1 font-mono text-foreground">{jobProgress.current_order_id}</span>
+                    ) : null}
+                  </span>
+                  <span className="font-semibold tabular-nums text-foreground">{jobProgress.percent}%</span>
+                </div>
+                <div
+                  className="h-2 overflow-hidden rounded-full bg-muted"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={jobProgress.percent}
+                >
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
+                    style={{ width: `${jobProgress.percent}%` }}
+                  />
+                </div>
+                {jobProgress.total ? (
+                  <div className="text-[11px] text-muted-foreground">
+                    ทำไปแล้ว {jobProgress.current ?? 0}/{jobProgress.total} คำสั่งซื้อ
+                  </div>
+                ) : null}
+              </div>
               {job.status === 'failed' && job.error && (
                 <div className="mt-2 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">
                   {job.error}
@@ -628,6 +667,32 @@ function JobStatusBadge({ status }: { status: ShopeeEmailRepairJob['status'] }) 
   )
 }
 
+function repairJobProgress(job: ShopeeEmailRepairJob | null): Required<Pick<EmailRepairJobProgress, 'percent' | 'label'>> & EmailRepairJobProgress {
+  const p = job?.progress ?? {}
+  const rawPercent =
+    typeof p.percent === 'number'
+      ? p.percent
+      : job?.status === 'succeeded' || job?.status === 'failed'
+        ? 100
+        : job?.status === 'running'
+          ? 5
+          : 0
+  const percent = Math.max(0, Math.min(100, Math.round(rawPercent)))
+  const fallbackLabel =
+    job?.status === 'succeeded'
+      ? 'ซ่อมคำสั่งซื้อจากอีเมลเสร็จแล้ว'
+      : job?.status === 'failed'
+        ? 'งานซ่อมไม่สำเร็จ'
+        : job?.status === 'running'
+          ? 'กำลังซ่อมคำสั่งซื้อจากอีเมลยืนยัน'
+          : 'รอเริ่มงานซ่อม'
+  return {
+    ...p,
+    percent,
+    label: p.label || fallbackLabel,
+  }
+}
+
 function RepairEmailHelp() {
   return (
     <TooltipProvider>
@@ -712,7 +777,7 @@ export function ArtifactList({
 
   if (loading) return null
 
-  const visibleItems = items.filter((a) => isUserVisibleArtifact(a.kind))
+  const visibleItems = normalizeVisibleArtifacts(items.filter((a) => isUserVisibleArtifact(a.kind)))
 
   if (visibleItems.length === 0) {
     return (
@@ -940,9 +1005,68 @@ function artifactDisplay(
   }
 }
 
+function normalizeVisibleArtifacts(items: BillArtifact[]): BillArtifact[] {
+  const byKey = new Map<string, BillArtifact>()
+  for (const item of items) {
+    const key = artifactDedupeKey(item)
+    const existing = byKey.get(key)
+    if (!existing || preferArtifact(item, existing)) {
+      byKey.set(key, item)
+    }
+  }
+  return Array.from(byKey.values()).sort(compareArtifacts)
+}
+
+function artifactDedupeKey(artifact: BillArtifact): string {
+  if (artifact.kind !== 'email_html' && artifact.kind !== 'email_text') {
+    return artifact.id
+  }
+  const messageID = metaString(artifact.source_meta?.message_id)
+  if (!messageID) {
+    return artifact.id
+  }
+  return `email:${messageID}:${emailEvidenceRank(artifact)}`
+}
+
+function preferArtifact(next: BillArtifact, current: BillArtifact): boolean {
+  if (next.kind === 'email_html' && current.kind !== 'email_html') return true
+  if (next.kind !== 'email_html' && current.kind === 'email_html') return false
+  return Date.parse(next.created_at) < Date.parse(current.created_at)
+}
+
+function compareArtifacts(a: BillArtifact, b: BillArtifact): number {
+  const rankDelta = emailEvidenceRank(a) - emailEvidenceRank(b)
+  if (rankDelta !== 0) return rankDelta
+  const timeDelta = Date.parse(a.created_at) - Date.parse(b.created_at)
+  if (timeDelta !== 0) return timeDelta
+  return a.id.localeCompare(b.id)
+}
+
+function emailEvidenceRank(artifact: BillArtifact): number {
+  if (artifact.kind !== 'email_html' && artifact.kind !== 'email_text') {
+    return 20
+  }
+  const subject = metaString(artifact.source_meta?.subject)
+  const eventType = metaString(artifact.source_meta?.event_type)
+  if (
+    eventType === 'payment_confirmed' ||
+    subject.includes('ยืนยันการชำระเงิน') ||
+    subject.includes('ยืนยันคำสั่งซื้อ')
+  ) {
+    return 0
+  }
+  if (eventType === 'shipped' || subject.includes('ถูกจัดส่งแล้ว')) {
+    return 10
+  }
+  return 15
+}
+
 function emailEvidenceLabel(subject: string, eventType: string): string {
   if (eventType === 'payment_confirmed' || subject.includes('ยืนยันการชำระเงิน')) {
     return 'อีเมลยืนยันการชำระเงิน'
+  }
+  if (subject.includes('ยืนยันคำสั่งซื้อ')) {
+    return 'อีเมลยืนยันคำสั่งซื้อ'
   }
   if (eventType === 'shipped' || subject.includes('ถูกจัดส่งแล้ว')) {
     return 'อีเมลแจ้งจัดส่ง'

@@ -69,6 +69,44 @@ func (r *BillArtifactRepo) ListByBill(billID string) ([]models.BillArtifact, err
 	return out, nil
 }
 
+func (r *BillArtifactRepo) FindEmailBodyByBillMessage(billID, messageID string) (*models.BillArtifact, error) {
+	if r == nil || billID == "" || messageID == "" {
+		return nil, nil
+	}
+	var a models.BillArtifact
+	var meta sql.NullString
+	var ct, sha sql.NullString
+	err := r.db.QueryRow(
+		`SELECT id, bill_id, kind, filename, content_type, size_bytes, sha256, storage_path, source_meta, created_at
+		   FROM bill_artifacts
+		  WHERE bill_id = $1
+		    AND kind IN ('email_html','email_text')
+		    AND source_meta->>'message_id' = $2
+		  ORDER BY CASE WHEN kind = 'email_html' THEN 0 ELSE 1 END, created_at ASC
+		  LIMIT 1`,
+		billID, messageID,
+	).Scan(
+		&a.ID, &a.BillID, &a.Kind, &a.Filename, &ct, &a.SizeBytes,
+		&sha, &a.StoragePath, &meta, &a.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if ct.Valid {
+		a.ContentType = ct.String
+	}
+	if sha.Valid {
+		a.SHA256 = sha.String
+	}
+	if meta.Valid && meta.String != "" {
+		a.SourceMeta = json.RawMessage(meta.String)
+	}
+	return &a, nil
+}
+
 func (r *BillArtifactRepo) GetOne(id string) (*models.BillArtifact, error) {
 	var a models.BillArtifact
 	var meta sql.NullString
