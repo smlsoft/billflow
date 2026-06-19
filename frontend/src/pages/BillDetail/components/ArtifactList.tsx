@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Eye, History, Loader2, Paperclip, Printer, Wrench, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Eye, History, Info, Loader2, Paperclip, Printer, Wrench, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import axios from 'axios'
 import { toast } from 'sonner'
@@ -8,6 +8,7 @@ import dayjs from 'dayjs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
   DialogContent,
@@ -39,7 +40,7 @@ interface Props {
   emailGroup?: BillEmailGroup | null
   smlPayload?: Record<string, unknown> | null
   onReload?: () => Promise<unknown>
-  canRepairShopeeEmail?: boolean
+  canRepairMarketplaceEmail?: boolean
 }
 
 type PrintReadiness = {
@@ -56,15 +57,21 @@ type PrintAPIError = {
 
 type ShopeeEmailRepairPreview = {
   bill_id: string
+  source?: string
   message_id: string
   artifact_id: string
   subject: string
+  input_subject?: string
   detected_order_count: number
   existing_count: number
   missing_count: number
+  rebuild_count?: number
+  blocked_count?: number
   detected_order_ids: string[]
   existing_order_ids: string[]
   missing_order_ids: string[]
+  rebuild_order_ids?: string[]
+  blocked_order_ids?: string[]
   email_total: number
   has_stale_tombstones?: boolean
   stale_tombstone_order_ids?: string[]
@@ -79,10 +86,13 @@ type ShopeeEmailRepairJob = {
   status: 'queued' | 'running' | 'succeeded' | 'failed'
   error?: string
   created_count?: number
+  rebuilt_count?: number
   skipped_count?: number
   missing_count?: number
   created_bill_ids?: string[]
   created_order_ids?: string[]
+  rebuilt_bill_ids?: string[]
+  rebuilt_order_ids?: string[]
   missing_order_ids?: string[]
 }
 
@@ -255,34 +265,57 @@ function ShopeeEmailRepairDialog({
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [subjectInput, setSubjectInput] = useState('')
 
   useEffect(() => {
     if (!open) {
       setPreview(null)
       setJob(null)
       setError('')
+      setSubjectInput('')
       return
     }
     let alive = true
-    setLoadingPreview(true)
-    setError('')
-    api
-      .get<{ data: ShopeeEmailRepairPreview }>(`/api/bills/${billId}/shopee-email-repair/preview`)
-      .then((res) => {
+    const loadPreview = async () => {
+      setLoadingPreview(true)
+      setError('')
+      try {
+        const res = await api.get<{ data: ShopeeEmailRepairPreview }>(
+          `/api/bills/${billId}/shopee-email-repair/preview`,
+        )
         if (!alive) return
         setPreview(res.data.data)
-      })
-      .catch((err) => {
+        setSubjectInput((current) => current || res.data.data.subject || '')
+      } catch (err) {
         if (!alive) return
         setError(apiErrorMessage(err, 'ตรวจอีเมลต้นฉบับไม่สำเร็จ'))
-      })
-      .finally(() => {
+      } finally {
         if (alive) setLoadingPreview(false)
-      })
+      }
+    }
+    void loadPreview()
     return () => {
       alive = false
     }
   }, [billId, open])
+
+  const handlePreview = async () => {
+    setLoadingPreview(true)
+    setError('')
+    setJob(null)
+    try {
+      const res = await api.get<{ data: ShopeeEmailRepairPreview }>(
+        `/api/bills/${billId}/shopee-email-repair/preview`,
+        { params: subjectInput.trim() ? { subject: subjectInput.trim() } : undefined },
+      )
+      setPreview(res.data.data)
+      setSubjectInput(res.data.data.subject || subjectInput)
+    } catch (err) {
+      setError(apiErrorMessage(err, 'ตรวจอีเมลต้นฉบับไม่สำเร็จ'))
+    } finally {
+      setLoadingPreview(false)
+    }
+  }
 
   const polling = job?.status === 'queued' || job?.status === 'running'
   useEffect(() => {
@@ -310,7 +343,8 @@ function ShopeeEmailRepairDialog({
   }, [billId, job?.id, onReload, open, polling])
 
   const handleCreateJob = async () => {
-    if (!preview || submitting || !preview.can_repair || preview.missing_count === 0) return
+    const rebuildIDs = preview?.rebuild_order_ids ?? []
+    if (!preview || submitting || !preview.can_repair || (preview.missing_count === 0 && rebuildIDs.length === 0)) return
     setSubmitting(true)
     setError('')
     try {
@@ -320,6 +354,8 @@ function ShopeeEmailRepairDialog({
           expected_order_count: preview.detected_order_count,
           expected_total: preview.email_total,
           expected_missing_order_ids: preview.missing_order_ids,
+          expected_rebuild_order_ids: rebuildIDs,
+          subject: preview.subject,
         },
       )
       setJob(res.data.data)
@@ -332,20 +368,52 @@ function ShopeeEmailRepairDialog({
   }
 
   const createdBillIds = job?.created_bill_ids ?? []
+  const rebuiltBillIds = job?.rebuilt_bill_ids ?? []
   const missingIDs = preview?.missing_order_ids ?? []
+  const rebuildIDs = preview?.rebuild_order_ids ?? []
+  const blockedIDs = preview?.blocked_order_ids ?? []
   const hasWarnings = (preview?.warnings?.length ?? 0) > 0
 
   return (
     <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>ตรวจคำสั่งซื้อในอีเมลต้นฉบับ</DialogTitle>
+          <DialogTitle>ซ่อมคำสั่งซื้อจากอีเมลยืนยัน</DialogTitle>
           <DialogDescription>
-            ใช้ซ่อมกรณีอีเมล Shopee มีหลายคำสั่งซื้อ แต่ BillFlow สร้างมาไม่ครบ
+            ระบุหัวข้ออีเมลยืนยัน เพื่อสร้างรายการที่ตกหล่นและซ่อมบิลเดิมจากอีเมลต้นฉบับที่ถูกต้อง
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="shopee-repair-subject">
+              หัวข้ออีเมลยืนยัน
+            </label>
+            <div className="flex gap-2">
+              <Textarea
+                id="shopee-repair-subject"
+                value={subjectInput}
+                onChange={(event) => setSubjectInput(event.target.value)}
+                placeholder={'Shopee: ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #260608HPC8A42A\nLazada: ยืนยันคำสั่งซื้อหมายเลข 1094738208195692'}
+                className="min-h-[58px] resize-none text-sm"
+                disabled={loadingPreview || submitting || polling}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="h-[58px] shrink-0 gap-1.5"
+                onClick={handlePreview}
+                disabled={loadingPreview || submitting || polling}
+              >
+                {loadingPreview ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+                ตรวจสอบ
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              ถ้าไม่ระบุ ระบบจะลองใช้อีเมลยืนยันการชำระเงินที่แนบกับบิลนี้ก่อน
+            </p>
+          </div>
+
           {loadingPreview && (
             <div className="flex items-center gap-2 rounded-md border border-border bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -367,6 +435,13 @@ function ShopeeEmailRepairDialog({
                 <RepairMetric label="มีใน BillFlow แล้ว" value={preview.existing_count} suffix="ใบ" />
                 <RepairMetric label="ตกหล่น" value={preview.missing_count} suffix="ใบ" tone={preview.missing_count > 0 ? 'warning' : 'success'} />
                 <RepairMetric label="ยอดรวมในอีเมล" value={formatMoney(preview.email_total)} />
+                <RepairMetric label="ซ่อมจากเมลยืนยัน" value={preview.rebuild_count ?? 0} suffix="ใบ" tone={(preview.rebuild_count ?? 0) > 0 ? 'warning' : 'success'} />
+                <RepairMetric label="แก้อัตโนมัติไม่ได้" value={preview.blocked_count ?? 0} suffix="ใบ" tone={(preview.blocked_count ?? 0) > 0 ? 'warning' : 'success'} />
+              </div>
+
+              <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                <div className="text-[11px] text-muted-foreground">อีเมลที่จะใช้เป็นต้นฉบับ</div>
+                <div className="mt-1 break-words text-sm font-medium text-foreground">{preview.subject}</div>
               </div>
 
               <div className="rounded-md border border-border bg-muted/20 p-3">
@@ -393,6 +468,32 @@ function ShopeeEmailRepairDialog({
                   </div>
                 )}
               </div>
+
+              {rebuildIDs.length > 0 && (
+                <div className="rounded-md border border-warning/40 bg-warning/10 p-3">
+                  <div className="mb-2 text-sm font-medium text-warning">บิลเดิมที่จะซ่อมจากอีเมลยืนยัน</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {rebuildIDs.map((id) => (
+                      <span key={id} className="rounded border border-warning/40 bg-background px-2 py-1 font-mono text-xs text-warning">
+                        {id}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {blockedIDs.length > 0 && (
+                <div className="rounded-md border border-border bg-muted/20 p-3">
+                  <div className="mb-2 text-sm font-medium text-muted-foreground">ส่ง SML แล้วหรือซ่อมอัตโนมัติไม่ได้</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {blockedIDs.map((id) => (
+                      <span key={id} className="rounded border border-border bg-background px-2 py-1 font-mono text-xs text-muted-foreground">
+                        {id}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {hasWarnings && (
                 <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
@@ -421,7 +522,7 @@ function ShopeeEmailRepairDialog({
               {job.status === 'succeeded' && (
                 <div className="mt-3 space-y-2">
                   <div className="text-sm text-muted-foreground">
-                    สร้างใหม่ {job.created_count ?? createdBillIds.length} ใบ, ข้ามใบที่มีอยู่แล้ว {job.skipped_count ?? 0} ใบ
+                    สร้างใหม่ {job.created_count ?? createdBillIds.length} ใบ, ซ่อมบิลเดิม {job.rebuilt_count ?? rebuiltBillIds.length} ใบ, ข้ามใบที่มีอยู่แล้ว {job.skipped_count ?? 0} ใบ
                   </div>
                   {createdBillIds.length > 0 && (
                     <div className="flex flex-wrap gap-2">
@@ -440,6 +541,23 @@ function ShopeeEmailRepairDialog({
                       ))}
                     </div>
                   )}
+                  {rebuiltBillIds.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {rebuiltBillIds.map((id, index) => (
+                        <Button
+                          key={id}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={() => window.open(`/bills/${id}`, '_blank', 'noopener,noreferrer')}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          เปิดบิลที่ซ่อม {index + 1}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -450,7 +568,7 @@ function ShopeeEmailRepairDialog({
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             ปิด
           </Button>
-          {preview && preview.missing_count > 0 && job?.status !== 'succeeded' && (
+          {preview && (preview.missing_count > 0 || (preview.rebuild_count ?? 0) > 0) && job?.status !== 'succeeded' && (
             <Button
               type="button"
               className="gap-1.5"
@@ -458,7 +576,7 @@ function ShopeeEmailRepairDialog({
               disabled={submitting || polling || !preview.can_repair}
             >
               {submitting || polling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
-              สร้างเฉพาะรายการที่ตกหล่น
+              ซ่อมจากอีเมลยืนยัน
             </Button>
           )}
         </DialogFooter>
@@ -510,6 +628,27 @@ function JobStatusBadge({ status }: { status: ShopeeEmailRepairJob['status'] }) 
   )
 }
 
+function RepairEmailHelp() {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            tabIndex={0}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            aria-label="คำอธิบายฟังก์ชันซ่อมจากอีเมลยืนยัน"
+          >
+            <Info className="h-3.5 w-3.5" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="max-w-xs text-xs leading-relaxed">
+          ใช้เมื่อ Shopee/Lazada มีอีเมลยืนยันที่ถูกต้อง แต่ BillFlow สร้างบิลไม่ครบ หรือบิลเดิมถูกสร้างจากอีเมลผิดฉบับ ระบบจะตรวจจากหัวข้ออีเมลก่อน และซ่อมเฉพาะบิลที่ยังไม่ส่ง SML
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 export function ArtifactList({
   billId,
   billStatus,
@@ -521,7 +660,7 @@ export function ArtifactList({
   emailGroup,
   smlPayload,
   onReload,
-  canRepairShopeeEmail = false,
+  canRepairMarketplaceEmail = false,
 }: Props) {
   const { items, loading } = useArtifacts(billId)
   const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string; displayName: string } | null>(null)
@@ -585,11 +724,14 @@ export function ArtifactList({
                 <Paperclip className="h-4 w-4 text-muted-foreground" />
                 หลักฐานต้นฉบับ (0)
               </CardTitle>
-              {canRepairShopeeEmail && (
-                <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setRepairOpen(true)}>
-                  <Wrench className="h-3.5 w-3.5" />
-                  ตรวจคำสั่งซื้อในอีเมล
-                </Button>
+              {canRepairMarketplaceEmail && (
+                <div className="flex items-center gap-1">
+                  <RepairEmailHelp />
+                  <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setRepairOpen(true)}>
+                    <Wrench className="h-3.5 w-3.5" />
+                    ซ่อมจากอีเมลยืนยัน
+                  </Button>
+                </div>
               )}
             </div>
           </CardHeader>
@@ -599,7 +741,7 @@ export function ArtifactList({
             </p>
           </CardContent>
         </Card>
-        {canRepairShopeeEmail && (
+        {canRepairMarketplaceEmail && (
           <ShopeeEmailRepairDialog
             billId={billId}
             open={repairOpen}
@@ -627,11 +769,14 @@ export function ArtifactList({
                 เปิดดูเฉพาะเมื่อต้องย้อนตรวจหลักฐานต้นฉบับ
               </p>
             </div>
-            {canRepairShopeeEmail && (
-              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setRepairOpen(true)}>
-                <Wrench className="h-3.5 w-3.5" />
-                ตรวจคำสั่งซื้อในอีเมล
-              </Button>
+            {canRepairMarketplaceEmail && (
+              <div className="flex items-center gap-1">
+                <RepairEmailHelp />
+                <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setRepairOpen(true)}>
+                  <Wrench className="h-3.5 w-3.5" />
+                  ซ่อมจากอีเมลยืนยัน
+                </Button>
+              </div>
             )}
           </div>
         </CardHeader>
@@ -766,7 +911,7 @@ export function ArtifactList({
           onClose={() => setPreviewArt(null)}
         />
       )}
-      {canRepairShopeeEmail && (
+      {canRepairMarketplaceEmail && (
         <ShopeeEmailRepairDialog
           billId={billId}
           open={repairOpen}
