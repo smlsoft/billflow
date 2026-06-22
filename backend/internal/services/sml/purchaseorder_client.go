@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,18 @@ func (c *PurchaseOrderClient) headers() map[string]string {
 
 // ─── Payload ──────────────────────────────────────────────────────────────────
 
+type Money2 float64
+
+func (m Money2) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.FormatFloat(round2(float64(m)), 'f', 2, 64)), nil
+}
+
+type Money4 float64
+
+func (m Money4) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.FormatFloat(roundN(float64(m), 4), 'f', 4, 64)), nil
+}
+
 // PurchaseOrderDetail mirrors InvoiceDetail one-for-one (the v3 PO endpoint
 // accepts the same per-line shape as saleinvoice). If SML rejects any field
 // for purchase orders we'll iterate based on actual error responses.
@@ -78,14 +91,14 @@ type PurchaseOrderDetail struct {
 	WHCode2          string  `json:"wh_code_2,omitempty"`
 	ShelfCode2       string  `json:"shelf_code_2,omitempty"`
 	Qty              float64 `json:"qty"`
-	Price            float64 `json:"price"`
-	PriceExcludeVAT  float64 `json:"price_exclude_vat"`
-	DiscountAmount   float64 `json:"discount_amount"`
-	SumAmount        float64 `json:"sum_amount"`
-	VATAmount        float64 `json:"vat_amount"`
+	Price            Money2  `json:"price"`
+	PriceExcludeVAT  Money4  `json:"price_exclude_vat"`
+	DiscountAmount   Money2  `json:"discount_amount"`
+	SumAmount        Money2  `json:"sum_amount"`
+	VATAmount        Money2  `json:"vat_amount"`
 	TaxType          int     `json:"tax_type"`
 	VATType          int     `json:"vat_type"`
-	SumAmountExclVAT float64 `json:"sum_amount_exclude_vat"`
+	SumAmountExclVAT Money2  `json:"sum_amount_exclude_vat"`
 }
 
 // PurchaseOrderPayload is the body for POST /api/v1/ic/purchase-orders
@@ -112,17 +125,17 @@ type PurchaseOrderPayload struct {
 	InquiryType    int                   `json:"inquiry_type"`
 	VATType        int                   `json:"vat_type"`
 	VATRate        float64               `json:"vat_rate"`
-	TotalValue     float64               `json:"total_value"`
-	TotalDiscount  float64               `json:"total_discount"`
-	TotalBeforeVAT float64               `json:"total_before_vat"`
-	TotalVATValue  float64               `json:"total_vat_value"`
-	TotalExceptVAT float64               `json:"total_except_vat"`
-	TotalAfterVAT  float64               `json:"total_after_vat"`
-	TotalAmount    float64               `json:"total_amount"`
-	CashAmount     float64               `json:"cash_amount"`
-	ChqAmount      float64               `json:"chq_amount"`
-	CreditAmount   float64               `json:"credit_amount"`
-	TransferAmount float64               `json:"tranfer_amount"` // typo intentional
+	TotalValue     Money2                `json:"total_value"`
+	TotalDiscount  Money2                `json:"total_discount"`
+	TotalBeforeVAT Money2                `json:"total_before_vat"`
+	TotalVATValue  Money2                `json:"total_vat_value"`
+	TotalExceptVAT Money2                `json:"total_except_vat"`
+	TotalAfterVAT  Money2                `json:"total_after_vat"`
+	TotalAmount    Money2                `json:"total_amount"`
+	CashAmount     Money2                `json:"cash_amount"`
+	ChqAmount      Money2                `json:"chq_amount"`
+	CreditAmount   Money2                `json:"credit_amount"`
+	TransferAmount Money2                `json:"tranfer_amount"` // typo intentional
 	Items          []PurchaseOrderDetail `json:"items"`
 	PayDetails     []interface{}         `json:"paydetails"`
 	Remark         string                `json:"remark,omitempty"`
@@ -496,14 +509,14 @@ func BuildPurchaseOrderPayload(
 			WHCode2:          wh,
 			ShelfCode2:       shelf,
 			Qty:              item.Qty,
-			Price:            round2(item.Price),
-			PriceExcludeVAT:  roundN(unitVAT.PriceExcludeVAT, 4),
-			DiscountAmount:   discountAmount,
-			SumAmount:        round2(v.SumAmount),
-			VATAmount:        round2(v.VATAmount),
+			Price:            Money2(round2(item.Price)),
+			PriceExcludeVAT:  Money4(roundN(unitVAT.PriceExcludeVAT, 4)),
+			DiscountAmount:   Money2(discountAmount),
+			SumAmount:        Money2(round2(v.SumAmount)),
+			VATAmount:        Money2(round2(v.VATAmount)),
 			TaxType:          0,
 			VATType:          cfg.VATType,
-			SumAmountExclVAT: round2(v.SumAmountExclVAT),
+			SumAmountExclVAT: Money2(round2(v.SumAmountExclVAT)),
 		})
 	}
 
@@ -552,17 +565,17 @@ func BuildPurchaseOrderPayload(
 		InquiryType:    header.InquiryType,
 		VATType:        cfg.VATType,
 		VATRate:        cfg.VATRate,
-		TotalValue:     totalValue,
-		TotalDiscount:  totalDiscount,
-		TotalBeforeVAT: totalBeforeVAT,
-		TotalVATValue:  totalVAT,
-		TotalExceptVAT: 0,
-		TotalAfterVAT:  totalAfterVAT,
-		TotalAmount:    totalAmount,
-		CashAmount:     0,
-		ChqAmount:      0,
-		CreditAmount:   0,
-		TransferAmount: 0,
+		TotalValue:     Money2(totalValue),
+		TotalDiscount:  Money2(totalDiscount),
+		TotalBeforeVAT: Money2(totalBeforeVAT),
+		TotalVATValue:  Money2(totalVAT),
+		TotalExceptVAT: Money2(0),
+		TotalAfterVAT:  Money2(totalAfterVAT),
+		TotalAmount:    Money2(totalAmount),
+		CashAmount:     Money2(0),
+		ChqAmount:      Money2(0),
+		CreditAmount:   Money2(0),
+		TransferAmount: Money2(0),
 		Items:          details,
 		PayDetails:     []interface{}{},
 		Remark:         header.Remark,

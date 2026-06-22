@@ -78,17 +78,20 @@ func TestBuildCreditCardReportWorkbookHasExpectedSheets(t *testing.T) {
 			t.Fatalf("sheets = %#v, want %#v", got, want)
 		}
 	}
-	cell, err := f.GetCellValue("รายงานบัตรเครดิต", "E2")
+	cell, err := f.GetCellValue("รายงานบัตรเครดิต", "F2")
 	if err != nil {
-		t.Fatalf("cell E2: %v", err)
+		t.Fatalf("cell F2: %v", err)
 	}
 	if cell == "" {
-		t.Fatalf("cell E2 should contain charge amount")
+		t.Fatalf("cell F2 should contain charge amount")
 	}
-	assertCellValue(t, f, "รายงานบัตรเครดิต", "B1", "วันที่/เวลาจากอีเมล")
-	assertCellValue(t, f, "รายงานบัตรเครดิต", "F1", "ยอดรวมบิลใน BillFlow")
-	assertCellValue(t, f, "รายงานบัตรเครดิต", "G1", "ต่างจากยอดรูด")
-	assertCellValue(t, f, "รายงานบัตรเครดิต", "I2", "1109337756759692")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "B1", "วันที่จากอีเมล")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "C1", "เวลาจากอีเมล")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "B2", "11/06/2026")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "C2", "16:45:00")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "G1", "ยอดรวมบิลใน BillFlow")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "H1", "ต่างจากยอดรูด")
+	assertCellValue(t, f, "รายงานบัตรเครดิต", "J2", "1109337756759692")
 
 	dailyTitleRow := findCellRow(t, f, "สรุปยอด", "สรุปรายวันจาก BillFlow")
 	if dailyTitleRow == 0 {
@@ -98,7 +101,7 @@ func TestBuildCreditCardReportWorkbookHasExpectedSheets(t *testing.T) {
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 1, dailyHeaderRow), "วันที่จากอีเมล")
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 5, dailyHeaderRow), "ยอดรูดบัตรรวม")
 	dailyDataRow := dailyHeaderRow + 1
-	assertCellValue(t, f, "สรุปยอด", cellName(t, 1, dailyDataRow), "2026-06-11")
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 1, dailyDataRow), "11/06/2026")
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 3, dailyDataRow), "1")
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 4, dailyDataRow), "2")
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 5, dailyDataRow), "7417.69")

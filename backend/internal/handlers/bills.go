@@ -3626,12 +3626,13 @@ func validateLazadaPurchasePayloadTotalForSend(bill *models.Bill, payload sml.Pu
 	if !ok {
 		return fmt.Errorf("Lazada order %s ไม่มียอดชำระจากอีเมลสำหรับตรวจยอด PO", marketplaceOrderIDFromRawData(rd))
 	}
-	delta := roundMoneyForBill(payload.TotalAmount - paidTotal)
+	payloadTotal := float64(payload.TotalAmount)
+	delta := roundMoneyForBill(payloadTotal - paidTotal)
 	if math.Abs(delta) <= 0.01 {
 		return nil
 	}
 	return fmt.Errorf("ยอด PO Lazada ไม่ตรงกับยอดชำระจากอีเมล (order %s, Lazada %.2f, PO %.2f, ส่วนต่าง %.2f) — กรุณาตรวจรายการสินค้าและค่าจัดส่ง/fee SHIP_CUS",
-		marketplaceOrderIDFromRawData(rd), paidTotal, payload.TotalAmount, delta)
+		marketplaceOrderIDFromRawData(rd), paidTotal, payloadTotal, delta)
 }
 
 func (h *BillHandler) logLazadaChargeGroupForSend(bill *models.Bill, group *repository.LazadaChargeGroup, payload sml.PurchaseOrderPayload) {
@@ -3647,7 +3648,7 @@ func (h *BillHandler) logLazadaChargeGroupForSend(bill *models.Bill, group *repo
 		zap.Int("group_count", group.GroupCount),
 		zap.Float64("group_total", group.GroupTotal),
 		zap.Float64("order_paid_total", paidTotal),
-		zap.Float64("payload_total", payload.TotalAmount),
+		zap.Float64("payload_total", float64(payload.TotalAmount)),
 	)
 }
 
@@ -3656,10 +3657,11 @@ func isCardPaymentMethod(method string) bool {
 }
 
 func formatDocRefAmount(v float64) string {
-	if v == float64(int64(v)) {
-		return strconv.FormatInt(int64(v), 10)
+	rounded := roundMoneyForBill(v)
+	if rounded == float64(int64(rounded)) {
+		return strconv.FormatInt(int64(rounded), 10)
 	}
-	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(v, 'f', 2, 64), "0"), ".")
+	return strconv.FormatFloat(rounded, 'f', 2, 64)
 }
 
 func rawDataMapFromBill(bill *models.Bill) map[string]interface{} {

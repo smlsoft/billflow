@@ -17,7 +17,7 @@ function text(value: unknown): string {
 function money(value: unknown): string {
   const n = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(n)) return '—'
-  return `฿${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+  return `฿${n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function vatLabel(value: unknown): string {

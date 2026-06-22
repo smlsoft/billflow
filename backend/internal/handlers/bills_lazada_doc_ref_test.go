@@ -148,6 +148,23 @@ func TestValidateLazadaPurchasePayloadTotalForSend(t *testing.T) {
 	}
 }
 
+func TestFormatDocRefAmountPreservesSatangZero(t *testing.T) {
+	tests := []struct {
+		amount float64
+		want   string
+	}{
+		{amount: 6597, want: "6597"},
+		{amount: 6597.1, want: "6597.10"},
+		{amount: 3904.1, want: "3904.10"},
+		{amount: 1021.45, want: "1021.45"},
+	}
+	for _, tt := range tests {
+		if got := formatDocRefAmount(tt.amount); got != tt.want {
+			t.Fatalf("formatDocRefAmount(%v) = %q, want %q", tt.amount, got, tt.want)
+		}
+	}
+}
+
 func lazadaBillForDocRefTest(raw string) *models.Bill {
 	var compact map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &compact); err != nil {

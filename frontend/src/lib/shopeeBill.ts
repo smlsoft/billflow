@@ -103,5 +103,9 @@ export function marketplaceReconciliationDelta(bill: Bill): number | null {
 
 export function money(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—'
-  return `฿${value.toLocaleString('th-TH')}`
+  const hasSatang = Math.abs(value - Math.round(value)) >= 0.005
+  return `฿${value.toLocaleString('th-TH', {
+    minimumFractionDigits: hasSatang ? 2 : 0,
+    maximumFractionDigits: 2,
+  })}`
 }

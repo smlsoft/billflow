@@ -154,7 +154,7 @@ export async function printArtifact(
       }
 
       const doc = win.document
-      decoratePrintableDocument(doc, printContext, 'fixed')
+      decoratePrintableDocument(doc, printContext, 'fixed', filename)
 
       win.onafterprint = cleanup
       setTimeout(cleanup, 60_000)
@@ -190,7 +190,7 @@ export async function printArtifactsBatch(items: ArtifactPrintBatchItem[]): Prom
     const blob = await fetchArtifactBlob(item.billID, item.artID, item.filename, 'preview')
     const html = await blob.text()
     const sourceDoc = parser.parseFromString(html, 'text/html')
-    decoratePrintableDocument(sourceDoc, item.printContext, 'absolute')
+    decoratePrintableDocument(sourceDoc, item.printContext, 'absolute', item.filename)
     return {
       title: item.filename,
       headHTML: sourceDoc.head?.innerHTML ?? '',
@@ -279,6 +279,7 @@ function decoratePrintableDocument(
   doc: Document,
   printContext: ArtifactPrintContext | undefined,
   stampPosition: 'fixed' | 'absolute',
+  filename = '',
 ): void {
   try {
     trimMarketplacePrintFooter(doc)
@@ -289,6 +290,7 @@ function decoratePrintableDocument(
 
   const printOrders = normalizePrintOrders(printContext)
   const paymentLines = paymentPrintLines(printOrders)
+  const marketplaceKind = detectPrintableMarketplace(doc, filename)
   const orderDocMap = Object.fromEntries(
     printOrders
       .filter((order) => order.orderId && order.smlDocNo)
@@ -296,12 +298,33 @@ function decoratePrintableDocument(
   )
 
   if (paymentLines.length > 0 && doc.body) {
-    insertPaymentPrintStamp(doc, paymentLines, stampPosition)
+    insertPaymentPrintStamp(doc, paymentLines, stampPosition, marketplaceKind)
   }
 
   if (Object.keys(orderDocMap).length > 0 && doc.body) {
     injectOrderDocTextLabels(doc, orderDocMap)
   }
+}
+
+type PrintableMarketplaceKind = 'lazada' | 'shopee' | 'unknown'
+
+function detectPrintableMarketplace(doc: Document, filename: string): PrintableMarketplaceKind {
+  const lowerFilename = filename.toLowerCase()
+  if (lowerFilename.includes('lazada')) return 'lazada'
+  if (lowerFilename.includes('shopee')) return 'shopee'
+
+  const bodyText = (doc.body?.textContent ?? '').toLowerCase()
+  if (
+    bodyText.includes('lazada') ||
+    bodyText.includes('ยอดรวมทั้งหมด(รวม vat)') ||
+    bodyText.includes('tradeorderid')
+  ) {
+    return 'lazada'
+  }
+  if (bodyText.includes('shopee') || bodyText.includes('ยอดที่ต้องชำระทั้งหมด')) {
+    return 'shopee'
+  }
+  return 'unknown'
 }
 
 function normalizePrintOrders(printContext?: ArtifactPrintContext): ArtifactPrintOrderContext[] {
@@ -347,11 +370,19 @@ function insertPaymentPrintStamp(
   doc: Document,
   paymentMethods: string[],
   stampPosition: 'fixed' | 'absolute',
+  marketplaceKind: PrintableMarketplaceKind,
 ): void {
   const floatingStamp = createPaymentPrintStamp(doc, paymentMethods, true)
+  const placeBottomRight = marketplaceKind === 'lazada'
   floatingStamp.style.position = stampPosition
   floatingStamp.style.right = stampPosition === 'fixed' ? '10mm' : '10px'
-  floatingStamp.style.top = stampPosition === 'fixed' ? '8mm' : '10px'
+  if (placeBottomRight) {
+    floatingStamp.style.bottom = stampPosition === 'fixed' ? '8mm' : '10px'
+    floatingStamp.style.top = 'auto'
+  } else {
+    floatingStamp.style.top = stampPosition === 'fixed' ? '8mm' : '10px'
+    floatingStamp.style.bottom = 'auto'
+  }
   floatingStamp.style.zIndex = '2147483647'
   floatingStamp.style.maxWidth = '150px'
   floatingStamp.style.boxShadow = '0 1px 6px rgba(0,0,0,.14)'

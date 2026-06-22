@@ -23,6 +23,8 @@ type CreditCardReportHandler struct {
 	log       *zap.Logger
 }
 
+var creditCardReportExportLocation = mustCreditCardReportBangkokLocation()
+
 func NewCreditCardReportHandler(repo *repository.CreditCardReportRepo, billRepo *repository.BillRepo, auditRepo *repository.AuditLogRepo, log *zap.Logger) *CreditCardReportHandler {
 	return &CreditCardReportHandler{repo: repo, billRepo: billRepo, auditRepo: auditRepo, log: log}
 }
@@ -264,7 +266,7 @@ func buildCreditCardReportWorkbook(run *models.CreditCardReportRun) ([]byte, err
 
 func writeReportDetails(f *excelize.File, sheet string, run *models.CreditCardReportRun, headerStyle, moneyStyle, warnStyle int) {
 	headers := []string{
-		"ลำดับยอดรูดบัตร", "วันที่/เวลาจากอีเมล", "ช่องทาง", "วิธีชำระเงิน", "ยอดรูดบัตร",
+		"ลำดับยอดรูดบัตร", "วันที่จากอีเมล", "เวลาจากอีเมล", "ช่องทาง", "วิธีชำระเงิน", "ยอดรูดบัตร",
 		"ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "POL", "เลขคำสั่งซื้อ", "ผู้ขาย", "ยอดบิล", "สถานะ SML", "doc_ref", "หมายเหตุ",
 	}
 	writeHeader(f, sheet, headers, headerStyle)
@@ -272,10 +274,12 @@ func writeReportDetails(f *excelize.File, sheet string, run *models.CreditCardRe
 	for i, group := range run.Snapshot.Groups {
 		note := issueMessages(group.Issues)
 		paymentMethod := strings.Join(group.PaymentMethods, ", ")
+		chargeDate, chargeTime := creditCardReportExportDateTime(group.ChargeTime)
 		for _, order := range group.Orders {
 			values := []interface{}{
 				i + 1,
-				group.ChargeTime,
+				chargeDate,
+				chargeTime,
 				group.SourceLabel,
 				paymentMethod,
 				nullableFloat(group.ChargeAmount),
@@ -291,15 +295,15 @@ func writeReportDetails(f *excelize.File, sheet string, run *models.CreditCardRe
 			}
 			writeRow(f, sheet, row, values)
 			if len(group.Issues) > 0 {
-				_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", row), fmt.Sprintf("N%d", row), warnStyle)
+				_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", row), fmt.Sprintf("O%d", row), warnStyle)
 			}
 			row++
 		}
 	}
 	setReportWidths(f, sheet)
-	_ = f.SetCellStyle(sheet, "E2", fmt.Sprintf("G%d", max(row-1, 2)), moneyStyle)
-	_ = f.SetCellStyle(sheet, "K2", fmt.Sprintf("K%d", max(row-1, 2)), moneyStyle)
-	_ = f.AutoFilter(sheet, fmt.Sprintf("A1:N%d", max(row-1, 1)), nil)
+	_ = f.SetCellStyle(sheet, "F2", fmt.Sprintf("H%d", max(row-1, 2)), moneyStyle)
+	_ = f.SetCellStyle(sheet, "L2", fmt.Sprintf("L%d", max(row-1, 2)), moneyStyle)
+	_ = f.AutoFilter(sheet, fmt.Sprintf("A1:O%d", max(row-1, 1)), nil)
 }
 
 func writeReportSummary(f *excelize.File, sheet string, run *models.CreditCardReportRun, headerStyle, moneyStyle int) {
@@ -399,16 +403,18 @@ func writeReportSummary(f *excelize.File, sheet string, run *models.CreditCardRe
 }
 
 func writeReportIssues(f *excelize.File, sheet string, run *models.CreditCardReportRun, headerStyle, moneyStyle int) {
-	headers := []string{"ลำดับยอดรูดบัตร", "วันที่/เวลาจากอีเมล", "ช่องทาง", "ยอดรูดบัตร", "ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "จำนวนคำสั่งซื้อ", "หมายเหตุ"}
+	headers := []string{"ลำดับยอดรูดบัตร", "วันที่จากอีเมล", "เวลาจากอีเมล", "ช่องทาง", "ยอดรูดบัตร", "ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "จำนวนคำสั่งซื้อ", "หมายเหตุ"}
 	writeHeader(f, sheet, headers, headerStyle)
 	row := 2
 	for i, group := range run.Snapshot.Groups {
 		if len(group.Issues) == 0 {
 			continue
 		}
+		chargeDate, chargeTime := creditCardReportExportDateTime(group.ChargeTime)
 		writeRow(f, sheet, row, []interface{}{
 			i + 1,
-			group.ChargeTime,
+			chargeDate,
+			chargeTime,
 			group.SourceLabel,
 			nullableFloat(group.ChargeAmount),
 			group.OrderTotal,
@@ -418,9 +424,9 @@ func writeReportIssues(f *excelize.File, sheet string, run *models.CreditCardRep
 		})
 		row++
 	}
-	_ = f.SetColWidth(sheet, "A", "H", 18)
-	_ = f.SetColWidth(sheet, "H", "H", 48)
-	_ = f.SetCellStyle(sheet, "D2", fmt.Sprintf("F%d", max(row-1, 2)), moneyStyle)
+	_ = f.SetColWidth(sheet, "A", "I", 18)
+	_ = f.SetColWidth(sheet, "I", "I", 48)
+	_ = f.SetCellStyle(sheet, "E2", fmt.Sprintf("G%d", max(row-1, 2)), moneyStyle)
 }
 
 func writeHeader(f *excelize.File, sheet string, headers []string, style int) {
@@ -441,8 +447,8 @@ func writeRow(f *excelize.File, sheet string, row int, values []interface{}) {
 
 func setReportWidths(f *excelize.File, sheet string) {
 	widths := map[string]float64{
-		"A": 12, "B": 22, "C": 12, "D": 18, "E": 14, "F": 14, "G": 12,
-		"H": 16, "I": 24, "J": 28, "K": 14, "L": 14, "M": 16, "N": 36,
+		"A": 12, "B": 14, "C": 12, "D": 12, "E": 18, "F": 14, "G": 14, "H": 12,
+		"I": 16, "J": 24, "K": 28, "L": 14, "M": 14, "N": 16, "O": 36,
 	}
 	for col, width := range widths {
 		_ = f.SetColWidth(sheet, col, col, width)
@@ -462,6 +468,7 @@ func issueMessages(issues []models.CreditCardReportIssue) string {
 
 type creditCardReportDailySummary struct {
 	Date            string
+	sortDate        string
 	PaymentMethod   string
 	GroupCount      int
 	OrderCount      int
@@ -478,14 +485,16 @@ func buildCreditCardReportDailySummaries(groups []models.CreditCardReportGroup) 
 	}
 	byKey := map[key]creditCardReportDailySummary{}
 	for _, group := range groups {
-		date := creditCardReportGroupDateLabel(group)
+		dateKey := creditCardReportGroupDateKey(group)
+		date := creditCardReportDisplayDate(dateKey)
 		method := strings.Join(group.PaymentMethods, ", ")
 		if strings.TrimSpace(method) == "" {
 			method = "-"
 		}
-		k := key{date: date, method: method}
+		k := key{date: dateKey, method: method}
 		row := byKey[k]
 		row.Date = date
+		row.sortDate = dateKey
 		row.PaymentMethod = method
 		row.GroupCount++
 		row.OrderCount += group.OrderCount
@@ -504,15 +513,15 @@ func buildCreditCardReportDailySummaries(groups []models.CreditCardReportGroup) 
 		out = append(out, row)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Date != out[j].Date {
-			return out[i].Date < out[j].Date
+		if out[i].sortDate != out[j].sortDate {
+			return out[i].sortDate < out[j].sortDate
 		}
 		return out[i].PaymentMethod < out[j].PaymentMethod
 	})
 	return out
 }
 
-func creditCardReportGroupDateLabel(group models.CreditCardReportGroup) string {
+func creditCardReportGroupDateKey(group models.CreditCardReportGroup) string {
 	if v := strings.TrimSpace(group.ChargeDate); v != "" {
 		return v
 	}
@@ -520,6 +529,76 @@ func creditCardReportGroupDateLabel(group models.CreditCardReportGroup) string {
 		return v[:10]
 	}
 	return "-"
+}
+
+func creditCardReportExportDateTime(value string) (string, string) {
+	t, ok := parseCreditCardReportExportTime(value)
+	if !ok {
+		if len(strings.TrimSpace(value)) >= 10 {
+			date := creditCardReportDisplayDate(strings.TrimSpace(value)[:10])
+			return date, ""
+		}
+		return "", ""
+	}
+	t = t.In(creditCardReportBangkokLocation())
+	return t.Format("02/01/2006"), t.Format("15:04:05")
+}
+
+func parseCreditCardReportExportTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	loc := creditCardReportBangkokLocation()
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05-07",
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		var (
+			t   time.Time
+			err error
+		)
+		if layout == "2006-01-02 15:04:05" || layout == "2006-01-02 15:04" || layout == "2006-01-02" {
+			t, err = time.ParseInLocation(layout, value, loc)
+		} else {
+			t, err = time.Parse(layout, value)
+		}
+		if err == nil {
+			return t.In(loc), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func creditCardReportDisplayDate(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "-" {
+		return "-"
+	}
+	if t, err := time.ParseInLocation("2006-01-02", value, creditCardReportBangkokLocation()); err == nil {
+		return t.Format("02/01/2006")
+	}
+	if t, ok := parseCreditCardReportExportTime(value); ok {
+		return t.In(creditCardReportBangkokLocation()).Format("02/01/2006")
+	}
+	return value
+}
+
+func creditCardReportBangkokLocation() *time.Location {
+	return creditCardReportExportLocation
+}
+
+func mustCreditCardReportBangkokLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Bangkok")
+	if err != nil {
+		return time.FixedZone("Asia/Bangkok", 7*60*60)
+	}
+	return loc
 }
 
 func creditCardReportDisplayOrderID(value string) string {

@@ -88,6 +88,45 @@ func TestBuildPurchaseOrderPayloadIncludesHeaderFields(t *testing.T) {
 	}
 }
 
+func TestPurchaseOrderPayloadJSONPreservesTwoDecimalMoney(t *testing.T) {
+	payload := BuildPurchaseOrderPayload(
+		"POL26060044",
+		"2026-06-18",
+		"6597.10",
+		"2026-06-18",
+		[]POItem{
+			{ItemCode: "CH0002BK", ItemName: "เก้าอี้", Qty: 5, Price: 699, DiscountAmount: 69.9, UnitCode: "ชิ้น"},
+			{ItemCode: "SHIP_CUS", ItemName: "ค่าบริการส่งสินค้า", Qty: 1, Price: 479, UnitCode: "บาท"},
+		},
+		PurchaseOrderConfig{DocFormat: "POL", CustCode: "AF00001", VATType: 2, VATRate: 7, UnitCode: "ชิ้น"},
+		"Thaidi Bear",
+	)
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range [][]byte{
+		[]byte(`"total_amount":3904.10`),
+		[]byte(`"total_value":3904.10`),
+		[]byte(`"discount_amount":69.90`),
+		[]byte(`"sum_amount":3425.10`),
+		[]byte(`"price":479.00`),
+	} {
+		if !bytes.Contains(body, want) {
+			t.Fatalf("payload JSON missing %s: %s", want, body)
+		}
+	}
+
+	asciiBody, err := marshalASCII(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(asciiBody, []byte(`"total_amount":3904.10`)) {
+		t.Fatalf("ASCII payload lost two-decimal amount: %s", asciiBody)
+	}
+}
+
 func TestSaleAndInvoicePayloadIncludeRemark2WhenProvided(t *testing.T) {
 	saleOrder := BuildSaleOrderPayload(
 		"SO-1",
