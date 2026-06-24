@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -152,6 +154,65 @@ func TestCreditCardReportLazadaChargeGroupSumsPaidAmountsAndFiltersAtGroupLevel(
 	}
 	if !hasCreditCardReportIssue(group, "mixed_payment_method") {
 		t.Fatalf("issues = %#v, want mixed_payment_method", group.Issues)
+	}
+}
+
+func TestCreditCardReportDiagnosisCategories(t *testing.T) {
+	chargeSmall := 1002.0
+	small := buildCreditCardReportGroup("shopee:small", []creditCardReportRow{{
+		BillID:             "bill-small",
+		Source:             "shopee_shipped",
+		Status:             "needs_review",
+		OrderID:            "260613AAA",
+		EmailDate:          "2026-06-13T16:14:29+07:00",
+		EmailMessageID:     "msg-small",
+		ShopeeChargeAmount: &chargeSmall,
+		OrderTotal:         1000,
+		CreatedAt:          reportTestTime("2026-06-13T16:15:00+07:00"),
+	}})
+	if small.DiagnosisCategory != "small_diff" {
+		t.Fatalf("small diff diagnosis = %q, want small_diff", small.DiagnosisCategory)
+	}
+
+	chargeOK := 1000.0
+	incomplete := buildCreditCardReportGroup("shopee:incomplete", []creditCardReportRow{{
+		BillID:             "bill-incomplete",
+		Source:             "shopee_shipped",
+		Status:             "needs_review",
+		OrderID:            "260613BBB",
+		EmailDate:          "2026-06-13T16:14:29+07:00",
+		EmailMessageID:     "msg-incomplete",
+		ShopeeChargeAmount: &chargeOK,
+		OrderTotal:         1000,
+		CreatedAt:          reportTestTime("2026-06-13T16:15:00+07:00"),
+	}})
+	if incomplete.DiagnosisCategory != "incomplete_only" {
+		t.Fatalf("incomplete diagnosis = %q, want incomplete_only", incomplete.DiagnosisCategory)
+	}
+	if !hasCreditCardReportIssue(incomplete, "missing_pol") || !hasCreditCardReportIssue(incomplete, "missing_payment_method") {
+		t.Fatalf("incomplete issues = %#v, want missing POL/payment", incomplete.Issues)
+	}
+}
+
+func TestCreditCardReportShopeeDiagnosticArtifactDetection(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join("2026", "06", "bill-1", "payment.html")
+	abs := filepath.Join(root, path)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := `ยืนยันการชำระเงิน #260611S88U1Y7J #260701S88U1Y7K #260611S88U1Y7J #260801S88U1Y7M`
+	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	repo := &CreditCardReportRepo{artifactRoot: root}
+	got := repo.detectShopeeOrdersFromDiagnosticArtifacts([]creditCardDiagnosticArtifact{{
+		Subject:     "ยืนยันการชำระเงินคำสั่งซื้อหมายเลข #260611S88U1Y7J",
+		StoragePath: path,
+		SizeBytes:   int64(len(body)),
+	}})
+	if got != 3 {
+		t.Fatalf("detected orders = %d, want 3", got)
 	}
 }
 

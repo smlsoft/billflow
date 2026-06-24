@@ -94,6 +94,7 @@ func main() {
 	channelDefaultRepo := repository.NewChannelDefaultRepo(db)
 	docCounterRepo := repository.NewDocCounterRepo(db)
 	creditCardReportRepo := repository.NewCreditCardReportRepo(db)
+	creditCardReportRepo.SetArtifactRoot(cfg.ArtifactsDir)
 	chatConvRepo := repository.NewChatConversationRepo(db)
 	chatMessageRepo := repository.NewChatMessageRepo(db)
 	chatMediaRepo := repository.NewChatMediaRepo(db, cfg.ArtifactsDir, cfg.ArtifactsMaxBytes)

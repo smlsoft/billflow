@@ -301,6 +301,7 @@ export default function BillDetail() {
     (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
     bill.bill_type === 'purchase' &&
     !bill.archived_at
+  const shouldOpenRepairDialog = new URLSearchParams(location.search).get('open_repair') === '1'
 
   const handleItemUpdated = (updated: BillItem) => {
     setBill((prev) => {
@@ -422,6 +423,7 @@ export default function BillDetail() {
             smlPayload={bill.sml_payload}
             onReload={reloadBill}
             canRepairMarketplaceEmail={canRepairMarketplaceEmail}
+            autoOpenRepair={shouldOpenRepairDialog}
           />
           <BillTimeline billId={bill.id} shopeeEvents={bill.shopee_events ?? []} />
           <SmlPayloadSection

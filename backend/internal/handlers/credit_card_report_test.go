@@ -71,7 +71,7 @@ func TestBuildCreditCardReportWorkbookHasExpectedSheets(t *testing.T) {
 		t.Fatalf("open workbook: %v", err)
 	}
 	defer f.Close()
-	want := []string{"รายงานบัตรเครดิต", "สรุปยอด", "ต้องตรวจสอบ"}
+	want := []string{"รายงานบัตรเครดิต", "สรุปยอด", "ต้องตรวจสอบ", "ยอดไม่ตรงจริง", "ข้อมูลยังไม่ครบ"}
 	got := f.GetSheetList()
 	for i, sheet := range want {
 		if i >= len(got) || got[i] != sheet {
@@ -92,6 +92,10 @@ func TestBuildCreditCardReportWorkbookHasExpectedSheets(t *testing.T) {
 	assertCellValue(t, f, "รายงานบัตรเครดิต", "G1", "ยอดรวมบิลใน BillFlow")
 	assertCellValue(t, f, "รายงานบัตรเครดิต", "H1", "ต่างจากยอดรูด")
 	assertCellValue(t, f, "รายงานบัตรเครดิต", "J2", "1109337756759692")
+	assertCellValue(t, f, "ต้องตรวจสอบ", "E1", "ประเภทปัญหา")
+	assertCellValue(t, f, "ต้องตรวจสอบ", "F1", "สาเหตุที่พบ")
+	assertCellValue(t, f, "ยอดไม่ตรงจริง", "E1", "ประเภทปัญหา")
+	assertCellValue(t, f, "ข้อมูลยังไม่ครบ", "E1", "ประเภทปัญหา")
 
 	dailyTitleRow := findCellRow(t, f, "สรุปยอด", "สรุปรายวันจาก BillFlow")
 	if dailyTitleRow == 0 {
@@ -105,7 +109,11 @@ func TestBuildCreditCardReportWorkbookHasExpectedSheets(t *testing.T) {
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 3, dailyDataRow), "1")
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 4, dailyDataRow), "2")
 	assertCellValue(t, f, "สรุปยอด", cellName(t, 5, dailyDataRow), "7417.69")
-	assertCellValue(t, f, "สรุปยอด", "B12", "รายงานนี้ยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement")
+	noteRow := findCellRow(t, f, "สรุปยอด", "หมายเหตุ")
+	if noteRow == 0 {
+		t.Fatalf("summary note row not found")
+	}
+	assertCellValue(t, f, "สรุปยอด", cellName(t, 2, noteRow), "รายงานนี้ยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement และยอดไม่ตรงจริงไม่ใช่จำนวนเดียวกับกลุ่มที่ต้องตรวจสอบทั้งหมด")
 }
 
 func bytesReader(data []byte) *bytes.Reader {

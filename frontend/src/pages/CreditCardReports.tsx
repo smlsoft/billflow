@@ -12,6 +12,7 @@ import {
   Loader2,
   Printer,
   RefreshCw,
+  Wrench,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -49,6 +50,7 @@ import {
   previewCreditCardReport,
   recordCreditCardReportPrintEvents,
 } from '@/hooks/useCreditCardReports'
+import { useAuth } from '@/hooks/useAuth'
 import { DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS } from '@/pages/ChannelDefaults/labels'
 import { printArtifactsBatch } from '@/pages/BillDetail/hooks/useArtifacts'
 import { cn } from '@/lib/utils'
@@ -61,6 +63,14 @@ import type {
 } from '@/types'
 
 const ALL = 'all'
+
+type DiagnosisFilter =
+  | 'all'
+  | 'amount_mismatch'
+  | 'repair_candidate'
+  | 'missing_pol'
+  | 'missing_payment_method'
+  | 'ok'
 
 const SOURCE_OPTIONS = [
   { value: ALL, label: 'ทุกช่องทาง' },
@@ -76,6 +86,15 @@ const CHARGE_AMOUNT_HELP =
 
 const EMAIL_TIME_HELP =
   'วันที่/เวลาจากอีเมลที่ BillFlow ใช้เรียงและจับกลุ่มยอดรูดบัตร ไม่ใช่เวลาจาก statement ธนาคาร.'
+
+const DIAGNOSIS_FILTERS: Array<{ value: DiagnosisFilter; label: string }> = [
+  { value: 'all', label: 'ทั้งหมด' },
+  { value: 'amount_mismatch', label: 'ยอดไม่ตรง' },
+  { value: 'repair_candidate', label: 'ควรซ่อม' },
+  { value: 'missing_pol', label: 'ยังไม่มี POL' },
+  { value: 'missing_payment_method', label: 'ยังไม่มีวิธีชำระ' },
+  { value: 'ok', label: 'ยอดตรงแล้ว' },
+]
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -155,6 +174,70 @@ function selectedGroups(preview: CreditCardReportPreview | null, selected: Set<s
   return preview.groups.filter((group) => selected.has(group.group_id))
 }
 
+function hasIssue(group: CreditCardReportGroup, code: string) {
+  return group.issues.some((issue) => issue.code === code)
+}
+
+function diagnosisCategory(group: CreditCardReportGroup) {
+  if (group.diagnosis_category) return group.diagnosis_category
+  if (group.charge_amount === null || group.charge_amount === undefined) return 'incomplete_only'
+  if (group.diff !== null && group.diff !== undefined && Math.abs(group.diff) > 0.01) {
+    return Math.abs(group.diff) <= 2 ? 'small_diff' : 'amount_mismatch'
+  }
+  if (group.issues.length > 0) return 'incomplete_only'
+  return 'ok'
+}
+
+function groupMatchesDiagnosisFilter(group: CreditCardReportGroup, filter: DiagnosisFilter) {
+  if (filter === 'all') return true
+  if (filter === 'missing_pol') return hasIssue(group, 'missing_pol')
+  if (filter === 'missing_payment_method') return hasIssue(group, 'missing_payment_method')
+  if (filter === 'amount_mismatch') return hasIssue(group, 'amount_mismatch')
+  if (filter === 'repair_candidate') return diagnosisCategory(group) === 'repair_candidate'
+  if (filter === 'ok') return diagnosisCategory(group) === 'ok'
+  return true
+}
+
+function diagnosisLabel(group: CreditCardReportGroup) {
+  switch (diagnosisCategory(group)) {
+    case 'repair_candidate':
+      return 'ควรซ่อมจากอีเมล'
+    case 'amount_mismatch':
+      return 'ยอดไม่ตรงจริง'
+    case 'small_diff':
+      return 'ยอดต่างเล็กน้อย'
+    case 'incomplete_only':
+      return 'ข้อมูลยังไม่ครบ'
+    case 'ok':
+      return 'ยอดตรง'
+    default:
+      return 'ต้องตรวจสอบ'
+  }
+}
+
+function diagnosisTone(group: CreditCardReportGroup) {
+  switch (diagnosisCategory(group)) {
+    case 'repair_candidate':
+      return 'border-destructive/30 bg-destructive/10 text-destructive'
+    case 'amount_mismatch':
+    case 'small_diff':
+      return 'border-warning/30 bg-warning/10 text-warning'
+    case 'incomplete_only':
+      return 'border-muted-foreground/20 bg-muted text-muted-foreground'
+    case 'ok':
+      return 'border-success/30 bg-success/10 text-success'
+    default:
+      return 'border-muted-foreground/20 bg-muted text-muted-foreground'
+  }
+}
+
+function diagnosisDetail(group: CreditCardReportGroup) {
+  if (group.diagnosis_detail) return group.diagnosis_detail
+  if (group.diagnosis_title) return group.diagnosis_title
+  if (group.issues.length > 0) return group.issues.map((issue) => issue.message).join('; ')
+  return diagnosisLabel(group)
+}
+
 function issueTone(issueCode: string) {
   if (issueCode === 'amount_mismatch') return 'border-warning/30 bg-warning/10 text-warning'
   if (issueCode === 'missing_pol' || issueCode === 'missing_charge_amount' || issueCode === 'missing_group_key') {
@@ -227,6 +310,32 @@ function IssueChips({ group }: { group: CreditCardReportGroup }) {
   )
 }
 
+function DiagnosisCell({ group, canRepair }: { group: CreditCardReportGroup; canRepair: boolean }) {
+  const category = diagnosisCategory(group)
+  return (
+    <div className="min-w-0 space-y-1">
+      <Badge variant="outline" className={cn('h-5 max-w-full px-1.5 text-[11px]', diagnosisTone(group))}>
+        <span className="truncate">{diagnosisLabel(group)}</span>
+      </Badge>
+      <div className="line-clamp-2 text-[11px] leading-snug text-muted-foreground" title={diagnosisDetail(group)}>
+        {diagnosisDetail(group)}
+      </div>
+      {category === 'repair_candidate' && group.repair_bill_id && (
+        canRepair ? (
+          <Button asChild variant="outline" size="sm" className="h-6 px-2 text-[11px]">
+            <Link to={`/bills/${group.repair_bill_id}?open_repair=1`}>
+              <Wrench className="mr-1 h-3 w-3" />
+              ตรวจ/ซ่อม
+            </Link>
+          </Button>
+        ) : (
+          <div className="text-[11px] text-muted-foreground">ซ่อมได้เฉพาะผู้ดูแลระบบ</div>
+        )
+      )}
+    </div>
+  )
+}
+
 function SummaryItem({ label, value, tone }: { label: string; value: string; tone?: 'warn' }) {
   return (
     <div className="flex items-baseline gap-1.5 whitespace-nowrap">
@@ -239,6 +348,7 @@ function SummaryItem({ label, value, tone }: { label: string; value: string; ton
 }
 
 export default function CreditCardReports() {
+  const { user } = useAuth()
   const [filter, setFilter] = useState<CreditCardReportFilter>({
     date_from: firstDayOfMonthISO(),
     date_to: todayISO(),
@@ -255,9 +365,15 @@ export default function CreditCardReports() {
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [showRuns, setShowRuns] = useState(false)
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [diagnosisFilter, setDiagnosisFilter] = useState<DiagnosisFilter>('all')
   const [busy, setBusy] = useState('')
+  const canRepairFromReport = user?.role === 'admin'
 
   const selectedRows = useMemo(() => selectedGroups(preview, selected), [preview, selected])
+  const displayedGroups = useMemo(
+    () => preview?.groups.filter((group) => groupMatchesDiagnosisFilter(group, diagnosisFilter)) ?? [],
+    [preview, diagnosisFilter],
+  )
   const selectedOrderCount = useMemo(
     () => selectedRows.reduce((sum, group) => sum + group.order_count, 0),
     [selectedRows],
@@ -334,7 +450,7 @@ export default function CreditCardReports() {
 
   const selectAllPreview = () => {
     if (!preview) return
-    setSelected(new Set(preview.groups.map((group) => group.group_id)))
+    setSelected(new Set(displayedGroups.map((group) => group.group_id)))
   }
 
   const clearSelection = () => setSelected(new Set())
@@ -606,6 +722,10 @@ export default function CreditCardReports() {
           <SummaryItem label="ยอดรูดบัตร" value={money(selectedChargeTotal)} />
           <SummaryItem label="ยอดรวมบิลใน BillFlow" value={money(selectedOrderTotal)} />
           <SummaryItem label="ต้องตรวจ" value={numberLabel(selectedIssueCount)} tone={selectedIssueCount > 0 ? 'warn' : undefined} />
+          <SummaryItem label="ยอดไม่ตรงจริง" value={numberLabel(preview?.summary.amount_mismatch_count ?? 0)} tone={(preview?.summary.amount_mismatch_count ?? 0) > 0 ? 'warn' : undefined} />
+          <SummaryItem label="ควรซ่อม" value={numberLabel(preview?.summary.repair_candidate_count ?? 0)} tone={(preview?.summary.repair_candidate_count ?? 0) > 0 ? 'warn' : undefined} />
+          <SummaryItem label="ข้อมูลยังไม่ครบ" value={numberLabel(preview?.summary.incomplete_only_count ?? 0)} />
+          <SummaryItem label="ยอดต่างเล็กน้อย" value={numberLabel(preview?.summary.small_diff_count ?? 0)} />
           {activeRun && (
             <div className="min-w-0 truncate text-xs text-muted-foreground">
               snapshot: <span className="font-medium text-foreground">{activeRun.report_name || activeRun.id.slice(0, 8)}</span>
@@ -621,8 +741,8 @@ export default function CreditCardReports() {
             <div className="truncate text-xs text-muted-foreground">เลือกทั้งยอดรูดบัตร เพื่อไม่ให้ยอด statement แตกเป็นราย order</div>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
-            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={selectAllPreview} disabled={!preview || preview.groups.length === 0}>
-              เลือกทั้งหมด
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={selectAllPreview} disabled={!preview || displayedGroups.length === 0}>
+              เลือกที่แสดง
             </Button>
             <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={clearSelection} disabled={selected.size === 0}>
               ล้างที่เลือก
@@ -636,6 +756,26 @@ export default function CreditCardReports() {
               Export Excel
             </Button>
           </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b bg-muted/10 px-3 py-1.5">
+          <span className="mr-1 text-[11px] font-medium text-muted-foreground">กรองสาเหตุ</span>
+          {DIAGNOSIS_FILTERS.map((option) => (
+            <Button
+              key={option.value}
+              type="button"
+              variant={diagnosisFilter === option.value ? 'default' : 'outline'}
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => setDiagnosisFilter(option.value)}
+            >
+              {option.label}
+            </Button>
+          ))}
+          {preview && diagnosisFilter !== 'all' && (
+            <span className="ml-1 text-[11px] text-muted-foreground">
+              แสดง {numberLabel(displayedGroups.length)} จาก {numberLabel(preview.groups.length)} ยอดรูด
+            </span>
+          )}
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {!preview && !loadingPreview && (
@@ -664,8 +804,17 @@ export default function CreditCardReports() {
               />
             </div>
           )}
-          {preview && preview.groups.length > 0 && (
-            <table className="w-full min-w-[980px] border-collapse text-xs">
+          {preview && preview.groups.length > 0 && displayedGroups.length === 0 && !loadingPreview && (
+            <div className="flex h-full items-center justify-center p-6">
+              <EmptyState
+                icon={FileSpreadsheet}
+                title="ไม่พบรายการในตัวกรองนี้"
+                description="ลองเลือกตัวกรองสาเหตุอื่น หรือกดทั้งหมดเพื่อกลับไปดูรายการครบ"
+              />
+            </div>
+          )}
+          {preview && displayedGroups.length > 0 && (
+            <table className="w-full min-w-[1180px] border-collapse text-xs">
               <thead className="sticky top-0 z-20 bg-muted/95 shadow-[0_1px_0_hsl(var(--border))]">
                 <tr>
                   <th className="h-8 w-8 px-2 text-left font-medium text-muted-foreground"></th>
@@ -681,11 +830,13 @@ export default function CreditCardReports() {
                   <th className="h-8 w-[138px] px-2 text-right font-medium text-muted-foreground">ยอดรวมบิลใน BillFlow</th>
                   <th className="h-8 w-[112px] px-2 text-right font-medium text-muted-foreground">ต่างจากยอดรูด</th>
                   <th className="h-8 w-[88px] px-2 text-left font-medium text-muted-foreground">POL</th>
-                  <th className="h-8 w-[170px] px-2 text-left font-medium text-muted-foreground">สถานะ</th>
+                  <th className="h-8 w-[220px] px-2 text-left font-medium text-muted-foreground">สาเหตุ</th>
+                  <th className="h-8 w-[150px] px-2 text-left font-medium text-muted-foreground">สถานะ</th>
                 </tr>
               </thead>
               <tbody>
-                  {preview.groups.map((group, idx) => {
+                  {displayedGroups.map((group) => {
+                    const originalIndex = preview.groups.findIndex((item) => item.group_id === group.group_id)
                     const isSelected = selected.has(group.group_id)
                     const isExpanded = expanded.has(group.group_id)
                     return (
@@ -699,7 +850,7 @@ export default function CreditCardReports() {
                             <Checkbox
                               checked={isSelected}
                               onCheckedChange={(checked) => toggleSelected(group.group_id, Boolean(checked))}
-                              aria-label={`เลือกยอดรูดบัตร ${idx + 1}`}
+                              aria-label={`เลือกยอดรูดบัตร ${originalIndex + 1}`}
                             />
                           </td>
                           <td className="px-1 py-1.5 align-middle">
@@ -709,7 +860,7 @@ export default function CreditCardReports() {
                           </td>
                           <td className="px-2 py-1.5 align-middle" title={dateTimeLabel(group.charge_time)}>
                             <span className="font-medium tabular-nums">{compactDateTimeLabel(group.charge_time)}</span>
-                            <span className="ml-1 text-[11px] text-muted-foreground">#{idx + 1}</span>
+                            <span className="ml-1 text-[11px] text-muted-foreground">#{originalIndex + 1}</span>
                           </td>
                           <td className="px-2 py-1.5 align-middle">
                             <Badge variant="outline" className={cn(
@@ -734,13 +885,23 @@ export default function CreditCardReports() {
                             <span className="font-medium tabular-nums">POL {numberLabel(group.pol_count)}/{numberLabel(group.order_count)}</span>
                           </td>
                           <td className="px-2 py-1.5 align-middle">
+                            <DiagnosisCell group={group} canRepair={canRepairFromReport} />
+                          </td>
+                          <td className="px-2 py-1.5 align-middle">
                             <IssueChips group={group} />
                           </td>
                         </tr>
                         {isExpanded && (
                           <tr key={`${group.group_id}-orders`} className="border-b bg-muted/20">
-                            <td colSpan={10} className="p-0">
+                            <td colSpan={11} className="p-0">
                               <div className="px-10 py-2">
+                                <div className="mb-2 rounded-md border bg-background px-2 py-1.5 text-xs">
+                                  <div className="font-medium text-foreground">{diagnosisLabel(group)}</div>
+                                  <div className="mt-0.5 text-muted-foreground">{diagnosisDetail(group)}</div>
+                                  {group.recommended_action && (
+                                    <div className="mt-1 text-muted-foreground">คำแนะนำ: {group.recommended_action}</div>
+                                  )}
+                                </div>
                                 {group.issues.length > 0 && (
                                   <div className="mb-2 flex flex-wrap gap-1">
                                     {group.issues.map((issue) => (

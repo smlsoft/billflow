@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -14,18 +17,30 @@ import (
 )
 
 const (
-	creditCardReportMaxGroups = 500
-	creditCardReportMaxOrders = 5000
+	creditCardReportMaxGroups              = 500
+	creditCardReportMaxOrders              = 5000
+	creditCardReportSmallDiffThreshold     = 2.0
+	creditCardReportMaxDiagnosticGroups    = 80
+	creditCardReportMaxDiagnosticFileBytes = 512 * 1024
 )
 
 var bangkokLocation = mustBangkokLocation()
+var creditCardShopeeOrderIDPattern = regexp.MustCompile(`#([0-9A-Za-z]{8,})`)
 
 type CreditCardReportRepo struct {
-	db *sql.DB
+	db           *sql.DB
+	artifactRoot string
 }
 
 func NewCreditCardReportRepo(db *sql.DB) *CreditCardReportRepo {
 	return &CreditCardReportRepo{db: db}
+}
+
+func (r *CreditCardReportRepo) SetArtifactRoot(root string) {
+	if r == nil {
+		return
+	}
+	r.artifactRoot = strings.TrimSpace(root)
 }
 
 type creditCardReportRow struct {
@@ -75,6 +90,9 @@ func (r *CreditCardReportRepo) Preview(f models.CreditCardReportFilter) (*models
 		groups = limited
 	}
 	if err := r.attachCreditCardReportArtifacts(groups); err != nil {
+		return nil, err
+	}
+	if err := r.diagnoseCreditCardReportGroups(groups); err != nil {
 		return nil, err
 	}
 	evaluateCreditCardReportPrintReadiness(groups)
@@ -457,7 +475,268 @@ func buildCreditCardReportGroup(groupID string, rows []creditCardReportRow) mode
 		Orders:         orders,
 	}
 	group.Issues = creditCardReportIssues(group, rows)
+	diagnoseCreditCardReportGroupBase(&group)
 	return group
+}
+
+type creditCardDiagnosticArtifact struct {
+	MessageID   string
+	BillID      string
+	Kind        string
+	SizeBytes   int64
+	StoragePath string
+	Subject     string
+	CreatedAt   time.Time
+}
+
+func (r *CreditCardReportRepo) diagnoseCreditCardReportGroups(groups []models.CreditCardReportGroup) error {
+	for i := range groups {
+		diagnoseCreditCardReportGroupBase(&groups[i])
+	}
+	if r == nil || strings.TrimSpace(r.artifactRoot) == "" {
+		return nil
+	}
+	messageIDs := []string{}
+	seen := map[string]bool{}
+	candidateCount := 0
+	for i := range groups {
+		group := groups[i]
+		if group.Source != "shopee_shipped" || !hasCreditCardReportIssue(group, "amount_mismatch") {
+			continue
+		}
+		if group.Diff == nil || math.Abs(*group.Diff) <= creditCardReportSmallDiffThreshold {
+			continue
+		}
+		if candidateCount >= creditCardReportMaxDiagnosticGroups {
+			continue
+		}
+		messageID := creditCardReportGroupMessageID(group)
+		if messageID == "" || seen[messageID] {
+			continue
+		}
+		seen[messageID] = true
+		messageIDs = append(messageIDs, messageID)
+		candidateCount++
+	}
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	artifacts, err := r.creditCardDiagnosticArtifacts(messageIDs)
+	if err != nil {
+		return err
+	}
+	for i := range groups {
+		group := &groups[i]
+		if group.Source != "shopee_shipped" || !hasCreditCardReportIssue(*group, "amount_mismatch") {
+			continue
+		}
+		if group.Diff == nil || math.Abs(*group.Diff) <= creditCardReportSmallDiffThreshold {
+			continue
+		}
+		messageID := creditCardReportGroupMessageID(*group)
+		if messageID == "" {
+			continue
+		}
+		detected := r.detectShopeeOrdersFromDiagnosticArtifacts(artifacts[messageID])
+		if detected <= group.OrderCount {
+			continue
+		}
+		group.DiagnosisCategory = "repair_candidate"
+		group.DiagnosisTitle = "คำสั่งซื้อตกหล่นจากอีเมล"
+		group.DetectedEmailOrderCount = detected
+		group.ActiveBillOrderCount = group.OrderCount
+		group.EstimatedMissingOrderCount = detected - group.OrderCount
+		group.RepairBillID = creditCardReportFirstOrderBillID(*group)
+		group.DiagnosisDetail = fmt.Sprintf("อีเมลต้นฉบับมี %d คำสั่งซื้อ แต่ BillFlow มี %d ใบในยอดรูดนี้", detected, group.OrderCount)
+		group.RecommendedAction = "กดตรวจ/ซ่อมจากอีเมลต้นฉบับ แล้วกลับมากด Preview ใหม่"
+	}
+	return nil
+}
+
+func diagnoseCreditCardReportGroupBase(group *models.CreditCardReportGroup) {
+	if group == nil {
+		return
+	}
+	group.ActiveBillOrderCount = group.OrderCount
+	if group.DiagnosisCategory == "repair_candidate" {
+		return
+	}
+	if group.ChargeAmount == nil {
+		group.DiagnosisCategory = "incomplete_only"
+		group.DiagnosisTitle = "ข้อมูลยอดรูดไม่ครบ"
+		group.DiagnosisDetail = "กลุ่มนี้ยังไม่มียอดรูดบัตรจากอีเมล จึงยังเทียบ statement ไม่ได้"
+		group.RecommendedAction = "ตรวจอีเมลต้นฉบับหรือข้อมูลยอดรูดก่อน export"
+		return
+	}
+	if group.Diff != nil && math.Abs(*group.Diff) > 0.01 {
+		if math.Abs(*group.Diff) <= creditCardReportSmallDiffThreshold {
+			group.DiagnosisCategory = "small_diff"
+			group.DiagnosisTitle = "ยอดต่างเล็กน้อย"
+			group.DiagnosisDetail = fmt.Sprintf("ยอดต่าง %.2f บาท ควรตรวจส่วนลด ค่าส่ง หรือ rounding จากข้อมูลเก่า", *group.Diff)
+			group.RecommendedAction = "ตรวจรายการย่อยในกลุ่มนี้ก่อนส่งต่อบัญชี"
+			return
+		}
+		group.DiagnosisCategory = "amount_mismatch"
+		group.DiagnosisTitle = "ยอดรวมบิลไม่ตรงกับยอดรูด"
+		group.DiagnosisDetail = "ยอดรวมบิลใน BillFlow ยังไม่เท่ากับยอดรูดบัตรจากอีเมล"
+		group.RecommendedAction = "ตรวจว่ามีคำสั่งซื้อตกหล่น หรือยอดสินค้า/ส่วนลด/ค่าส่งจากข้อมูลเก่าผิดหรือไม่"
+		return
+	}
+	if len(group.Issues) > 0 {
+		group.DiagnosisCategory = "incomplete_only"
+		group.DiagnosisTitle = "ข้อมูลยังไม่ครบแต่ยอดตรง"
+		group.DiagnosisDetail = issueMessagesForDiagnosis(group.Issues)
+		group.RecommendedAction = "เติมข้อมูลที่ระบบเตือน เช่น POL หรือวิธีชำระเงิน"
+		return
+	}
+	group.DiagnosisCategory = "ok"
+	group.DiagnosisTitle = "ยอดตรง"
+	group.DiagnosisDetail = "ยอดรูดบัตรตรงกับยอดรวมบิลใน BillFlow"
+	group.RecommendedAction = ""
+}
+
+func (r *CreditCardReportRepo) creditCardDiagnosticArtifacts(messageIDs []string) (map[string][]creditCardDiagnosticArtifact, error) {
+	out := map[string][]creditCardDiagnosticArtifact{}
+	rows, err := r.db.Query(`
+		SELECT message_id, bill_id, kind, size_bytes, storage_path, subject, created_at
+		  FROM (
+		    SELECT COALESCE(NULLIF(ba.source_meta->>'message_id', ''), NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) AS message_id,
+		           b.id::text AS bill_id,
+		           ba.kind,
+		           ba.size_bytes,
+		           ba.storage_path,
+		           COALESCE(ba.source_meta->>'subject', '') AS subject,
+		           ba.created_at
+		      FROM bills b
+		      JOIN bill_artifacts ba ON ba.bill_id = b.id
+		     WHERE COALESCE(NULLIF(ba.source_meta->>'message_id', ''), NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) = ANY($1)
+		       AND ba.kind IN ('email_html', 'email_text')
+		       AND ba.size_bytes <= $2
+		  ) x
+		 WHERE message_id <> ''
+		 ORDER BY message_id, created_at ASC`,
+		pq.Array(messageIDs),
+		creditCardReportMaxDiagnosticFileBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a creditCardDiagnosticArtifact
+		if err := rows.Scan(&a.MessageID, &a.BillID, &a.Kind, &a.SizeBytes, &a.StoragePath, &a.Subject, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out[a.MessageID] = append(out[a.MessageID], a)
+	}
+	return out, rows.Err()
+}
+
+func (r *CreditCardReportRepo) detectShopeeOrdersFromDiagnosticArtifacts(artifacts []creditCardDiagnosticArtifact) int {
+	best := 0
+	for _, a := range artifacts {
+		if !creditCardReportIsShopeePaymentSubject(a.Subject) && hasAnyPaymentArtifact(artifacts) {
+			continue
+		}
+		data, ok := r.readCreditCardDiagnosticArtifact(a.StoragePath)
+		if !ok {
+			continue
+		}
+		count := len(creditCardReportUniqueShopeeOrderIDs(string(data)))
+		if count > best {
+			best = count
+		}
+	}
+	return best
+}
+
+func hasAnyPaymentArtifact(artifacts []creditCardDiagnosticArtifact) bool {
+	for _, a := range artifacts {
+		if creditCardReportIsShopeePaymentSubject(a.Subject) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *CreditCardReportRepo) readCreditCardDiagnosticArtifact(storagePath string) ([]byte, bool) {
+	root := strings.TrimSpace(r.artifactRoot)
+	storagePath = strings.TrimSpace(storagePath)
+	if root == "" || storagePath == "" || filepath.IsAbs(storagePath) {
+		return nil, false
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, false
+	}
+	abs := filepath.Join(rootAbs, filepath.Clean(storagePath))
+	rel, err := filepath.Rel(rootAbs, abs)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return nil, false
+	}
+	info, err := os.Stat(abs)
+	if err != nil || info.IsDir() || info.Size() > creditCardReportMaxDiagnosticFileBytes {
+		return nil, false
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil || len(data) == 0 || len(data) > creditCardReportMaxDiagnosticFileBytes {
+		return nil, false
+	}
+	return data, true
+}
+
+func creditCardReportIsShopeePaymentSubject(subject string) bool {
+	subject = strings.TrimSpace(subject)
+	return strings.Contains(subject, "ยืนยันการชำระเงิน") && strings.Contains(subject, "คำสั่งซื้อ")
+}
+
+func creditCardReportUniqueShopeeOrderIDs(text string) []string {
+	matches := creditCardShopeeOrderIDPattern.FindAllStringSubmatch(text, -1)
+	out := []string{}
+	seen := map[string]bool{}
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		id := strings.ToUpper(strings.TrimLeft(strings.TrimSpace(match[1]), "#"))
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+func creditCardReportGroupMessageID(group models.CreditCardReportGroup) string {
+	for _, order := range group.Orders {
+		if strings.TrimSpace(order.EmailMessageID) != "" {
+			return strings.TrimSpace(order.EmailMessageID)
+		}
+	}
+	return ""
+}
+
+func creditCardReportFirstOrderBillID(group models.CreditCardReportGroup) string {
+	for _, order := range group.Orders {
+		if strings.TrimSpace(order.BillID) != "" {
+			return strings.TrimSpace(order.BillID)
+		}
+	}
+	return ""
+}
+
+func issueMessagesForDiagnosis(issues []models.CreditCardReportIssue) string {
+	if len(issues) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.Message) != "" {
+			out = append(out, issue.Message)
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 func (r *CreditCardReportRepo) attachCreditCardReportArtifacts(groups []models.CreditCardReportGroup) error {
@@ -639,6 +918,21 @@ func summarizeCreditCardReportGroups(groups []models.CreditCardReportGroup) mode
 		if len(group.Issues) > 0 {
 			s.IssueGroupCount++
 		}
+		category := strings.TrimSpace(group.DiagnosisCategory)
+		if category == "" {
+			category = creditCardReportDiagnosisCategory(group)
+		}
+		if category == "amount_mismatch" {
+			s.AmountMismatchCount++
+		}
+		switch category {
+		case "repair_candidate":
+			s.RepairCandidateCount++
+		case "incomplete_only":
+			s.IncompleteOnlyCount++
+		case "small_diff":
+			s.SmallDiffCount++
+		}
 		if group.POLCount != group.OrderCount {
 			s.MissingPOLCount += group.OrderCount - group.POLCount
 		}
@@ -647,6 +941,25 @@ func summarizeCreditCardReportGroups(groups []models.CreditCardReportGroup) mode
 		}
 	}
 	return s
+}
+
+func creditCardReportDiagnosisCategory(group models.CreditCardReportGroup) string {
+	if strings.TrimSpace(group.DiagnosisCategory) != "" {
+		return strings.TrimSpace(group.DiagnosisCategory)
+	}
+	if group.ChargeAmount == nil {
+		return "incomplete_only"
+	}
+	if group.Diff != nil && math.Abs(*group.Diff) > 0.01 {
+		if math.Abs(*group.Diff) <= creditCardReportSmallDiffThreshold {
+			return "small_diff"
+		}
+		return "amount_mismatch"
+	}
+	if len(group.Issues) > 0 {
+		return "incomplete_only"
+	}
+	return "ok"
 }
 
 func normalizeCreditCardReportFilter(f models.CreditCardReportFilter) models.CreditCardReportFilter {

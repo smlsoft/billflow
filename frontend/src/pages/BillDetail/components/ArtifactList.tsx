@@ -41,6 +41,7 @@ interface Props {
   smlPayload?: Record<string, unknown> | null
   onReload?: () => Promise<unknown>
   canRepairMarketplaceEmail?: boolean
+  autoOpenRepair?: boolean
 }
 
 type PrintReadiness = {
@@ -726,11 +727,18 @@ export function ArtifactList({
   smlPayload,
   onReload,
   canRepairMarketplaceEmail = false,
+  autoOpenRepair = false,
 }: Props) {
   const { items, loading } = useArtifacts(billId)
   const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string; displayName: string } | null>(null)
   const [printEvents, setPrintEvents] = useState<EmailPrintEvent[]>(emailGroup?.print_events ?? [])
   const [repairOpen, setRepairOpen] = useState(false)
+
+  useEffect(() => {
+    if (canRepairMarketplaceEmail && autoOpenRepair) {
+      setRepairOpen(true)
+    }
+  }, [autoOpenRepair, canRepairMarketplaceEmail])
 
   useEffect(() => {
     setPrintEvents(emailGroup?.print_events ?? [])

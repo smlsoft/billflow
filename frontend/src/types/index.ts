@@ -307,6 +307,10 @@ export interface CreditCardReportSummary {
   missing_pol_count: number
   missing_charge_count: number
   ready_print_groups: number
+  amount_mismatch_count?: number
+  repair_candidate_count?: number
+  incomplete_only_count?: number
+  small_diff_count?: number
 }
 
 export interface CreditCardReportIssue {
@@ -361,6 +365,14 @@ export interface CreditCardReportGroup {
   printable_count: number
   print_ready: boolean
   print_block_reason?: string
+  diagnosis_category?: 'ok' | 'amount_mismatch' | 'repair_candidate' | 'incomplete_only' | 'small_diff' | string
+  diagnosis_title?: string
+  diagnosis_detail?: string
+  recommended_action?: string
+  repair_bill_id?: string
+  detected_email_order_count?: number
+  active_bill_order_count?: number
+  estimated_missing_order_count?: number
   issues: CreditCardReportIssue[]
   orders: CreditCardReportOrder[]
   print_artifacts?: CreditCardReportPrintArtifact[]

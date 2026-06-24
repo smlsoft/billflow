@@ -21,37 +21,49 @@ type CreditCardReportPreview struct {
 }
 
 type CreditCardReportSummary struct {
-	GroupCount       int     `json:"group_count"`
-	OrderCount       int     `json:"order_count"`
-	SelectedCount    int     `json:"selected_count,omitempty"`
-	ChargeTotal      float64 `json:"charge_total"`
-	OrderTotal       float64 `json:"order_total"`
-	IssueGroupCount  int     `json:"issue_group_count"`
-	MissingPOLCount  int     `json:"missing_pol_count"`
-	MissingCharge    int     `json:"missing_charge_count"`
-	ReadyPrintGroups int     `json:"ready_print_groups"`
+	GroupCount           int     `json:"group_count"`
+	OrderCount           int     `json:"order_count"`
+	SelectedCount        int     `json:"selected_count,omitempty"`
+	ChargeTotal          float64 `json:"charge_total"`
+	OrderTotal           float64 `json:"order_total"`
+	IssueGroupCount      int     `json:"issue_group_count"`
+	MissingPOLCount      int     `json:"missing_pol_count"`
+	MissingCharge        int     `json:"missing_charge_count"`
+	ReadyPrintGroups     int     `json:"ready_print_groups"`
+	AmountMismatchCount  int     `json:"amount_mismatch_count"`
+	RepairCandidateCount int     `json:"repair_candidate_count"`
+	IncompleteOnlyCount  int     `json:"incomplete_only_count"`
+	SmallDiffCount       int     `json:"small_diff_count"`
 }
 
 type CreditCardReportGroup struct {
-	GroupID          string                          `json:"group_id"`
-	Source           string                          `json:"source"`
-	SourceLabel      string                          `json:"source_label"`
-	ChargeTime       string                          `json:"charge_time"`
-	ChargeDate       string                          `json:"charge_date"`
-	SortTime         time.Time                       `json:"sort_time"`
-	PaymentMethods   []string                        `json:"payment_methods"`
-	ChargeAmount     *float64                        `json:"charge_amount,omitempty"`
-	OrderTotal       float64                         `json:"order_total"`
-	Diff             *float64                        `json:"diff,omitempty"`
-	OrderCount       int                             `json:"order_count"`
-	POLCount         int                             `json:"pol_count"`
-	SentCount        int                             `json:"sent_count"`
-	PrintableCount   int                             `json:"printable_count"`
-	PrintReady       bool                            `json:"print_ready"`
-	PrintBlockReason string                          `json:"print_block_reason,omitempty"`
-	Issues           []CreditCardReportIssue         `json:"issues"`
-	Orders           []CreditCardReportOrder         `json:"orders"`
-	PrintArtifacts   []CreditCardReportPrintArtifact `json:"print_artifacts,omitempty"`
+	GroupID                    string                          `json:"group_id"`
+	Source                     string                          `json:"source"`
+	SourceLabel                string                          `json:"source_label"`
+	ChargeTime                 string                          `json:"charge_time"`
+	ChargeDate                 string                          `json:"charge_date"`
+	SortTime                   time.Time                       `json:"sort_time"`
+	PaymentMethods             []string                        `json:"payment_methods"`
+	ChargeAmount               *float64                        `json:"charge_amount,omitempty"`
+	OrderTotal                 float64                         `json:"order_total"`
+	Diff                       *float64                        `json:"diff,omitempty"`
+	OrderCount                 int                             `json:"order_count"`
+	POLCount                   int                             `json:"pol_count"`
+	SentCount                  int                             `json:"sent_count"`
+	PrintableCount             int                             `json:"printable_count"`
+	PrintReady                 bool                            `json:"print_ready"`
+	PrintBlockReason           string                          `json:"print_block_reason,omitempty"`
+	DiagnosisCategory          string                          `json:"diagnosis_category,omitempty"`
+	DiagnosisTitle             string                          `json:"diagnosis_title,omitempty"`
+	DiagnosisDetail            string                          `json:"diagnosis_detail,omitempty"`
+	RecommendedAction          string                          `json:"recommended_action,omitempty"`
+	RepairBillID               string                          `json:"repair_bill_id,omitempty"`
+	DetectedEmailOrderCount    int                             `json:"detected_email_order_count,omitempty"`
+	ActiveBillOrderCount       int                             `json:"active_bill_order_count,omitempty"`
+	EstimatedMissingOrderCount int                             `json:"estimated_missing_order_count,omitempty"`
+	Issues                     []CreditCardReportIssue         `json:"issues"`
+	Orders                     []CreditCardReportOrder         `json:"orders"`
+	PrintArtifacts             []CreditCardReportPrintArtifact `json:"print_artifacts,omitempty"`
 }
 
 type CreditCardReportOrder struct {

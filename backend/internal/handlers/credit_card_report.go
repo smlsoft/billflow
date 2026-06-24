@@ -238,9 +238,13 @@ func buildCreditCardReportWorkbook(run *models.CreditCardReportRun) ([]byte, err
 	detailSheet := "รายงานบัตรเครดิต"
 	summarySheet := "สรุปยอด"
 	issueSheet := "ต้องตรวจสอบ"
+	mismatchSheet := "ยอดไม่ตรงจริง"
+	incompleteSheet := "ข้อมูลยังไม่ครบ"
 	f.SetSheetName("Sheet1", detailSheet)
 	_, _ = f.NewSheet(summarySheet)
 	_, _ = f.NewSheet(issueSheet)
+	_, _ = f.NewSheet(mismatchSheet)
+	_, _ = f.NewSheet(incompleteSheet)
 
 	headerStyle, _ := f.NewStyle(&excelize.Style{
 		Font:      &excelize.Font{Bold: true, Color: "1F2937"},
@@ -256,6 +260,12 @@ func buildCreditCardReportWorkbook(run *models.CreditCardReportRun) ([]byte, err
 	writeReportDetails(f, detailSheet, run, headerStyle, moneyStyle, warnStyle)
 	writeReportSummary(f, summarySheet, run, headerStyle, moneyStyle)
 	writeReportIssues(f, issueSheet, run, headerStyle, moneyStyle)
+	writeReportFilteredIssues(f, mismatchSheet, run, headerStyle, moneyStyle, func(group models.CreditCardReportGroup) bool {
+		return creditCardReportHasIssue(group, "amount_mismatch")
+	})
+	writeReportFilteredIssues(f, incompleteSheet, run, headerStyle, moneyStyle, func(group models.CreditCardReportGroup) bool {
+		return creditCardReportWorkbookDiagnosisCategory(group) == "incomplete_only" && !creditCardReportHasIssue(group, "amount_mismatch")
+	})
 	f.SetActiveSheet(0)
 	var buf bytes.Buffer
 	if err := f.Write(&buf); err != nil {
@@ -317,19 +327,23 @@ func writeReportSummary(f *excelize.File, sheet string, run *models.CreditCardRe
 		{"ยอดรูดบัตรรวม", run.Summary.ChargeTotal},
 		{"ยอดรวมบิลใน BillFlow", run.Summary.OrderTotal},
 		{"กลุ่มที่ต้องตรวจสอบ", run.Summary.IssueGroupCount},
+		{"ยอดไม่ตรงจริง", creditCardReportSummaryAmountMismatchCount(run)},
+		{"ควรซ่อมจากอีเมล", creditCardReportSummaryRepairCandidateCount(run)},
+		{"ข้อมูลยังไม่ครบแต่ยอดตรง", creditCardReportSummaryIncompleteOnlyCount(run)},
+		{"ยอดต่างเล็กน้อย", creditCardReportSummarySmallDiffCount(run)},
 		{"สร้างเมื่อ", run.CreatedAt.Format(time.RFC3339)},
 	}
 	for i, row := range rows {
 		writeRow(f, sheet, i+1, row)
 	}
-	_ = f.SetCellStyle(sheet, "A1", "A10", headerStyle)
+	_ = f.SetCellStyle(sheet, "A1", fmt.Sprintf("A%d", len(rows)), headerStyle)
 	_ = f.SetCellStyle(sheet, "B7", "B8", moneyStyle)
 	_ = f.SetColWidth(sheet, "A", "A", 28)
 	_ = f.SetColWidth(sheet, "B", "B", 34)
 
 	noteRow := len(rows) + 2
 	_ = f.SetCellValue(sheet, fmt.Sprintf("A%d", noteRow), "หมายเหตุ")
-	_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", noteRow), "รายงานนี้ยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement")
+	_ = f.SetCellValue(sheet, fmt.Sprintf("B%d", noteRow), "รายงานนี้ยังไม่รวมยอดคืนเงิน/ยอดติดลบจาก statement และยอดไม่ตรงจริงไม่ใช่จำนวนเดียวกับกลุ่มที่ต้องตรวจสอบทั้งหมด")
 	_ = f.SetCellStyle(sheet, fmt.Sprintf("A%d", noteRow), fmt.Sprintf("A%d", noteRow), headerStyle)
 
 	platformHeaderRow := noteRow + 2
@@ -403,11 +417,17 @@ func writeReportSummary(f *excelize.File, sheet string, run *models.CreditCardRe
 }
 
 func writeReportIssues(f *excelize.File, sheet string, run *models.CreditCardReportRun, headerStyle, moneyStyle int) {
-	headers := []string{"ลำดับยอดรูดบัตร", "วันที่จากอีเมล", "เวลาจากอีเมล", "ช่องทาง", "ยอดรูดบัตร", "ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "จำนวนคำสั่งซื้อ", "หมายเหตุ"}
+	writeReportFilteredIssues(f, sheet, run, headerStyle, moneyStyle, func(group models.CreditCardReportGroup) bool {
+		return len(group.Issues) > 0
+	})
+}
+
+func writeReportFilteredIssues(f *excelize.File, sheet string, run *models.CreditCardReportRun, headerStyle, moneyStyle int, include func(models.CreditCardReportGroup) bool) {
+	headers := []string{"ลำดับยอดรูดบัตร", "วันที่จากอีเมล", "เวลาจากอีเมล", "ช่องทาง", "ประเภทปัญหา", "สาเหตุที่พบ", "คำแนะนำ", "ยอดรูดบัตร", "ยอดรวมบิลใน BillFlow", "ต่างจากยอดรูด", "จำนวนคำสั่งซื้อ", "หมายเหตุ"}
 	writeHeader(f, sheet, headers, headerStyle)
 	row := 2
 	for i, group := range run.Snapshot.Groups {
-		if len(group.Issues) == 0 {
+		if include != nil && !include(group) {
 			continue
 		}
 		chargeDate, chargeTime := creditCardReportExportDateTime(group.ChargeTime)
@@ -416,6 +436,9 @@ func writeReportIssues(f *excelize.File, sheet string, run *models.CreditCardRep
 			chargeDate,
 			chargeTime,
 			group.SourceLabel,
+			creditCardReportDiagnosisLabel(group),
+			creditCardReportDiagnosisTitle(group),
+			creditCardReportRecommendedAction(group),
 			nullableFloat(group.ChargeAmount),
 			group.OrderTotal,
 			nullableFloat(group.Diff),
@@ -424,9 +447,10 @@ func writeReportIssues(f *excelize.File, sheet string, run *models.CreditCardRep
 		})
 		row++
 	}
-	_ = f.SetColWidth(sheet, "A", "I", 18)
-	_ = f.SetColWidth(sheet, "I", "I", 48)
-	_ = f.SetCellStyle(sheet, "E2", fmt.Sprintf("G%d", max(row-1, 2)), moneyStyle)
+	_ = f.SetColWidth(sheet, "A", "L", 18)
+	_ = f.SetColWidth(sheet, "F", "G", 42)
+	_ = f.SetColWidth(sheet, "L", "L", 48)
+	_ = f.SetCellStyle(sheet, "H2", fmt.Sprintf("J%d", max(row-1, 2)), moneyStyle)
 }
 
 func writeHeader(f *excelize.File, sheet string, headers []string, style int) {
@@ -464,6 +488,154 @@ func issueMessages(issues []models.CreditCardReportIssue) string {
 		out = append(out, issue.Message)
 	}
 	return strings.Join(out, "; ")
+}
+
+func creditCardReportHasIssue(group models.CreditCardReportGroup, code string) bool {
+	for _, issue := range group.Issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func creditCardReportWorkbookDiagnosisCategory(group models.CreditCardReportGroup) string {
+	if strings.TrimSpace(group.DiagnosisCategory) != "" {
+		return strings.TrimSpace(group.DiagnosisCategory)
+	}
+	if group.ChargeAmount == nil {
+		return "incomplete_only"
+	}
+	if group.Diff != nil && math.Abs(*group.Diff) > 0.01 {
+		if math.Abs(*group.Diff) <= 2 {
+			return "small_diff"
+		}
+		return "amount_mismatch"
+	}
+	if len(group.Issues) > 0 {
+		return "incomplete_only"
+	}
+	return "ok"
+}
+
+func creditCardReportDiagnosisLabel(group models.CreditCardReportGroup) string {
+	switch creditCardReportWorkbookDiagnosisCategory(group) {
+	case "repair_candidate":
+		return "ควรซ่อมจากอีเมล"
+	case "amount_mismatch":
+		return "ยอดไม่ตรงจริง"
+	case "small_diff":
+		return "ยอดต่างเล็กน้อย"
+	case "incomplete_only":
+		return "ข้อมูลยังไม่ครบ"
+	case "ok":
+		return "ยอดตรง"
+	default:
+		return "ต้องตรวจสอบ"
+	}
+}
+
+func creditCardReportDiagnosisTitle(group models.CreditCardReportGroup) string {
+	if strings.TrimSpace(group.DiagnosisDetail) != "" {
+		return strings.TrimSpace(group.DiagnosisDetail)
+	}
+	if strings.TrimSpace(group.DiagnosisTitle) != "" {
+		return strings.TrimSpace(group.DiagnosisTitle)
+	}
+	switch creditCardReportWorkbookDiagnosisCategory(group) {
+	case "amount_mismatch":
+		return "ยอดรวมบิลใน BillFlow ไม่ตรงกับยอดรูดบัตร"
+	case "small_diff":
+		return "ยอดต่างเล็กน้อย ควรตรวจส่วนลดหรือค่าส่ง"
+	case "incomplete_only":
+		return issueMessages(group.Issues)
+	case "ok":
+		return "ยอดรูดบัตรตรงกับยอดรวมบิลใน BillFlow"
+	default:
+		return issueMessages(group.Issues)
+	}
+}
+
+func creditCardReportRecommendedAction(group models.CreditCardReportGroup) string {
+	if strings.TrimSpace(group.RecommendedAction) != "" {
+		return strings.TrimSpace(group.RecommendedAction)
+	}
+	switch creditCardReportWorkbookDiagnosisCategory(group) {
+	case "repair_candidate":
+		return "เปิดบิลต้นทางแล้วกดซ่อมจากอีเมลต้นฉบับ"
+	case "amount_mismatch":
+		return "ตรวจว่ามี order ตกหล่นหรือยอดจากอีเมลเก่าผิดหรือไม่"
+	case "small_diff":
+		return "ตรวจส่วนลด ค่าส่ง หรือ rounding"
+	case "incomplete_only":
+		return "เติม POL หรือวิธีชำระเงินให้ครบ"
+	default:
+		return ""
+	}
+}
+
+func creditCardReportSummaryAmountMismatchCount(run *models.CreditCardReportRun) int {
+	if run == nil {
+		return 0
+	}
+	if run.Summary.AmountMismatchCount > 0 {
+		return run.Summary.AmountMismatchCount
+	}
+	count := 0
+	for _, group := range run.Snapshot.Groups {
+		if creditCardReportHasIssue(group, "amount_mismatch") {
+			count++
+		}
+	}
+	return count
+}
+
+func creditCardReportSummaryRepairCandidateCount(run *models.CreditCardReportRun) int {
+	if run == nil {
+		return 0
+	}
+	if run.Summary.RepairCandidateCount > 0 {
+		return run.Summary.RepairCandidateCount
+	}
+	count := 0
+	for _, group := range run.Snapshot.Groups {
+		if creditCardReportWorkbookDiagnosisCategory(group) == "repair_candidate" {
+			count++
+		}
+	}
+	return count
+}
+
+func creditCardReportSummaryIncompleteOnlyCount(run *models.CreditCardReportRun) int {
+	if run == nil {
+		return 0
+	}
+	if run.Summary.IncompleteOnlyCount > 0 {
+		return run.Summary.IncompleteOnlyCount
+	}
+	count := 0
+	for _, group := range run.Snapshot.Groups {
+		if creditCardReportWorkbookDiagnosisCategory(group) == "incomplete_only" && !creditCardReportHasIssue(group, "amount_mismatch") {
+			count++
+		}
+	}
+	return count
+}
+
+func creditCardReportSummarySmallDiffCount(run *models.CreditCardReportRun) int {
+	if run == nil {
+		return 0
+	}
+	if run.Summary.SmallDiffCount > 0 {
+		return run.Summary.SmallDiffCount
+	}
+	count := 0
+	for _, group := range run.Snapshot.Groups {
+		if creditCardReportWorkbookDiagnosisCategory(group) == "small_diff" {
+			count++
+		}
+	}
+	return count
 }
 
 type creditCardReportDailySummary struct {
