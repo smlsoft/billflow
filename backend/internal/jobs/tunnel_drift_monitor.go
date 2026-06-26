@@ -10,8 +10,6 @@ import (
 
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
-
-	lineservice "billflow/internal/services/line"
 )
 
 // TunnelDriftMonitor checks once a day whether `PUBLIC_BASE_URL` (the
@@ -28,11 +26,11 @@ import (
 //     tunnel → backend) which is what we actually care about. A successful
 //     fetch proves the URL is good for LINE Push image delivery.
 //
-// Throttle: at most 1 LINE admin alert per 24h even if drift persists, so
-// the channel doesn't get spammed with the same warning every cron tick.
+// Throttle: at most 1 alert per 24h even if drift persists.
 type TunnelDriftMonitor struct {
 	publicBaseURL string
-	lineSvc       *lineservice.Service
+	notifier      Notifier
+	instanceID    string
 	httpClient    *http.Client
 	logger        *zap.Logger
 
@@ -40,10 +38,11 @@ type TunnelDriftMonitor struct {
 	lastAlerted time.Time
 }
 
-func NewTunnelDriftMonitor(publicBaseURL string, lineSvc *lineservice.Service, logger *zap.Logger) *TunnelDriftMonitor {
+func NewTunnelDriftMonitor(publicBaseURL string, notifier Notifier, instanceID string, logger *zap.Logger) *TunnelDriftMonitor {
 	return &TunnelDriftMonitor{
 		publicBaseURL: publicBaseURL,
-		lineSvc:       lineSvc,
+		notifier:      notifier,
+		instanceID:    instanceID,
 		// 10s timeout — Cloudflare typically resolves in <1s; anything
 		// longer is a sign the tunnel is degraded and worth alerting on.
 		httpClient: &http.Client{Timeout: 10 * time.Second},
@@ -51,12 +50,8 @@ func NewTunnelDriftMonitor(publicBaseURL string, lineSvc *lineservice.Service, l
 	}
 }
 
-// Register the daily check. 9am Bangkok = 2am UTC. Picked off-the-hour to
-// stagger from the other crons (insight 8am, backup midnight, token check
-// Mon, disk monitor 7am, reply-token cleanup hourly @ :07).
+// Register the daily check. 9am Bangkok = 2am UTC.
 func (m *TunnelDriftMonitor) Register(c *cron.Cron) {
-	// No public URL configured (e.g. dev environment) → nothing to check.
-	// Don't register at all rather than no-op every tick.
 	if strings.TrimSpace(m.publicBaseURL) == "" {
 		m.logger.Info("tunnel_drift_monitor disabled — PUBLIC_BASE_URL not set")
 		return
@@ -87,8 +82,6 @@ func (m *TunnelDriftMonitor) runOnce() {
 		return
 	}
 
-	// Capture error context BEFORE closing the body so the alert message
-	// includes everything the dev needs to diagnose.
 	var failureDetail string
 	switch {
 	case err != nil:
@@ -106,9 +99,6 @@ func (m *TunnelDriftMonitor) runOnce() {
 		zap.String("public_url", m.publicBaseURL),
 		zap.String("error", failureDetail))
 
-	// Throttle: skip the LINE push if we already alerted in the last 24h.
-	// The cron runs daily so this is normally a no-op, but keeps the
-	// behavior correct if someone calls runOnce manually for testing.
 	m.mu.Lock()
 	if time.Since(m.lastAlerted) < 24*time.Hour {
 		m.mu.Unlock()
@@ -119,23 +109,18 @@ func (m *TunnelDriftMonitor) runOnce() {
 	m.lastAlerted = time.Now()
 	m.mu.Unlock()
 
-	if m.lineSvc == nil {
+	if m.notifier == nil {
 		return
 	}
 
 	msg := fmt.Sprintf(
-		"⚠ Cloudflare Tunnel ใช้งานไม่ได้\n\n"+
-			"PUBLIC_BASE_URL: %s\n"+
-			"Error: %s\n\n"+
-			"วิธีแก้:\n"+
-			"1. ssh ไป server (192.168.2.109)\n"+
-			"2. grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' /tmp/billflow-tunnel.log\n"+
-			"3. อัพเดต PUBLIC_BASE_URL ใน .env เป็น URL ใหม่\n"+
-			"4. docker compose up -d backend\n\n"+
-			"ผลกระทบ: admin ส่งรูปให้ลูกค้าใน LINE ไม่ได้จนกว่าจะแก้",
-		m.publicBaseURL, failureDetail,
+		"🔗 [%s] Tunnel URL Unreachable\n─────────────────────\n"+
+			"URL    : %s\n"+
+			"Status : %s\n"+
+			"Action : restart cloudflared + update PUBLIC_BASE_URL in .env",
+		m.instanceID, m.publicBaseURL, failureDetail,
 	)
-	if pErr := m.lineSvc.PushAdmin(msg); pErr != nil {
+	if pErr := m.notifier.PushAdmin(msg); pErr != nil {
 		m.logger.Warn("tunnel_drift_alert_push_failed", zap.Error(pErr))
 	}
 }

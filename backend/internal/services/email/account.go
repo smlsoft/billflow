@@ -12,7 +12,6 @@ import (
 
 	"billflow/internal/models"
 	"billflow/internal/repository"
-	lineservice "billflow/internal/services/line"
 )
 
 // AccountPoller wraps one IMAP account with its own ticker goroutine.
@@ -22,7 +21,7 @@ type AccountPoller struct {
 	repo       *repository.ImapAccountRepo
 	jobRepo    *repository.IMAPPollJobRepo
 	processors *Processors
-	lineSvc    *lineservice.Service
+	notifier   Notifier
 	logger     *zap.Logger
 
 	cancel context.CancelFunc
@@ -34,7 +33,7 @@ type AccountPoller struct {
 	pollMu      sync.Mutex
 }
 
-// alertThrottle — minimum gap between LINE admin notifications per account
+// alertThrottle — minimum gap between admin notifications per account
 // when consecutive_failures stays ≥ 3. Prevents spamming during long outages.
 const alertThrottle = 1 * time.Hour
 
@@ -51,7 +50,7 @@ func NewAccountPoller(
 	repo *repository.ImapAccountRepo,
 	jobRepo *repository.IMAPPollJobRepo,
 	processors *Processors,
-	lineSvc *lineservice.Service,
+	notifier Notifier,
 	logger *zap.Logger,
 ) *AccountPoller {
 	return &AccountPoller{
@@ -59,7 +58,7 @@ func NewAccountPoller(
 		repo:       repo,
 		jobRepo:    jobRepo,
 		processors: processors,
-		lineSvc:    lineSvc,
+		notifier:   notifier,
 		logger:     logger.With(zap.String("account_id", accountID)),
 	}
 }
@@ -480,12 +479,12 @@ func capPollJobDetails(in []models.IMAPPollDetail) []models.IMAPPollDetail {
 	return append([]models.IMAPPollDetail{}, in[len(in)-limit:]...)
 }
 
-// maybeAlertAdmin pushes a LINE message to the admin if this account has
+// maybeAlertAdmin pushes a notification to the admin if this account has
 // failed ≥ alertThreshold times in a row AND we haven't alerted within
 // alertThrottle. Re-reads the row after UpdatePollStatus so consecutive_failures
 // is current.
 func (p *AccountPoller) maybeAlertAdmin(_ *models.IMAPAccount, res PollResult) {
-	if p.lineSvc == nil {
+	if p.notifier == nil {
 		return
 	}
 	fresh, err := p.repo.GetByID(p.accountID)
@@ -500,10 +499,10 @@ func (p *AccountPoller) maybeAlertAdmin(_ *models.IMAPAccount, res PollResult) {
 	}
 
 	msg := fmt.Sprintf(
-		"⚠️ BillFlow IMAP fail\nInbox: %s (%s)\nFails: %d ครั้งติด\nError: %s",
+		"📧 IMAP Inbox Failed\n─────────────────────\nInbox  : %s (%s)\nFails  : %d ครั้งติด\nError  : %s",
 		fresh.Name, fresh.Username, fresh.ConsecutiveFailures, truncate(res.Err.Error(), 200),
 	)
-	if err := p.lineSvc.PushAdmin(msg); err != nil {
+	if err := p.notifier.PushAdmin(msg); err != nil {
 		p.logger.Warn("imap_admin_alert_failed", zap.Error(err))
 		return
 	}

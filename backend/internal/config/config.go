@@ -33,6 +33,13 @@ type Config struct {
 	// "ขอบคุณค่ะ ทางร้านจะติดต่อกลับเร็ว ๆ นี้นะคะ 🙏" if you want one.
 	LineGreeting string
 
+	// ProjectName identifies this instance in alert messages (e.g. "billflow", "billflow-thaisunsport")
+	ProjectName string
+
+	// Telegram
+	TelegramBotToken string
+	TelegramChatID   string
+
 	// PublicBaseURL is the externally reachable HTTPS URL of this backend
 	// (e.g. the Cloudflare Quick Tunnel URL). Used when constructing
 	// originalContentUrl + previewImageUrl for LINE Push image messages —
@@ -127,6 +134,9 @@ func Load() *Config {
 		DBPassword:              getEnv("DB_PASSWORD", "changeme"),
 		JWTSecret:               getEnv("JWT_SECRET", ""),
 		JWTExpireHours:          getEnvInt("JWT_EXPIRE_HOURS", 24),
+		ProjectName:             getEnv("PROJECT_NAME", "billflow"),
+		TelegramBotToken:        getEnv("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:          getEnv("TELEGRAM_CHAT_ID", ""),
 		LineChannelSecret:       getEnv("LINE_CHANNEL_SECRET", ""),
 		LineChannelAccessToken:  getEnv("LINE_CHANNEL_ACCESS_TOKEN", ""),
 		LineAdminUserID:         getEnv("LINE_ADMIN_USER_ID", ""),

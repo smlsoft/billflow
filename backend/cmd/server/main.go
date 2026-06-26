@@ -31,6 +31,7 @@ import (
 	"billflow/internal/services/insight"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
+	telegramservice "billflow/internal/services/telegram"
 	"billflow/internal/services/media"
 	"billflow/internal/services/mistral"
 	"billflow/internal/services/sml"
@@ -259,16 +260,12 @@ func main() {
 		logger.Info("catalog: index loaded", zap.Int("size", catalogIdx.Size()))
 	}()
 
-	// LINE service (legacy single instance) — kept for PushAdmin paths used by
-	// insight cron, disk monitor, and email coordinator error notifications.
-	// The chat inbox uses lineRegistry instead so each conversation routes to
-	// the right OA's access_token.
-	var lineSvc *lineservice.Service
-	if cfg.LineChannelSecret != "" && cfg.LineChannelAccessToken != "" {
-		lineSvc, err = lineservice.New(cfg.LineChannelSecret, cfg.LineChannelAccessToken, cfg.LineAdminUserID, cfg.LineNotifyEnabled)
-		if err != nil {
-			logger.Warn("LINE service init failed", zap.Error(err))
-		}
+	// Telegram service — admin alert notifications (disk, IMAP, SML failures, tunnel drift).
+	telegramSvc := telegramservice.New(cfg.TelegramBotToken, cfg.TelegramChatID)
+	if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
+		logger.Info("Telegram alert service initialized", zap.String("chat_id", cfg.TelegramChatID))
+	} else {
+		logger.Warn("Telegram alert service disabled — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set")
 	}
 
 	// Multi-OA registry. Seeds a default OA from LINE_* env vars on first boot
@@ -313,7 +310,7 @@ func main() {
 		ShopeeOrder:   nil,
 		ShopeeShipped: nil,
 	}
-	imapCoordinator := emailservice.NewCoordinator(imapAccountRepo, imapPollJobRepo, imapProcessors, lineSvc, logger)
+	imapCoordinator := emailservice.NewCoordinator(imapAccountRepo, imapPollJobRepo, imapProcessors, telegramSvc, logger)
 
 	// Mistral OCR service (optional — used for PDF extraction)
 	ocrClient := mistral.New(cfg.MistralAPIKey)
@@ -361,7 +358,7 @@ func main() {
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
-	billH := handlers.NewBillHandler(billRepo, userRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, lineSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
+	billH := handlers.NewBillHandler(billRepo, userRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, telegramSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
 	billH.RecoverInterruptedBulkSendJobs()
 	creditCardReportH := handlers.NewCreditCardReportHandler(creditCardReportRepo, billRepo, auditLogRepo, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, catalogRepo, auditLogRepo, logger)
@@ -394,7 +391,7 @@ func main() {
 	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, mediaSigner, eventBroker, cfg.PublicBaseURL, logger)
 	publicMediaH := handlers.NewPublicMediaHandler(chatMediaRepo, mediaSigner, logger)
 	sseH := handlers.NewSSEHandler(eventBroker, mediaSigner)
-	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, billRepo, auditLogRepo, lineSvc, cfg.AutoConfirmThreshold, logger)
+	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, billRepo, auditLogRepo, telegramSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetChannelDefaults(channelDefaultRepo)
 	emailH.SetArtifactService(artifactSvc)
@@ -715,7 +712,7 @@ func main() {
 
 	// Background jobs
 	c := cron.New()
-	insightCron := jobs.NewInsightCron(insightSvc, billRepo, insightRepo, lineSvc, cfg.InsightLineNotify, logger)
+	insightCron := jobs.NewInsightCron(insightSvc, billRepo, insightRepo, telegramSvc, cfg.InsightLineNotify, logger)
 	insightCron.Register(c, cfg.InsightCronHour)
 
 	// Backup cron runs pg_dump from inside the backend container against the
@@ -728,7 +725,7 @@ func main() {
 	)
 	backupCron.Register(c, cfg.BackupCronHour)
 
-	diskMon := jobs.NewDiskMonitor(cfg.DiskWarnPercent, lineSvc, logger)
+	diskMon := jobs.NewDiskMonitor(cfg.DiskWarnPercent, telegramSvc, cfg.ProjectName, logger)
 	diskMon.Register(c)
 
 	if cfg.DataLifecycleEnabled {
@@ -743,11 +740,6 @@ func main() {
 		lifecycle.Register(c, cfg.DataLifecycleCronHour)
 	}
 
-	if lineSvc != nil {
-		tokenChecker := jobs.NewTokenChecker(lineSvc, logger)
-		tokenChecker.Register(c)
-	}
-
 	// Hourly: clear replyTokens > 1h old so admin replies don't waste a
 	// LINE round-trip on a token we know is dead.
 	replyTokenCleanup := jobs.NewReplyTokenCleanup(db, logger)
@@ -756,7 +748,7 @@ func main() {
 	// Daily 9am Bangkok: ping PUBLIC_BASE_URL/health to detect when the
 	// Cloudflare Quick Tunnel URL has rolled (cloudflared restart). Without
 	// this admin only finds out via "ลูกค้าได้รับรูปไม่ครบ" days later.
-	tunnelMon := jobs.NewTunnelDriftMonitor(cfg.PublicBaseURL, lineSvc, logger)
+	tunnelMon := jobs.NewTunnelDriftMonitor(cfg.PublicBaseURL, telegramSvc, cfg.ProjectName, logger)
 	tunnelMon.Register(c)
 
 	// Wire processors into the coordinator now that emailH is built, then

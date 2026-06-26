@@ -18,7 +18,6 @@ import (
 	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
 	emailservice "billflow/internal/services/email"
-	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/mistral"
 )
@@ -115,7 +114,7 @@ type EmailHandler struct {
 	anomalySvc *anomaly.Service
 	billRepo   *repository.BillRepo
 	auditRepo  *repository.AuditLogRepo
-	lineSvc    *lineservice.Service
+	notifier   Notifier
 	threshold  float64
 	logger     *zap.Logger
 	// Catalog-based matching (Shopee email flow)
@@ -136,7 +135,7 @@ func NewEmailHandler(
 	anomalySvc *anomaly.Service,
 	billRepo *repository.BillRepo,
 	auditRepo *repository.AuditLogRepo,
-	lineSvc *lineservice.Service,
+	notifier Notifier,
 	threshold float64,
 	logger *zap.Logger,
 ) *EmailHandler {
@@ -147,7 +146,7 @@ func NewEmailHandler(
 		anomalySvc: anomalySvc,
 		billRepo:   billRepo,
 		auditRepo:  auditRepo,
-		lineSvc:    lineSvc,
+		notifier:   notifier,
 		threshold:  threshold,
 		logger:     logger,
 	}
@@ -518,8 +517,8 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mi
 }
 
 func (h *EmailHandler) adminNotify(msg string) {
-	if h.lineSvc != nil {
-		_ = h.lineSvc.PushAdmin(msg)
+	if h.notifier != nil {
+		_ = h.notifier.PushAdmin(msg)
 	}
 }
 

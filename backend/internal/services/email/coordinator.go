@@ -11,8 +11,12 @@ import (
 
 	"billflow/internal/models"
 	"billflow/internal/repository"
-	lineservice "billflow/internal/services/line"
 )
+
+// Notifier delivers admin push notifications (Telegram, LINE, etc.)
+type Notifier interface {
+	PushAdmin(text string) error
+}
 
 // Coordinator manages one AccountPoller per enabled imap_accounts row.
 // Hot-reloads on admin edits via ReloadAccount/RemoveAccount so the
@@ -21,7 +25,7 @@ type Coordinator struct {
 	repo       *repository.ImapAccountRepo
 	jobRepo    *repository.IMAPPollJobRepo
 	processors *Processors
-	lineSvc    *lineservice.Service
+	notifier   Notifier
 	logger     *zap.Logger
 
 	ctx    context.Context
@@ -35,14 +39,14 @@ func NewCoordinator(
 	repo *repository.ImapAccountRepo,
 	jobRepo *repository.IMAPPollJobRepo,
 	processors *Processors,
-	lineSvc *lineservice.Service,
+	notifier Notifier,
 	logger *zap.Logger,
 ) *Coordinator {
 	return &Coordinator{
 		repo:       repo,
 		jobRepo:    jobRepo,
 		processors: processors,
-		lineSvc:    lineSvc,
+		notifier:    notifier,
 		logger:     logger.With(zap.String("component", "imap_coordinator")),
 		pollers:    map[string]*AccountPoller{},
 	}
@@ -150,7 +154,7 @@ func (c *Coordinator) PollNow(id string) (PollResult, error) {
 		if account == nil {
 			return PollResult{}, fmt.Errorf("account not found")
 		}
-		oneOff := NewAccountPoller(account.ID, c.repo, c.jobRepo, c.processors, c.lineSvc, c.logger)
+		oneOff := NewAccountPoller(account.ID, c.repo, c.jobRepo, c.processors, c.notifier, c.logger)
 		return oneOff.PollNow(c.ctx), nil
 	}
 	return p.PollNow(c.ctx), nil
@@ -187,7 +191,7 @@ func (c *Coordinator) StartPollJob(id, userID, userEmail string) (*models.IMAPPo
 	p := c.pollers[id]
 	c.mu.Unlock()
 	if p == nil {
-		p = NewAccountPoller(account.ID, c.repo, c.jobRepo, c.processors, c.lineSvc, c.logger)
+		p = NewAccountPoller(account.ID, c.repo, c.jobRepo, c.processors, c.notifier, c.logger)
 	}
 	go p.RunPollJob(c.ctx, job.ID)
 	return job, nil
@@ -244,7 +248,7 @@ func (c *Coordinator) TestConnection(ctx context.Context, a *models.IMAPAccount)
 }
 
 func (c *Coordinator) startPoller(a *models.IMAPAccount, pollInitial bool) {
-	p := NewAccountPoller(a.ID, c.repo, c.jobRepo, c.processors, c.lineSvc, c.logger)
+	p := NewAccountPoller(a.ID, c.repo, c.jobRepo, c.processors, c.notifier, c.logger)
 	p.skipInitial = !pollInitial
 	c.mu.Lock()
 	c.pollers[a.ID] = p

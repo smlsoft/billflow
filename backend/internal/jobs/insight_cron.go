@@ -10,15 +10,14 @@ import (
 
 	"billflow/internal/repository"
 	"billflow/internal/services/insight"
-	lineservice "billflow/internal/services/line"
 )
 
 type InsightCron struct {
 	insightSvc  *insight.Service
 	billRepo    *repository.BillRepo
 	insightRepo *repository.InsightRepo
-	lineSvc     *lineservice.Service
-	lineNotify  bool
+	notifier    Notifier
+	notify      bool
 	log         *zap.Logger
 }
 
@@ -26,16 +25,16 @@ func NewInsightCron(
 	insightSvc *insight.Service,
 	billRepo *repository.BillRepo,
 	insightRepo *repository.InsightRepo,
-	lineSvc *lineservice.Service,
-	lineNotify bool,
+	notifier Notifier,
+	notify bool,
 	log *zap.Logger,
 ) *InsightCron {
 	return &InsightCron{
 		insightSvc:  insightSvc,
 		billRepo:    billRepo,
 		insightRepo: insightRepo,
-		lineSvc:     lineSvc,
-		lineNotify:  lineNotify,
+		notifier:    notifier,
+		notify:      notify,
 		log:         log,
 	}
 }
@@ -70,9 +69,9 @@ func (j *InsightCron) Run() {
 
 	j.log.Info("insight cron: done", zap.Duration("elapsed", time.Since(start)))
 
-	if j.lineNotify && j.lineSvc != nil {
-		if err := j.lineSvc.PushAdmin("📊 Daily Insight\n" + text); err != nil {
-			j.log.Error("insight cron: LINE notify", zap.Error(err))
+	if j.notify && j.notifier != nil {
+		if err := j.notifier.PushAdmin("📊 Daily Insight\n" + text); err != nil {
+			j.log.Error("insight cron: notify", zap.Error(err))
 		}
 	}
 }

@@ -21,7 +21,6 @@ import (
 	"billflow/internal/repository"
 	"billflow/internal/services/artifact"
 	"billflow/internal/services/itemcode"
-	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/sml"
 )
@@ -35,7 +34,7 @@ type BillHandler struct {
 	poClient        *sml.PurchaseOrderClient // SML 248 purchaseorder REST
 	docNoClient     *sml.DocNoClient         // SML authoritative doc_no running
 	cfg             *config.Config
-	lineSvc         *lineservice.Service
+	notifier        Notifier
 	auditRepo       *repository.AuditLogRepo
 	catalogRepo     *repository.SMLCatalogRepo     // for unit_code defaults on item edit
 	channelDefaults *repository.ChannelDefaultRepo // per-(channel,bill_type) party config
@@ -57,7 +56,7 @@ func NewBillHandler(
 	poClient *sml.PurchaseOrderClient,
 	docNoClient *sml.DocNoClient,
 	cfg *config.Config,
-	lineSvc *lineservice.Service,
+	notifier Notifier,
 	auditRepo *repository.AuditLogRepo,
 	catalogRepo *repository.SMLCatalogRepo,
 	channelDefaults *repository.ChannelDefaultRepo,
@@ -78,7 +77,7 @@ func NewBillHandler(
 		poClient:        poClient,
 		docNoClient:     docNoClient,
 		cfg:             cfg,
-		lineSvc:         lineSvc,
+		notifier:        notifier,
 		auditRepo:       auditRepo,
 		catalogRepo:     catalogRepo,
 		channelDefaults: channelDefaults,
@@ -2871,14 +2870,14 @@ func (h *BillHandler) runBulkSendJob(jobID string) {
 }
 
 func (h *BillHandler) notifyBulkSendSummary(jobID string) {
-	if h.lineSvc == nil || h.bulkJobRepo == nil {
+	if h.notifier == nil || h.bulkJobRepo == nil {
 		return
 	}
 	job, err := h.bulkJobRepo.Get(jobID)
 	if err != nil || job == nil || job.FailedCount == 0 {
 		return
 	}
-	_ = h.lineSvc.PushAdmin(fmt.Sprintf(
+	_ = h.notifier.PushAdmin(fmt.Sprintf(
 		"⚠️ Bulk SML send finished with failures\nJob: %s\nสำเร็จ: %d\nไม่สำเร็จ: %d\nข้าม: %d\nเปิด BillFlow แล้วกด Retry failed เฉพาะรายการที่พลาด",
 		job.ID, job.SentCount, job.FailedCount, job.SkippedCount,
 	))
@@ -4060,8 +4059,11 @@ func (h *BillHandler) recordFailureForSend(id, source string, reqJSON []byte, er
 			Detail:     detail,
 		})
 	}
-	if h.lineSvc != nil && !opts.SuppressLineAlert {
-		_ = h.lineSvc.PushAdmin(fmt.Sprintf("⚠️ Bill retry SML failed (%s)\nBill: %s\nError: %s", route, id, errMsg))
+	if h.notifier != nil && !opts.SuppressLineAlert {
+		_ = h.notifier.PushAdmin(fmt.Sprintf(
+			"🚨 SML Retry Failed\n─────────────────────\nRoute  : %s\nBill ID: %s\nError  : %s",
+			route, id, rawErr,
+		))
 	}
 	return errMsg
 }
