@@ -835,9 +835,6 @@ func (h *EmailHandler) processOneShippedOrder(
 		})
 	}
 
-	h.adminNotify(fmt.Sprintf("📦 Shopee Shipped: บิลรอตรวจสอบ\nOrder: %s (%s)\nItems: %d\nBill ID: %s",
-		orderID, order.SellerName, len(itemsWithCandidates), bill.ID))
-
 	h.logger.Info("shopee_shipped: bill created",
 		zap.String("bill_id", bill.ID),
 		zap.String("status", status),
