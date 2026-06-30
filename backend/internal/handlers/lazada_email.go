@@ -317,8 +317,6 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 			},
 		})
 	}
-	h.adminNotify(fmt.Sprintf("Lazada Email: บิลซื้อรอตรวจสอบ\nOrder: %s (%s)\nItems: %d\nBill ID: %s",
-		orderID, sellerName, len(itemsWithCandidates), bill.ID))
 	h.logger.Info("lazada_email: bill created",
 		zap.String("bill_id", bill.ID),
 		zap.String("status", status),

@@ -304,7 +304,6 @@ func (h *EmailHandler) ProcessAttachment(data []byte, mimeType, filename, messag
 	if err != nil {
 		h.logger.Error("email: AI extract failed",
 			zap.String("mime", mimeType), zap.String("file", filename), zap.Error(err))
-		h.adminNotify(fmt.Sprintf("⚠️ Email AI extract failed\nFile: %s\nError: %s", filename, err.Error()))
 		return err
 	}
 
@@ -510,9 +509,6 @@ func (h *EmailHandler) handleExtracted(extracted *ai.ExtractedBill, filename, mi
 			},
 		})
 	}
-	h.adminNotify(fmt.Sprintf("📋 Email bill pending review\nBill: %s\nFile: %s\nStatus: %s\nConfidence: %.2f\nAnomalies: %d",
-		bill.ID, filename, status, extracted.Confidence, len(anomalies)))
-
 	return nil
 }
 
@@ -735,11 +731,6 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 				"status":        status,
 			},
 		})
-	}
-
-	if status == "needs_review" {
-		h.adminNotify(fmt.Sprintf("🛒 Shopee Email: บิลรอยืนยัน\nSubject: %s\nOrder: %s\nItems: %d\nBill ID: %s",
-			subject, shopeeOrderID, len(itemsWithCandidates), bill.ID))
 	}
 
 	h.logger.Info("shopee_email: bill created",
