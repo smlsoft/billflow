@@ -51,11 +51,6 @@ var instanceSettingDefs = []settingDef{
 	{Key: "sml.database", Label: "Database (tenant)", Group: "sml", Type: "text", Restart: true, Required: true, Description: "ชื่อ database SML ของร้านนี้ ต้องเป็น lowercase เช่น sml1_2026 (sml-api-byboss แปลงเป็น lowercase เสมอ ห้ามใช้ตัวพิมพ์ใหญ่)"},
 	{Key: "sml.stock_request_url", Label: "Stock Request URL", Group: "sml", Type: "url", Restart: false, Required: false, Description: "URL ของ SML server คำนวณต้นทุนสต๊อก (ไม่ใช่ sml-api-byboss) — path /SMLJavaWebService/rest/v1/processstockrequest จะถูกเติมอัตโนมัติ เช่น http://192.168.2.248:8080 (ว่าง = ข้ามการคำนวณ)"},
 
-	{Key: "line.notify_channel_secret", Label: "LINE Channel secret", Group: "line", Type: "password", Secret: true, Restart: true, Description: "ใช้กับ LINE OA ที่ส่งแจ้งเตือนระบบ"},
-	{Key: "line.notify_channel_access_token", Label: "LINE Channel access token", Group: "line", Type: "password", Secret: true, Restart: true, Description: "ใช้ส่ง Push แจ้งเตือน error และสถานะระบบไปยังแอดมิน"},
-	{Key: "line.notify_admin_user_id", Label: "LINE admin user ID", Group: "line", Type: "text", Restart: true, Description: "userId ของผู้รับแจ้งเตือนระบบ เช่น SML error, email error, disk/tunnel warning"},
-	{Key: "line.notify_enabled", Label: "เปิดใช้งาน LINE แจ้งเตือน", Group: "line", Type: "boolean", Restart: false, Description: "เปิด/ปิด push message ทั้งหมดไปยัง LINE admin (error, insight, IMAP fail ฯลฯ)"},
-
 	{Key: "ai.openrouter_api_key", Label: "OpenRouter API key", Group: "ai", Type: "password", Secret: true, Restart: true, Required: true},
 	{Key: "ai.openrouter_model", Label: "Model หลัก", Group: "ai", Type: "text", Restart: true, Required: true},
 	{Key: "ai.openrouter_fallback_model", Label: "Model สำรอง", Group: "ai", Type: "text", Restart: true},
@@ -354,31 +349,6 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 		}
 	}
 
-	// ── LINE ─────────────────────────────────────────────────────────────────
-	lineResult := checkResult{}
-	lineToken := get("line.notify_channel_access_token")
-	if lineToken == "" {
-		lineResult.Error = "ยังไม่ได้ตั้งค่า LINE Channel access token"
-	} else {
-		code, body, err := doGET("https://api.line.me/v2/bot/info",
-			map[string]string{"Authorization": "Bearer " + lineToken})
-		if err != nil {
-			lineResult.Error = fmt.Sprintf("เชื่อมต่อ LINE API ไม่ได้: %v", err)
-		} else if code == http.StatusOK {
-			lineResult.OK = true
-			// extract displayName from JSON cheaply
-			s := string(body)
-			if i := strings.Index(s, `"displayName":"`); i >= 0 {
-				rest := s[i+15:]
-				if j := strings.Index(rest, `"`); j >= 0 {
-					lineResult.Detail = rest[:j]
-				}
-			}
-		} else {
-			lineResult.Error = "access token ไม่ถูกต้องหรือหมดอายุแล้ว"
-		}
-	}
-
 	// ── OpenRouter ───────────────────────────────────────────────────────────
 	orResult := checkResult{}
 	orKey := get("ai.openrouter_api_key")
@@ -405,11 +375,10 @@ func (h *InstanceSettingsHandler) TestConnection(c *gin.Context) {
 		}
 	}
 
-	allOK := smlResult.OK && lineResult.OK && orResult.OK
+	allOK := smlResult.OK && orResult.OK
 	c.JSON(http.StatusOK, gin.H{
 		"ok":         allOK,
 		"sml":        smlResult,
-		"line":       lineResult,
 		"openrouter": orResult,
 	})
 }

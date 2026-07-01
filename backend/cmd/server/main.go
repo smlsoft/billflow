@@ -712,7 +712,7 @@ func main() {
 
 	// Background jobs
 	c := cron.New()
-	insightCron := jobs.NewInsightCron(insightSvc, billRepo, insightRepo, telegramSvc, cfg.InsightLineNotify, logger)
+	insightCron := jobs.NewInsightCron(insightSvc, billRepo, insightRepo, telegramSvc, false, logger)
 	insightCron.Register(c, cfg.InsightCronHour)
 
 	// Backup cron runs pg_dump from inside the backend container against the
