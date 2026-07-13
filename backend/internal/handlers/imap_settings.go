@@ -28,6 +28,12 @@ type resetIMAPProgressRequest struct {
 	PollNow      bool `json:"poll_now"`
 }
 
+type imapAccountFilterOption struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+}
+
 func NewIMAPSettingsHandler(
 	repo *repository.ImapAccountRepo,
 	jobRepo *repository.IMAPPollJobRepo,
@@ -55,6 +61,26 @@ func (h *IMAPSettingsHandler) List(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": accounts})
+}
+
+// ListFilterOptions returns the minimal mailbox metadata needed by Bills filters.
+// It intentionally excludes connection config, poll status, and passwords so
+// non-admin staff can filter bills by inbox without gaining mailbox settings access.
+func (h *IMAPSettingsHandler) ListFilterOptions(c *gin.Context) {
+	accounts, err := h.repo.ListAll()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	out := make([]imapAccountFilterOption, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, imapAccountFilterOption{
+			ID:       a.ID,
+			Name:     a.Name,
+			Username: a.Username,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
 }
 
 // Get returns a single account, password scrubbed.

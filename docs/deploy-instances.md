@@ -1,6 +1,6 @@
 # BillFlow Deploy Instances
 
-Registry สำหรับจำว่าแต่ละร้านใช้ folder, port, container และ public tunnel ไหนบน server `192.168.2.109`.
+Registry สำหรับจำว่าแต่ละร้านใช้ folder, port, container และ public tunnel ไหนบน dev server `192.168.2.109` และเครื่องลูกค้า production ที่แยกออกไปแล้ว.
 
 > หมายเหตุ: Main/Thaisunsport ใช้ Cloudflare Quick Tunnel (`trycloudflare.com`) และ URL จะเปลี่ยนเมื่อ process `cloudflared` restart.
 > ⚠️ **`billflow-henna` ย้ายเป็น Nexflow แล้ว (2026-05-31)** — folder `~/billflow-henna` ปัจจุบันรัน Nexflow ซึ่งเป็น product แยก repo ออกจาก billflow โดยสมบูรณ์ ห้าม deploy billflow ไปที่ folder นี้
@@ -11,6 +11,7 @@ Registry สำหรับจำว่าแต่ละร้านใช้ f
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
 | `billflow` | BillFlow ปกติ / demo หลัก | `/home/bosscatdog/billflow` | `3010` | `8090` | `5438` | `https://edt-surfaces-graph-pension.trycloudflare.com` | `/tmp/billflow-tunnel.log` |
 | `billflow-thaisunsport` | Thaisunsport demo Phase 1 ฝั่งซื้อ | `/home/bosscatdog/billflow-thaisunsport` | `3020` | `8100` | `5448` | `https://pets-mini-museums-ships.trycloudflare.com` | `/tmp/billflow-thaisunsport-tunnel.log` |
+| `billflow-thaisunsport-prod` | Thaisunsport production hardware | `/home/thaisunspot/billflow-thaisunsport` on staging LAN `192.168.2.35`; customer LAN planned `192.168.1.251` | `3020` / Caddy `80,9981` | `127.0.0.1:8100` | `127.0.0.1:5448` | `https://thaisunsport.thddns.net:9981` (pending router forward) | Docker `caddy` service |
 | ~~`billflow-henna`~~ → **Nexflow** | Henna — ย้ายเป็น Nexflow แล้ว | `/home/bosscatdog/billflow-henna` | `3030` | `8110` | `5440` | ngrok-free.dev (ดู Nexflow .env) | `/tmp/nexflow-tunnel.log` |
 
 > **Nexflow** repo แยก: `https://github.com/bosocmputer/Nexflow.git` | local: `/Users/nontawatwongnuk/dev_bos/Nexflow` | deploy: `NX_PASS=<from-local-secret-source> python scripts/deploy.py`
@@ -152,6 +153,17 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 
 ## Thaisunsport Notes
 
+- **Production hardware prepared 2026-07-06 +07**:
+  - Server staging LAN while at developer site: `192.168.2.35`; planned customer LAN static IP before shipping: `192.168.1.251`; user `thaisunspot`, folder `/home/thaisunspot/billflow-thaisunsport`.
+  - Runs BillFlow, PostgreSQL, and `sml-api-bybos` in one compose project; backend calls SML gateway by compose DNS `http://sml-api:8200`, so this server does not depend on dev `192.168.2.109`.
+  - THDDNS/Caddy prepared: Docker `caddy` service listens on `80/9981` and proxies `thaisunsport.thddns.net:9981` to the frontend service. Customer router still needs TCP `80 -> 192.168.1.251:80` for Let's Encrypt HTTP-01 and TCP `9981 -> 192.168.1.251:9981` for BillFlow HTTPS. Existing THDDNS port `9980` remains reserved for ERP SML.
+  - LAN/fallback exposure: frontend `3020` remains open temporarily until external HTTPS is verified. Backend `8100`, PostgreSQL `5448`, and SML gateway `8200` are bound to `127.0.0.1` on the host.
+  - SML tenant switched from demo `data1_test` to real `data1`; gateway `ALLOWED_TENANTS=data1,smlerpmaindata`. Production hardware `sml-api-bybos` is preconfigured for the customer's LAN SML PostgreSQL server: `SML_DB_HOST_DATA1=192.168.1.50`, `SML_DB_PORT_DATA1=5432`, `SML_DB_HOST_SMLERPMAINDATA=192.168.1.50`, `SML_DB_PORT_SMLERPMAINDATA=5432`.
+  - Data was cloned from dev `billflow-thaisunsport`, then production cutover reset cleared old SML send state: no active bill has `sml_doc_no` or `sent_at`; active status projection is `needs_review=932`, `pending=108`.
+  - Email dedup and artifacts were preserved: `processed_email_keys=3380`, `bill_artifacts=3730`, artifacts folder `594M`; IMAP accounts remain enabled and first poll on the new server returned `no_new_mail`.
+  - `PUBLIC_BASE_URL=https://thaisunsport.thddns.net:9981`. Caddy will obtain the Let's Encrypt certificate after router forwarding is live.
+  - 2026-07-06 +07 frontend patch deployed on production hardware: `/settings/instance` hides the Shopee Open API disabled banner when `VITE_ENABLE_SHOPEE_EXCEL=false`, matching Thaisunsport Phase 1 purchase-only policy.
+  - Current SML readiness caveat on staging LAN: after switching to customer LAN DB `192.168.1.50:5432`, `/health/ready` is expected to fail while the hardware is still on developer LAN `192.168.2.x`. Recheck after moving the server to customer LAN `192.168.1.x`. `sml.stock_request_url` is preconfigured for LAN SML JavaWebService: `http://192.168.1.50:8080`.
 - Latest deploy verified: 2026-06-15 +07 (TT payment auto-sync, Lazada charge group key backfill, SML doc_ref repair, and SML gateway doc_ref patch endpoint).
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:

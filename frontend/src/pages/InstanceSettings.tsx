@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { PageHeader } from '@/components/common/PageHeader'
+import { ENABLE_SHOPEE_EXCEL } from '@/lib/featureFlags'
 import { cn } from '@/lib/utils'
 
 type SettingGroup = 'instance' | 'sml' | 'sml_db' | 'line' | 'ai' | 'automation'
@@ -144,10 +145,14 @@ export default function InstanceSettings() {
       setDraft(
         Object.fromEntries((res.data.settings ?? []).map((s) => [s.key, s.value ?? ''])),
       )
-      client
-        .get<ShopeeAPIStatus>('/api/settings/shopee-api/status')
-        .then((statusRes) => setShopeeAPIStatus(statusRes.data))
-        .catch(() => setShopeeAPIStatus(null))
+      if (ENABLE_SHOPEE_EXCEL) {
+        client
+          .get<ShopeeAPIStatus>('/api/settings/shopee-api/status')
+          .then((statusRes) => setShopeeAPIStatus(statusRes.data))
+          .catch(() => setShopeeAPIStatus(null))
+      } else {
+        setShopeeAPIStatus(null)
+      }
     } catch {
       toast.error('โหลดค่าการเชื่อมต่อไม่สำเร็จ')
     } finally {
@@ -180,6 +185,7 @@ export default function InstanceSettings() {
   }, [shopeeAPIStatus?.redirect_url])
   const currentHost = typeof window !== 'undefined' ? window.location.host : ''
   const shopeeRedirectMismatch = Boolean(shopeeAPIStatus?.enabled && shopeeRedirectHost && currentHost && shopeeRedirectHost !== currentHost)
+  const showShopeeAPIWarning = ENABLE_SHOPEE_EXCEL && !!shopeeAPIStatus && (!shopeeAPIStatus.enabled || shopeeRedirectMismatch)
 
   const waitForBackend = async () => {
     await new Promise((resolve) => setTimeout(resolve, 1200))
@@ -326,7 +332,7 @@ export default function InstanceSettings() {
         </div>
       </div>
 
-      {shopeeAPIStatus && (!shopeeAPIStatus.enabled || shopeeRedirectMismatch) && (
+      {showShopeeAPIWarning && shopeeAPIStatus && (
         <div className="rounded-lg border border-warning/35 bg-warning/[0.07] p-3 text-sm">
           <div className="flex gap-2.5">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

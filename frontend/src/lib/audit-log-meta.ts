@@ -53,6 +53,7 @@ export const ACTION_META: Record<string, ActionMeta> = {
   bill_restored: { label: 'กู้คืนบิล', emoji: '♻️', tone: 'info' },
   bill_item_added: { label: 'เพิ่มรายการในบิล', emoji: '➕', tone: 'info' },
   bill_item_deleted: { label: 'ลบรายการในบิล', emoji: '➖', tone: 'muted' },
+  bill_print_payment_method_updated: { label: 'แก้วิธีชำระเงินสำหรับพิมพ์', emoji: '💳', tone: 'info' },
   bill_doc_no_regenerated: { label: 'ออกเลขเอกสารใหม่', emoji: '🔢', tone: 'primary' },
   bill_doc_no_regenerate_failed: { label: 'ออกเลขเอกสารใหม่ไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
   bill_doc_no_preview_failed: { label: 'ดึงเลขล่าสุดไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
@@ -305,6 +306,12 @@ export function summarize(log: AuditLog): string {
         d.doc_no,
         d.old_party_code && d.new_party_code ? `${d.old_party_code} → ${d.new_party_code}` : '',
         d.changed === false ? 'ไม่เปลี่ยนแปลง' : '',
+      ].filter(Boolean).join(' · ')
+    case 'bill_print_payment_method_updated':
+      return [
+        d.doc_no,
+        d.payment_method ? `วิธีชำระ: ${String(d.payment_method)}` : '',
+        typeof d.updated_count === 'number' ? `อัปเดต ${d.updated_count.toLocaleString()} บิล` : '',
       ].filter(Boolean).join(' · ')
     case 'bill_purchase_creditor_update_failed':
       return [

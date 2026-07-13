@@ -282,6 +282,7 @@ export default function BillDetail() {
     bill.status === 'pending' ||
     bill.status === 'needs_review'
   const canEdit = canSendToSML && canSend
+  const canDeleteItems = user?.role === 'admin' && canEdit
   const canUpdatePurchaseCreditor =
     user?.role === 'admin' &&
     bill.status === 'sent' &&
@@ -361,6 +362,7 @@ export default function BillDetail() {
       <BillItemsTable
         bill={bill}
         canEdit={canEdit}
+        canDeleteItems={canDeleteItems}
         onItemUpdated={handleItemUpdated}
         onItemDeleted={handleItemDeleted}
         onItemAdded={handleItemAdded}

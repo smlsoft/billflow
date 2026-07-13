@@ -31,6 +31,7 @@ import { BillItemRow, type DiscountInfo } from './BillItemRow'
 interface Props {
   bill: Bill
   canEdit: boolean
+  canDeleteItems: boolean
   onItemUpdated: (updated: BillItem) => void
   onItemDeleted: (itemId: string) => void
   onItemAdded: (item: BillItem) => void
@@ -216,6 +217,7 @@ function MarketplaceTableTotalSummary({
 export function BillItemsTable({
   bill,
   canEdit,
+  canDeleteItems,
   onItemUpdated,
   onItemDeleted,
   onItemAdded,
@@ -371,6 +373,7 @@ export function BillItemsTable({
                   item={item}
                   billId={bill.id}
                   editable={canEdit}
+                  canDelete={canDeleteItems}
                   lockSourceAmounts={lockSourceAmounts}
                   onUpdated={onItemUpdated}
                   onDeleted={onItemDeleted}

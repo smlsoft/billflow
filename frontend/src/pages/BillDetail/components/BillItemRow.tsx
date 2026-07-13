@@ -33,6 +33,7 @@ interface Props {
   item: BillItem
   billId: string
   editable: boolean
+  canDelete: boolean
   onUpdated: (updated: BillItem) => void
   onDeleted: (itemId: string) => void
   onRefresh: () => Promise<unknown>
@@ -82,6 +83,7 @@ export function BillItemRow({
   item,
   billId,
   editable,
+  canDelete,
   onUpdated,
   onDeleted,
   onRefresh,
@@ -407,30 +409,34 @@ export function BillItemRow({
                 <Edit className="h-3.5 w-3.5" />
                 {item.item_code ? 'แก้ไข' : 'จับคู่สินค้า'}
               </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 px-0 text-destructive hover:text-destructive"
-                onClick={() => setDeleteOpen(true)}
-                title="ลบรายการ"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              {canDelete && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 px-0 text-destructive hover:text-destructive"
+                  onClick={() => setDeleteOpen(true)}
+                  title="ลบรายการ"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
               </div>
             </TableCell>
           )}
         </TableRow>
 
-        <ConfirmDialog
-          open={deleteOpen}
-          onOpenChange={setDeleteOpen}
-          title="ลบรายการสินค้า"
-          description={`ยืนยันลบ "${item.raw_name.slice(0, 50)}${item.raw_name.length > 50 ? '...' : ''}" ?`}
-          confirmLabel="ลบรายการ"
-          variant="destructive"
-          onConfirm={handleDelete}
-        />
+        {canDelete && (
+          <ConfirmDialog
+            open={deleteOpen}
+            onOpenChange={setDeleteOpen}
+            title="ลบรายการสินค้า"
+            description={`ยืนยันลบ "${item.raw_name.slice(0, 50)}${item.raw_name.length > 50 ? '...' : ''}" ?`}
+            confirmLabel="ลบรายการ"
+            variant="destructive"
+            onConfirm={handleDelete}
+          />
+        )}
       </>
     )
   }

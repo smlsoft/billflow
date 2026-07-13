@@ -17,6 +17,10 @@ frontend/.vite/
 # Graphify local context map
 graphify-out/
 
+# Local agent/tool state and generated exports
+.serena/
+output/
+
 # Backups
 backups/*.sql
 

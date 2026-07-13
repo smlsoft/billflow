@@ -31,10 +31,10 @@ import (
 	"billflow/internal/services/insight"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
-	telegramservice "billflow/internal/services/telegram"
 	"billflow/internal/services/media"
 	"billflow/internal/services/mistral"
 	"billflow/internal/services/sml"
+	telegramservice "billflow/internal/services/telegram"
 	"billflow/internal/worker"
 )
 
@@ -468,6 +468,7 @@ func main() {
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)
+		api.GET("/bills/email-inboxes", middleware.RequireRole("admin", "staff", "viewer"), imapSettingsH.ListFilterOptions)
 		api.GET("/bills/email-print-candidates", billH.EmailPrintCandidates)
 		api.POST("/bills/email-print-events/bulk", middleware.RequireRole("admin", "staff"), billH.RecordEmailPrintEventsBulk)
 		api.POST("/bills/bulk-send-jobs", middleware.RequireRole("admin"), billH.CreateBulkSendJob)
@@ -492,7 +493,7 @@ func main() {
 		api.GET("/bills/:id/shopee-email-repair/jobs/:job_id", middleware.RequireRole("admin"), billH.GetShopeeEmailRepairJob)
 		api.PUT("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.UpdateItem)
 		api.POST("/bills/:id/items", middleware.RequireRole("admin", "staff"), billH.AddItem)
-		api.DELETE("/bills/:id/items/:item_id", middleware.RequireRole("admin", "staff"), billH.DeleteItemRow)
+		api.DELETE("/bills/:id/items/:item_id", middleware.RequireRole("admin"), billH.DeleteItemRow)
 		api.GET("/bills/:id/artifacts", billH.ListArtifacts)
 		api.GET("/bills/:id/artifacts/:artifact_id/download", billH.DownloadArtifact)
 		api.GET("/bills/:id/artifacts/:artifact_id/preview", billH.PreviewArtifact)

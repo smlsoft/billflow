@@ -625,7 +625,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
 
   useEffect(() => {
     let alive = true
-    client.get<{ data: InboxOption[] }>('/api/settings/imap-accounts')
+    client.get<{ data: InboxOption[] }>('/api/bills/email-inboxes')
       .then((res) => {
         if (alive) setInboxes(res.data.data ?? [])
       })
