@@ -62,46 +62,11 @@ func extractShopeeImageURLs(html string) []string {
 	if strings.TrimSpace(html) == "" {
 		return nil
 	}
-	seen := map[string]bool{}
-	primary := []string{}
-	fallback := []string{}
-	out := []string{}
-	for _, m := range imgSrcPattern.FindAllStringSubmatch(html, -1) {
-		if len(m) < 2 {
-			continue
-		}
-		u := strings.TrimSpace(m[1])
-		if u == "" || seen[u] || strings.HasPrefix(strings.ToLower(u), "data:") {
-			continue
-		}
-		lower := strings.ToLower(u)
-		if !(strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) {
-			continue
-		}
-		if strings.Contains(lower, "tracking.") ||
-			strings.Contains(lower, "/tracking/") ||
-			strings.Contains(lower, "/open/") {
-			continue
-		}
-		// Product images in Thai Shopee emails usually use the local CDN and
-		// a "th-" file key. Global Shopee assets are often logos/app/social
-		// icons, so keep them only as a fallback.
-		isProductLike := strings.Contains(lower, "cf.shopee.co.th/file/") ||
-			strings.Contains(lower, "f.shopee.co.th/file/") ||
-			strings.Contains(lower, "/file/th-")
-		isShopeeAsset := strings.Contains(lower, "shopee") && strings.Contains(lower, "/file/")
-		if !isProductLike && !isShopeeAsset {
-			continue
-		}
-		seen[u] = true
-		if isProductLike {
-			primary = append(primary, u)
-		} else {
-			fallback = append(fallback, u)
-		}
+	refs := shopeeProductImageRefs(html)
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, ref.url)
 	}
-	out = append(out, primary...)
-	out = append(out, fallback...)
 	return out
 }
 
@@ -586,10 +551,7 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 	// Fallback per-item prices in case the AI returned nil for some lines
 	// (Gemini occasionally drops Price fields when it sees the ฿ glyph).
 	fallbackPrices := extractShopeePrices(plainText)
-	sourceImages := extractShopeeImageURLs(bodyHTML)
-	if len(sourceImages) == 0 {
-		sourceImages = extractShopeeImageURLs(bodyText)
-	}
+	extracted.Items, _ = MatchShopeeItemImages(extracted.Items, bodyHTML, shopeeOrderID)
 
 	for i, extItem := range extracted.Items {
 		var matches []models.CatalogMatch
@@ -623,6 +585,9 @@ func (h *EmailHandler) ProcessShopeeEmailBody(subject, from, bodyText, bodyHTML,
 			p := fallbackPrices[i]
 			item.Price = &p
 			price = p
+		}
+		if extItem.ImageURL != "" {
+			item.SourceImageURL = extItem.ImageURL
 		}
 
 		var topMatch *models.CatalogMatch

@@ -642,6 +642,25 @@ func (h *EmailHandler) processOneShippedOrder(
 		return false, nil
 	}
 
+	var imageMatched, imageAmbiguous int
+	validItems, imageDecisions := MatchShopeeItemImages(validItems, bodyHTML, orderID)
+	for _, decision := range imageDecisions {
+		switch decision.Reason {
+		case ShopeeItemImageReasonNearest, ShopeeItemImageReasonSingleFallback:
+			imageMatched++
+		case ShopeeItemImageReasonAmbiguous:
+			imageAmbiguous++
+		}
+	}
+	if imageMatched > 0 || imageAmbiguous > 0 {
+		h.logger.Info("shopee_shipped: matched source item images",
+			zap.String("message_id", messageID),
+			zap.String("order_id", orderID),
+			zap.Int("matched", imageMatched),
+			zap.Int("ambiguous", imageAmbiguous),
+		)
+	}
+
 	const topK = 5
 	const highConfThreshold = 0.85
 

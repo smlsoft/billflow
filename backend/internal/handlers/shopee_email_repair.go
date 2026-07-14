@@ -573,6 +573,7 @@ func (s *ShopeeEmailRepairService) rebuildOneShopeeBillFromPaymentEmail(
 func (h *EmailHandler) buildShopeeRepairItems(orderID string, validItems []ai.ExtractedItem, body shopeeRepairEmailBody, fallbackPrices []float64) ([]shopeeRepairItemWithCandidates, bool) {
 	const topK = 5
 	const highConfThreshold = 0.85
+	validItems, _ = MatchShopeeItemImages(validItems, body.HTML, orderID)
 	itemsWithCandidates := []shopeeRepairItemWithCandidates{}
 	allHighConfidence := true
 	for i, extItem := range validItems {
