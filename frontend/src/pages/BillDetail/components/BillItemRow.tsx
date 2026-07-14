@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, AlertTriangle, Check, CheckCircle2, Edit, Info, Trash2, X } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Check, CheckCircle2, Edit, Info, Maximize2, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { TableRow, TableCell } from '@/components/ui/table'
 import {
@@ -115,6 +122,7 @@ export function BillItemRow({
   const [confirming, setConfirming] = useState(false)
   const [showMapModal, setShowMapModal] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
   const [pickedMatch, setPickedMatch] = useState<CatalogMatch | null>(null)
   const [draft, setDraft] = useState({
     item_code: item.item_code ?? '',
@@ -253,39 +261,48 @@ export function BillItemRow({
         >
           <TableCell className="max-w-[360px] align-top">
             <div className="flex items-start gap-2">
-            {item.source_image_url && (
-              <div className="h-12 w-12 shrink-0 overflow-hidden rounded border border-border bg-muted">
-                <img
-                  src={item.source_image_url}
-                  alt=""
-                  className="h-full w-full object-cover"
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                />
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2 break-words text-sm leading-6 text-foreground">
-              <span>{item.raw_name}</span>
-              {isShopeeShippingLine && (
-                <span className="inline-flex rounded-md border border-info/30 bg-info/10 px-2 py-0.5 text-[11px] font-medium text-info">
-                  ค่าส่งจาก Shopee
-                </span>
+              {item.source_image_url && (
+                <button
+                  type="button"
+                  className="group relative h-12 w-12 shrink-0 overflow-hidden rounded border border-border bg-muted outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  onClick={() => setImagePreviewOpen(true)}
+                  aria-label={`ดูรูปสินค้า ${item.raw_name}`}
+                  title="ดูรูปสินค้า"
+                >
+                  <img
+                    src={item.source_image_url}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                  />
+                  <span className="absolute bottom-0.5 right-0.5 rounded bg-background/90 p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                    <Maximize2 className="h-3 w-3" aria-hidden="true" />
+                  </span>
+                </button>
               )}
-              {isLazadaFeeLine && (
-                <span className="inline-flex rounded-md border border-[#f31c9b]/30 bg-[#f31c9b]/10 px-2 py-0.5 text-[11px] font-medium text-[#9f176b] dark:text-[#ff9bd7]">
-                  ค่าส่ง/fee จาก Lazada
-                </span>
-              )}
-            </div>
-            {item.source_sku && !isMarketplaceFeeLine && (
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                SKU ต้นทาง: <code className="font-mono">{item.source_sku}</code>
-                {!item.item_code && <span className="text-warning"> · ยังไม่พบในสินค้า SML</span>}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2 break-words text-sm leading-6 text-foreground">
+                  <span>{item.raw_name}</span>
+                  {isShopeeShippingLine && (
+                    <span className="inline-flex rounded-md border border-info/30 bg-info/10 px-2 py-0.5 text-[11px] font-medium text-info">
+                      ค่าส่งจาก Shopee
+                    </span>
+                  )}
+                  {isLazadaFeeLine && (
+                    <span className="inline-flex rounded-md border border-[#f31c9b]/30 bg-[#f31c9b]/10 px-2 py-0.5 text-[11px] font-medium text-[#9f176b] dark:text-[#ff9bd7]">
+                      ค่าส่ง/fee จาก Lazada
+                    </span>
+                  )}
+                </div>
+                {item.source_sku && !isMarketplaceFeeLine && (
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    SKU ต้นทาง: <code className="font-mono">{item.source_sku}</code>
+                    {!item.item_code && <span className="text-warning"> · ยังไม่พบในสินค้า SML</span>}
+                  </div>
+                )}
+                <IssueBadge reason={issueReason} />
               </div>
-            )}
-            <IssueBadge reason={issueReason} />
-            </div>
             </div>
           </TableCell>
           <TableCell>
@@ -436,6 +453,24 @@ export function BillItemRow({
             variant="destructive"
             onConfirm={handleDelete}
           />
+        )}
+        {item.source_image_url && (
+          <Dialog open={imagePreviewOpen} onOpenChange={setImagePreviewOpen}>
+            <DialogContent className="max-h-[92vh] max-w-[min(92vw,960px)] overflow-hidden p-0">
+              <DialogHeader className="sr-only">
+                <DialogTitle>รูปสินค้า</DialogTitle>
+                <DialogDescription>{item.raw_name}</DialogDescription>
+              </DialogHeader>
+              <div className="flex max-h-[92vh] min-h-[280px] items-center justify-center bg-muted/40 p-3 sm:p-4">
+                <img
+                  src={item.source_image_url}
+                  alt={item.raw_name}
+                  className="max-h-[86vh] max-w-full rounded-md object-contain"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+            </DialogContent>
+          </Dialog>
         )}
       </>
     )
