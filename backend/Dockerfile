@@ -13,7 +13,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o server ./cmd
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o lazada_group_key ./cmd/backfill/lazada_group_key \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o lazada_fee_line ./cmd/backfill/lazada_fee_line \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o shopee_multi_order_repair ./cmd/backfill/shopee_multi_order_repair \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o marketplace_order_url_backfill ./cmd/backfill/marketplace_order_url
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o marketplace_order_url_backfill ./cmd/backfill/marketplace_order_url \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o shopee_item_images ./cmd/backfill/shopee_item_images
 
 # Runtime stage
 FROM alpine:3.19
@@ -28,6 +29,7 @@ COPY --from=builder /app/lazada_group_key .
 COPY --from=builder /app/lazada_fee_line .
 COPY --from=builder /app/shopee_multi_order_repair .
 COPY --from=builder /app/marketplace_order_url_backfill .
+COPY --from=builder /app/shopee_item_images .
 
 EXPOSE 8090
 
