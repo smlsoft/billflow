@@ -54,6 +54,64 @@ func TestPlanShopeeItemImageUpdatesSkipsExistingAndAmbiguous(t *testing.T) {
 	}
 }
 
+func TestPlanShopeeItemImageUpdatesUsesQuantityAndPriceForDuplicateNames(t *testing.T) {
+	price60 := 60.0
+	price63 := 63.0
+	price66 := 66.0
+	rawName := "ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส"
+	target := shopeeItemImageTarget{
+		ID:      "bill-duplicate-name",
+		OrderID: "26072071GA0FY0",
+		Items: []shopeeItemImageTargetItem{
+			{ID: "item-black", RawName: rawName, Qty: 3, Price: &price60},
+			{ID: "item-pink", RawName: rawName, Qty: 2, Price: &price63},
+			{ID: "item-green", RawName: rawName, Qty: 2, Price: &price66},
+		},
+	}
+	html := `
+		<div>#26072071GA0FY0</div>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-black">
+			<div>ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส</div>
+			<div>ตัวเลือกสินค้า: black</div>
+			<div>จำนวน: 3</div>
+			<div>ราคา: ฿60</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-green">
+			<div>ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส</div>
+			<div>ตัวเลือกสินค้า: green</div>
+			<div>จำนวน: 2</div>
+			<div>ราคา: ฿66</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-pink">
+			<div>ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส</div>
+			<div>ตัวเลือกสินค้า: pink</div>
+			<div>จำนวน: 2</div>
+			<div>ราคา: ฿63</div>
+		</section>
+	`
+
+	updates, summary := planShopeeItemImageUpdates(target, html)
+	if len(updates) != 3 {
+		t.Fatalf("updates len = %d, want 3 (%+v)", len(updates), updates)
+	}
+	want := map[string]string{
+		"item-black": "https://cf.shopee.co.th/file/th-11134207-7rase-black",
+		"item-pink":  "https://cf.shopee.co.th/file/th-11134207-7rase-pink",
+		"item-green": "https://cf.shopee.co.th/file/th-11134207-7rase-green",
+	}
+	for _, update := range updates {
+		if update.ImageURL != want[update.ItemID] {
+			t.Fatalf("update for %s image = %q, want %q", update.ItemID, update.ImageURL, want[update.ItemID])
+		}
+	}
+	if summary.NoMatch != 0 || summary.Ambiguous != 0 {
+		t.Fatalf("summary NoMatch=%d Ambiguous=%d, want zero", summary.NoMatch, summary.Ambiguous)
+	}
+}
+
 func TestUpdateShopeeItemImageScopesToShopeePurchaseAndBlank(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

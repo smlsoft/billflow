@@ -42,6 +42,8 @@ type shopeeItemImageTarget struct {
 type shopeeItemImageTargetItem struct {
 	ID             string
 	RawName        string
+	Qty            float64
+	Price          *float64
 	SourceImageURL string
 }
 
@@ -121,6 +123,8 @@ func listShopeeItemImageTargets(db *sql.DB) ([]shopeeItemImageTarget, error) {
 		       COALESCE(b.raw_data, '{}'::jsonb) AS raw_data,
 		       bi.id::text,
 		       bi.raw_name,
+		       bi.qty,
+		       bi.price,
 		       COALESCE(bi.source_image_url, '') AS source_image_url
 		  FROM bills b
 		  JOIN bill_items bi ON bi.bill_id = b.id
@@ -137,8 +141,10 @@ func listShopeeItemImageTargets(db *sql.DB) ([]shopeeItemImageTarget, error) {
 	order := []string{}
 	for rows.Next() {
 		var billID, orderID, messageID, itemID, rawName, sourceImageURL string
+		var qty float64
+		var price sql.NullFloat64
 		var rawData []byte
-		if err := rows.Scan(&billID, &orderID, &messageID, &rawData, &itemID, &rawName, &sourceImageURL); err != nil {
+		if err := rows.Scan(&billID, &orderID, &messageID, &rawData, &itemID, &rawName, &qty, &price, &sourceImageURL); err != nil {
 			return nil, err
 		}
 		target := byBill[billID]
@@ -152,9 +158,16 @@ func listShopeeItemImageTargets(db *sql.DB) ([]shopeeItemImageTarget, error) {
 			byBill[billID] = target
 			order = append(order, billID)
 		}
+		var pricePtr *float64
+		if price.Valid {
+			v := price.Float64
+			pricePtr = &v
+		}
 		target.Items = append(target.Items, shopeeItemImageTargetItem{
 			ID:             itemID,
 			RawName:        rawName,
+			Qty:            qty,
+			Price:          pricePtr,
 			SourceImageURL: sourceImageURL,
 		})
 	}
@@ -254,7 +267,8 @@ func planShopeeItemImageUpdates(target shopeeItemImageTarget, bodyHTML string) (
 	for _, item := range target.Items {
 		items = append(items, ai.ExtractedItem{
 			RawName:  item.RawName,
-			Qty:      1,
+			Qty:      item.Qty,
+			Price:    item.Price,
 			ImageURL: item.SourceImageURL,
 		})
 	}
@@ -269,7 +283,7 @@ func planShopeeItemImageUpdates(target shopeeItemImageTarget, bodyHTML string) (
 		}
 		decision := decisions[i]
 		switch decision.Reason {
-		case handlers.ShopeeItemImageReasonNearest, handlers.ShopeeItemImageReasonSingleFallback:
+		case handlers.ShopeeItemImageReasonBlock, handlers.ShopeeItemImageReasonNearest, handlers.ShopeeItemImageReasonSingleFallback:
 			imageURL := strings.TrimSpace(matched[i].ImageURL)
 			if imageURL == "" {
 				summary.NoMatch++

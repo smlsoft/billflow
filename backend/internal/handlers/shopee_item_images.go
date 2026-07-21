@@ -2,6 +2,9 @@ package handlers
 
 import (
 	htmlstd "html"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"billflow/internal/services/ai"
@@ -9,6 +12,7 @@ import (
 
 const (
 	ShopeeItemImageReasonExisting       = "existing"
+	ShopeeItemImageReasonBlock          = "block"
 	ShopeeItemImageReasonNearest        = "nearest"
 	ShopeeItemImageReasonSingleFallback = "single_fallback"
 	ShopeeItemImageReasonNoMatch        = "no_match"
@@ -25,6 +29,19 @@ type shopeeImageRef struct {
 	start int
 	end   int
 }
+
+type shopeeProductImageBlock struct {
+	refIndex       int
+	normalizedText string
+	qty            *float64
+	price          *float64
+}
+
+var (
+	shopeeHTMLTagPattern    = regexp.MustCompile(`(?s)<[^>]+>`)
+	shopeeWhitespacePattern = regexp.MustCompile(`\s+`)
+	shopeeQtyPattern        = regexp.MustCompile(`(?i)(?:^|\s)(?:จำนวน|qty|quantity)\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?)`)
+)
 
 func MatchShopeeItemImages(items []ai.ExtractedItem, bodyHTML, orderID string) ([]ai.ExtractedItem, []ShopeeItemImageDecision) {
 	out := make([]ai.ExtractedItem, len(items))
@@ -54,6 +71,8 @@ func MatchShopeeItemImages(items []ai.ExtractedItem, bodyHTML, orderID string) (
 	if len(refs) == 0 {
 		return out, decisions
 	}
+	blocks := shopeeProductImageBlocks(scopedHTML, refs)
+	nameCounts := shopeeNormalizedItemNameCounts(out)
 
 	used := map[int]bool{}
 	for _, item := range out {
@@ -71,6 +90,20 @@ func MatchShopeeItemImages(items []ai.ExtractedItem, bodyHTML, orderID string) (
 
 	for i := range out {
 		if strings.TrimSpace(out[i].ImageURL) != "" {
+			continue
+		}
+		if blockIdx := matchShopeeProductImageBlockIndex(blocks, out[i], used); blockIdx >= 0 {
+			refIdx := blocks[blockIdx].refIndex
+			out[i].ImageURL = refs[refIdx].url
+			decisions[i] = ShopeeItemImageDecision{
+				ImageURL: refs[refIdx].url,
+				Reason:   ShopeeItemImageReasonBlock,
+			}
+			used[refIdx] = true
+			continue
+		}
+		if nameCounts[normalizeShopeeMatchText(out[i].RawName)] > 1 {
+			decisions[i].Reason = ShopeeItemImageReasonAmbiguous
 			continue
 		}
 		pos := findShopeeItemHTMLPosition(scopedHTML, out[i].RawName)
@@ -102,6 +135,130 @@ func MatchShopeeItemImages(items []ai.ExtractedItem, bodyHTML, orderID string) (
 	}
 
 	return out, decisions
+}
+
+func shopeeProductImageBlocks(bodyHTML string, refs []shopeeImageRef) []shopeeProductImageBlock {
+	blocks := make([]shopeeProductImageBlock, 0, len(refs))
+	for i, ref := range refs {
+		start := ref.start
+		end := len(bodyHTML)
+		if i+1 < len(refs) {
+			end = refs[i+1].start
+		}
+		if start < 0 || end <= start || end > len(bodyHTML) {
+			continue
+		}
+		text := normalizeShopeeHTMLText(bodyHTML[start:end])
+		blocks = append(blocks, shopeeProductImageBlock{
+			refIndex:       i,
+			normalizedText: normalizeShopeeMatchText(text),
+			qty:            parseShopeeBlockQty(text),
+			price:          parseShopeeBlockPrice(text),
+		})
+	}
+	return blocks
+}
+
+func matchShopeeProductImageBlockIndex(blocks []shopeeProductImageBlock, item ai.ExtractedItem, used map[int]bool) int {
+	hasQty := item.Qty > 0
+	hasPrice := item.Price != nil
+	if !hasQty && !hasPrice {
+		return -1
+	}
+
+	matches := []int{}
+	for i, block := range blocks {
+		if used[block.refIndex] {
+			continue
+		}
+		if !shopeeBlockContainsItemName(block.normalizedText, item.RawName) {
+			continue
+		}
+		if hasQty {
+			if block.qty == nil || !sameShopeeNumber(*block.qty, item.Qty) {
+				continue
+			}
+		}
+		if hasPrice {
+			if block.price == nil || !sameShopeeNumber(*block.price, *item.Price) {
+				continue
+			}
+		}
+		matches = append(matches, i)
+	}
+	if len(matches) != 1 {
+		return -1
+	}
+	return matches[0]
+}
+
+func shopeeBlockContainsItemName(normalizedBlockText, rawName string) bool {
+	rawName = strings.TrimSpace(rawName)
+	if rawName == "" || normalizedBlockText == "" {
+		return false
+	}
+	candidates := []string{rawName}
+	if short := firstRunes(rawName, 90); short != rawName {
+		candidates = append(candidates, short)
+	}
+	if short := firstRunes(rawName, 45); short != rawName {
+		candidates = append(candidates, short)
+	}
+	for _, candidate := range candidates {
+		normalized := normalizeShopeeMatchText(candidate)
+		if normalized != "" && strings.Contains(normalizedBlockText, normalized) {
+			return true
+		}
+	}
+	return false
+}
+
+func shopeeNormalizedItemNameCounts(items []ai.ExtractedItem) map[string]int {
+	counts := map[string]int{}
+	for _, item := range items {
+		name := normalizeShopeeMatchText(item.RawName)
+		if name != "" {
+			counts[name]++
+		}
+	}
+	return counts
+}
+
+func normalizeShopeeHTMLText(raw string) string {
+	raw = htmlstd.UnescapeString(raw)
+	raw = shopeeHTMLTagPattern.ReplaceAllString(raw, " ")
+	return strings.TrimSpace(shopeeWhitespacePattern.ReplaceAllString(raw, " "))
+}
+
+func normalizeShopeeMatchText(raw string) string {
+	raw = htmlstd.UnescapeString(raw)
+	raw = shopeeHTMLTagPattern.ReplaceAllString(raw, " ")
+	raw = shopeeWhitespacePattern.ReplaceAllString(raw, " ")
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func parseShopeeBlockQty(text string) *float64 {
+	m := shopeeQtyPattern.FindStringSubmatch(text)
+	if len(m) < 2 {
+		return nil
+	}
+	v, err := strconv.ParseFloat(strings.ReplaceAll(m[1], ",", ""), 64)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+func parseShopeeBlockPrice(text string) *float64 {
+	prices := extractShopeePrices(text)
+	if len(prices) == 0 {
+		return nil
+	}
+	return &prices[0]
+}
+
+func sameShopeeNumber(a, b float64) bool {
+	return math.Abs(a-b) < 0.01
 }
 
 func scopeShopeeItemImageHTML(bodyHTML, orderID string) string {

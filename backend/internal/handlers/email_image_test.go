@@ -88,6 +88,84 @@ func TestMatchShopeeItemImagesMatchesNearestName(t *testing.T) {
 	}
 }
 
+func TestMatchShopeeItemImagesMatchesDuplicateNamesByQuantityAndPrice(t *testing.T) {
+	name := "ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส"
+	price60 := 60.0
+	price63 := 63.0
+	price66 := 66.0
+	items := []ai.ExtractedItem{
+		{RawName: name, Qty: 3, Price: &price60},
+		{RawName: name, Qty: 2, Price: &price63},
+		{RawName: name, Qty: 2, Price: &price66},
+	}
+	html := `
+		<div>#26072071GA0FY0</div>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-black">
+			<div>ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส</div>
+			<div>ตัวเลือกสินค้า: black</div>
+			<div>จำนวน: 3</div>
+			<div>ราคา: ฿60</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-green">
+			<div>ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส</div>
+			<div>ตัวเลือกสินค้า: green</div>
+			<div>จำนวน: 2</div>
+			<div>ราคา: ฿66</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-pink">
+			<div>ชุดเซทแก้วน้ำ-กระบอกน้ำ 500 ml. กระบอกน้ำเก็บอุณหภูมิ กระบอกน้ำสแตนเลส แก้วน้ำกระบอกน้ำสแตนเลส</div>
+			<div>ตัวเลือกสินค้า: pink</div>
+			<div>จำนวน: 2</div>
+			<div>ราคา: ฿63</div>
+		</section>
+	`
+
+	got, decisions := MatchShopeeItemImages(items, html, "26072071GA0FY0")
+	want := []string{
+		"https://cf.shopee.co.th/file/th-11134207-7rase-black",
+		"https://cf.shopee.co.th/file/th-11134207-7rase-pink",
+		"https://cf.shopee.co.th/file/th-11134207-7rase-green",
+	}
+	for i := range want {
+		if got[i].ImageURL != want[i] {
+			t.Fatalf("item %d ImageURL = %q, want %q", i, got[i].ImageURL, want[i])
+		}
+		if decisions[i].Reason != ShopeeItemImageReasonBlock {
+			t.Fatalf("item %d reason = %q, want block", i, decisions[i].Reason)
+		}
+	}
+}
+
+func TestMatchShopeeItemImagesLeavesDuplicateNamesBlankWithoutNumericMatch(t *testing.T) {
+	items := []ai.ExtractedItem{
+		{RawName: "สินค้าชื่อซ้ำ"},
+		{RawName: "สินค้าชื่อซ้ำ"},
+	}
+	html := `
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-first">
+			<div>สินค้าชื่อซ้ำ</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7rase-second">
+			<div>สินค้าชื่อซ้ำ</div>
+		</section>
+	`
+
+	got, decisions := MatchShopeeItemImages(items, html, "")
+	for i := range got {
+		if got[i].ImageURL != "" {
+			t.Fatalf("item %d ImageURL = %q, want blank when duplicate names have no qty/price evidence", i, got[i].ImageURL)
+		}
+		if decisions[i].Reason != ShopeeItemImageReasonAmbiguous {
+			t.Fatalf("item %d reason = %q, want ambiguous", i, decisions[i].Reason)
+		}
+	}
+}
+
 func TestMatchShopeeItemImagesLeavesAmbiguousMissingNameBlank(t *testing.T) {
 	items := []ai.ExtractedItem{{RawName: "ชื่อที่ไม่มีใน HTML", Qty: 1}}
 	html := `
