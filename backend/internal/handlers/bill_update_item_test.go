@@ -35,7 +35,7 @@ func TestUpdateItemRejectsMarketplaceQuantityChange(t *testing.T) {
 	mock.ExpectQuery(`(?s)FROM bill_items.*WHERE bill_id = \$1`).
 		WithArgs(billID).
 		WillReturnRows(billItemRows().AddRow(
-			itemID, billID, "โต๊ะ", "", "", nil, 1.0, nil, 690.0, 0.0, false, nil, []byte("[]"),
+			itemID, billID, "โต๊ะ", "", "", "", 0, nil, 1.0, nil, 690.0, 0.0, false, nil, []byte("[]"),
 		))
 	mock.ExpectQuery("FROM shopee_order_events").
 		WithArgs(billID).
@@ -80,7 +80,7 @@ func billRows() *sqlmock.Rows {
 
 func billItemRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
-		"id", "bill_id", "raw_name", "source_sku", "source_image_url", "item_code", "qty", "unit_code", "price",
+		"id", "bill_id", "raw_name", "source_sku", "source_image_url", "source_variant", "source_line_no", "item_code", "qty", "unit_code", "price",
 		"discount_amount", "mapped", "mapping_id", "candidates",
 	})
 }

@@ -235,6 +235,9 @@ export function BillItemRow({
   const isShopeeShippingLine = item.source_sku === SHOPEE_SHIPPING_SOURCE_SKU
   const isLazadaFeeLine = item.source_sku === LAZADA_FEE_SOURCE_SKU
   const isMarketplaceFeeLine = isMarketplaceFeeSourceSKU(item.source_sku)
+  const sourceItemDescription = item.source_variant
+    ? `${item.raw_name} ตัวเลือก ${item.source_variant}`
+    : item.raw_name
   const editMatchInfo =
     pickedMatch && pickedMatch.item_code === draft.item_code
       ? {
@@ -266,7 +269,7 @@ export function BillItemRow({
                   type="button"
                   className="group relative h-12 w-12 shrink-0 overflow-hidden rounded border border-border bg-muted outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   onClick={() => setImagePreviewOpen(true)}
-                  aria-label={`ดูรูปสินค้า ${item.raw_name}`}
+                  aria-label={`ดูรูปสินค้า ${sourceItemDescription}`}
                   title="ดูรูปสินค้า"
                 >
                   <img
@@ -295,6 +298,11 @@ export function BillItemRow({
                     </span>
                   )}
                 </div>
+                {item.source_variant && !isMarketplaceFeeLine && (
+                  <div className="mt-1 break-words text-[11px] text-muted-foreground">
+                    ตัวเลือก: <span className="font-medium text-foreground/80">{item.source_variant}</span>
+                  </div>
+                )}
                 {item.source_sku && !isMarketplaceFeeLine && (
                   <div className="mt-1 text-[11px] text-muted-foreground">
                     SKU ต้นทาง: <code className="font-mono">{item.source_sku}</code>
@@ -459,12 +467,12 @@ export function BillItemRow({
             <DialogContent className="max-h-[92vh] max-w-[min(92vw,960px)] overflow-hidden p-0">
               <DialogHeader className="sr-only">
                 <DialogTitle>รูปสินค้า</DialogTitle>
-                <DialogDescription>{item.raw_name}</DialogDescription>
+                <DialogDescription>{sourceItemDescription}</DialogDescription>
               </DialogHeader>
               <div className="flex max-h-[92vh] min-h-[280px] items-center justify-center bg-muted/40 p-3 sm:p-4">
                 <img
                   src={item.source_image_url}
-                  alt={item.raw_name}
+                  alt={sourceItemDescription}
                   className="max-h-[86vh] max-w-full rounded-md object-contain"
                   referrerPolicy="no-referrer"
                 />

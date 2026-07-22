@@ -97,6 +97,8 @@ export interface BillItem {
   raw_name: string
   source_sku?: string
   source_image_url?: string
+  source_variant?: string
+  source_line_no?: number
   item_code?: string | null
   has_hidden_chars?: boolean
   clean_item_code?: string

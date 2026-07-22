@@ -118,6 +118,8 @@ type BillItem struct {
 	RawName        string          `json:"raw_name"`
 	SourceSKU      string          `json:"source_sku,omitempty"`
 	SourceImageURL string          `json:"source_image_url,omitempty"`
+	SourceVariant  string          `json:"source_variant,omitempty"`
+	SourceLineNo   int             `json:"source_line_no,omitempty"`
 	ItemCode       *string         `json:"item_code,omitempty"`
 	HasHiddenChars bool            `json:"has_hidden_chars"`
 	CleanItemCode  string          `json:"clean_item_code,omitempty"`

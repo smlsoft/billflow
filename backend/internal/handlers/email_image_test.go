@@ -1,10 +1,31 @@
 package handlers
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"billflow/internal/services/ai"
 )
+
+func shopeeMojibakeFixture(raw string) string {
+	var out strings.Builder
+	for _, b := range []byte(raw) {
+		if b < 0x80 {
+			out.WriteByte(b)
+			continue
+		}
+		fmt.Fprintf(&out, "&#%d;", b)
+	}
+	return out.String()
+}
+
+func TestDecodeShopeeHTMLTextRepairsThaiMojibake(t *testing.T) {
+	encoded := shopeeMojibakeFixture("ตัวเลือกสินค้า จำนวน ราคา")
+	if got := decodeShopeeHTMLText(encoded); got != "ตัวเลือกสินค้า จำนวน ราคา" {
+		t.Fatalf("decodeShopeeHTMLText() = %q", got)
+	}
+}
 
 func TestExtractShopeeImageURLsPrefersProductImage(t *testing.T) {
 	html := `
@@ -135,6 +156,97 @@ func TestMatchShopeeItemImagesMatchesDuplicateNamesByQuantityAndPrice(t *testing
 		}
 		if decisions[i].Reason != ShopeeItemImageReasonBlock {
 			t.Fatalf("item %d reason = %q, want block", i, decisions[i].Reason)
+		}
+	}
+}
+
+func TestMatchShopeeItemImagesMatchesEqualDuplicateVariantsFromMojibakeHTML(t *testing.T) {
+	name := "Homsmart รถเข็นพับได้ 45L/65L เข็นลื่น รถเข็นแคมป์ปิ้ง ช้อปปิ้ง นั่งได้ พับเก็บง่าย พกพาสะดวก"
+	price669 := 669.0
+	price679 := 679.0
+	existingURL := "https://cf.shopee.co.th/file/th-11134207-7r98p-lm8m19jq0y6f43"
+	items := []ai.ExtractedItem{
+		{RawName: name, Qty: 1, Price: &price669},
+		{RawName: name, Qty: 1, Price: &price669},
+		{RawName: name, Qty: 1, Price: &price679, ImageURL: existingURL},
+	}
+	html := shopeeMojibakeFixture(`
+		<div>#2607219G32VR3V</div>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7r98p-lm8m19jq0y6f43">
+			<div>Homsmart รถเข็นพับได้ 45L/65L เข็นลื่น รถเข็นแคมป์ปิ้ง ช้อปปิ้ง นั่งได้ พับเก็บง่าย พกพาสะดวก</div>
+			<div>ตัวเลือกสินค้า: O14 ชมพู - 65L</div>
+			<div>จำนวน: 1</div>
+			<div>ราคา: ฿679</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7r98y-lm8lga05y1vrc3">
+			<div>Homsmart รถเข็นพับได้ 45L/65L เข็นลื่น รถเข็นแคมป์ปิ้ง ช้อปปิ้ง นั่งได้ พับเก็บง่าย พกพาสะดวก</div>
+			<div>ตัวเลือกสินค้า: S-15 ชมพู - 45L</div>
+			<div>จำนวน: 1</div>
+			<div>ราคา: ฿669</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-7r98x-lm8lga05wnbbbf">
+			<div>Homsmart รถเข็นพับได้ 45L/65L เข็นลื่น รถเข็นแคมป์ปิ้ง ช้อปปิ้ง นั่งได้ พับเก็บง่าย พกพาสะดวก</div>
+			<div>ตัวเลือกสินค้า: S-15 มิ้นต์ - 45L</div>
+			<div>จำนวน: 1</div>
+			<div>ราคา: ฿669</div>
+		</section>
+	`)
+
+	got, decisions := MatchShopeeItemImages(items, html, "2607219G32VR3V")
+	want := []string{
+		"https://cf.shopee.co.th/file/th-11134207-7r98y-lm8lga05y1vrc3",
+		"https://cf.shopee.co.th/file/th-11134207-7r98x-lm8lga05wnbbbf",
+		existingURL,
+	}
+	for i := range want {
+		if got[i].ImageURL != want[i] {
+			t.Fatalf("item %d ImageURL = %q, want %q", i, got[i].ImageURL, want[i])
+		}
+	}
+	wantVariants := []string{"S-15 ชมพู - 45L", "S-15 มิ้นต์ - 45L", "O14 ชมพู - 65L"}
+	wantLines := []int{2, 3, 1}
+	wantReasons := []string{
+		ShopeeItemImageReasonDuplicateGroup,
+		ShopeeItemImageReasonDuplicateGroup,
+		ShopeeItemImageReasonExisting,
+	}
+	for i := range decisions {
+		if decisions[i].SourceVariant != wantVariants[i] {
+			t.Fatalf("item %d SourceVariant = %q, want %q", i, decisions[i].SourceVariant, wantVariants[i])
+		}
+		if decisions[i].SourceLineNo != wantLines[i] {
+			t.Fatalf("item %d SourceLineNo = %d, want %d", i, decisions[i].SourceLineNo, wantLines[i])
+		}
+		if decisions[i].Reason != wantReasons[i] {
+			t.Fatalf("item %d Reason = %q, want %q", i, decisions[i].Reason, wantReasons[i])
+		}
+	}
+}
+
+func TestMatchShopeeItemImagesLeavesEqualDuplicateGroupAmbiguousWhenCountsDiffer(t *testing.T) {
+	price := 669.0
+	items := []ai.ExtractedItem{
+		{RawName: "รถเข็นพับได้", Qty: 1, Price: &price},
+		{RawName: "รถเข็นพับได้", Qty: 1, Price: &price},
+	}
+	html := `
+		<img src="https://cf.shopee.co.th/file/th-11134207-one-image">
+		<div>รถเข็นพับได้</div>
+		<div>ตัวเลือกสินค้า: สีชมพู</div>
+		<div>จำนวน: 1</div>
+		<div>ราคา: ฿669</div>
+	`
+
+	got, decisions := MatchShopeeItemImages(items, html, "")
+	for i := range got {
+		if got[i].ImageURL != "" {
+			t.Fatalf("item %d ImageURL = %q, want blank", i, got[i].ImageURL)
+		}
+		if decisions[i].Reason != ShopeeItemImageReasonAmbiguous {
+			t.Fatalf("item %d Reason = %q, want ambiguous", i, decisions[i].Reason)
 		}
 	}
 }

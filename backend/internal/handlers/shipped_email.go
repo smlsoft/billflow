@@ -646,7 +646,7 @@ func (h *EmailHandler) processOneShippedOrder(
 	validItems, imageDecisions := MatchShopeeItemImages(validItems, bodyHTML, orderID)
 	for _, decision := range imageDecisions {
 		switch decision.Reason {
-		case ShopeeItemImageReasonNearest, ShopeeItemImageReasonSingleFallback:
+		case ShopeeItemImageReasonBlock, ShopeeItemImageReasonDuplicateGroup, ShopeeItemImageReasonNearest, ShopeeItemImageReasonSingleFallback:
 			imageMatched++
 		case ShopeeItemImageReasonAmbiguous:
 			imageAmbiguous++
@@ -686,9 +686,11 @@ func (h *EmailHandler) processOneShippedOrder(
 		}
 
 		item := models.BillItem{
-			RawName: extItem.RawName,
-			Qty:     extItem.Qty,
-			Mapped:  false,
+			RawName:       extItem.RawName,
+			Qty:           extItem.Qty,
+			Mapped:        false,
+			SourceVariant: imageDecisions[i].SourceVariant,
+			SourceLineNo:  imageDecisions[i].SourceLineNo,
 		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price

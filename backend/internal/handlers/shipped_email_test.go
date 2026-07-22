@@ -517,7 +517,7 @@ func TestEnsureShopeeShippingLineForSendAddsMissingConfiguredLine(t *testing.T) 
 	mock.ExpectQuery("INSERT INTO bill_items").
 		WithArgs(
 			bill.ID, "ค่าจัดส่งสินค้า", models.ShopeeShippingSourceSKU, "",
-			sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
+			"", 0, sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ship-item"))
 
@@ -584,7 +584,7 @@ func TestEnsureShopeeShippingLineForSendAddsZeroAmountLine(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO bill_items").
 		WithArgs(
 			bill.ID, "ค่าจัดส่งสินค้า", models.ShopeeShippingSourceSKU, "",
-			sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
+			"", 0, sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ship-item"))
 
@@ -688,7 +688,7 @@ func TestEnsureMarketplaceFeeLineForSendAddsLazadaConfiguredLine(t *testing.T) {
 	mock.ExpectQuery("INSERT INTO bill_items").
 		WithArgs(
 			bill.ID, "ค่าจัดส่ง/ค่าธรรมเนียม Lazada", models.LazadaFeeSourceSKU, "",
-			sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
+			"", 0, sqlmock.AnyArg(), float64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), float64(0), true, nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("lazada-fee-item"))
 

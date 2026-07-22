@@ -645,7 +645,8 @@ func (r *BillRepo) UpdateStatus(id, status string, smlDocNo *string, smlResponse
 
 func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 	rows, err := r.db.Query(
-		`SELECT id, bill_id, raw_name, COALESCE(source_sku, ''), COALESCE(source_image_url, ''), item_code, qty, unit_code, price,
+		`SELECT id, bill_id, raw_name, COALESCE(source_sku, ''), COALESCE(source_image_url, ''),
+		        COALESCE(source_variant, ''), COALESCE(source_line_no, 0), item_code, qty, unit_code, price,
 		        COALESCE(discount_amount, 0), mapped, mapping_id,
 		        COALESCE(candidates, '[]') as candidates
 		 FROM bill_items WHERE bill_id = $1 ORDER BY id`, billID,
@@ -661,6 +662,7 @@ func (r *BillRepo) findItems(billID string) ([]models.BillItem, error) {
 		var candidatesRaw []byte
 		if err := rows.Scan(
 			&item.ID, &item.BillID, &item.RawName, &item.SourceSKU, &item.SourceImageURL,
+			&item.SourceVariant, &item.SourceLineNo,
 			&item.ItemCode, &item.Qty, &item.UnitCode, &item.Price, &item.DiscountAmount, &item.Mapped, &item.MappingID,
 			&candidatesRaw,
 		); err != nil {
@@ -698,10 +700,10 @@ func billItemDisplayGroup(item models.BillItem) int {
 
 func (r *BillRepo) InsertItem(item *models.BillItem) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, source_variant, source_line_no, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 RETURNING id`,
-		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
+		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.SourceVariant, item.SourceLineNo, item.ItemCode, item.Qty,
 		item.UnitCode, item.Price, item.DiscountAmount, item.Mapped, item.MappingID,
 	).Scan(&item.ID)
 }
@@ -1187,10 +1189,10 @@ func (r *BillRepo) MarkProcessedEmailKey(source, messageID, orderID string) erro
 // InsertItemWithCandidates inserts a bill item including top-5 catalog candidates
 func (r *BillRepo) InsertItemWithCandidates(item *models.BillItem, candidatesJSON []byte) error {
 	return r.db.QueryRow(
-		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id, candidates)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, source_variant, source_line_no, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id, candidates)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		 RETURNING id`,
-		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
+		item.BillID, item.RawName, item.SourceSKU, item.SourceImageURL, item.SourceVariant, item.SourceLineNo, item.ItemCode, item.Qty,
 		item.UnitCode, item.Price, item.DiscountAmount, item.Mapped, item.MappingID, candidatesJSON,
 	).Scan(&item.ID)
 }
