@@ -23,10 +23,10 @@ func (r *MarketplaceAliasRepo) Find(source, sourceSKU, rawName string) (*models.
 	sourceSKU = normalizeAliasSKU(sourceSKU)
 	normalizedKey := marketplace.NormalizeKey(rawName, sourceSKU)
 	if sourceSKU != "" {
+		// Source SKU is the stable marketplace identity. Do not let a generic
+		// title alias map another variant before this SKU is explicitly confirmed.
 		alias, err := r.findByQuery(`source = $1 AND source_sku = $2`, source, sourceSKU)
-		if err != nil || alias != nil {
-			return alias, err
-		}
+		return alias, err
 	}
 	if normalizedKey != "" {
 		return r.findByQuery(`source = $1 AND normalized_key = $2`, source, normalizedKey)
@@ -296,15 +296,7 @@ func (r *MarketplaceAliasRepo) ApplyToOpenItems(source, billType, sourceSKU, nor
 		if err := rows.Scan(&id, &rowRaw, &rowSKU); err != nil {
 			return 0, 0, err
 		}
-		if sourceSKU != "" && rowSKU == sourceSKU {
-			ids = append(ids, id)
-			continue
-		}
-		if sourceSKU == "" && marketplace.NormalizeKey(rowRaw, rowSKU) == normalizedKey {
-			ids = append(ids, id)
-			continue
-		}
-		if rawName != "" && rowRaw == rawName {
+		if marketplaceAliasMatchesRow(sourceSKU, normalizedKey, rawName, rowSKU, rowRaw) {
 			ids = append(ids, id)
 		}
 	}
@@ -359,6 +351,21 @@ func (r *MarketplaceAliasRepo) ApplyToOpenItems(source, billType, sourceSKU, nor
 		return 0, 0, err
 	}
 	return int(applied), int(ready), nil
+}
+
+// marketplaceAliasMatchesRow keeps SKU-confirmed mappings scoped to that
+// exact marketplace SKU. A raw-name fallback is only safe when the source did
+// not provide a SKU at all; otherwise color/variant siblings can be overwritten.
+func marketplaceAliasMatchesRow(sourceSKU, normalizedKey, rawName, rowSKU, rowRaw string) bool {
+	sourceSKU = normalizeAliasSKU(sourceSKU)
+	rowSKU = normalizeAliasSKU(rowSKU)
+	if sourceSKU != "" {
+		return rowSKU == sourceSKU
+	}
+	if normalizedKey != "" && marketplace.NormalizeKey(rowRaw, rowSKU) == normalizedKey {
+		return true
+	}
+	return rawName != "" && rowRaw == rawName
 }
 
 func normalizeAliasSKU(s string) string {

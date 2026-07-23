@@ -83,12 +83,13 @@ type EmailHandler struct {
 	threshold  float64
 	logger     *zap.Logger
 	// Catalog-based matching (Shopee email flow)
-	catalogSvc      *catalog.SMLCatalogService
-	embSvc          *catalog.EmbeddingService
-	catalogIdx      *catalog.CatalogIndex
-	catalogRepo     *repository.SMLCatalogRepo
-	channelDefaults *repository.ChannelDefaultRepo
-	shopeeAI        shopeeOrderExtractor
+	catalogSvc           *catalog.SMLCatalogService
+	embSvc               *catalog.EmbeddingService
+	catalogIdx           *catalog.CatalogIndex
+	catalogRepo          *repository.SMLCatalogRepo
+	marketplaceAliasRepo *repository.MarketplaceAliasRepo
+	channelDefaults      *repository.ChannelDefaultRepo
+	shopeeAI             shopeeOrderExtractor
 	// Source-artifact storage (PDF/HTML/envelope)
 	artifactSvc *artifact.Service
 }
@@ -128,6 +129,12 @@ func (h *EmailHandler) SetCatalogServices(
 	h.embSvc = embSvc
 	h.catalogIdx = catalogIdx
 	h.catalogRepo = catalogRepo
+}
+
+// SetMarketplaceAliasRepo wires source-SKU aliases used by marketplace email
+// purchases. These aliases are more precise than a name-only learned mapping.
+func (h *EmailHandler) SetMarketplaceAliasRepo(repo *repository.MarketplaceAliasRepo) {
+	h.marketplaceAliasRepo = repo
 }
 
 // SetChannelDefaults wires per-channel routing/config used by email flows.

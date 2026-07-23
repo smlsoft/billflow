@@ -816,11 +816,11 @@ func (s *ShopeeEmailRepairService) rebuildOneLazadaBillFromConfirmation(
 	if len(validItems) == 0 {
 		return "", fmt.Errorf("rebuild lazada bill %s: no usable items", orderID)
 	}
-	validItems = attachLazadaItemImages(validItems, bodyHTML)
+	validItems, sourceMetadata := attachLazadaItemSourceMetadata(validItems, bodyHTML)
 	amountSummary := repository.ExtractLazadaAmountSummary(plainText, bodyHTML)
 	validItems = applyLazadaEmailSummaryPrices(validItems, amountSummary)
 	itemsGrossDelta := lazadaExtractedItemsGrossDelta(validItems, amountSummary)
-	itemsWithCandidates, allHighConfidence := emailHandler.mapLazadaItems(validItems)
+	itemsWithCandidates, allHighConfidence := emailHandler.mapLazadaItems(validItems, sourceMetadata)
 	if len(itemsWithCandidates) == 0 {
 		return "", fmt.Errorf("rebuild lazada bill %s: no mapped item rows", orderID)
 	}

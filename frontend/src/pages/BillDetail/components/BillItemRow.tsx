@@ -41,7 +41,6 @@ interface Props {
   billId: string
   editable: boolean
   canDelete: boolean
-  onUpdated: (updated: BillItem) => void
   onDeleted: (itemId: string) => void
   onRefresh: () => Promise<unknown>
   lockSourceAmounts?: boolean
@@ -91,7 +90,6 @@ export function BillItemRow({
   billId,
   editable,
   canDelete,
-  onUpdated,
   onDeleted,
   onRefresh,
   lockSourceAmounts = false,
@@ -157,34 +155,30 @@ export function BillItemRow({
         payload.qty = Number(draft.qty)
         payload.price = Number(draft.price)
       }
-      await api.put(`/api/bills/${billId}/items/${item.id}`, payload)
+      const { data } = await api.put<{
+        mapping_scope?: 'item_only' | 'source_sku' | 'raw_name'
+      }>(`/api/bills/${billId}/items/${item.id}`, payload)
 
-      // F1 learning: backend registers ai_learned mapping if item_code changed.
       const prevCode = item.item_code ?? ''
       if (draft.item_code && draft.item_code !== prevCode) {
-        toast.success('✓ จดจำการจับคู่นี้แล้ว — ครั้งถัดไประบบจะ map ให้อัตโนมัติ', {
-          duration: 3500,
-        })
+        if (data.mapping_scope === 'source_sku') {
+          toast.success('บันทึกการจับคู่สำหรับ SKU ต้นทางนี้แล้ว', {
+            description: 'สินค้า/สีอื่นที่ชื่อเหมือนกันจะไม่ถูกเปลี่ยนตาม',
+            duration: 3500,
+          })
+        } else if (data.mapping_scope === 'item_only') {
+          toast.success('บันทึกเฉพาะรายการนี้แล้ว', {
+            description: 'ชื่อสินค้าซ้ำ ระบบจึงไม่กระจายรหัสไปยังรายการอื่น',
+            duration: 3500,
+          })
+        } else {
+          toast.success('จดจำการจับคู่นี้แล้ว', {
+            description: 'ครั้งถัดไประบบจะจับคู่ให้อัตโนมัติ',
+            duration: 3500,
+          })
+        }
       }
-
-      const candidates = pickedMatch
-        ? [
-            pickedMatch,
-            ...(item.candidates ?? []).filter(
-              (candidate) => candidate.item_code !== pickedMatch.item_code,
-            ),
-          ]
-        : item.candidates
-
-      onUpdated({
-        ...item,
-        item_code: draft.item_code,
-        unit_code: draft.unit_code,
-        qty: lockSourceAmounts ? item.qty : Number(draft.qty),
-        price: lockSourceAmounts ? item.price : Number(draft.price),
-        mapped: draft.item_code !== '',
-        candidates,
-      })
+      await onRefresh()
       setEditing(false)
       setPickedMatch(null)
     } catch (err) {

@@ -42,6 +42,7 @@ export interface RetryBillPayload {
   vat_type?: number
   vat_rate?: number
   inquiry_type?: number
+  confirm_duplicate_item_codes?: boolean
 }
 
 export interface RetryBillResponse {

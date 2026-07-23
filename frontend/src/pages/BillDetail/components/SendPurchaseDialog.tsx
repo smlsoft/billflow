@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, RefreshCw, Send } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -38,6 +39,7 @@ import { DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS, normalizeMarketplacePrintPol
 import { PartyPicker, type Party } from "@/pages/ChannelDefaults/PartyPicker";
 import { SMLMasterCodePicker } from "./SMLMasterCodePicker";
 import { ShelfPicker, WarehousePicker } from "./WarehousePicker";
+import { isMarketplaceFeeSourceSKU } from "@/lib/shopeeBill";
 
 function payloadString(
   payload: Record<string, unknown> | null | undefined,
@@ -176,6 +178,38 @@ function orderIDFromRaw(raw: Record<string, unknown> | null | undefined) {
   );
 }
 
+type DuplicateItemCodeWarning = {
+  rawName: string;
+  itemCode: string;
+  count: number;
+};
+
+function duplicateMarketplaceItemCodeWarnings(bill: Bill): DuplicateItemCodeWarning[] {
+  const isMarketplacePurchase =
+    bill.bill_type === "purchase" &&
+    (bill.source === "lazada_email" || bill.source === "shopee_shipped");
+  if (!isMarketplacePurchase) return [];
+
+  const groups = new Map<string, DuplicateItemCodeWarning>();
+  for (const item of bill.items ?? []) {
+    if (isMarketplaceFeeSourceSKU(item.source_sku)) continue;
+    const rawName = item.raw_name.trim();
+    const itemCode = (item.item_code ?? "").trim();
+    if (!rawName || !itemCode) continue;
+    const key = `${rawName}\u001f${itemCode}`;
+    const group = groups.get(key);
+    if (group) {
+      group.count += 1;
+    } else {
+      groups.set(key, { rawName, itemCode, count: 1 });
+    }
+  }
+
+  return Array.from(groups.values())
+    .filter((group) => group.count > 1)
+    .sort((a, b) => a.rawName.localeCompare(b.rawName, "th") || a.itemCode.localeCompare(b.itemCode));
+}
+
 interface Props {
   open: boolean;
   bill: Bill;
@@ -229,6 +263,7 @@ export function SendPurchaseDialog({
   const [remark2Str, setRemark2Str] = useState(REMARK2_NONE);
   const [printPaymentMethod, setPrintPaymentMethod] = useState("");
   const [savingPrintPaymentMethod, setSavingPrintPaymentMethod] = useState(false);
+  const [duplicateItemCodesConfirmed, setDuplicateItemCodesConfirmed] = useState(false);
 
   const autoPaymentMethod = useMemo(() => {
     return deriveTTPrintPaymentMethod(party);
@@ -281,6 +316,11 @@ export function SendPurchaseDialog({
   const sellerFromEmail = rawString(bill.raw_data, "seller_name");
   const orderID = orderIDFromRaw(bill.raw_data);
   const smlReady = isSMLReady(smlReadiness);
+  const duplicateItemCodeWarnings = useMemo(
+    () => duplicateMarketplaceItemCodeWarnings(bill),
+    [bill],
+  );
+  const duplicateItemCodesNeedConfirmation = duplicateItemCodeWarnings.length > 0;
   const canConfirm =
     smlReady &&
     !!effectivePartyCode &&
@@ -292,6 +332,7 @@ export function SendPurchaseDialog({
     docTime.trim() !== "" &&
     smlDocDateReady &&
     printPaymentMethodAllowed &&
+    (!duplicateItemCodesNeedConfirmation || duplicateItemCodesConfirmed) &&
     !savingPrintPaymentMethod;
   const missingFields = useMemo(
     () =>
@@ -314,10 +355,14 @@ export function SendPurchaseDialog({
         !printPaymentMethodAllowed
           ? "วิธีการชำระเงินต้องอยู่ในรายการที่ตั้งค่าไว้ใน Channels"
           : "",
+        duplicateItemCodesNeedConfirmation
+          ? "ตรวจสอบรายการสินค้าชื่อซ้ำที่ใช้รหัส SML เดียวกัน"
+          : "",
         docTime.trim() === "" ? "เวลาเอกสาร (doc_time)" : "",
       ].filter(Boolean),
     [
       docTime,
+      duplicateItemCodesNeedConfirmation,
       effectivePartyCode,
       inquiryTypeStr,
       isMarketplacePurchaseEmail,
@@ -461,6 +506,7 @@ export function SendPurchaseDialog({
           : "",
     );
     setSavingPrintPaymentMethod(false);
+    setDuplicateItemCodesConfirmed(false);
     const storedMethod = (bill.print_payment_method || "").trim();
     const initialPartyCode = payloadString(payload, "cust_code") ||
       (defaults?.party_code ?? "");
@@ -529,6 +575,9 @@ export function SendPurchaseDialog({
       vat_type: Number(vatTypeStr),
       vat_rate: vatRateNum,
       inquiry_type: inquiryTypeStr !== "" ? Number(inquiryTypeStr) : undefined,
+      confirm_duplicate_item_codes: duplicateItemCodesNeedConfirmation
+        ? duplicateItemCodesConfirmed
+        : undefined,
     });
   };
 
@@ -1037,6 +1086,38 @@ export function SendPurchaseDialog({
               <div className="mt-2 text-[11px] text-muted-foreground">
                 หมายเหตุ SML ของบิลซื้อจากอีเมลจะใช้ผู้ขายจากอีเมลอัตโนมัติ
                 เพื่อไม่ให้ช่องหมายเหตุถูกกรอกทับก่อนส่ง
+              </div>
+            </div>
+          )}
+
+          {duplicateItemCodesNeedConfirmation && (
+            <div className="rounded-md border border-warning/40 bg-warning/[0.08] px-3 py-3 text-xs">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-foreground">
+                    พบชื่อสินค้าซ้ำที่ใช้รหัส SML เดียวกัน
+                  </div>
+                  <div className="mt-1 text-muted-foreground">
+                    โปรดตรวจสอบว่าเป็นสินค้าเดียวกันจริงก่อนส่ง เพราะรหัสเดียวกันจะถูกสร้างเป็นรายการเดียวกันใน SML
+                  </div>
+                  <ul className="mt-2 space-y-1 font-mono text-[11px] text-foreground">
+                    {duplicateItemCodeWarnings.map((warning) => (
+                      <li key={`${warning.rawName}-${warning.itemCode}`} className="break-words">
+                        {warning.rawName} · {warning.itemCode} · {warning.count} รายการ
+                      </li>
+                    ))}
+                  </ul>
+                  <label className="mt-3 flex cursor-pointer items-start gap-2 text-foreground">
+                    <Checkbox
+                      checked={duplicateItemCodesConfirmed}
+                      onCheckedChange={(checked) => setDuplicateItemCodesConfirmed(checked === true)}
+                    />
+                    <span className="leading-5">
+                      ตรวจสอบแล้ว และยืนยันให้ส่งด้วยรหัส SML เดียวกัน
+                    </span>
+                  </label>
+                </div>
               </div>
             </div>
           )}

@@ -304,18 +304,6 @@ export default function BillDetail() {
     !bill.archived_at
   const shouldOpenRepairDialog = new URLSearchParams(location.search).get('open_repair') === '1'
 
-  const handleItemUpdated = (updated: BillItem) => {
-    setBill((prev) => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        items: (prev.items ?? []).map((it) =>
-          it.id === updated.id ? { ...it, ...updated } : it,
-        ),
-      }
-    })
-  }
-
   const handleItemDeleted = (itemId: string) => {
     setBill((prev) => {
       if (!prev) return prev
@@ -363,7 +351,6 @@ export default function BillDetail() {
         bill={bill}
         canEdit={canEdit}
         canDeleteItems={canDeleteItems}
-        onItemUpdated={handleItemUpdated}
         onItemDeleted={handleItemDeleted}
         onItemAdded={handleItemAdded}
         onRefresh={reloadBill}

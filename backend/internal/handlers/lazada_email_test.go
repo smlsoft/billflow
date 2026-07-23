@@ -118,6 +118,58 @@ func TestAttachLazadaItemImagesUsesNearestProductImage(t *testing.T) {
 	}
 }
 
+func TestAttachLazadaItemSourceMetadataSeparatesDuplicateNamesByProductSKU(t *testing.T) {
+	name := "Icebase กระติกเก็บความเย็น ขนาด39ลิตร (TITAN) รุ่น CLT-039"
+	html := `
+	  <section>
+	    <img src="https://th-live-01.slatic.net/p/green.jpg">
+	    <a href="https://c.lazada.co.th/t/c.example?url=https%3A%2F%2Fwww.lazada.co.th%2Fproducts%2Fi16181655661-s127271408131.html%3FurlFlag%3Dtrue"><span>` + name + `</span></a>
+	    <span>THB 3,266.00</span><span>จำนวน: 1</span>
+	  </section>
+	  <section>
+	    <img src="https://th-live-01.slatic.net/p/blue.jpg">
+	    <a href="https://c.lazada.co.th/t/c.example?url=https%3A%2F%2Fwww.lazada.co.th%2Fproducts%2Fi16181655661-s127271408130.html%3FurlFlag%3Dtrue"><span>` + name + `</span></a>
+	    <span>THB 3,266.00</span><span>จำนวน: 1</span>
+	  </section>
+	`
+	items := []ai.ExtractedItem{
+		{RawName: name, Qty: 1},
+		{RawName: name, Qty: 1},
+	}
+
+	got, metadata := attachLazadaItemSourceMetadata(items, html)
+	if len(metadata) != 2 {
+		t.Fatalf("metadata len = %d, want 2", len(metadata))
+	}
+	if metadata[0].SourceSKU != "127271408131" || metadata[0].SourceLineNo != 1 {
+		t.Fatalf("metadata[0] = %+v", metadata[0])
+	}
+	if metadata[1].SourceSKU != "127271408130" || metadata[1].SourceLineNo != 2 {
+		t.Fatalf("metadata[1] = %+v", metadata[1])
+	}
+	if got[0].ImageURL != "https://th-live-01.slatic.net/p/green.jpg" {
+		t.Fatalf("first image = %q", got[0].ImageURL)
+	}
+	if got[1].ImageURL != "https://th-live-01.slatic.net/p/blue.jpg" {
+		t.Fatalf("second image = %q", got[1].ImageURL)
+	}
+}
+
+func TestLazadaDuplicateRawNamesRequireExplicitMapping(t *testing.T) {
+	items := []ai.ExtractedItem{
+		{RawName: "กระติก TITAN 45L", Qty: 1},
+		{RawName: "กระติก TITAN 45L", Qty: 1},
+		{RawName: "โต๊ะพับ", Qty: 1},
+	}
+	counts := lazadaDuplicateRawNameCounts(items)
+	if lazadaItemCanAutoMap("กระติก TITAN 45L", counts) {
+		t.Fatal("duplicate Lazada title must not be auto-mapped before a SKU alias exists")
+	}
+	if !lazadaItemCanAutoMap("โต๊ะพับ", counts) {
+		t.Fatal("unique Lazada title should remain eligible for high-confidence auto-mapping")
+	}
+}
+
 func TestAttachLazadaItemImagesKeepsExistingImage(t *testing.T) {
 	items := []ai.ExtractedItem{{
 		RawName:  "เก้าอี้แคมป์ปิ้ง",

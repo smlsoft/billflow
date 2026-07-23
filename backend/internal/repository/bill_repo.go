@@ -766,6 +766,31 @@ func (r *BillRepo) UpdateBillItemFields(itemID string, itemCode, unitCode *strin
 	return err
 }
 
+// MarkReadyIfAllMapped moves one review bill forward without changing any item
+// values. It is used after a staff member manually confirms a row whose name
+// is duplicated in the same marketplace order.
+func (r *BillRepo) MarkReadyIfAllMapped(billID string) (bool, error) {
+	res, err := r.db.Exec(
+		`UPDATE bills b
+		    SET status = 'pending',
+		        error_msg = NULL
+		  WHERE b.id = $1
+		    AND b.status = 'needs_review'
+		    AND NOT EXISTS (
+		      SELECT 1
+		        FROM bill_items bi
+		       WHERE bi.bill_id = b.id
+		         AND (COALESCE(bi.item_code, '') = '' OR bi.mapped IS DISTINCT FROM TRUE)
+		    )`,
+		billID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // ApplyVerifiedMappingToOpenItems applies a human-confirmed raw_name mapping to
 // other open bills from the same source/bill_type. It also promotes any
 // needs_review bill to pending once all of its rows are mapped.

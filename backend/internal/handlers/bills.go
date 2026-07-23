@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,25 +27,32 @@ import (
 )
 
 type BillHandler struct {
-	billRepo        *repository.BillRepo
-	userRepo        *repository.UserRepo
-	mapperSvc       *mapper.Service
-	invoiceClient   *sml.InvoiceClient       // SML 248 saleinvoice REST (legacy)
-	saleOrderClient *sml.SaleOrderClient     // SML 248 saleorder REST (default)
-	poClient        *sml.PurchaseOrderClient // SML 248 purchaseorder REST
-	docNoClient     *sml.DocNoClient         // SML authoritative doc_no running
-	cfg             *config.Config
-	notifier        Notifier
-	auditRepo       *repository.AuditLogRepo
-	catalogRepo     *repository.SMLCatalogRepo     // for unit_code defaults on item edit
-	channelDefaults *repository.ChannelDefaultRepo // per-(channel,bill_type) party config
-	docCounters     *repository.DocCounterRepo     // atomic doc_no generator
-	bulkJobRepo     *repository.SMLBulkJobRepo     // async SML bulk send jobs
-	artifactSvc     *artifact.Service              // source-artifact storage (PDF/HTML/etc.)
-	warehouseCache  *sml.WarehouseCache            // optional validation for wh/shelf chosen in dialog
-	smlReadiness    *sml.ReadinessChecker          // fail-closed guard for tenant DB availability
-	appSettingsRepo *repository.AppSettingsRepo    // runtime: sml.stock_request_url read per-send
-	log             *zap.Logger
+	billRepo             *repository.BillRepo
+	userRepo             *repository.UserRepo
+	mapperSvc            *mapper.Service
+	invoiceClient        *sml.InvoiceClient       // SML 248 saleinvoice REST (legacy)
+	saleOrderClient      *sml.SaleOrderClient     // SML 248 saleorder REST (default)
+	poClient             *sml.PurchaseOrderClient // SML 248 purchaseorder REST
+	docNoClient          *sml.DocNoClient         // SML authoritative doc_no running
+	cfg                  *config.Config
+	notifier             Notifier
+	auditRepo            *repository.AuditLogRepo
+	catalogRepo          *repository.SMLCatalogRepo     // for unit_code defaults on item edit
+	channelDefaults      *repository.ChannelDefaultRepo // per-(channel,bill_type) party config
+	docCounters          *repository.DocCounterRepo     // atomic doc_no generator
+	bulkJobRepo          *repository.SMLBulkJobRepo     // async SML bulk send jobs
+	artifactSvc          *artifact.Service              // source-artifact storage (PDF/HTML/etc.)
+	warehouseCache       *sml.WarehouseCache            // optional validation for wh/shelf chosen in dialog
+	smlReadiness         *sml.ReadinessChecker          // fail-closed guard for tenant DB availability
+	appSettingsRepo      *repository.AppSettingsRepo    // runtime: sml.stock_request_url read per-send
+	marketplaceAliasRepo *repository.MarketplaceAliasRepo
+	log                  *zap.Logger
+}
+
+// SetMarketplaceAliasRepo wires precise marketplace-SKU learning into item
+// edits without expanding the constructor used by older tests.
+func (h *BillHandler) SetMarketplaceAliasRepo(repo *repository.MarketplaceAliasRepo) {
+	h.marketplaceAliasRepo = repo
 }
 
 func NewBillHandler(
@@ -985,20 +993,21 @@ func (h *BillHandler) Timeline(c *gin.Context) {
 // Manual remark is allowed only for non-marketplace-email routes; Shopee and
 // Lazada email purchase map SML remark from seller_name/supplier_name.
 type RetryRequest struct {
-	PartyCode   string   `json:"party_code"`
-	PartyName   string   `json:"party_name"`
-	DocNo       string   `json:"doc_no"`
-	Remark      string   `json:"remark"`
-	Remark2     string   `json:"remark_2"`
-	BranchCode  string   `json:"branch_code"`
-	SaleCode    string   `json:"sale_code"`
-	UnitCode    string   `json:"unit_code"`
-	DocTime     string   `json:"doc_time"`
-	WHCode      string   `json:"wh_code"`
-	ShelfCode   string   `json:"shelf_code"`
-	VATType     *int     `json:"vat_type"`
-	VATRate     *float64 `json:"vat_rate"`
-	InquiryType *int     `json:"inquiry_type"`
+	PartyCode                 string   `json:"party_code"`
+	PartyName                 string   `json:"party_name"`
+	DocNo                     string   `json:"doc_no"`
+	Remark                    string   `json:"remark"`
+	Remark2                   string   `json:"remark_2"`
+	BranchCode                string   `json:"branch_code"`
+	SaleCode                  string   `json:"sale_code"`
+	UnitCode                  string   `json:"unit_code"`
+	DocTime                   string   `json:"doc_time"`
+	WHCode                    string   `json:"wh_code"`
+	ShelfCode                 string   `json:"shelf_code"`
+	VATType                   *int     `json:"vat_type"`
+	VATRate                   *float64 `json:"vat_rate"`
+	InquiryType               *int     `json:"inquiry_type"`
+	ConfirmDuplicateItemCodes bool     `json:"confirm_duplicate_item_codes"`
 }
 
 type purchaseCreditorUpdateRequest struct {
@@ -2084,6 +2093,13 @@ func (h *BillHandler) sendPurchaseOrderToSML(bill *models.Bill, req RetryRequest
 	route := "PurchaseOrder"
 	if h.poClient == nil {
 		return retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "purchaseorder client not configured", Route: route}
+	}
+	if warnings := marketplaceDuplicateItemCodeWarnings(bill); len(warnings) > 0 && !req.ConfirmDuplicateItemCodes {
+		return retrySendResult{
+			HTTPStatus: http.StatusBadRequest,
+			Error:      "พบรายการสินค้าชื่อซ้ำที่กำลังส่งด้วยรหัส SML เดียวกัน กรุณาตรวจสอบและยืนยันก่อนส่ง",
+			Route:      route,
+		}
 	}
 
 	sentItemCodesPO := make([]string, 0, len(bill.Items))
@@ -4362,6 +4378,145 @@ type updateItemRequest struct {
 	Price    *float64 `json:"price"`
 }
 
+type itemMappingScope string
+
+const (
+	itemMappingScopeItemOnly  itemMappingScope = "item_only"
+	itemMappingScopeSourceSKU itemMappingScope = "source_sku"
+	itemMappingScopeRawName   itemMappingScope = "raw_name"
+)
+
+type itemMappingPlan struct {
+	Scope               itemMappingScope
+	AliasSource         string
+	LearnGlobal         bool
+	ApplyGlobal         bool
+	UseMarketplaceAlias bool
+}
+
+type itemMappingFeedbackResult struct {
+	Scope        itemMappingScope
+	AppliedItems int
+	ReadyBills   int
+}
+
+type marketplaceDuplicateItemCodeWarning struct {
+	RawName    string   `json:"raw_name"`
+	ItemCode   string   `json:"item_code"`
+	Count      int      `json:"count"`
+	SourceSKUs []string `json:"source_skus,omitempty"`
+}
+
+func itemMappingFeedbackPlan(bill *models.Bill, item *models.BillItem) itemMappingPlan {
+	if bill == nil || item == nil {
+		return itemMappingPlan{Scope: itemMappingScopeItemOnly}
+	}
+	if source := marketplaceAliasSource(bill.Source); source != "" {
+		if item.SourceSKU != "" && !models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
+			return itemMappingPlan{
+				Scope:               itemMappingScopeSourceSKU,
+				AliasSource:         source,
+				UseMarketplaceAlias: true,
+			}
+		}
+		// Marketplace titles are frequently shared by several variants. Without
+		// a stable source SKU, preserve the staff selection on this row only.
+		return itemMappingPlan{Scope: itemMappingScopeItemOnly}
+	}
+	if duplicateRawNameCount(bill.Items, item.RawName) > 1 {
+		return itemMappingPlan{Scope: itemMappingScopeItemOnly}
+	}
+	return itemMappingPlan{
+		Scope:       itemMappingScopeRawName,
+		LearnGlobal: true,
+		ApplyGlobal: true,
+	}
+}
+
+func marketplaceAliasSource(source string) string {
+	switch source {
+	case "lazada", "lazada_email":
+		return "lazada"
+	case "shopee", "shopee_email", "shopee_shipped":
+		return "shopee"
+	case "tiktok":
+		return "tiktok"
+	default:
+		return ""
+	}
+}
+
+func duplicateRawNameCount(items []models.BillItem, rawName string) int {
+	rawName = strings.TrimSpace(rawName)
+	if rawName == "" {
+		return 0
+	}
+	count := 0
+	for _, item := range items {
+		if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
+			continue
+		}
+		if strings.TrimSpace(item.RawName) == rawName {
+			count++
+		}
+	}
+	return count
+}
+
+func marketplaceDuplicateItemCodeWarnings(bill *models.Bill) []marketplaceDuplicateItemCodeWarning {
+	if bill == nil || bill.BillType != "purchase" || (bill.Source != "lazada_email" && bill.Source != "shopee_shipped") {
+		return nil
+	}
+	type group struct {
+		rawName    string
+		itemCode   string
+		count      int
+		sourceSKUs map[string]struct{}
+	}
+	groups := map[string]*group{}
+	for _, item := range bill.Items {
+		if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) || item.ItemCode == nil {
+			continue
+		}
+		rawName := strings.TrimSpace(item.RawName)
+		itemCode := strings.TrimSpace(*item.ItemCode)
+		if rawName == "" || itemCode == "" {
+			continue
+		}
+		key := rawName + "\x1f" + itemCode
+		g := groups[key]
+		if g == nil {
+			g = &group{rawName: rawName, itemCode: itemCode, sourceSKUs: map[string]struct{}{}}
+			groups[key] = g
+		}
+		g.count++
+		if sku := strings.TrimSpace(item.SourceSKU); sku != "" {
+			g.sourceSKUs[sku] = struct{}{}
+		}
+	}
+	out := make([]marketplaceDuplicateItemCodeWarning, 0)
+	for _, group := range groups {
+		if group.count < 2 {
+			continue
+		}
+		skus := make([]string, 0, len(group.sourceSKUs))
+		for sku := range group.sourceSKUs {
+			skus = append(skus, sku)
+		}
+		sort.Strings(skus)
+		out = append(out, marketplaceDuplicateItemCodeWarning{
+			RawName: group.rawName, ItemCode: group.itemCode, Count: group.count, SourceSKUs: skus,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RawName != out[j].RawName {
+			return out[i].RawName < out[j].RawName
+		}
+		return out[i].ItemCode < out[j].ItemCode
+	})
+	return out
+}
+
 func (h *BillHandler) UpdateItem(c *gin.Context) {
 	billID := c.Param("id")
 	itemID := c.Param("item_id")
@@ -4430,70 +4585,117 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 		return
 	}
 
-	// F1 learning loop: if the user supplies a non-empty item_code, treat the
-	// save as human confirmation when the code changed OR when the row was still
-	// an unconfirmed low-confidence match. This covers marketplace imports where
-	// AI prefilled the same code but still left the bill in needs_review.
-	if req.ItemCode != nil && *req.ItemCode != "" && existingItem.RawName != "" {
-		prev := ""
-		if existingItem.ItemCode != nil {
-			prev = *existingItem.ItemCode
+	feedback := h.applyItemMappingFeedback(c, bill, existingItem, req.ItemCode, req.UnitCode)
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "item updated",
+		"mapping_scope": feedback.Scope,
+		"applied_items": feedback.AppliedItems,
+		"ready_bills":   feedback.ReadyBills,
+	})
+}
+
+func (h *BillHandler) applyItemMappingFeedback(
+	c *gin.Context,
+	bill *models.Bill,
+	existingItem *models.BillItem,
+	itemCode, unitCode *string,
+) itemMappingFeedbackResult {
+	result := itemMappingFeedbackResult{Scope: itemMappingScopeItemOnly}
+	if bill == nil || existingItem == nil || itemCode == nil || strings.TrimSpace(*itemCode) == "" || strings.TrimSpace(existingItem.RawName) == "" {
+		return result
+	}
+
+	prev := ""
+	if existingItem.ItemCode != nil {
+		prev = strings.TrimSpace(*existingItem.ItemCode)
+	}
+	wasUnconfirmed := !existingItem.Mapped || existingItem.MappingID == nil || *existingItem.MappingID == ""
+	if prev == *itemCode && !wasUnconfirmed {
+		return result
+	}
+
+	unit := ""
+	if unitCode != nil {
+		unit = strings.TrimSpace(*unitCode)
+	}
+	plan := itemMappingFeedbackPlan(bill, existingItem)
+	result.Scope = plan.Scope
+
+	switch {
+	case plan.UseMarketplaceAlias && h.marketplaceAliasRepo != nil:
+		userID := c.GetString("user_id")
+		alias, err := h.marketplaceAliasRepo.Upsert(plan.AliasSource, existingItem.SourceSKU, existingItem.RawName, *itemCode, unit, userID)
+		if err != nil {
+			h.log.Warn("UpdateItem: marketplace alias save failed",
+				zap.String("source_sku", existingItem.SourceSKU), zap.Error(err))
+			result.Scope = itemMappingScopeItemOnly
+			break
 		}
-		wasUnconfirmed := !existingItem.Mapped || existingItem.MappingID == nil || *existingItem.MappingID == ""
-		if prev != *req.ItemCode || wasUnconfirmed {
-			unit := ""
-			if req.UnitCode != nil {
-				unit = *req.UnitCode
-			}
-			if err := h.mapperSvc.LearnFromFeedback(existingItem.RawName, *req.ItemCode, unit, &billID); err != nil {
-				h.log.Warn("UpdateItem: F1 feedback save failed",
-					zap.String("raw_name", existingItem.RawName),
-					zap.String("item_code", *req.ItemCode),
-					zap.Error(err))
-			} else {
-				appliedItems, readyBills, applyErr := h.billRepo.ApplyVerifiedMappingToOpenItems(
-					bill.Source,
-					bill.BillType,
-					existingItem.RawName,
-					*req.ItemCode,
-					unit,
-				)
-				if applyErr != nil {
-					h.log.Warn("UpdateItem: apply learned mapping to open bills failed",
-						zap.String("source", bill.Source),
-						zap.String("bill_type", bill.BillType),
-						zap.String("raw_name", existingItem.RawName),
-						zap.String("item_code", *req.ItemCode),
-						zap.Error(applyErr))
-				}
-				if h.auditRepo != nil {
-					var userID *string
-					if uid := c.GetString("user_id"); uid != "" {
-						userID = &uid
-					}
-					_ = h.auditRepo.Log(models.AuditEntry{
-						Action:   "mapping_feedback",
-						TargetID: &itemID,
-						UserID:   userID,
-						Source:   bill.Source,
-						Level:    "info",
-						Detail: map[string]interface{}{
-							"raw_name":           existingItem.RawName,
-							"prev_code":          prev,
-							"new_code":           *req.ItemCode,
-							"unit_code":          unit,
-							"bill_id":            billID,
-							"confirmed_existing": prev == *req.ItemCode,
-							"applied_items":      appliedItems,
-							"ready_bills":        readyBills,
-						},
-					})
-				}
-			}
+		applied, ready, err := h.marketplaceAliasRepo.ApplyToOpenItems(
+			bill.Source, bill.BillType, alias.SourceSKU, alias.NormalizedKey, existingItem.RawName, *itemCode, unit,
+		)
+		if err != nil {
+			h.log.Warn("UpdateItem: apply marketplace alias failed",
+				zap.String("source_sku", existingItem.SourceSKU), zap.Error(err))
+		} else {
+			result.AppliedItems = applied
+			result.ReadyBills = ready
+		}
+	case plan.LearnGlobal && plan.ApplyGlobal && h.mapperSvc != nil:
+		if err := h.mapperSvc.LearnFromFeedback(existingItem.RawName, *itemCode, unit, &bill.ID); err != nil {
+			h.log.Warn("UpdateItem: F1 feedback save failed",
+				zap.String("raw_name", existingItem.RawName), zap.String("item_code", *itemCode), zap.Error(err))
+			result.Scope = itemMappingScopeItemOnly
+			break
+		}
+		applied, ready, err := h.billRepo.ApplyVerifiedMappingToOpenItems(
+			bill.Source, bill.BillType, existingItem.RawName, *itemCode, unit,
+		)
+		if err != nil {
+			h.log.Warn("UpdateItem: apply learned mapping to open bills failed",
+				zap.String("source", bill.Source), zap.String("raw_name", existingItem.RawName), zap.Error(err))
+		} else {
+			result.AppliedItems = applied
+			result.ReadyBills = ready
+		}
+	default:
+		result.Scope = itemMappingScopeItemOnly
+	}
+
+	if result.ReadyBills == 0 {
+		if ready, err := h.billRepo.MarkReadyIfAllMapped(bill.ID); err != nil {
+			h.log.Warn("UpdateItem: mark bill ready failed", zap.String("bill", bill.ID), zap.Error(err))
+		} else if ready {
+			result.ReadyBills = 1
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "item updated"})
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := c.GetString("user_id"); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "mapping_feedback",
+			TargetID: &bill.ID,
+			UserID:   userID,
+			Source:   bill.Source,
+			Level:    "info",
+			Detail: map[string]interface{}{
+				"item_id":            existingItem.ID,
+				"raw_name":           existingItem.RawName,
+				"source_sku":         existingItem.SourceSKU,
+				"prev_code":          prev,
+				"new_code":           *itemCode,
+				"unit_code":          unit,
+				"mapping_scope":      result.Scope,
+				"confirmed_existing": prev == *itemCode,
+				"applied_items":      result.AppliedItems,
+				"ready_bills":        result.ReadyBills,
+			},
+		})
+	}
+	return result
 }
 
 func sameMarketplaceNumber(a, b float64) bool {

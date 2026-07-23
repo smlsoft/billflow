@@ -6,6 +6,7 @@ import (
 	"fmt"
 	htmlstd "html"
 	"math"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -31,11 +32,13 @@ const (
 )
 
 var (
-	lazadaOrderIDPattern  = regexp.MustCompile(`(?i)(?:คำสั่งซื้อหมายเลข|order\s*(?:number|#)?)[^\d]{0,12}(\d{10,})`)
-	lazadaAnyOrderPattern = regexp.MustCompile(`\b(\d{10,})\b`)
-	lazadaAIOnce          sync.Once
-	lazadaAISem           chan struct{}
-	lazadaImgSrcPattern   = regexp.MustCompile(`(?is)<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>`)
+	lazadaOrderIDPattern    = regexp.MustCompile(`(?i)(?:คำสั่งซื้อหมายเลข|order\s*(?:number|#)?)[^\d]{0,12}(\d{10,})`)
+	lazadaAnyOrderPattern   = regexp.MustCompile(`\b(\d{10,})\b`)
+	lazadaAIOnce            sync.Once
+	lazadaAISem             chan struct{}
+	lazadaImgSrcPattern     = regexp.MustCompile(`(?is)<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>`)
+	lazadaAnchorHrefPattern = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>`)
+	lazadaProductSKUPattern = regexp.MustCompile(`(?i)-s([0-9]+)\.html`)
 )
 
 type lazadaItemWithCandidates struct {
@@ -177,7 +180,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		}
 		return false, nil
 	}
-	validItems = attachLazadaItemImages(validItems, bodyHTML)
+	validItems, sourceMetadata := attachLazadaItemSourceMetadata(validItems, bodyHTML)
 	amountSummary := repository.ExtractLazadaAmountSummary(plainText, bodyHTML)
 	validItems = applyLazadaEmailSummaryPrices(validItems, amountSummary)
 	itemsGrossDelta := lazadaExtractedItemsGrossDelta(validItems, amountSummary)
@@ -206,7 +209,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		}
 	}
 
-	itemsWithCandidates, allHighConfidence := h.mapLazadaItems(validItems)
+	itemsWithCandidates, allHighConfidence := h.mapLazadaItems(validItems, sourceMetadata)
 	if len(itemsWithCandidates) == 0 {
 		return false, nil
 	}
@@ -411,26 +414,20 @@ func applyLazadaAmountSummaryRawData(raw map[string]interface{}, summary reposit
 	}
 }
 
-func (h *EmailHandler) mapLazadaItems(validItems []ai.ExtractedItem) ([]lazadaItemWithCandidates, bool) {
+func (h *EmailHandler) mapLazadaItems(validItems []ai.ExtractedItem, sourceMetadata []lazadaItemSourceMetadata) ([]lazadaItemWithCandidates, bool) {
 	const topK = 5
 	out := make([]lazadaItemWithCandidates, 0, len(validItems))
 	allHighConfidence := true
-	for _, extItem := range validItems {
-		var matches []models.CatalogMatch
-		if h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
-			queryEmb, err := h.embSvc.EmbedText(extItem.RawName)
-			if err == nil {
-				matches = h.catalogIdx.Search(queryEmb, topK)
-			}
-		}
-		if len(matches) == 0 && h.catalogSvc != nil {
-			matches, _ = h.catalogSvc.SearchByText(extItem.RawName, topK)
-		}
-
+	duplicateNames := lazadaDuplicateRawNameCounts(validItems)
+	for i, extItem := range validItems {
 		item := models.BillItem{
 			RawName: extItem.RawName,
 			Qty:     extItem.Qty,
 			Mapped:  false,
+		}
+		if i < len(sourceMetadata) {
+			item.SourceSKU = sourceMetadata[i].SourceSKU
+			item.SourceLineNo = sourceMetadata[i].SourceLineNo
 		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
@@ -442,7 +439,35 @@ func (h *EmailHandler) mapLazadaItems(validItems []ai.ExtractedItem) ([]lazadaIt
 		if extItem.ImageURL != "" {
 			item.SourceImageURL = extItem.ImageURL
 		}
-		if len(matches) > 0 && matches[0].Score >= lazadaHighConfThreshold {
+		var alias *models.MarketplaceItemAlias
+		if h.marketplaceAliasRepo != nil && item.SourceSKU != "" {
+			alias, _ = h.marketplaceAliasRepo.Find("lazada", item.SourceSKU, item.RawName)
+		}
+		if alias != nil {
+			code := alias.ItemCode
+			unit := alias.UnitCode
+			if unit == "" && item.UnitCode != nil {
+				unit = *item.UnitCode
+			}
+			item.ItemCode = &code
+			item.UnitCode = &unit
+			item.Mapped = true
+			_ = h.marketplaceAliasRepo.IncrementUsage(alias.ID)
+			out = append(out, lazadaItemWithCandidates{item: item})
+			continue
+		}
+
+		var matches []models.CatalogMatch
+		if h.embSvc != nil && h.embSvc.IsConfigured() && h.catalogIdx != nil && h.catalogIdx.Size() > 0 {
+			queryEmb, err := h.embSvc.EmbedText(extItem.RawName)
+			if err == nil {
+				matches = h.catalogIdx.Search(queryEmb, topK)
+			}
+		}
+		if len(matches) == 0 && h.catalogSvc != nil {
+			matches, _ = h.catalogSvc.SearchByText(extItem.RawName, topK)
+		}
+		if lazadaItemCanAutoMap(extItem.RawName, duplicateNames) && len(matches) > 0 && matches[0].Score >= lazadaHighConfThreshold {
 			item.ItemCode = &matches[0].ItemCode
 			item.UnitCode = &matches[0].UnitCode
 			item.Mapped = true
@@ -454,24 +479,84 @@ func (h *EmailHandler) mapLazadaItems(validItems []ai.ExtractedItem) ([]lazadaIt
 	return out, allHighConfidence
 }
 
+func lazadaDuplicateRawNameCounts(items []ai.ExtractedItem) map[string]int {
+	counts := make(map[string]int, len(items))
+	for _, item := range items {
+		if key := normalizeLazadaSourceName(item.RawName); key != "" {
+			counts[key]++
+		}
+	}
+	return counts
+}
+
+func lazadaItemCanAutoMap(rawName string, duplicateNames map[string]int) bool {
+	key := normalizeLazadaSourceName(rawName)
+	return key != "" && duplicateNames[key] <= 1
+}
+
 type lazadaImageRef struct {
 	url   string
 	start int
 	end   int
 }
 
+type lazadaItemSourceMetadata struct {
+	SourceSKU    string
+	SourceLineNo int
+}
+
+type lazadaProductSourceRef struct {
+	SourceSKU string
+	RawName   string
+	ImageURL  string
+	LineNo    int
+	Start     int
+	End       int
+}
+
 func attachLazadaItemImages(items []ai.ExtractedItem, bodyHTML string) []ai.ExtractedItem {
-	if strings.TrimSpace(bodyHTML) == "" || len(items) == 0 {
-		return items
-	}
-	refs := lazadaProductImageRefs(bodyHTML)
-	if len(refs) == 0 {
-		return items
-	}
+	out, _ := attachLazadaItemSourceMetadata(items, bodyHTML)
+	return out
+}
+
+func attachLazadaItemSourceMetadata(items []ai.ExtractedItem, bodyHTML string) ([]ai.ExtractedItem, []lazadaItemSourceMetadata) {
 	out := make([]ai.ExtractedItem, len(items))
 	copy(out, items)
+	metadata := make([]lazadaItemSourceMetadata, len(items))
+	if strings.TrimSpace(bodyHTML) == "" || len(items) == 0 {
+		return out, metadata
+	}
+	productRefs := lazadaProductSourceRefs(bodyHTML)
+	matched := make([]bool, len(out))
+	itemsByName := map[string][]int{}
+	refsByName := map[string][]lazadaProductSourceRef{}
+	for i, item := range out {
+		if key := normalizeLazadaSourceName(item.RawName); key != "" {
+			itemsByName[key] = append(itemsByName[key], i)
+		}
+	}
+	for _, ref := range productRefs {
+		if key := normalizeLazadaSourceName(ref.RawName); key != "" {
+			refsByName[key] = append(refsByName[key], ref)
+		}
+	}
+	for key, itemIndexes := range itemsByName {
+		refs := refsByName[key]
+		if len(refs) == 0 || len(refs) != len(itemIndexes) {
+			continue
+		}
+		for i, itemIndex := range itemIndexes {
+			applyLazadaSourceMetadata(&out[itemIndex], &metadata[itemIndex], refs[i])
+			matched[itemIndex] = true
+		}
+	}
+
+	refs := lazadaProductImageRefs(bodyHTML)
+	if len(refs) == 0 {
+		return out, metadata
+	}
 	for i := range out {
-		if strings.TrimSpace(out[i].ImageURL) != "" {
+		if matched[i] || strings.TrimSpace(out[i].ImageURL) != "" {
 			continue
 		}
 		pos := findLazadaItemHTMLPosition(bodyHTML, out[i].RawName)
@@ -485,7 +570,64 @@ func attachLazadaItemImages(items []ai.ExtractedItem, bodyHTML string) []ai.Extr
 			out[i].ImageURL = url
 		}
 	}
-	return out
+	return out, metadata
+}
+
+func applyLazadaSourceMetadata(item *ai.ExtractedItem, metadata *lazadaItemSourceMetadata, ref lazadaProductSourceRef) {
+	metadata.SourceSKU = ref.SourceSKU
+	metadata.SourceLineNo = ref.LineNo
+	if strings.TrimSpace(item.ImageURL) == "" {
+		item.ImageURL = ref.ImageURL
+	}
+}
+
+func lazadaProductSourceRefs(bodyHTML string) []lazadaProductSourceRef {
+	matches := lazadaAnchorHrefPattern.FindAllStringSubmatchIndex(bodyHTML, -1)
+	imageRefs := lazadaProductImageRefs(bodyHTML)
+	refs := make([]lazadaProductSourceRef, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 6 || m[2] < 0 || m[3] < 0 || m[4] < 0 || m[5] < 0 {
+			continue
+		}
+		sourceSKU := lazadaSourceSKUFromHref(bodyHTML[m[2]:m[3]])
+		if sourceSKU == "" {
+			continue
+		}
+		rawName := strings.TrimSpace(htmlToText(htmlstd.UnescapeString(bodyHTML[m[4]:m[5]])))
+		if rawName == "" {
+			continue
+		}
+		refs = append(refs, lazadaProductSourceRef{
+			SourceSKU: sourceSKU,
+			RawName:   rawName,
+			ImageURL:  nearestLazadaProductImageURL(imageRefs, m[0]),
+			LineNo:    len(refs) + 1,
+			Start:     m[0],
+			End:       m[1],
+		})
+	}
+	return refs
+}
+
+func lazadaSourceSKUFromHref(rawHref string) string {
+	value := htmlstd.UnescapeString(strings.TrimSpace(rawHref))
+	for i := 0; i < 3; i++ {
+		if match := lazadaProductSKUPattern.FindStringSubmatch(value); len(match) > 1 {
+			return match[1]
+		}
+		decoded, err := url.QueryUnescape(value)
+		if err != nil || decoded == value {
+			break
+		}
+		value = decoded
+	}
+	return ""
+}
+
+func normalizeLazadaSourceName(raw string) string {
+	raw = htmlstd.UnescapeString(raw)
+	raw = strings.ToLower(strings.Join(strings.Fields(raw), " "))
+	return raw
 }
 
 func lazadaProductImageRefs(bodyHTML string) []lazadaImageRef {
@@ -605,10 +747,10 @@ func (h *EmailHandler) createLazadaEmailBillTx(
 		item := iwc.item
 		candidatesJSON, _ := json.Marshal(iwc.candidates)
 		if err := tx.QueryRow(
-			`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id, candidates)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, source_variant, source_line_no, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id, candidates)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			 RETURNING id`,
-			bill.ID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
+			bill.ID, item.RawName, item.SourceSKU, item.SourceImageURL, item.SourceVariant, item.SourceLineNo, item.ItemCode, item.Qty,
 			item.UnitCode, item.Price, item.DiscountAmount, item.Mapped, item.MappingID, candidatesJSON,
 		).Scan(&item.ID); err != nil {
 			return err
