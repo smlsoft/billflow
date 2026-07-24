@@ -124,6 +124,18 @@ func TestBillWherePrintReadyExcludesAlreadyPrintedEmailGroups(t *testing.T) {
 	}
 }
 
+func TestMarketplacePrintReadySQLExcludesArchivedBills(t *testing.T) {
+	query := marketplacePrintReadySQL("b")
+	for _, want := range []string{
+		"b.archived_at IS NULL",
+		"rb.archived_at IS NULL",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("marketplace print-ready SQL = %q, missing %q", query, want)
+		}
+	}
+}
+
 func TestBillWhereFreeTextSearchIncludesEmailMetadata(t *testing.T) {
 	where, args, _ := billWhere(models.BillListFilter{Search: "info@mail.shopee.co.th"})
 	for _, want := range []string{

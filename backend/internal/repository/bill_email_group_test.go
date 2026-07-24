@@ -310,6 +310,60 @@ func TestAttachEmailGroupsIncludesNoPrintSummary(t *testing.T) {
 	}
 }
 
+func TestListBillsByEmailMessageIDExcludesArchivedBills(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewBillRepo(db)
+	mock.ExpectQuery(`(?s)FROM bills b.*b\.archived_at IS NULL`).
+		WithArgs("message@example.test", "current-bill", 50).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "order_id", "party_code", "party_name", "print_payment_method", "effective_print_payment_method",
+			"source", "bill_type", "document_route", "status", "sml_doc_no", "created_at", "total_amount", "is_current",
+		}))
+
+	related, err := repo.ListBillsByEmailMessageID("message@example.test", "current-bill", 50)
+	if err != nil {
+		t.Fatalf("ListBillsByEmailMessageID: %v", err)
+	}
+	if len(related) != 0 {
+		t.Fatalf("related = %#v, want no active rows", related)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestListMarketplacePrintRowsExcludesArchivedBills(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewBillRepo(db)
+	mock.ExpectQuery(`(?s)WITH message_ids.*b\.archived_at IS NULL`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "id", "order_id", "source", "bill_type", "status", "sml_doc_no",
+			"party_code", "party_name", "print_payment_method", "effective_print_payment_method",
+		}))
+
+	rows, err := repo.listMarketplacePrintRows("message@example.test")
+	if err != nil {
+		t.Fatalf("listMarketplacePrintRows: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %#v, want no active rows", rows)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
 func TestAttachEmailGroupsIncludesPrintSummary(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

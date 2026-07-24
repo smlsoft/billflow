@@ -47,6 +47,7 @@ func marketplacePrintReadySQL(alias string) string {
 	return fmt.Sprintf(`
 		%s.source IN ('shopee_shipped', 'lazada_email')
 		AND %s.bill_type = 'purchase'
+		AND %s.archived_at IS NULL
 		AND %s.status = 'sent'
 		AND COALESCE(%s.sml_doc_no, '') <> ''
 		AND EXISTS (
@@ -88,6 +89,7 @@ func marketplacePrintReadySQL(alias string) string {
 			 WHERE %s = %s
 			   AND rb.source IN ('shopee_shipped', 'lazada_email')
 			   AND rb.bill_type = 'purchase'
+			   AND rb.archived_at IS NULL
 			   AND (
 			     (
 			       pol.requires_all_orders_sml_doc
@@ -120,7 +122,7 @@ func marketplacePrintReadySQL(alias string) string {
 			       )
 			     )
 			   )
-		)`, alias, alias, alias, alias, alias, effectivePayment, relatedMsg, msg)
+		)`, alias, alias, alias, alias, alias, alias, effectivePayment, relatedMsg, msg)
 }
 
 func marketplacePrintPendingSQL(alias string) string {
@@ -209,6 +211,7 @@ func (r *BillRepo) listMarketplacePrintRowsByMessageIDs(messageIDs []string) (ma
 		   WHERE b.raw_data ? 'email_message_id'
 		     AND b.source IN ('shopee_shipped', 'lazada_email')
 		     AND b.bill_type = 'purchase'
+		     AND b.archived_at IS NULL
 		  UNION ALL
 		  SELECT m.message_id,
 		         b.id::text,
@@ -228,6 +231,7 @@ func (r *BillRepo) listMarketplacePrintRowsByMessageIDs(messageIDs []string) (ma
 		     AND COALESCE(b.raw_data->>'email_message_id', '') = ''
 		     AND b.source IN ('shopee_shipped', 'lazada_email')
 		     AND b.bill_type = 'purchase'
+		     AND b.archived_at IS NULL
 		)
 		SELECT message_id, id, order_id, source, bill_type, status, sml_doc_no,
 		       party_code, party_name, print_payment_method, effective_print_payment_method

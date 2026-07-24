@@ -94,6 +94,7 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		   WHERE b.raw_data ? 'email_message_id'
 		     AND b.source IN ('shopee_shipped', 'lazada_email')
 		     AND b.bill_type = 'purchase'
+		     AND b.archived_at IS NULL
 		  UNION ALL
 		  SELECT b.id, m.message_id
 		    FROM marketplace_message_ids m
@@ -102,17 +103,20 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		     AND COALESCE(b.raw_data->>'email_message_id', '') = ''
 		     AND b.source IN ('shopee_shipped', 'lazada_email')
 		     AND b.bill_type = 'purchase'
+		     AND b.archived_at IS NULL
 		  UNION ALL
 		  SELECT b.id, m.message_id
 		    FROM general_message_ids m
 		    JOIN bills b ON b.raw_data->>'email_message_id' = m.message_id
 		   WHERE b.raw_data ? 'email_message_id'
+		     AND b.archived_at IS NULL
 		  UNION ALL
 		  SELECT b.id, m.message_id
 		    FROM general_message_ids m
 		    JOIN bills b ON b.raw_data->>'message_id' = m.message_id
 		   WHERE b.raw_data ? 'message_id'
 		     AND COALESCE(b.raw_data->>'email_message_id', '') = ''
+		     AND b.archived_at IS NULL
 		),
 		group_stats AS (
 		  SELECT message_id,
@@ -323,6 +327,7 @@ func (r *BillRepo) ListBillsByEmailMessageID(messageID, currentBillID string, li
 		  FROM bills b
 		  LEFT JOIN bill_items bi ON bi.bill_id = b.id
 		 WHERE COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', '')) = $1
+		   AND b.archived_at IS NULL
 		 GROUP BY b.id, b.raw_data, b.source, b.bill_type, b.document_route, b.status,
 		          b.sml_doc_no, b.sml_payload, b.print_payment_method, b.created_at
 		 ORDER BY b.created_at DESC, b.id DESC
