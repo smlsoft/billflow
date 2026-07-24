@@ -14,6 +14,7 @@ import (
 	"billflow/internal/repository"
 	"billflow/internal/services/ai"
 	"billflow/internal/services/artifact"
+	"billflow/internal/services/catalog"
 	emailservice "billflow/internal/services/email"
 )
 
@@ -362,18 +363,152 @@ func TestBuildShopeeExtractionJobsChunksLargeMultiOrderEmail(t *testing.T) {
 	}
 }
 
-func TestMissingShopeeExtractedOrderIDsRequiresAllDetectedMultiOrders(t *testing.T) {
-	expected := []string{"260608AAAAAAA", "260608BBBBBBB", "260608CCCCCCC"}
-	orders := []ai.ExtractedOrder{
-		{OrderID: "#260608AAAAAAA"},
-		{OrderID: "260608CCCCCCC"},
+func TestExtractShopeeOrdersBoundedRejectsOrderNotPresentInEmail(t *testing.T) {
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVU\nสินค้า ชุดถูพื้น",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVV\nสินค้า เก้าอี้",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVW\nสินค้า เก้าอี้",
+	}, "\n")
+	extractor := &testShopeeOrderExtractor{compactResults: [][]ai.ExtractedOrder{{
+		{OrderID: "260722C0U38XVU"},
+		{OrderID: "260722C0U38XVV"},
+		{OrderID: "260722C0U38XVW"},
+		// Regression: AI must never create a bill for an ID absent from the source email.
+		{OrderID: "260722C0U38XWV"},
+	}}}
+	h := &EmailHandler{shopeeAI: extractor, logger: zap.NewNop()}
+
+	_, err := h.extractShopeeOrdersBounded("ยืนยันการชำระเงินคำสั่งซื้อ", body, "", "trace-test")
+	if err == nil {
+		t.Fatal("expected unexpected order ID to reject the extraction")
 	}
-	missing := missingShopeeExtractedOrderIDs(expected, orders)
-	if len(missing) != 1 || missing[0] != "260608BBBBBBB" {
-		t.Fatalf("missing = %#v", missing)
+	if !strings.Contains(err.Error(), "unexpected") || !strings.Contains(err.Error(), "260722C0U38XWV") {
+		t.Fatalf("error = %v, want unexpected source order ID", err)
 	}
-	if got := missingShopeeExtractedOrderIDs([]string{"260608AAAAAAA"}, nil); len(got) != 0 {
-		t.Fatalf("single-order expected should not enforce completeness, got %#v", got)
+}
+
+func TestExtractShopeeOrdersBoundedRejectsOrderFromAnotherChunk(t *testing.T) {
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVU\nสินค้า A",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVV\nสินค้า B",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVW\nสินค้า C",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVX\nสินค้า D",
+	}, "\n")
+	extractor := &testShopeeOrderExtractor{compactResults: [][]ai.ExtractedOrder{
+		{
+			{OrderID: "260722C0U38XVU"},
+			{OrderID: "260722C0U38XVV"},
+			{OrderID: "260722C0U38XVW"},
+		},
+		{
+			// The second chunk is allowed to return XVX only, not an ID from chunk one.
+			{OrderID: "260722C0U38XVV"},
+		},
+	}}
+	h := &EmailHandler{shopeeAI: extractor, logger: zap.NewNop()}
+
+	_, err := h.extractShopeeOrdersBounded("ยืนยันการชำระเงินคำสั่งซื้อ", body, "", "trace-test")
+	if err == nil {
+		t.Fatal("expected cross-chunk order ID to reject the extraction")
+	}
+	if !strings.Contains(err.Error(), "missing") || !strings.Contains(err.Error(), "unexpected") {
+		t.Fatalf("error = %v, want missing and unexpected source order IDs", err)
+	}
+}
+
+func TestExtractShopeeOrdersBoundedRejectsDuplicateOrderID(t *testing.T) {
+	body := "หมายเลขคำสั่งซื้อ #260722C0U38XVU\nสินค้า ชุดถูพื้น"
+	extractor := &testShopeeOrderExtractor{compactResults: [][]ai.ExtractedOrder{{
+		{OrderID: "260722C0U38XVU"},
+		{OrderID: "#260722C0U38XVU"},
+	}}}
+	h := &EmailHandler{shopeeAI: extractor, logger: zap.NewNop()}
+
+	_, err := h.extractShopeeOrdersBounded("ยืนยันการชำระเงินคำสั่งซื้อ #260722C0U38XVU", body, "", "trace-test")
+	if err == nil {
+		t.Fatal("expected duplicate order ID to reject the extraction")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("error = %v, want duplicate source order ID", err)
+	}
+}
+
+func TestExtractShopeeOrdersBoundedAcceptsExactSourceOrderIDs(t *testing.T) {
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVU\nสินค้า A",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVV\nสินค้า B",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVW\nสินค้า C",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVX\nสินค้า D",
+	}, "\n")
+	extractor := &testShopeeOrderExtractor{compactResults: [][]ai.ExtractedOrder{
+		{
+			{OrderID: "260722C0U38XVU"},
+			{OrderID: "260722C0U38XVV"},
+			{OrderID: "260722C0U38XVW"},
+		},
+		{{OrderID: "260722C0U38XVX"}},
+	}}
+	h := &EmailHandler{shopeeAI: extractor, logger: zap.NewNop()}
+
+	orders, err := h.extractShopeeOrdersBounded("ยืนยันการชำระเงินคำสั่งซื้อ", body, "", "trace-test")
+	if err != nil {
+		t.Fatalf("extractShopeeOrdersBounded: %v", err)
+	}
+	got := make([]string, 0, len(orders))
+	for _, order := range orders {
+		got = append(got, order.OrderID)
+	}
+	want := []string{"260722C0U38XVU", "260722C0U38XVV", "260722C0U38XVW", "260722C0U38XVX"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("order IDs = %#v, want %#v", got, want)
+	}
+}
+
+func TestProcessShopeeShippedEmailBodySkipsInvalidOrderIDsWithoutCreatingBills(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	messageID := "shopee-invalid-order-ids@example.test"
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVU\nสินค้า ชุดถูพื้น",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVV\nสินค้า เก้าอี้",
+		"หมายเลขคำสั่งซื้อ #260722C0U38XVW\nสินค้า เก้าอี้",
+	}, "\n")
+	extractor := &testShopeeOrderExtractor{compactResults: [][]ai.ExtractedOrder{{
+		{OrderID: "260722C0U38XVU"},
+		{OrderID: "260722C0U38XVV"},
+		{OrderID: "260722C0U38XVW"},
+		{OrderID: "260722C0U38XWV"},
+	}}}
+	mock.ExpectExec("INSERT INTO processed_email_keys").
+		WithArgs("shopee_shipped", messageID, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	h := &EmailHandler{
+		billRepo:   repository.NewBillRepo(db),
+		catalogSvc: &catalog.SMLCatalogService{},
+		shopeeAI:   extractor,
+		logger:     zap.NewNop(),
+	}
+
+	outcome, err := h.ProcessShopeeShippedEmailBody(
+		"ยืนยันการชำระเงินคำสั่งซื้อ",
+		"info@mail.shopee.co.th",
+		body,
+		"",
+		messageID,
+		mailSourceForTest(),
+	)
+	if err != nil {
+		t.Fatalf("ProcessShopeeShippedEmailBody: %v", err)
+	}
+	if outcome.Kind != emailservice.ProcessOutcomeSkipped || outcome.Code != "shopee_shipped_invalid_order_ids" {
+		t.Fatalf("outcome = %#v, want skipped invalid order IDs", outcome)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
 	}
 }
 
@@ -795,6 +930,24 @@ func aiExtractedOrderForTest(orderID string) ai.ExtractedOrder {
 			Price:   &price,
 		}},
 	}
+}
+
+type testShopeeOrderExtractor struct {
+	compactResults []([]ai.ExtractedOrder)
+	compactCalls   int
+}
+
+func (e *testShopeeOrderExtractor) ExtractOrdersCompact(string) ([]ai.ExtractedOrder, error) {
+	if e.compactCalls >= len(e.compactResults) {
+		return nil, nil
+	}
+	orders := e.compactResults[e.compactCalls]
+	e.compactCalls++
+	return orders, nil
+}
+
+func (e *testShopeeOrderExtractor) ExtractOrdersWithHTML(text, html string) ([]ai.ExtractedOrder, error) {
+	return e.ExtractOrdersCompact(text + html)
 }
 
 func mailSourceForTest() emailservice.MailSource {

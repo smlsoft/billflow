@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -103,22 +104,29 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	// AI extracts all orders from bounded input. Small emails can include HTML
 	// for image URLs; large/status emails use compact text-only jobs.
 	orders, err := h.extractShopeeOrdersBounded(subject, plainText, bodyHTML, traceID)
-	if err != nil || len(orders) == 0 {
+	if err != nil {
+		var mismatch *shopeeOrderIDMismatchError
+		if errors.As(err, &mismatch) {
+			return h.skipShopeeShippedInvalidOrderIDs(messageID, traceID, mismatch.Expected, mismatch.Validation)
+		}
 		h.logger.Warn("shopee_shipped: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
-		if err == nil {
-			return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: empty orders")
-		}
 		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: %w", err)
 	}
-	if missing := missingShopeeExtractedOrderIDs(detectedOrderIDs, orders); len(missing) > 0 {
-		h.logger.Warn("shopee_shipped: AI extract incomplete",
+	if len(orders) == 0 {
+		h.logger.Warn("shopee_shipped: AI extract failed or empty", zap.String("subject", subject))
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: empty orders")
+	}
+	if validation := validateShopeeExtractedOrderIDs(detectedOrderIDs, orders); len(detectedOrderIDs) > 0 && !validation.Valid() {
+		h.logger.Warn("shopee_shipped: AI extract order IDs do not match source email",
 			zap.String("trace_id", traceID),
 			zap.Int("detected_order_count", len(detectedOrderIDs)),
 			zap.Int("extracted_order_count", len(orders)),
-			zap.Strings("missing_order_ids", missing),
+			zap.Strings("missing_order_ids", validation.Missing),
+			zap.Strings("unexpected_order_ids", validation.Unexpected),
+			zap.Strings("duplicate_order_ids", validation.Duplicate),
 		)
-		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: incomplete orders, missing %s", strings.Join(missing, ","))
+		return h.skipShopeeShippedInvalidOrderIDs(messageID, traceID, detectedOrderIDs, validation)
 	}
 
 	h.logger.Info("shopee_shipped: orders extracted",
@@ -306,6 +314,24 @@ func (h *EmailHandler) extractShopeeOrdersBounded(subject, plainText, bodyHTML, 
 		if err != nil {
 			return nil, fmt.Errorf("job %d/%d: %w", i+1, len(jobs), err)
 		}
+		expectedOrderIDs := shopeeExtractionJobOrderIDs(job)
+		if validation := validateShopeeExtractedOrderIDs(expectedOrderIDs, orders); len(expectedOrderIDs) > 0 && !validation.Valid() {
+			h.logger.Warn("shopee_shipped: AI extraction job order IDs do not match source block",
+				zap.String("trace_id", traceID),
+				zap.Int("job_index", i+1),
+				zap.Int("job_count", len(jobs)),
+				zap.Strings("expected_order_ids", expectedOrderIDs),
+				zap.Strings("missing_order_ids", validation.Missing),
+				zap.Strings("unexpected_order_ids", validation.Unexpected),
+				zap.Strings("duplicate_order_ids", validation.Duplicate),
+			)
+			return nil, &shopeeOrderIDMismatchError{
+				JobIndex:   i + 1,
+				JobCount:   len(jobs),
+				Expected:   expectedOrderIDs,
+				Validation: validation,
+			}
+		}
 		for _, order := range orders {
 			canonical := normalizeShopeeOrderID(order.OrderID)
 			if canonical == "" {
@@ -449,24 +475,131 @@ func DetectShopeeBodyOrderIDs(plainText, bodyHTML string) []string {
 	return detectedShopeeBodyOrderIDs(plainText, bodyHTML)
 }
 
-func missingShopeeExtractedOrderIDs(expected []string, orders []ai.ExtractedOrder) []string {
-	if len(expected) <= 1 {
-		return nil
+type shopeeOrderIDValidation struct {
+	Missing    []string
+	Unexpected []string
+	Duplicate  []string
+}
+
+type shopeeOrderIDMismatchError struct {
+	JobIndex   int
+	JobCount   int
+	Expected   []string
+	Validation shopeeOrderIDValidation
+}
+
+func (e *shopeeOrderIDMismatchError) Error() string {
+	if e == nil {
+		return "AI returned order IDs that do not match source email block"
 	}
-	extracted := map[string]bool{}
+	return fmt.Sprintf("job %d/%d: AI returned order IDs that do not match source email block: %s", e.JobIndex, e.JobCount, e.Validation.String())
+}
+
+func (v shopeeOrderIDValidation) Valid() bool {
+	return len(v.Missing) == 0 && len(v.Unexpected) == 0 && len(v.Duplicate) == 0
+}
+
+func (v shopeeOrderIDValidation) String() string {
+	parts := make([]string, 0, 3)
+	if len(v.Missing) > 0 {
+		parts = append(parts, "missing="+strings.Join(v.Missing, ","))
+	}
+	if len(v.Unexpected) > 0 {
+		parts = append(parts, "unexpected="+strings.Join(v.Unexpected, ","))
+	}
+	if len(v.Duplicate) > 0 {
+		parts = append(parts, "duplicate="+strings.Join(v.Duplicate, ","))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func shopeeExtractionJobOrderIDs(job shopeeExtractionJob) []string {
+	return normalizedShopeeOrderIDs(strings.Split(job.OrderID, ","))
+}
+
+// validateShopeeExtractedOrderIDs verifies the AI output against the exact
+// order IDs found in the email block. AI output is advisory; source email IDs
+// are authoritative and must match exactly before any bill can be created.
+func validateShopeeExtractedOrderIDs(expected []string, orders []ai.ExtractedOrder) shopeeOrderIDValidation {
+	expected = normalizedShopeeOrderIDs(expected)
+	if len(expected) == 0 {
+		return shopeeOrderIDValidation{}
+	}
+
+	expectedSet := make(map[string]bool, len(expected))
+	for _, id := range expected {
+		expectedSet[id] = true
+	}
+
+	extracted := make(map[string]bool, len(orders))
+	validation := shopeeOrderIDValidation{}
 	for _, order := range orders {
 		id := normalizeShopeeOrderID(order.OrderID)
-		if id != "" {
-			extracted[id] = true
+		if id == "" {
+			continue
+		}
+		if extracted[id] {
+			validation.Duplicate = appendUniqueShopeeOrderID(validation.Duplicate, id)
+			continue
+		}
+		extracted[id] = true
+		if !expectedSet[id] {
+			validation.Unexpected = appendUniqueShopeeOrderID(validation.Unexpected, id)
 		}
 	}
-	missing := []string{}
 	for _, id := range expected {
-		if id != "" && !extracted[id] {
-			missing = append(missing, id)
+		if !extracted[id] {
+			validation.Missing = append(validation.Missing, id)
 		}
 	}
-	return missing
+	return validation
+}
+
+func normalizedShopeeOrderIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = appendUniqueShopeeOrderID(out, normalizeShopeeOrderID(id))
+	}
+	return out
+}
+
+func appendUniqueShopeeOrderID(ids []string, id string) []string {
+	if id == "" {
+		return ids
+	}
+	for _, existing := range ids {
+		if existing == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
+func (h *EmailHandler) skipShopeeShippedInvalidOrderIDs(messageID, traceID string, expected []string, validation shopeeOrderIDValidation) (emailservice.ProcessOutcome, error) {
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:  "shopee_shipped_order_ids_rejected",
+			Source:  "shopee_shipped",
+			Level:   "warn",
+			TraceID: traceID,
+			Detail: map[string]interface{}{
+				"message_id":           messageID,
+				"expected_order_ids":   expected,
+				"missing_order_ids":    validation.Missing,
+				"unexpected_order_ids": validation.Unexpected,
+				"duplicate_order_ids":  validation.Duplicate,
+			},
+		})
+	}
+	if messageID != "" {
+		if err := h.billRepo.MarkProcessedEmailKey("shopee_shipped", messageID, ""); err != nil {
+			return emailservice.ProcessOutcome{}, fmt.Errorf("mark rejected shopee_shipped email processed: %w", err)
+		}
+	}
+	return emailservice.SkippedOutcome(
+		"shopee_shipped_invalid_order_ids",
+		"ไม่สร้างบิล: เลขคำสั่งซื้อที่ AI อ่านไม่ตรงกับอีเมลต้นทาง",
+	), nil
 }
 
 func scopeShopeeTextToOrder(text, orderID string) string {
