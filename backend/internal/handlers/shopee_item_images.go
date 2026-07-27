@@ -98,6 +98,9 @@ func MatchShopeeItemImages(items []ai.ExtractedItem, bodyHTML, orderID string) (
 			continue
 		}
 		for blockIdx, block := range blocks {
+			if used[block.refIndex] {
+				continue
+			}
 			ref := refs[block.refIndex]
 			if sameURL(existingURL, ref.url) {
 				used[block.refIndex] = true
@@ -495,7 +498,6 @@ func scopeShopeeItemImageHTML(bodyHTML, orderID string) string {
 func shopeeProductImageRefs(bodyHTML string) []shopeeImageRef {
 	matches := imgSrcPattern.FindAllStringSubmatchIndex(bodyHTML, -1)
 	refs := make([]shopeeImageRef, 0, len(matches))
-	seen := map[string]bool{}
 	for _, m := range matches {
 		if len(m) < 4 || m[2] < 0 || m[3] < 0 {
 			continue
@@ -504,11 +506,9 @@ func shopeeProductImageRefs(bodyHTML string) []shopeeImageRef {
 		if !isShopeeProductImageURL(url) {
 			continue
 		}
-		key := strings.ToLower(url)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
+		// A single product image URL can legitimately appear once per source
+		// line. Keep occurrences separate so their adjacent qty/price/variant
+		// can be matched without assigning the image to only the first line.
 		refs = append(refs, shopeeImageRef{url: url, start: m[0], end: m[1]})
 	}
 	return refs

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -966,21 +967,17 @@ func (h *EmailHandler) processOneShippedOrder(
 	}
 	discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID)
 
-	// คำนวณ Shopee Coin = gross_goods - coupon_discount - (paid_total - shipping)
-	// ใช้ bodyHTML เป็น primary เพราะ Shopee email มักไม่มี text/plain part
-	paidTotal, hasPaidTotal := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, "ยอดที่ต้องชำระทั้งหมด")
-	if !hasPaidTotal {
-		paidTotal, hasPaidTotal = repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, "ยอดที่ต้องชำระทั้งหมด")
+	itemCopies := make([]models.BillItem, len(itemsWithCandidates))
+	for i := range itemsWithCandidates {
+		itemCopies[i] = itemsWithCandidates[i].item
 	}
-	goodsTotalForCoin, hasGoodsTotal := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, "ยอดรวมค่าสินค้า")
-	if !hasGoodsTotal {
-		goodsTotalForCoin, hasGoodsTotal = repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, "ยอดรวมค่าสินค้า")
-	}
-	var coinAmount float64
-	var hasCoin bool
-	if hasGoodsTotal {
-		coinAmount, hasCoin = repository.CalcShopeeCoinAmount(goodsTotalForCoin, shippingAmount, discountSummary.TotalDiscountAmount, paidTotal, hasPaidTotal)
-	}
+	coinAmount, hasCoin := shopeeCoinAmountForItems(
+		itemCopies,
+		bodyText,
+		bodyHTML,
+		orderID,
+		discountSummary.TotalDiscountAmount,
+	)
 
 	effectiveDiscount := discountSummary.TotalDiscountAmount
 	if hasCoin {
@@ -988,10 +985,6 @@ func (h *EmailHandler) processOneShippedOrder(
 	}
 
 	if discountSummary.HasAny() || hasCoin {
-		itemCopies := make([]models.BillItem, len(itemsWithCandidates))
-		for i := range itemsWithCandidates {
-			itemCopies[i] = itemsWithCandidates[i].item
-		}
 		repository.ApplyShopeeDiscountsToItems(itemCopies, effectiveDiscount)
 		for i := range itemsWithCandidates {
 			itemsWithCandidates[i].item.DiscountAmount = itemCopies[i].DiscountAmount
@@ -1104,6 +1097,59 @@ func (h *EmailHandler) processOneShippedOrder(
 	)
 
 	return true, nil
+}
+
+// shopeeCoinAmountForItems derives Shopee Coin only when the email totals
+// reconcile. The email's goods total is already net of discounts, so the
+// gross amount must come from the individual purchase lines.
+func shopeeCoinAmountForItems(items []models.BillItem, bodyText, bodyHTML, orderID string, couponDiscount float64) (float64, bool) {
+	grossGoodsTotal, ok := shopeeGrossGoodsTotal(items)
+	if !ok {
+		return 0, false
+	}
+	shippingAmount, hasShippingAmount := repository.ExtractShopeeShippingAmount(bodyText, bodyHTML, orderID)
+	if !hasShippingAmount {
+		return 0, false
+	}
+	paidTotal, hasPaidTotal := shopeeMoneyLabel(bodyText, bodyHTML, orderID, "ยอดที่ต้องชำระทั้งหมด")
+	netGoodsTotal, hasNetGoodsTotal := shopeeMoneyLabel(bodyText, bodyHTML, orderID, "ยอดรวมค่าสินค้า")
+	if !hasPaidTotal || !hasNetGoodsTotal {
+		return 0, false
+	}
+	if math.Abs(roundShopeeMoney(paidTotal-shippingAmount)-roundShopeeMoney(netGoodsTotal)) > 0.01 {
+		return 0, false
+	}
+	return repository.CalcShopeeCoinAmount(grossGoodsTotal, shippingAmount, couponDiscount, paidTotal, true)
+}
+
+func shopeeGrossGoodsTotal(items []models.BillItem) (float64, bool) {
+	total := 0.0
+	hasProduct := false
+	for _, item := range items {
+		if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
+			continue
+		}
+		if item.Price == nil || item.Qty <= 0 {
+			return 0, false
+		}
+		total += item.Qty * *item.Price
+		hasProduct = true
+	}
+	if !hasProduct || total <= 0 {
+		return 0, false
+	}
+	return roundShopeeMoney(total), true
+}
+
+func shopeeMoneyLabel(bodyText, bodyHTML, orderID, label string) (float64, bool) {
+	if amount, ok := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, label); ok {
+		return amount, true
+	}
+	return repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, label)
+}
+
+func roundShopeeMoney(amount float64) float64 {
+	return math.Round(amount*100) / 100
 }
 
 func (h *EmailHandler) saveShopeeShippedEmailArtifacts(billID, subject, from, bodyText, bodyHTML, messageID string) {

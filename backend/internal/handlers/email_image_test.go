@@ -160,6 +160,78 @@ func TestMatchShopeeItemImagesMatchesDuplicateNamesByQuantityAndPrice(t *testing
 	}
 }
 
+func TestMatchShopeeItemImagesKeepsRepeatedURLForSeparateSourceLines(t *testing.T) {
+	name := "ตะกร้าพลาสติก"
+	price67 := 67.0
+	price68 := 68.0
+	imageURL := "https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63"
+	items := []ai.ExtractedItem{
+		{RawName: name, Qty: 5, Price: &price67},
+		{RawName: name, Qty: 1, Price: &price68},
+	}
+	html := `
+		<div>#260725KGHQSU9U</div>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63">
+			<div>ตะกร้าพลาสติก</div>
+			<div>ตัวเลือกสินค้า: M-YD 2542</div>
+			<div>จำนวน: 5</div>
+			<div>ราคา: ฿67</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63">
+			<div>ตะกร้าพลาสติก</div>
+			<div>ตัวเลือกสินค้า: M-YD 2542</div>
+			<div>จำนวน: 1</div>
+			<div>ราคา: ฿68</div>
+		</section>
+	`
+
+	got, decisions := MatchShopeeItemImages(items, html, "260725KGHQSU9U")
+	for i := range got {
+		if got[i].ImageURL != imageURL {
+			t.Fatalf("item %d ImageURL = %q, want %q", i, got[i].ImageURL, imageURL)
+		}
+		if decisions[i].SourceVariant != "M-YD 2542" {
+			t.Fatalf("item %d SourceVariant = %q, want M-YD 2542", i, decisions[i].SourceVariant)
+		}
+		if decisions[i].SourceLineNo != i+1 {
+			t.Fatalf("item %d SourceLineNo = %d, want %d", i, decisions[i].SourceLineNo, i+1)
+		}
+	}
+}
+
+func TestMatchShopeeItemImagesMapsRepeatedExistingURLToDistinctSourceLines(t *testing.T) {
+	name := "ตะกร้าพลาสติก"
+	price67 := 67.0
+	price68 := 68.0
+	imageURL := "https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63"
+	items := []ai.ExtractedItem{
+		{RawName: name, Qty: 5, Price: &price67, ImageURL: imageURL},
+		{RawName: name, Qty: 1, Price: &price68, ImageURL: imageURL},
+	}
+	html := `
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63">
+			<div>ตะกร้าพลาสติก</div><div>ตัวเลือกสินค้า: M-YD 2542</div><div>จำนวน: 5</div><div>ราคา: ฿67</div>
+		</section>
+		<section>
+			<img src="https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63">
+			<div>ตะกร้าพลาสติก</div><div>ตัวเลือกสินค้า: M-YD 2542</div><div>จำนวน: 1</div><div>ราคา: ฿68</div>
+		</section>
+	`
+
+	_, decisions := MatchShopeeItemImages(items, html, "")
+	for i := range decisions {
+		if decisions[i].Reason != ShopeeItemImageReasonExisting {
+			t.Fatalf("item %d reason = %q, want existing", i, decisions[i].Reason)
+		}
+		if decisions[i].SourceLineNo != i+1 {
+			t.Fatalf("item %d SourceLineNo = %d, want %d", i, decisions[i].SourceLineNo, i+1)
+		}
+	}
+}
+
 func TestMatchShopeeItemImagesMatchesEqualDuplicateVariantsFromMojibakeHTML(t *testing.T) {
 	name := "Homsmart รถเข็นพับได้ 45L/65L เข็นลื่น รถเข็นแคมป์ปิ้ง ช้อปปิ้ง นั่งได้ พับเก็บง่าย พกพาสะดวก"
 	price669 := 669.0

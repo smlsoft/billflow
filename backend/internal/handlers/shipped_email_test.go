@@ -67,6 +67,44 @@ func TestFindExistingShopeeShippedBillIDMissingReturnsFalse(t *testing.T) {
 	}
 }
 
+func TestShopeeCoinAmountForItemsUsesGrossLineTotal(t *testing.T) {
+	price67 := 67.0
+	price68 := 68.0
+	shipping := 130.0
+	items := []models.BillItem{
+		{RawName: "ตะกร้าพลาสติก", Qty: 5, Price: &price67},
+		{RawName: "ตะกร้าพลาสติก", Qty: 1, Price: &price68},
+		{RawName: "ค่าขนส่งบิลซื้อ", SourceSKU: models.ShopeeShippingSourceSKU, Qty: 1, Price: &shipping},
+	}
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ: #260725KGHQSU9U",
+		"ยอดรวมค่าสินค้า: ฿401",
+		"ค่าจัดส่งสินค้า: ฿130",
+		"ยอดที่ต้องชำระทั้งหมด: ฿531",
+	}, "\n")
+
+	coin, ok := shopeeCoinAmountForItems(items, body, "", "260725KGHQSU9U", 0)
+	if !ok || coin != 2 {
+		t.Fatalf("coin = (%v, %v), want (2, true)", coin, ok)
+	}
+}
+
+func TestShopeeCoinAmountForItemsRejectsInconsistentEmailTotals(t *testing.T) {
+	price := 100.0
+	items := []models.BillItem{{RawName: "สินค้า", Qty: 1, Price: &price}}
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ: #260725KGHQSU9U",
+		"ยอดรวมค่าสินค้า: ฿90",
+		"ค่าจัดส่งสินค้า: ฿10",
+		"ยอดที่ต้องชำระทั้งหมด: ฿95",
+	}, "\n")
+
+	coin, ok := shopeeCoinAmountForItems(items, body, "", "260725KGHQSU9U", 0)
+	if ok || coin != 0 {
+		t.Fatalf("coin = (%v, %v), want (0, false)", coin, ok)
+	}
+}
+
 func TestProcessOneShippedOrderRecordsEventOnExistingBill(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

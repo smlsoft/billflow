@@ -497,7 +497,7 @@ func (s *ShopeeEmailRepairService) rebuildOneShopeeBillFromPaymentEmail(
 		return "", fmt.Errorf("rebuild shopee bill %s: no usable items", orderID)
 	}
 
-	itemsWithCandidates, allHighConfidence := emailHandler.buildShopeeRepairItems(orderID, validItems, body, fallbackPrices)
+	itemsWithCandidates, allHighConfidence, coinAmount := emailHandler.buildShopeeRepairItems(orderID, validItems, body, fallbackPrices)
 	docDate := order.DocDate
 	if docDate == "" {
 		docDate = extractDocDate(body.Text)
@@ -528,8 +528,8 @@ func (s *ShopeeEmailRepairService) rebuildOneShopeeBillFromPaymentEmail(
 	if paymentSummary := repository.ExtractShopeePaymentSummary(body.Text, body.HTML, orderID); paymentSummary.HasAny() {
 		rawDataMap["payment_summary"] = paymentSummary
 	}
-	if coin := extractShopeeCoinForRepair(body.Text, body.HTML, orderID); coin > 0 {
-		rawDataMap["shopee_coin_amount"] = coin
+	if coinAmount > 0 {
+		rawDataMap["shopee_coin_amount"] = coinAmount
 	}
 	applyMailSource(rawDataMap, source)
 	rawDataBytes, _ := json.Marshal(rawDataMap)
@@ -570,10 +570,10 @@ func (s *ShopeeEmailRepairService) rebuildOneShopeeBillFromPaymentEmail(
 	return billID, nil
 }
 
-func (h *EmailHandler) buildShopeeRepairItems(orderID string, validItems []ai.ExtractedItem, body shopeeRepairEmailBody, fallbackPrices []float64) ([]shopeeRepairItemWithCandidates, bool) {
+func (h *EmailHandler) buildShopeeRepairItems(orderID string, validItems []ai.ExtractedItem, body shopeeRepairEmailBody, fallbackPrices []float64) ([]shopeeRepairItemWithCandidates, bool, float64) {
 	const topK = 5
 	const highConfThreshold = 0.85
-	validItems, _ = MatchShopeeItemImages(validItems, body.HTML, orderID)
+	validItems, imageDecisions := MatchShopeeItemImages(validItems, body.HTML, orderID)
 	itemsWithCandidates := []shopeeRepairItemWithCandidates{}
 	allHighConfidence := true
 	for i, extItem := range validItems {
@@ -582,9 +582,11 @@ func (h *EmailHandler) buildShopeeRepairItems(orderID string, validItems []ai.Ex
 			matches, _ = h.catalogSvc.SearchByText(extItem.RawName, topK)
 		}
 		item := models.BillItem{
-			RawName: extItem.RawName,
-			Qty:     extItem.Qty,
-			Mapped:  false,
+			RawName:       extItem.RawName,
+			Qty:           extItem.Qty,
+			Mapped:        false,
+			SourceVariant: imageDecisions[i].SourceVariant,
+			SourceLineNo:  imageDecisions[i].SourceLineNo,
 		}
 		if extItem.Price != nil {
 			item.Price = extItem.Price
@@ -612,21 +614,28 @@ func (h *EmailHandler) buildShopeeRepairItems(orderID string, validItems []ai.Ex
 		}
 	}
 	discountSummary := repository.ExtractShopeeDiscountSummary(body.Text, body.HTML, orderID)
+	itemCopies := make([]models.BillItem, len(itemsWithCandidates))
+	for i := range itemsWithCandidates {
+		itemCopies[i] = itemsWithCandidates[i].item
+	}
+	coinAmount, hasCoin := shopeeCoinAmountForItems(
+		itemCopies,
+		body.Text,
+		body.HTML,
+		orderID,
+		discountSummary.TotalDiscountAmount,
+	)
 	effectiveDiscount := discountSummary.TotalDiscountAmount
-	if coin := extractShopeeCoinForRepair(body.Text, body.HTML, orderID); coin > 0 {
-		effectiveDiscount = roundShopeeRepairMoney(effectiveDiscount + coin)
+	if hasCoin {
+		effectiveDiscount = roundShopeeMoney(effectiveDiscount + coinAmount)
 	}
 	if discountSummary.HasAny() || effectiveDiscount > 0 {
-		itemCopies := make([]models.BillItem, len(itemsWithCandidates))
-		for i := range itemsWithCandidates {
-			itemCopies[i] = itemsWithCandidates[i].item
-		}
 		repository.ApplyShopeeDiscountsToItems(itemCopies, effectiveDiscount)
 		for i := range itemsWithCandidates {
 			itemsWithCandidates[i].item.DiscountAmount = itemCopies[i].DiscountAmount
 		}
 	}
-	return itemsWithCandidates, allHighConfidence
+	return itemsWithCandidates, allHighConfidence, coinAmount
 }
 
 func (s *ShopeeEmailRepairService) replaceShopeeRepairBill(orderID, status string, confidence float64, rawData []byte, items []shopeeRepairItemWithCandidates) (string, error) {
@@ -677,10 +686,10 @@ func (s *ShopeeEmailRepairService) replaceShopeeRepairBill(orderID, status strin
 		item := iwc.item
 		candidatesJSON, _ := json.Marshal(iwc.candidates)
 		if _, err := tx.Exec(
-			`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id, candidates)
-			 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-			billID, item.RawName, item.SourceSKU, item.SourceImageURL, item.ItemCode, item.Qty,
-			item.UnitCode, item.Price, item.DiscountAmount, item.Mapped, item.MappingID, candidatesJSON,
+			`INSERT INTO bill_items (bill_id, raw_name, source_sku, source_image_url, source_variant, source_line_no, item_code, qty, unit_code, price, discount_amount, mapped, mapping_id, candidates)
+			 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+			billID, item.RawName, item.SourceSKU, item.SourceImageURL, item.SourceVariant, item.SourceLineNo,
+			item.ItemCode, item.Qty, item.UnitCode, item.Price, item.DiscountAmount, item.Mapped, item.MappingID, candidatesJSON,
 		); err != nil {
 			return "", err
 		}
@@ -689,31 +698,6 @@ func (s *ShopeeEmailRepairService) replaceShopeeRepairBill(orderID, status strin
 		return "", err
 	}
 	return billID, nil
-}
-
-func extractShopeeCoinForRepair(bodyText, bodyHTML, orderID string) float64 {
-	shippingAmount, _ := repository.ExtractShopeeShippingAmount(bodyText, bodyHTML, orderID)
-	discountSummary := repository.ExtractShopeeDiscountSummary(bodyText, bodyHTML, orderID)
-	paidTotal, hasPaidTotal := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, "ยอดที่ต้องชำระทั้งหมด")
-	if !hasPaidTotal {
-		paidTotal, hasPaidTotal = repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, "ยอดที่ต้องชำระทั้งหมด")
-	}
-	goodsTotal, hasGoodsTotal := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, "ยอดรวมค่าสินค้า")
-	if !hasGoodsTotal {
-		goodsTotal, hasGoodsTotal = repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, "ยอดรวมค่าสินค้า")
-	}
-	if !hasGoodsTotal {
-		return 0
-	}
-	coin, ok := repository.CalcShopeeCoinAmount(goodsTotal, shippingAmount, discountSummary.TotalDiscountAmount, paidTotal, hasPaidTotal)
-	if !ok {
-		return 0
-	}
-	return coin
-}
-
-func roundShopeeRepairMoney(v float64) float64 {
-	return math.Round(v*100) / 100
 }
 
 func (s *ShopeeEmailRepairService) applyLazadaEmailRepairOrders(

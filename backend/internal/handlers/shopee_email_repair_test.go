@@ -6,7 +6,46 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
+	"billflow/internal/services/ai"
 )
+
+func TestBuildShopeeRepairItemsPreservesRepeatedImageAndCoin(t *testing.T) {
+	price67 := 67.0
+	price68 := 68.0
+	imageURL := "https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63"
+	items := []ai.ExtractedItem{
+		{RawName: "ตะกร้าพลาสติก", Qty: 5, Price: &price67},
+		{RawName: "ตะกร้าพลาสติก", Qty: 1, Price: &price68},
+	}
+	body := shopeeRepairEmailBody{HTML: `
+		<div>#260725KGHQSU9U</div>
+		<section><img src="https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63"><div>ตะกร้าพลาสติก</div><div>ตัวเลือกสินค้า: M-YD 2542</div><div>จำนวน: 5</div><div>ราคา: ฿67</div></section>
+		<section><img src="https://cf.shopee.co.th/file/th-11134207-81ztp-mnzimihz0nwo63"><div>ตะกร้าพลาสติก</div><div>ตัวเลือกสินค้า: M-YD 2542</div><div>จำนวน: 1</div><div>ราคา: ฿68</div></section>
+		<div>ยอดรวมค่าสินค้า: ฿401</div><div>ค่าจัดส่งสินค้า: ฿130</div><div>ยอดที่ต้องชำระทั้งหมด: ฿531</div>
+	`}
+
+	got, _, coinAmount := (&EmailHandler{}).buildShopeeRepairItems("260725KGHQSU9U", items, body, nil)
+	if len(got) != 2 {
+		t.Fatalf("items = %d, want 2", len(got))
+	}
+	if coinAmount != 2 {
+		t.Fatalf("coinAmount = %v, want 2", coinAmount)
+	}
+	discountTotal := 0.0
+	for i, item := range got {
+		if item.item.SourceImageURL != imageURL {
+			t.Fatalf("item %d SourceImageURL = %q, want %q", i, item.item.SourceImageURL, imageURL)
+		}
+		if item.item.SourceVariant != "M-YD 2542" || item.item.SourceLineNo != i+1 {
+			t.Fatalf("item %d source = (%q, %d), want (M-YD 2542, %d)", i, item.item.SourceVariant, item.item.SourceLineNo, i+1)
+		}
+		discountTotal += item.item.DiscountAmount
+	}
+	if math.Abs(discountTotal-2) > 0.01 {
+		t.Fatalf("discountTotal = %v, want 2", discountTotal)
+	}
+}
 
 func TestShopeeEmailRepairPreviewDetectsMissingAndStaleTombstone(t *testing.T) {
 	db, mock, err := sqlmock.New()
