@@ -31,7 +31,7 @@ import {
   BILL_TYPE_LABEL,
   PAGE_TITLE,
 } from '@/lib/labels'
-import type { Bill, EmailPrintCandidate } from '@/types'
+import type { Bill, EmailPrintCandidate, MarketplaceEmailGroupAttention } from '@/types'
 import type { Party } from '@/pages/ChannelDefaults/PartyPicker'
 import { DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS } from '@/pages/ChannelDefaults/labels'
 
@@ -87,6 +87,11 @@ const PURCHASE_SOURCE_OPTIONS = [
   { value: 'lazada_email', label: BILL_SOURCE_LABEL.lazada_email, description: 'อีเมล Lazada ที่สร้างเป็นบิลซื้อรอตรวจ' },
 ]
 const VALID_PURCHASE_SOURCES = PURCHASE_SOURCE_OPTIONS.map((o) => o.value)
+const EMAIL_COMPLETENESS_OPTIONS = [
+  { value: ALL, label: 'สถานะอีเมลทั้งหมด' },
+  { value: 'attention', label: 'อีเมลที่ต้องตรวจสอบ' },
+]
+const VALID_EMAIL_COMPLETENESS = EMAIL_COMPLETENESS_OPTIONS.map((o) => o.value)
 const PAYMENT_METHOD_ALL_LABEL = 'ทุกวิธีชำระเงิน'
 const ARCHIVE_OPTIONS = [
   { value: 'active', label: 'รายการปกติ' },
@@ -228,11 +233,15 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [sourceFilter, setSourceFilter] = useState<string>(() =>
     readURLFilter(searchParams, 'source', VALID_PURCHASE_SOURCES),
   )
+  const [emailCompleteness, setEmailCompleteness] = useState<string>(() =>
+    readURLFilter(searchParams, 'email_completeness', VALID_EMAIL_COMPLETENESS),
+  )
   const [printReadyOnly, setPrintReadyOnly] = useState(() => searchParams.get('print_ready') === '1')
   const [sourceFilterOpen, setSourceFilterOpen] = useState(false)
   const [shopeeShopId, setShopeeShopId] = useState(() => searchParams.get('shopee_shop_id') || ALL)
   const [emailAccountId, setEmailAccountId] = useState(() => searchParams.get('email_account_id') || ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
+  const [emailAttentionGroups, setEmailAttentionGroups] = useState<MarketplaceEmailGroupAttention[]>([])
   const [shopeeShops, setShopeeShops] = useState<ShopeeShopOption[]>([])
   const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '')
   const [search, setSearch] = useState(() => (searchParams.get('search') ?? '').trim())
@@ -285,6 +294,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     document_route: config.documentRoute,
     print_ready: showPurchaseSourceFilter && printReadyOnly,
     email_account_id: emailAccountId === ALL ? '' : emailAccountId,
+    email_completeness: showPurchaseSourceFilter && emailCompleteness === 'attention' ? 'attention' : undefined,
     shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
     search,
     print_payment_method: activePaymentMethod,
@@ -336,6 +346,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const selectedInbox = inboxes.find((a) => a.id === emailAccountId)
   const selectedShopeeShop = shopeeShops.find((shop) => String(shop.shop_id) === shopeeShopId)
   const selectedShopeeStatus = SHOPEE_STATUS_OPTIONS.find((o) => o.value === shopeeStatus)?.label ?? SHOPEE_STATUS_OPTIONS[0].label
+  const selectedEmailCompleteness = EMAIL_COMPLETENESS_OPTIONS.find((o) => o.value === emailCompleteness)?.label ?? EMAIL_COMPLETENESS_OPTIONS[0].label
   const selectedArchiveLabel = ARCHIVE_OPTIONS.find((o) => o.value === archiveMode)?.label ?? ARCHIVE_OPTIONS[0].label
   const sourceSummary = showPurchaseSourceFilter
     ? activeSourceOption.label
@@ -358,6 +369,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const activeFilterSummary = [
     `ช่องทาง: ${sourceSummary}`,
     showShopeeStatusFilter ? `สถานะคำสั่งซื้อ: ${selectedShopeeStatus}` : '',
+    showPurchaseSourceFilter && emailCompleteness === 'attention' ? `ความครบอีเมล: ${selectedEmailCompleteness}` : '',
     showPurchaseSourceFilter && printReadyOnly ? 'รอพิมพ์อีเมล' : '',
     showPurchaseSourceFilter && activePaymentMethod ? `วิธีชำระ: ${selectedPaymentMethodLabel}` : '',
     `กล่อง/ร้าน: ${inboxSummary}`,
@@ -406,6 +418,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     params.set('bill_type', config.billType)
     if (config.documentRoute) params.set('document_route', config.documentRoute)
     if (emailAccountId !== ALL) params.set('email_account_id', emailAccountId)
+    if (showPurchaseSourceFilter && emailCompleteness === 'attention') params.set('email_completeness', 'attention')
     if (archiveMode !== 'active') params.set('archived', archiveMode)
     if (showPurchaseSourceFilter && printReadyOnly) params.set('print_ready', '1')
     if (showShopeeStatusFilter && shopeeStatus !== ALL) params.set('shopee_status', shopeeStatus)
@@ -658,7 +671,26 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       setCounts({ needs_review: 0, pending: 0, sent: 0, failed: 0, skipped: 0, total: 0, print_ready_orders: 0, print_ready_groups: 0 })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSource, activePaymentMethod, config.billType, config.documentRoute, emailAccountId, archiveMode, shopeeStatus, shopeeShopId, search, printReadyOnly, dateFrom, dateTo])
+  }, [activeSource, activePaymentMethod, config.billType, config.documentRoute, emailAccountId, emailCompleteness, archiveMode, shopeeStatus, shopeeShopId, search, printReadyOnly, dateFrom, dateTo])
+
+  useEffect(() => {
+    if (!showPurchaseSourceFilter || archiveMode !== 'active') {
+      setEmailAttentionGroups([])
+      return
+    }
+    let alive = true
+    const params = new URLSearchParams({ limit: '8' })
+    if (sourceFilter !== ALL) params.set('source', sourceFilter)
+    if (emailAccountId !== ALL) params.set('email_account_id', emailAccountId)
+    client.get<{ data: MarketplaceEmailGroupAttention[] }>(`/api/bills/email-groups/attention?${params}`)
+      .then((res) => {
+        if (alive) setEmailAttentionGroups(res.data.data ?? [])
+      })
+      .catch(() => {
+        if (alive) setEmailAttentionGroups([])
+      })
+    return () => { alive = false }
+  }, [archiveMode, emailAccountId, showPurchaseSourceFilter, sourceFilter])
 
   useEffect(() => {
     if (!loading && data && page > totalPages) {
@@ -721,6 +753,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.delete('shopee_status')
     if (showPurchaseSourceFilter && sourceFilter !== ALL) next.set('source', sourceFilter)
     else next.delete('source')
+    if (showPurchaseSourceFilter && emailCompleteness === 'attention') next.set('email_completeness', 'attention')
+    else next.delete('email_completeness')
     if (showPurchaseSourceFilter && printReadyOnly) next.set('print_ready', '1')
     else next.delete('print_ready')
     if (showPurchaseSourceFilter && activePaymentMethod) next.set('print_payment_method', activePaymentMethod)
@@ -752,6 +786,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     status,
     shopeeStatus,
     sourceFilter,
+    emailCompleteness,
     printReadyOnly,
     activePaymentMethod,
     archiveMode,
@@ -838,6 +873,21 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
                 <Filter className="h-3.5 w-3.5" />
                 <span className="truncate">{activeSourceOption.label}</span>
               </Button>
+            )}
+
+            {showPurchaseSourceFilter && (
+              <select
+                value={emailCompleteness}
+                onChange={(e) => resetPage(() => setEmailCompleteness(e.target.value))}
+                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[190px]"
+                aria-label="กรองตามความครบของอีเมล"
+              >
+                {EMAIL_COMPLETENESS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             )}
             {showPurchaseSourceFilter && (
               <select
@@ -998,6 +1048,39 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           </div>
         </div>
       </div>
+
+      {showPurchaseSourceFilter && emailAttentionGroups.length > 0 && (
+        <div className="mx-auto mb-3 w-full max-w-[1440px] rounded-lg border border-warning/35 bg-warning/[0.07] px-3 py-2.5 text-xs">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-foreground">พบอีเมลที่ระบบอ่านคำสั่งซื้อได้ไม่ครบ</div>
+              <div className="mt-0.5 text-muted-foreground">
+                ระบบหยุดการพิมพ์อีเมลกลุ่มนี้ไว้ก่อน เพื่อป้องกันเอกสารไม่ครบชุด
+              </div>
+              <div className="mt-2 space-y-1.5">
+                {emailAttentionGroups.map((group) => {
+                  const label = `${group.source === 'shopee_shipped' ? 'Shopee' : 'Lazada'} · อ่านได้ ${group.resolved_order_count.toLocaleString('th-TH')}/${group.expected_order_count.toLocaleString('th-TH')} คำสั่งซื้อ`
+                  return group.representative_bill_id ? (
+                    <Link key={group.id} to={`/bills/${group.representative_bill_id}`} className="block truncate text-warning hover:underline">
+                      {label} · {group.subject || group.message_id}
+                    </Link>
+                  ) : (
+                    <div key={group.id} className="truncate text-warning">
+                      {label} · ยังไม่สร้างบิลจากอีเมลนี้ ({group.subject || group.message_id})
+                    </div>
+                  )
+                })}
+              </div>
+              {user?.role === 'admin' && (
+                <Link to="/settings/email" className="mt-2 inline-flex text-primary hover:underline">
+                  เปิดตั้งค่าอีเมลเพื่ออ่านซ้ำหรือซ่อมรายการ
+                </Link>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {!loading && bills.length === 0 && !search && status === ALL && shopeeStatus === ALL && (!showPurchaseSourceFilter || sourceFilter === ALL) && archiveMode === 'active' ? (
         <EmptyState

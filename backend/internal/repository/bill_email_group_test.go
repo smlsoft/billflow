@@ -79,6 +79,9 @@ func TestRecordEmailPrintEventBlocksMarketplaceEmailGroupMissingSMLDoc(t *testin
 			"source", "bill_type", "status", "order_id", "sml_doc_no", "party_code", "party_name",
 			"print_payment_method", "effective_print_payment_method",
 		}).AddRow("lazada_email", "purchase", "sent", "1107473377495692", "PO260600001", "AF00007", "TT3086", "", "TT3086"))
+	mock.ExpectQuery("FROM marketplace_email_groups").
+		WithArgs("lazada_email", messageID).
+		WillReturnRows(marketplaceEmailGroupRows())
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs("lazada_email", "purchase").
 		WillReturnRows(sqlmock.NewRows([]string{"print_policy"}).AddRow([]byte("{}")))
@@ -132,6 +135,9 @@ func TestRecordEmailPrintEventBlocksMarketplaceEmailGroupNonMatchingPaymentMetho
 			"source", "bill_type", "status", "order_id", "sml_doc_no", "party_code", "party_name",
 			"print_payment_method", "effective_print_payment_method",
 		}).AddRow("lazada_email", "purchase", "sent", "1107473377495692", "PO260600001", "AF00007", "ACME", "โอน Kbank", "โอน Kbank"))
+	mock.ExpectQuery("FROM marketplace_email_groups").
+		WithArgs("lazada_email", messageID).
+		WillReturnRows(marketplaceEmailGroupRows())
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs("lazada_email", "purchase").
 		WillReturnRows(sqlmock.NewRows([]string{"print_policy"}).AddRow([]byte("{}")))
@@ -191,6 +197,9 @@ func TestRecordEmailPrintEventAllowsConfiguredPaymentMethodPrefix(t *testing.T) 
 			"source", "bill_type", "status", "order_id", "sml_doc_no", "party_code", "party_name",
 			"print_payment_method", "effective_print_payment_method",
 		}).AddRow("lazada_email", "purchase", "sent", "1107473377495692", "PO260600001", "AF00007", "ACME", "AF00007", "AF00007"))
+	mock.ExpectQuery("FROM marketplace_email_groups").
+		WithArgs("lazada_email", messageID).
+		WillReturnRows(marketplaceEmailGroupRows())
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs("lazada_email", "purchase").
 		WillReturnRows(sqlmock.NewRows([]string{"print_policy"}).AddRow(policyJSON))
@@ -224,6 +233,13 @@ func TestRecordEmailPrintEventAllowsConfiguredPaymentMethodPrefix(t *testing.T) 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
 	}
+}
+
+func marketplaceEmailGroupRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"id", "source", "message_id", "imap_account_id", "imap_mailbox", "subject", "from_addr",
+		"status", "expected_order_count", "resolved_order_count", "missing_order_count", "failure_code",
+	})
 }
 
 func TestRecordEmailPrintEventsBulkBlocksAlreadyPrintedGroup(t *testing.T) {

@@ -53,9 +53,6 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 	traceID := fmt.Sprintf("lazada-email-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 
-	if h.aiClient == nil {
-		return emailservice.ProcessOutcome{}, fmt.Errorf("AI client not configured")
-	}
 	if messageID != "" {
 		var count int
 		_ = h.billRepo.DB().QueryRow(
@@ -82,6 +79,32 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 	if strings.TrimSpace(plainText) == "" {
 		return emailservice.ProcessOutcome{}, emailservice.SkipMessage("lazada_no_new_bill", "เมล Lazada นี้ไม่มีเนื้อหาที่อ่านได้")
 	}
+	fallbackOrderID := extractLazadaOrderID(subject + "\n" + plainText)
+	groupFailureCode := ""
+	groupFailureDetail := map[string]interface{}{}
+	if h.emailGroupRepo != nil && strings.TrimSpace(messageID) != "" && fallbackOrderID != "" {
+		if err := h.emailGroupRepo.RegisterExpectedOrders(repository.MarketplaceEmailGroupInput{
+			Source:        lazadaEmailSource,
+			MessageID:     messageID,
+			IMAPAccountID: source.AccountID,
+			IMAPMailbox:   source.Mailbox,
+			Subject:       subject,
+			From:          from,
+			OrderIDs:      []string{fallbackOrderID},
+		}); err != nil {
+			return emailservice.ProcessOutcome{}, fmt.Errorf("record source email completeness: %w", err)
+		} else {
+			defer func() {
+				if err := h.emailGroupRepo.Finalize(lazadaEmailSource, messageID, groupFailureCode, groupFailureDetail); err != nil {
+					h.logger.Warn("lazada_email: finalize source email group failed", zap.String("message_id", messageID), zap.Error(err))
+				}
+			}()
+		}
+	}
+	if h.aiClient == nil {
+		groupFailureCode = "ai_not_configured"
+		return emailservice.ProcessOutcome{}, fmt.Errorf("AI client not configured")
+	}
 
 	releaseSlot := acquireLazadaAISlot()
 	orders, err := h.aiClient.ExtractLazadaOrders(plainText)
@@ -89,16 +112,28 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 	if err != nil || len(orders) == 0 {
 		h.logger.Warn("lazada_email: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
+		groupFailureCode = "ai_extract_failed"
+		groupFailureDetail = map[string]interface{}{"trace_id": traceID}
 		if err == nil {
+			groupFailureCode = "ai_extract_empty"
 			return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract lazada_email: empty orders")
 		}
 		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract lazada_email: %w", err)
 	}
+	if mismatch := validateLazadaExtractedOrderID(fallbackOrderID, orders); mismatch != nil {
+		groupFailureCode = "lazada_order_id_mismatch"
+		groupFailureDetail = map[string]interface{}{
+			"trace_id":             traceID,
+			"expected_order_id":    mismatch.Expected,
+			"unexpected_order_ids": mismatch.Unexpected,
+		}
+		return emailservice.ProcessOutcome{}, mismatch
+	}
 
-	fallbackOrderID := extractLazadaOrderID(subject + "\n" + plainText)
 	createdCount := 0
 	skippedCount := 0
 	failedCount := 0
+	failedOrderIDs := make([]string, 0)
 	for _, order := range orders {
 		if strings.TrimSpace(order.OrderID) == "" && fallbackOrderID != "" {
 			order.OrderID = fallbackOrderID
@@ -108,6 +143,7 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 		)
 		if err != nil {
 			failedCount++
+			failedOrderIDs = append(failedOrderIDs, normalizeLazadaOrderID(order.OrderID))
 			h.logger.Warn("lazada_email: order processing failed",
 				zap.String("order_id", order.OrderID), zap.Error(err))
 			continue
@@ -116,6 +152,13 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 			createdCount++
 		} else {
 			skippedCount++
+		}
+	}
+	if failedCount > 0 {
+		groupFailureCode = "order_processing_failed"
+		groupFailureDetail = map[string]interface{}{
+			"trace_id":  traceID,
+			"order_ids": normalizedLazadaOrderIDs(failedOrderIDs),
 		}
 	}
 
@@ -913,6 +956,53 @@ func normalizeLazadaOrderID(orderID string) string {
 		return ""
 	}
 	return b.String()
+}
+
+type lazadaOrderIDMismatchError struct {
+	Expected   string
+	Unexpected []string
+}
+
+func (e *lazadaOrderIDMismatchError) Error() string {
+	return fmt.Sprintf("lazada order id mismatch: expected %s, got %s", e.Expected, strings.Join(e.Unexpected, ", "))
+}
+
+// validateLazadaExtractedOrderID rejects an AI-provided order ID that differs
+// from the source email. Blank IDs are safe: the intake assigns the source ID
+// later, preserving legacy fallback behavior.
+func validateLazadaExtractedOrderID(expected string, orders []ai.ExtractedOrder) *lazadaOrderIDMismatchError {
+	expected = normalizeLazadaOrderID(expected)
+	if expected == "" {
+		return nil
+	}
+	unexpected := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, order := range orders {
+		orderID := normalizeLazadaOrderID(order.OrderID)
+		if orderID == "" || orderID == expected || seen[orderID] {
+			continue
+		}
+		seen[orderID] = true
+		unexpected = append(unexpected, orderID)
+	}
+	if len(unexpected) == 0 {
+		return nil
+	}
+	return &lazadaOrderIDMismatchError{Expected: expected, Unexpected: unexpected}
+}
+
+func normalizedLazadaOrderIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = normalizeLazadaOrderID(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 func extractLazadaOrderID(text string) string {

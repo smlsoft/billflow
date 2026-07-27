@@ -27,7 +27,7 @@ import { useArtifacts, openArtifact, printArtifact, recordArtifactPrint } from '
 import type { ArtifactPrintContext, BillArtifact } from '../hooks/useArtifacts'
 import { KIND_META, fmtSize, isUserVisibleArtifact } from '../utils/formatters'
 import api from '@/api/client'
-import type { BillEmailGroup, BillEmailRelatedBill, EmailPrintEvent } from '@/types'
+import type { BillEmailGroup, BillEmailRelatedBill, EmailPrintEvent, MarketplaceEmailGroupOrder } from '@/types'
 
 interface Props {
   billId: string
@@ -1283,10 +1283,38 @@ function EmailGroupContext({
   const related = emailGroup.related_bills ?? []
   const showRelated = related.length > 1
   const showHistory = emailGroup.has_printable_email
-  if (!showRelated && !showHistory) return null
+  const hasIngestionState = Boolean(emailGroup.ingestion_status && (emailGroup.expected_order_count ?? 0) > 0)
+  const isIncomplete = hasIngestionState && emailGroup.ingestion_status !== 'complete'
+  const expectedCount = emailGroup.expected_order_count ?? emailGroup.order_count ?? 0
+  const resolvedCount = emailGroup.resolved_order_count ?? emailGroup.order_count ?? 0
+  if (!showRelated && !showHistory && !hasIngestionState) return null
 
   return (
     <div className="space-y-3 border-b border-border/50 pb-3">
+      {hasIngestionState && (
+        <div className={`rounded-md border px-3 py-2 text-xs ${
+          isIncomplete
+            ? 'border-warning/40 bg-warning/10 text-warning'
+            : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
+        }`}>
+          <div className="flex items-center gap-1.5 font-medium">
+            {isIncomplete ? <AlertTriangle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+            {emailGroup.ingestion_status === 'processing'
+              ? 'กำลังอ่านคำสั่งซื้อจากอีเมลต้นฉบับ'
+              : isIncomplete
+                ? `อีเมลนี้อ่านได้ไม่ครบ ${resolvedCount.toLocaleString('th-TH')}/${expectedCount.toLocaleString('th-TH')} คำสั่งซื้อ`
+                : `อีเมลนี้ครบ ${resolvedCount.toLocaleString('th-TH')}/${expectedCount.toLocaleString('th-TH')} คำสั่งซื้อแล้ว`}
+          </div>
+          {isIncomplete && (
+            <div className="mt-1 text-warning/90">
+              ระบบจะไม่อนุญาตให้พิมพ์อีเมลกลุ่มนี้ และเมื่อเปิดการป้องกันในระบบ จะไม่อนุญาตให้ส่งเข้า SML จนกว่าจะกู้ข้อมูลครบ
+            </div>
+          )}
+          {emailGroup.ingestion_orders && emailGroup.ingestion_orders.length > 0 && (
+            <EmailGroupOrderList orders={emailGroup.ingestion_orders} currentBillID={billId} />
+          )}
+        </div>
+      )}
       {emailGroup.print_policy_note && (
         <div className="rounded-md border border-info/30 bg-info/5 px-3 py-2 text-xs text-info">
           {emailGroup.print_policy_note}
@@ -1360,6 +1388,36 @@ function EmailGroupContext({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function EmailGroupOrderList({ orders, currentBillID }: { orders: MarketplaceEmailGroupOrder[]; currentBillID: string }) {
+  return (
+    <div className="mt-2 max-h-28 space-y-1 overflow-y-auto border-t border-current/20 pt-2 text-[11px]">
+      {orders.map((order) => {
+        const complete = order.status === 'created' || order.status === 'existing'
+        const label = complete ? 'พร้อมตรวจ' : order.status === 'failed' ? 'อ่านไม่สำเร็จ' : order.status === 'archived' ? 'เก็บบิลแล้ว' : 'ยังไม่พบบิล'
+        const content = (
+          <>
+            <span className="font-mono">{order.order_id}</span>
+            <span className="ml-1">{label}</span>
+          </>
+        )
+        if (order.bill_id) {
+          return (
+            <Link
+              key={order.order_id}
+              to={`/bills/${order.bill_id}`}
+              className={`flex items-center justify-between rounded px-1 py-0.5 hover:bg-background/50 ${order.bill_id === currentBillID ? 'font-medium' : ''}`}
+            >
+              {content}
+              <ExternalLink className="h-3 w-3" />
+            </Link>
+          )
+        }
+        return <div key={order.order_id} className="rounded px-1 py-0.5">{content}</div>
+      })}
     </div>
   )
 }

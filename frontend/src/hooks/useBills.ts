@@ -14,6 +14,7 @@ interface BillsFilter {
   bill_type?: string
   document_route?: string
   email_account_id?: string
+  email_completeness?: 'attention'
   search?: string
   print_payment_method?: string
   shopee_shop_id?: string
@@ -43,6 +44,8 @@ export interface RetryBillPayload {
   vat_rate?: number
   inquiry_type?: number
   confirm_duplicate_item_codes?: boolean
+  allow_incomplete_email_group?: boolean
+  incomplete_email_group_reason?: string
 }
 
 export interface RetryBillResponse {
@@ -175,6 +178,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.bill_type) params.set('bill_type', filter.bill_type)
       if (filter.document_route) params.set('document_route', filter.document_route)
       if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
+      if (filter.email_completeness) params.set('email_completeness', filter.email_completeness)
       if (filter.search) params.set('search', filter.search)
       if (filter.print_payment_method) params.set('print_payment_method', filter.print_payment_method)
       if (filter.shopee_shop_id) params.set('shopee_shop_id', filter.shopee_shop_id)

@@ -336,6 +336,15 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 		args = append(args, f.EmailAccountID)
 		argN++
 	}
+	if f.EmailCompleteness == "attention" {
+		where += ` AND EXISTS (
+			SELECT 1
+			  FROM marketplace_email_groups meg
+			 WHERE meg.source = b.source
+			   AND meg.message_id = COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', ''))
+			   AND meg.status IN ('processing', 'attention')
+		)`
+	}
 	if f.ShopeeStatus != "" {
 		where += fmt.Sprintf(` AND EXISTS (
 			SELECT 1 FROM shopee_order_events soe

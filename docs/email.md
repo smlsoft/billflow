@@ -182,6 +182,16 @@ Shopee/Lazada purchase email print is controlled by BillFlow-only payment method
 
 Runbook: [Marketplace Purchase Print And Payment Method](marketplace-purchase-print-and-payment.md).
 
+### Marketplace email completeness
+
+สำหรับ Shopee/Lazada purchase email ระบบจะบันทึกเลขคำสั่งซื้อที่พบจากอีเมลต้นฉบับก่อนเรียก AI แล้วเทียบกับบิลที่สร้างสำเร็จภายหลัง เพื่อให้กรณีอ่านพลาดหรือสร้างบิลไม่ครบไม่หายไปจากงานของผู้ใช้:
+
+- หน้า `/bills` แสดงป้าย `ครบ X/Y` หรือ `ขาด X/Y` บนบิลที่เกี่ยวข้อง และมีตัวกรอง `อีเมลที่ต้องตรวจสอบ`
+- หน้า `/bills` มีแถบเตือนแยกสำหรับอีเมลที่ไม่มีบิลถูกสร้างเลย พร้อมบอกจำนวนที่ขาด
+- Email group ที่ยังไม่ครบพิมพ์ไม่ได้
+- ตั้ง `EMAIL_GROUP_COMPLETENESS_ENFORCED=true` เพื่อ block การส่ง SML ด้วย backend ทุก route รวม bulk send; admin override ได้เฉพาะการส่งทีละบิลและต้องระบุเหตุผล ส่วน bulk send จะข้ามรายการที่ยังไม่ครบเสมอ
+- ค่า default เป็น `false` เพื่อ rollout แบบ shadow mode: ระบบแสดงสถานะและ log ก่อน โดยยังไม่ block SML
+
 ---
 
 ## คำถามที่พบบ่อย

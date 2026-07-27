@@ -67,6 +67,20 @@ func TestNormalizeLazadaOrderID(t *testing.T) {
 	}
 }
 
+func TestValidateLazadaExtractedOrderID(t *testing.T) {
+	expected := "1107473377495692"
+	if mismatch := validateLazadaExtractedOrderID(expected, []ai.ExtractedOrder{{OrderID: expected}, {}}); mismatch != nil {
+		t.Fatalf("matching/source fallback orders should be accepted: %+v", mismatch)
+	}
+	mismatch := validateLazadaExtractedOrderID(expected, []ai.ExtractedOrder{{OrderID: "1107473377495693"}})
+	if mismatch == nil {
+		t.Fatal("different AI order id should be rejected")
+	}
+	if mismatch.Expected != expected || len(mismatch.Unexpected) != 1 || mismatch.Unexpected[0] != "1107473377495693" {
+		t.Fatalf("mismatch = %+v", mismatch)
+	}
+}
+
 func TestNormalizeLazadaEmailDocDatePrefersMailHeader(t *testing.T) {
 	source := emailservice.MailSource{EmailDate: "2026-06-04T09:31:00+07:00"}
 	if got := normalizeLazadaEmailDocDate("2024-06-04", source); got != "2026-06-04" {

@@ -219,6 +219,7 @@ interface Props {
   regeneratingDocNo?: boolean;
   smlReadiness?: SMLReadiness | null;
   smlReadinessLoading?: boolean;
+  canOverrideIncompleteEmailGroup?: boolean;
 }
 
 export function SendPurchaseDialog({
@@ -230,6 +231,7 @@ export function SendPurchaseDialog({
   regeneratingDocNo = false,
   smlReadiness,
   smlReadinessLoading = false,
+  canOverrideIncompleteEmailGroup = false,
 }: Props) {
   const billType = bill.bill_type === "sale" ? "sale" : "purchase";
   const isSale = billType === "sale";
@@ -264,6 +266,8 @@ export function SendPurchaseDialog({
   const [printPaymentMethod, setPrintPaymentMethod] = useState("");
   const [savingPrintPaymentMethod, setSavingPrintPaymentMethod] = useState(false);
   const [duplicateItemCodesConfirmed, setDuplicateItemCodesConfirmed] = useState(false);
+  const [allowIncompleteEmailGroup, setAllowIncompleteEmailGroup] = useState(false);
+  const [incompleteEmailGroupReason, setIncompleteEmailGroupReason] = useState("");
 
   const autoPaymentMethod = useMemo(() => {
     return deriveTTPrintPaymentMethod(party);
@@ -321,6 +325,12 @@ export function SendPurchaseDialog({
     [bill],
   );
   const duplicateItemCodesNeedConfirmation = duplicateItemCodeWarnings.length > 0;
+  const emailGroupExpectedCount = bill.email_group?.expected_order_count ?? 0;
+  const emailGroupResolvedCount = bill.email_group?.resolved_order_count ?? 0;
+  const emailGroupIncomplete =
+    isMarketplacePurchaseEmail &&
+    emailGroupExpectedCount > 0 &&
+    bill.email_group?.ingestion_status !== "complete";
   const canConfirm =
     smlReady &&
     !!effectivePartyCode &&
@@ -333,6 +343,7 @@ export function SendPurchaseDialog({
     smlDocDateReady &&
     printPaymentMethodAllowed &&
     (!duplicateItemCodesNeedConfirmation || duplicateItemCodesConfirmed) &&
+    (!emailGroupIncomplete || !allowIncompleteEmailGroup || incompleteEmailGroupReason.trim().length >= 3) &&
     !savingPrintPaymentMethod;
   const missingFields = useMemo(
     () =>
@@ -507,6 +518,8 @@ export function SendPurchaseDialog({
     );
     setSavingPrintPaymentMethod(false);
     setDuplicateItemCodesConfirmed(false);
+    setAllowIncompleteEmailGroup(false);
+    setIncompleteEmailGroupReason("");
     const storedMethod = (bill.print_payment_method || "").trim();
     const initialPartyCode = payloadString(payload, "cust_code") ||
       (defaults?.party_code ?? "");
@@ -578,6 +591,12 @@ export function SendPurchaseDialog({
       confirm_duplicate_item_codes: duplicateItemCodesNeedConfirmation
         ? duplicateItemCodesConfirmed
         : undefined,
+      allow_incomplete_email_group: emailGroupIncomplete && allowIncompleteEmailGroup
+        ? true
+        : undefined,
+      incomplete_email_group_reason: emailGroupIncomplete && allowIncompleteEmailGroup
+        ? incompleteEmailGroupReason.trim()
+        : undefined,
     });
   };
 
@@ -628,6 +647,41 @@ export function SendPurchaseDialog({
                     เปิดเครื่อง SML/Postgres ของร้านนี้
                     แล้วกดตรวจอีกครั้งบนแถบแจ้งเตือนด้านบน
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {emailGroupIncomplete && (
+            <div className="rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-foreground">
+                    อีเมลนี้ยังอ่านได้ไม่ครบ {emailGroupResolvedCount.toLocaleString('th-TH')}/{emailGroupExpectedCount.toLocaleString('th-TH')} คำสั่งซื้อ
+                  </div>
+                  <div className="mt-0.5 text-muted-foreground">
+                    ตรวจรายการที่ขาดจากส่วนหลักฐานต้นฉบับก่อนส่ง SML เพื่อป้องกันเอกสารไม่ครบชุด
+                  </div>
+                  {canOverrideIncompleteEmailGroup && (
+                    <div className="mt-2 space-y-2 border-t border-warning/25 pt-2">
+                      <label className="flex items-start gap-2 text-foreground">
+                        <Checkbox
+                          checked={allowIncompleteEmailGroup}
+                          onCheckedChange={(checked) => setAllowIncompleteEmailGroup(checked === true)}
+                        />
+                        <span>ผู้ดูแลยืนยันให้ส่งทั้งที่อีเมลยังไม่ครบ</span>
+                      </label>
+                      {allowIncompleteEmailGroup && (
+                        <Input
+                          value={incompleteEmailGroupReason}
+                          onChange={(event) => setIncompleteEmailGroupReason(event.target.value)}
+                          placeholder="ระบุเหตุผลอย่างน้อย 3 ตัวอักษร"
+                          className="h-8 text-xs"
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

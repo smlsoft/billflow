@@ -36,25 +36,59 @@ type Bill struct {
 }
 
 type BillEmailGroup struct {
-	MessageID                      string                 `json:"message_id"`
-	GroupKey                       string                 `json:"group_key"`
-	Subject                        string                 `json:"subject"`
-	From                           string                 `json:"from"`
-	OrderCount                     int                    `json:"order_count"`
-	HasPrintableEmail              bool                   `json:"has_printable_email"`
-	PrintCount                     int                    `json:"print_count"`
-	LastPrintedAt                  *time.Time             `json:"last_printed_at,omitempty"`
-	LastPrintedByEmail             string                 `json:"last_printed_by_email,omitempty"`
-	LastPrintedByName              string                 `json:"last_printed_by_name,omitempty"`
-	PrintReady                     bool                   `json:"print_ready"`
-	PrintBlockReason               string                 `json:"print_block_reason,omitempty"`
-	MissingSMLOrders               []string               `json:"missing_sml_orders,omitempty"`
-	MissingPaymentMethodOrders     []string               `json:"missing_payment_method_orders,omitempty"`
-	NonMatchingPaymentMethodOrders []string               `json:"non_matching_payment_method_orders,omitempty"`
-	PrintPolicy                    MarketplacePrintPolicy `json:"print_policy,omitempty"`
-	PrintPolicyNote                string                 `json:"print_policy_note,omitempty"`
-	RelatedBills                   []BillEmailRelatedBill `json:"related_bills,omitempty"`
-	PrintEvents                    []EmailPrintEvent      `json:"print_events,omitempty"`
+	MessageID                      string                       `json:"message_id"`
+	GroupKey                       string                       `json:"group_key"`
+	Subject                        string                       `json:"subject"`
+	From                           string                       `json:"from"`
+	OrderCount                     int                          `json:"order_count"`
+	IngestionStatus                string                       `json:"ingestion_status,omitempty"`
+	ExpectedOrderCount             int                          `json:"expected_order_count,omitempty"`
+	ResolvedOrderCount             int                          `json:"resolved_order_count,omitempty"`
+	MissingOrderCount              int                          `json:"missing_order_count,omitempty"`
+	IngestionFailureCode           string                       `json:"ingestion_failure_code,omitempty"`
+	IngestionOrders                []MarketplaceEmailGroupOrder `json:"ingestion_orders,omitempty"`
+	IMAPAccountID                  string                       `json:"imap_account_id,omitempty"`
+	HasPrintableEmail              bool                         `json:"has_printable_email"`
+	PrintCount                     int                          `json:"print_count"`
+	LastPrintedAt                  *time.Time                   `json:"last_printed_at,omitempty"`
+	LastPrintedByEmail             string                       `json:"last_printed_by_email,omitempty"`
+	LastPrintedByName              string                       `json:"last_printed_by_name,omitempty"`
+	PrintReady                     bool                         `json:"print_ready"`
+	PrintBlockReason               string                       `json:"print_block_reason,omitempty"`
+	MissingSMLOrders               []string                     `json:"missing_sml_orders,omitempty"`
+	MissingPaymentMethodOrders     []string                     `json:"missing_payment_method_orders,omitempty"`
+	NonMatchingPaymentMethodOrders []string                     `json:"non_matching_payment_method_orders,omitempty"`
+	PrintPolicy                    MarketplacePrintPolicy       `json:"print_policy,omitempty"`
+	PrintPolicyNote                string                       `json:"print_policy_note,omitempty"`
+	RelatedBills                   []BillEmailRelatedBill       `json:"related_bills,omitempty"`
+	PrintEvents                    []EmailPrintEvent            `json:"print_events,omitempty"`
+}
+
+// MarketplaceEmailGroup is the durable reconciliation record for every
+// marketplace purchase email. It tracks the source order IDs independently
+// from bills that were successfully created from the email.
+type MarketplaceEmailGroup struct {
+	ID                   string                       `json:"id"`
+	Source               string                       `json:"source"`
+	MessageID            string                       `json:"message_id"`
+	IMAPAccountID        string                       `json:"imap_account_id,omitempty"`
+	IMAPMailbox          string                       `json:"imap_mailbox,omitempty"`
+	Subject              string                       `json:"subject,omitempty"`
+	From                 string                       `json:"from,omitempty"`
+	Status               string                       `json:"status"`
+	ExpectedOrderCount   int                          `json:"expected_order_count"`
+	ResolvedOrderCount   int                          `json:"resolved_order_count"`
+	MissingOrderCount    int                          `json:"missing_order_count"`
+	FailureCode          string                       `json:"failure_code,omitempty"`
+	RepresentativeBillID string                       `json:"representative_bill_id,omitempty"`
+	Orders               []MarketplaceEmailGroupOrder `json:"orders,omitempty"`
+}
+
+type MarketplaceEmailGroupOrder struct {
+	OrderID   string `json:"order_id"`
+	BillID    string `json:"bill_id,omitempty"`
+	Status    string `json:"status"`
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 type BillEmailRelatedBill struct {
@@ -152,6 +186,7 @@ type BillListFilter struct {
 	BillType           string `form:"bill_type"`
 	DocumentRoute      string `form:"document_route"`
 	EmailAccountID     string `form:"email_account_id"`
+	EmailCompleteness  string `form:"email_completeness"` // "attention" = source email has unresolved orders
 	ShopeeStatus       string `form:"shopee_status"`
 	ShopeeShopID       string `form:"shopee_shop_id"`
 	Search             string `form:"search"`

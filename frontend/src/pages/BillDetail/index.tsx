@@ -432,6 +432,7 @@ export default function BillDetail() {
           regeneratingDocNo={refreshingDocNo}
           smlReadiness={smlReadiness}
           smlReadinessLoading={smlReadinessLoading}
+          canOverrideIncompleteEmailGroup={user?.role === 'admin'}
         />
       )}
       <SMLSendProgressDialog

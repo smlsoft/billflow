@@ -46,6 +46,7 @@ type BillHandler struct {
 	smlReadiness         *sml.ReadinessChecker          // fail-closed guard for tenant DB availability
 	appSettingsRepo      *repository.AppSettingsRepo    // runtime: sml.stock_request_url read per-send
 	marketplaceAliasRepo *repository.MarketplaceAliasRepo
+	emailGroupRepo       *repository.MarketplaceEmailGroupRepo
 	log                  *zap.Logger
 }
 
@@ -53,6 +54,12 @@ type BillHandler struct {
 // edits without expanding the constructor used by older tests.
 func (h *BillHandler) SetMarketplaceAliasRepo(repo *repository.MarketplaceAliasRepo) {
 	h.marketplaceAliasRepo = repo
+}
+
+// SetMarketplaceEmailGroupRepo enables source-email completeness checks before
+// marketplace purchase bills are sent to SML.
+func (h *BillHandler) SetMarketplaceEmailGroupRepo(repo *repository.MarketplaceEmailGroupRepo) {
+	h.emailGroupRepo = repo
 }
 
 func NewBillHandler(
@@ -685,6 +692,25 @@ func (h *BillHandler) Counts(c *gin.Context) {
 	c.JSON(http.StatusOK, counts)
 }
 
+// GET /api/bills/email-groups/attention
+// Lists unresolved marketplace source emails, including ones where no bill was
+// created at all. That makes parser/AI failures visible without email-by-email
+// manual comparison.
+func (h *BillHandler) ListMarketplaceEmailGroupAttention(c *gin.Context) {
+	if h.emailGroupRepo == nil {
+		c.JSON(http.StatusOK, gin.H{"data": []models.MarketplaceEmailGroup{}})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	groups, err := h.emailGroupRepo.ListAttention(c.Query("source"), c.Query("email_account_id"), limit)
+	if err != nil {
+		h.log.Error("list marketplace email group attention", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": groups})
+}
+
 // GET /api/bills/email-print-candidates
 func (h *BillHandler) EmailPrintCandidates(c *gin.Context) {
 	var f models.BillListFilter
@@ -993,21 +1019,23 @@ func (h *BillHandler) Timeline(c *gin.Context) {
 // Manual remark is allowed only for non-marketplace-email routes; Shopee and
 // Lazada email purchase map SML remark from seller_name/supplier_name.
 type RetryRequest struct {
-	PartyCode                 string   `json:"party_code"`
-	PartyName                 string   `json:"party_name"`
-	DocNo                     string   `json:"doc_no"`
-	Remark                    string   `json:"remark"`
-	Remark2                   string   `json:"remark_2"`
-	BranchCode                string   `json:"branch_code"`
-	SaleCode                  string   `json:"sale_code"`
-	UnitCode                  string   `json:"unit_code"`
-	DocTime                   string   `json:"doc_time"`
-	WHCode                    string   `json:"wh_code"`
-	ShelfCode                 string   `json:"shelf_code"`
-	VATType                   *int     `json:"vat_type"`
-	VATRate                   *float64 `json:"vat_rate"`
-	InquiryType               *int     `json:"inquiry_type"`
-	ConfirmDuplicateItemCodes bool     `json:"confirm_duplicate_item_codes"`
+	PartyCode                  string   `json:"party_code"`
+	PartyName                  string   `json:"party_name"`
+	DocNo                      string   `json:"doc_no"`
+	Remark                     string   `json:"remark"`
+	Remark2                    string   `json:"remark_2"`
+	BranchCode                 string   `json:"branch_code"`
+	SaleCode                   string   `json:"sale_code"`
+	UnitCode                   string   `json:"unit_code"`
+	DocTime                    string   `json:"doc_time"`
+	WHCode                     string   `json:"wh_code"`
+	ShelfCode                  string   `json:"shelf_code"`
+	VATType                    *int     `json:"vat_type"`
+	VATRate                    *float64 `json:"vat_rate"`
+	InquiryType                *int     `json:"inquiry_type"`
+	ConfirmDuplicateItemCodes  bool     `json:"confirm_duplicate_item_codes"`
+	AllowIncompleteEmailGroup  bool     `json:"allow_incomplete_email_group"`
+	IncompleteEmailGroupReason string   `json:"incomplete_email_group_reason"`
 }
 
 type purchaseCreditorUpdateRequest struct {
@@ -1029,6 +1057,7 @@ type retrySendOptions struct {
 	BulkItemSequence   int
 	SuppressLineAlert  bool
 	LazadaChargeGroups map[string]*repository.LazadaChargeGroup
+	UserRole           string
 }
 
 type retrySendResult struct {
@@ -1126,11 +1155,22 @@ func (h *BillHandler) Retry(c *gin.Context) {
 	// Parse optional request body (party_code / remark overrides for purchase bills)
 	var req RetryRequest
 	_ = c.ShouldBindJSON(&req)
+	if req.AllowIncompleteEmailGroup {
+		if c.GetString("user_role") != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "only admin can override an incomplete email group"})
+			return
+		}
+		if len([]rune(strings.TrimSpace(req.IncompleteEmailGroupReason))) < 3 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "incomplete_email_group_reason is required for override"})
+			return
+		}
+	}
 
 	result := h.sendBillToSML(bill, req, retrySendOptions{
-		UserID:  c.GetString("user_id"),
-		TraceID: c.GetString("trace_id"),
-		Via:     "retry",
+		UserID:   c.GetString("user_id"),
+		TraceID:  c.GetString("trace_id"),
+		Via:      "retry",
+		UserRole: c.GetString("user_role"),
 	})
 	if result.HTTPStatus == http.StatusOK {
 		resp := gin.H{"message": result.Message, "doc_no": result.DocNo}
@@ -1605,6 +1645,9 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 			Skipped:    true,
 		}
 	}
+	if result := h.guardMarketplaceEmailGroupCompleteness(bill, req, opts); result != nil {
+		return *result
+	}
 	if err := validateRemark2(req.Remark2); err != nil {
 		return retrySendResult{HTTPStatus: http.StatusBadRequest, Error: err.Error()}
 	}
@@ -1711,6 +1754,70 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 		h.logHiddenItemCodeWarnings(bill, warnings, opts, "sml_send")
 		return result
 	}
+}
+
+func (h *BillHandler) guardMarketplaceEmailGroupCompleteness(bill *models.Bill, req RetryRequest, opts retrySendOptions) *retrySendResult {
+	if h.emailGroupRepo == nil || bill == nil || bill.EmailGroup == nil || !isMarketplacePurchaseEmailBill(bill) {
+		return nil
+	}
+	messageID := strings.TrimSpace(bill.EmailGroup.MessageID)
+	if messageID == "" {
+		return nil
+	}
+	group, err := h.emailGroupRepo.Get(bill.Source, messageID)
+	if err != nil {
+		if h.log != nil {
+			h.log.Warn("load marketplace email group before SML send failed", zap.String("bill_id", bill.ID), zap.Error(err))
+		}
+		return &retrySendResult{HTTPStatus: http.StatusServiceUnavailable, Error: "ตรวจความครบของอีเมลก่อนส่ง SML ไม่สำเร็จ"}
+	}
+	if group == nil || group.Status == "complete" || group.ExpectedOrderCount == 0 {
+		return nil
+	}
+
+	detail := map[string]interface{}{
+		"message_id":           group.MessageID,
+		"group_id":             group.ID,
+		"group_status":         group.Status,
+		"expected_order_count": group.ExpectedOrderCount,
+		"resolved_order_count": group.ResolvedOrderCount,
+		"missing_order_count":  group.MissingOrderCount,
+		"failure_code":         group.FailureCode,
+		"via":                  opts.Via,
+	}
+	message := fmt.Sprintf("อีเมลนี้ยังอ่านคำสั่งซื้อไม่ครบ (%d/%d) จึงยังส่ง SML ไม่ได้", group.ResolvedOrderCount, group.ExpectedOrderCount)
+	if h.cfg == nil || !h.cfg.EnforceEmailGroups {
+		if h.log != nil {
+			h.log.Info("marketplace email group would block SML send", zap.String("bill_id", bill.ID), zap.String("message_id", group.MessageID), zap.Int("resolved", group.ResolvedOrderCount), zap.Int("expected", group.ExpectedOrderCount))
+		}
+		return nil
+	}
+	if req.AllowIncompleteEmailGroup && opts.UserRole == "admin" && len([]rune(strings.TrimSpace(req.IncompleteEmailGroupReason))) >= 3 {
+		detail["override_reason"] = strings.TrimSpace(req.IncompleteEmailGroupReason)
+		h.auditMarketplaceEmailGroupSend("marketplace_email_group_sml_overridden", bill.ID, opts, detail, "warn")
+		return nil
+	}
+	h.auditMarketplaceEmailGroupSend("marketplace_email_group_sml_blocked", bill.ID, opts, detail, "warn")
+	return &retrySendResult{HTTPStatus: http.StatusConflict, Error: message, Skipped: true}
+}
+
+func (h *BillHandler) auditMarketplaceEmailGroupSend(action, billID string, opts retrySendOptions, detail map[string]interface{}, level string) {
+	if h.auditRepo == nil {
+		return
+	}
+	var userID *string
+	if strings.TrimSpace(opts.UserID) != "" {
+		userID = &opts.UserID
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action:   action,
+		TargetID: &billID,
+		UserID:   userID,
+		Source:   "marketplace_email",
+		Level:    level,
+		TraceID:  opts.TraceID,
+		Detail:   detail,
+	})
 }
 
 func hiddenWarningFromItem(billID string, item models.BillItem, code string, meta itemcode.Analysis) hiddenItemCodeWarning {

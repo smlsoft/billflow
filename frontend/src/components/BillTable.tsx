@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import { Fragment, type MouseEvent, type ReactNode } from 'react'
-import { Archive, Copy, CreditCard, ExternalLink, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
+import { AlertTriangle, Archive, CheckCircle2, Copy, CreditCard, ExternalLink, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -676,6 +676,18 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
   const hasOrderCount = orderCount >= 1
   const printCount = group.print_count ?? 0
   const hasPrintHistory = printCount > 0
+  const ingestionStatus = group.ingestion_status || ''
+  const expectedCount = group.expected_order_count ?? orderCount
+  const resolvedCount = group.resolved_order_count ?? orderCount
+  const hasIngestionStatus = ingestionStatus !== '' && expectedCount > 0
+  const isIncomplete = hasIngestionStatus && ingestionStatus !== 'complete'
+  const ingestionLabel = !hasIngestionStatus
+    ? ''
+    : ingestionStatus === 'processing'
+      ? 'กำลังอ่านอีเมล'
+      : ingestionStatus === 'complete'
+        ? `ครบ ${resolvedCount.toLocaleString('th-TH')}/${expectedCount.toLocaleString('th-TH')}`
+        : `ขาด ${Math.max(group.missing_order_count ?? expectedCount - resolvedCount, 0).toLocaleString('th-TH')}/${expectedCount.toLocaleString('th-TH')}`
   const printedAt = group.last_printed_at ? dayjs(group.last_printed_at) : null
   const printedAtLabel = printedAt?.isValid() ? printedAt.format('DD/MM/YYYY HH:mm') : ''
   const printedBy = group.last_printed_by_name || group.last_printed_by_email || ''
@@ -690,6 +702,7 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
     group.subject ? `Subject: ${group.subject}` : '',
     group.from ? `From: ${group.from}` : '',
     `Message-ID: ${group.message_id}`,
+    hasIngestionStatus ? `สถานะอีเมล: ${ingestionLabel}` : '',
     printTooltip,
   ].filter(Boolean).join('\n')
 
@@ -707,6 +720,18 @@ function EmailGroupLine({ bill }: { bill: Bill }) {
       {hasOrderCount && (
         <span className={`shrink-0 ${isMultiOrder ? 'font-medium' : 'font-normal'}`}>
           · {orderCount.toLocaleString('th-TH')} คำสั่งซื้อ
+        </span>
+      )}
+      {hasIngestionStatus && (
+        <span
+          className={`inline-flex shrink-0 items-center gap-1 rounded px-1 py-0 text-[10px] font-medium ${
+            isIncomplete
+              ? 'bg-warning/15 text-warning'
+              : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
+          }`}
+        >
+          {isIncomplete ? <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" /> : <CheckCircle2 className="h-2.5 w-2.5" aria-hidden="true" />}
+          {ingestionLabel}
         </span>
       )}
       {hasPrintHistory && (

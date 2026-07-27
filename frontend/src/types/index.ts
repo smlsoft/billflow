@@ -155,6 +155,13 @@ export interface BillEmailGroup {
   subject?: string
   from?: string
   order_count: number
+  ingestion_status?: 'processing' | 'complete' | 'attention' | 'legacy_unknown' | string
+  expected_order_count?: number
+  resolved_order_count?: number
+  missing_order_count?: number
+  ingestion_failure_code?: string
+  ingestion_orders?: MarketplaceEmailGroupOrder[]
+  imap_account_id?: string
   has_printable_email?: boolean
   print_count?: number
   last_printed_at?: string | null
@@ -169,6 +176,29 @@ export interface BillEmailGroup {
   print_policy_note?: string
   related_bills?: BillEmailRelatedBill[]
   print_events?: EmailPrintEvent[]
+}
+
+export interface MarketplaceEmailGroupOrder {
+  order_id: string
+  bill_id?: string
+  status: 'expected' | 'created' | 'existing' | 'missing' | 'failed' | 'archived' | string
+  error_code?: string
+}
+
+export interface MarketplaceEmailGroupAttention {
+  id: string
+  source: string
+  message_id: string
+  imap_account_id?: string
+  imap_mailbox?: string
+  subject?: string
+  from?: string
+  status: 'processing' | 'attention' | string
+  expected_order_count: number
+  resolved_order_count: number
+  missing_order_count: number
+  failure_code?: string
+  representative_bill_id?: string
 }
 
 export interface MarketplacePrintPolicy {

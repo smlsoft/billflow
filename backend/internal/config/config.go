@@ -104,6 +104,9 @@ type Config struct {
 
 	// Auto-confirm
 	AutoConfirmThreshold float64
+	// EnforceEmailGroups prevents an incomplete marketplace email
+	// group from being sent to SML. It is opt-in for a staged rollout.
+	EnforceEmailGroups bool
 
 	// Cron
 	InsightCronHour       int
@@ -173,6 +176,7 @@ func Load() *Config {
 		ShopeeOpenAPIPartnerKey: getEnv("SHOPEE_OPEN_API_PARTNER_KEY", ""),
 		ShopeeOpenAPIRedirect:   getEnv("SHOPEE_OPEN_API_REDIRECT_URL", ""),
 		AutoConfirmThreshold:    getEnvFloat("AUTO_CONFIRM_THRESHOLD", 0.85),
+		EnforceEmailGroups:      getEnvBool("EMAIL_GROUP_COMPLETENESS_ENFORCED", false),
 		InsightCronHour:         getEnvInt("INSIGHT_CRON_HOUR", 8),
 		BackupCronHour:          getEnvInt("BACKUP_CRON_HOUR", 0),
 		DiskWarnPercent:         getEnvInt("DISK_WARN_PERCENT", 90),

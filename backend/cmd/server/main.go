@@ -106,6 +106,7 @@ func main() {
 	appSettingsRepo := repository.NewAppSettingsRepo(db)
 	aiUsageRepo := repository.NewAIUsageRepo(db)
 	emailFailureRepo := repository.NewEmailIngestionFailureRepo(db)
+	marketplaceEmailGroupRepo := repository.NewMarketplaceEmailGroupRepo(db)
 	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
 		logger.Warn("apply DB instance settings", zap.Error(err))
 	}
@@ -361,6 +362,7 @@ func main() {
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
 	billH := handlers.NewBillHandler(billRepo, userRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, telegramSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
 	billH.SetMarketplaceAliasRepo(aliasRepo)
+	billH.SetMarketplaceEmailGroupRepo(marketplaceEmailGroupRepo)
 	billH.RecoverInterruptedBulkSendJobs()
 	creditCardReportH := handlers.NewCreditCardReportHandler(creditCardReportRepo, billRepo, auditLogRepo, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, catalogRepo, auditLogRepo, logger)
@@ -399,6 +401,7 @@ func main() {
 	emailH.SetChannelDefaults(channelDefaultRepo)
 	emailH.SetArtifactService(artifactSvc)
 	emailH.SetEmailIngestionFailureRepo(emailFailureRepo)
+	emailH.SetMarketplaceEmailGroupRepo(marketplaceEmailGroupRepo)
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, cfg, cfg.AutoConfirmThreshold, logger)
 	go func() {
 		time.Sleep(3 * time.Second)
@@ -472,6 +475,7 @@ func main() {
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)
+		api.GET("/bills/email-groups/attention", billH.ListMarketplaceEmailGroupAttention)
 		api.GET("/bills/email-inboxes", middleware.RequireRole("admin", "staff", "viewer"), imapSettingsH.ListFilterOptions)
 		api.GET("/bills/email-print-candidates", billH.EmailPrintCandidates)
 		api.POST("/bills/email-print-events/bulk", middleware.RequireRole("admin", "staff"), billH.RecordEmailPrintEventsBulk)

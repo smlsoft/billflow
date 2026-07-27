@@ -93,6 +93,7 @@ type EmailHandler struct {
 	// Source-artifact storage (PDF/HTML/envelope)
 	artifactSvc *artifact.Service
 	failureRepo *repository.EmailIngestionFailureRepo
+	emailGroupRepo *repository.MarketplaceEmailGroupRepo
 }
 
 func NewEmailHandler(
@@ -152,6 +153,12 @@ func (h *EmailHandler) SetArtifactService(svc *artifact.Service) {
 // investigate and replay them without resetting an entire mailbox.
 func (h *EmailHandler) SetEmailIngestionFailureRepo(repo *repository.EmailIngestionFailureRepo) {
 	h.failureRepo = repo
+}
+
+// SetMarketplaceEmailGroupRepo stores the source order set for marketplace
+// emails so missing orders remain visible even when no bill was created.
+func (h *EmailHandler) SetMarketplaceEmailGroupRepo(repo *repository.MarketplaceEmailGroupRepo) {
+	h.emailGroupRepo = repo
 }
 
 // saveEmailArtifacts persists the original source files (binary + envelope JSON)

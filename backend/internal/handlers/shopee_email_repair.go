@@ -298,6 +298,11 @@ func (s *ShopeeEmailRepairService) runJob(jobID, billID string) {
 		})
 		return
 	}
+	if s.handler != nil && s.handler.emailGroupRepo != nil && strings.TrimSpace(job.MessageID) != "" {
+		if err := s.handler.emailGroupRepo.Finalize("shopee_shipped", job.MessageID, "", nil); err != nil {
+			s.logWarn("shopee_email_repair: finalize marketplace email group failed", zap.String("job_id", jobID), zap.Error(err))
+		}
+	}
 	if err := s.markJobSucceeded(jobID, result); err != nil {
 		s.logWarn("shopee_email_repair: mark succeeded failed", zap.String("job_id", jobID), zap.Error(err))
 		return

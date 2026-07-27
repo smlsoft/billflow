@@ -174,6 +174,23 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		return err
 	}
 
+	marketplaceRefs := make([]MarketplaceEmailGroupRef, 0, len(bills))
+	for i := range bills {
+		if !isMarketplacePurchaseEmail(bills[i].Source, bills[i].BillType) {
+			continue
+		}
+		if messageID := billEmailMessageID(&bills[i]); messageID != "" {
+			marketplaceRefs = append(marketplaceRefs, MarketplaceEmailGroupRef{
+				Source:    bills[i].Source,
+				MessageID: messageID,
+			})
+		}
+	}
+	ingestionGroups, err := NewMarketplaceEmailGroupRepo(r.db).ListByRefs(marketplaceRefs)
+	if err != nil {
+		return err
+	}
+
 	for i := range bills {
 		messageID := billEmailMessageID(&bills[i])
 		if messageID == "" {
@@ -183,12 +200,19 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 		if stat.OrderCount == 0 {
 			stat.OrderCount = 1
 		}
+		var ingestion *models.MarketplaceEmailGroup
+		if isMarketplacePurchaseEmail(bills[i].Source, bills[i].BillType) {
+			ingestion = ingestionGroups[marketplaceEmailGroupRefKey(bills[i].Source, messageID)]
+			if ingestion != nil && ingestion.ExpectedOrderCount > 0 {
+				stat.OrderCount = ingestion.ExpectedOrderCount
+			}
+		}
 		var lastPrintedAt *time.Time
 		if stat.LastPrintedAt.Valid {
 			t := stat.LastPrintedAt.Time
 			lastPrintedAt = &t
 		}
-		bills[i].EmailGroup = &models.BillEmailGroup{
+		group := &models.BillEmailGroup{
 			MessageID:          messageID,
 			GroupKey:           emailGroupKey(messageID),
 			Subject:            billEmailSubject(&bills[i]),
@@ -200,6 +224,15 @@ func (r *BillRepo) attachEmailGroups(bills []models.Bill) error {
 			LastPrintedByEmail: stat.LastPrintedByEmail,
 			LastPrintedByName:  stat.LastPrintedByName,
 		}
+		if ingestion != nil {
+			group.IngestionStatus = ingestion.Status
+			group.ExpectedOrderCount = ingestion.ExpectedOrderCount
+			group.ResolvedOrderCount = ingestion.ResolvedOrderCount
+			group.MissingOrderCount = ingestion.MissingOrderCount
+			group.IngestionFailureCode = ingestion.FailureCode
+			group.IMAPAccountID = ingestion.IMAPAccountID
+		}
+		bills[i].EmailGroup = group
 	}
 	if err := r.attachPrintReadinessSummaries(bills); err != nil {
 		return err
@@ -265,6 +298,10 @@ func (r *BillRepo) attachPrintReadinessSummaries(bills []models.Bill) error {
 		policy := getPolicy(current)
 		bills[i].EmailGroup.PrintPolicy = policy
 		bills[i].EmailGroup.PrintPolicyNote = models.MarketplacePrintPolicyNote(policy)
+		if emailGroupIngestionIncomplete(bills[i].EmailGroup) {
+			bills[i].EmailGroup.PrintBlockReason = emailGroupIngestionBlockReason(bills[i].EmailGroup)
+			continue
+		}
 
 		_, _, err := evaluateMarketplacePrintRows(bills[i].ID, current, rowsByMessageID[bills[i].EmailGroup.MessageID], getPolicy)
 		if err == nil {
@@ -298,6 +335,21 @@ func (r *BillRepo) attachEmailGroupDetails(b *models.Bill) error {
 	}
 	b.EmailGroup.RelatedBills = related
 	b.EmailGroup.PrintEvents = prints
+	if isMarketplacePurchaseEmail(b.Source, b.BillType) {
+		group, err := NewMarketplaceEmailGroupRepo(r.db).Get(b.Source, b.EmailGroup.MessageID)
+		if err != nil {
+			return err
+		}
+		if group != nil {
+			b.EmailGroup.IngestionStatus = group.Status
+			b.EmailGroup.ExpectedOrderCount = group.ExpectedOrderCount
+			b.EmailGroup.ResolvedOrderCount = group.ResolvedOrderCount
+			b.EmailGroup.MissingOrderCount = group.MissingOrderCount
+			b.EmailGroup.IngestionFailureCode = group.FailureCode
+			b.EmailGroup.IMAPAccountID = group.IMAPAccountID
+			b.EmailGroup.IngestionOrders = group.Orders
+		}
+	}
 	return nil
 }
 
@@ -535,6 +587,16 @@ func (r *BillRepo) validateMarketplaceEmailPrintReady(billID, messageID string) 
 	if !isMarketplacePurchaseEmail(source, billType) {
 		return 0, 0, nil
 	}
+	group, err := NewMarketplaceEmailGroupRepo(r.db).Get(source, messageID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("load marketplace email completeness: %w", err)
+	}
+	if group != nil && group.Status != marketplaceEmailGroupComplete && group.ExpectedOrderCount > 0 {
+		return 0, 0, &EmailPrintReadinessError{
+			Message:       fmt.Sprintf("อีเมลนี้ยังอ่านคำสั่งซื้อไม่ครบ (%d/%d)", group.ResolvedOrderCount, group.ExpectedOrderCount),
+			MissingOrders: marketplaceEmailGroupMissingOrderIDs(group.Orders),
+		}
+	}
 
 	policyCache := map[string]models.MarketplacePrintPolicy{
 		source + "/" + billType: r.channelPrintPolicy(source, billType),
@@ -559,6 +621,27 @@ func (r *BillRepo) validateMarketplaceEmailPrintReady(billID, messageID string) 
 		EffectivePrintPaymentMethod: currentEffectivePaymentMethod,
 	}
 	return evaluateMarketplacePrintRows(billID, current, rows, getPolicy)
+}
+
+func emailGroupIngestionIncomplete(group *models.BillEmailGroup) bool {
+	return group != nil && group.IngestionStatus != "" && group.IngestionStatus != marketplaceEmailGroupComplete && group.ExpectedOrderCount > 0
+}
+
+func emailGroupIngestionBlockReason(group *models.BillEmailGroup) string {
+	if group == nil {
+		return "อีเมลนี้ยังอ่านคำสั่งซื้อไม่ครบ"
+	}
+	return fmt.Sprintf("อีเมลนี้ยังอ่านคำสั่งซื้อไม่ครบ (%d/%d)", group.ResolvedOrderCount, group.ExpectedOrderCount)
+}
+
+func marketplaceEmailGroupMissingOrderIDs(orders []models.MarketplaceEmailGroupOrder) []string {
+	missing := make([]string, 0)
+	for _, order := range orders {
+		if order.Status != marketplaceEmailGroupOrderCreated && order.Status != marketplaceEmailGroupOrderExisting {
+			missing = append(missing, order.OrderID)
+		}
+	}
+	return missing
 }
 
 func isMarketplacePurchaseEmail(source, billType string) bool {

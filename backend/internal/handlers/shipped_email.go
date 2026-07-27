@@ -94,11 +94,38 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 		}
 	}
 
+	// Store the order IDs read directly from the source email before AI runs.
+	// A later mismatch or transient failure must not make the expected orders
+	// disappear from the operator's view.
+	groupFailureCode := ""
+	groupFailureDetail := map[string]interface{}{}
+	if h.emailGroupRepo != nil && strings.TrimSpace(messageID) != "" && len(detectedOrderIDs) > 0 {
+		if err := h.emailGroupRepo.RegisterExpectedOrders(repository.MarketplaceEmailGroupInput{
+			Source:        "shopee_shipped",
+			MessageID:     messageID,
+			IMAPAccountID: source.AccountID,
+			IMAPMailbox:   source.Mailbox,
+			Subject:       subject,
+			From:          from,
+			OrderIDs:      detectedOrderIDs,
+		}); err != nil {
+			return emailservice.ProcessOutcome{}, fmt.Errorf("record source email completeness: %w", err)
+		} else {
+			defer func() {
+				if err := h.emailGroupRepo.Finalize("shopee_shipped", messageID, groupFailureCode, groupFailureDetail); err != nil {
+					h.logger.Warn("shopee_shipped: finalize source email group failed", zap.String("message_id", messageID), zap.Error(err))
+				}
+			}()
+		}
+	}
+
 	if h.catalogSvc == nil {
 		h.logger.Warn("shopee_shipped: catalog service not configured — skipping")
+		groupFailureCode = "catalog_not_configured"
 		return emailservice.ProcessOutcome{}, fmt.Errorf("catalog service not configured")
 	}
 	if h.shopeeOrderExtractor() == nil {
+		groupFailureCode = "ai_not_configured"
 		return emailservice.ProcessOutcome{}, fmt.Errorf("AI client not configured")
 	}
 
@@ -108,16 +135,22 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	if err != nil {
 		var mismatch *shopeeOrderIDMismatchError
 		if errors.As(err, &mismatch) {
+			groupFailureCode = "shopee_order_id_mismatch"
+			groupFailureDetail = shopeeOrderIDMismatchDetail(traceID, mismatch.Expected, mismatch.Validation)
 			return h.quarantineShopeeShippedInvalidOrderIDs(
 				subject, from, plainText, bodyHTML, messageID, source, traceID, mismatch.Expected, mismatch.Validation,
 			)
 		}
 		h.logger.Warn("shopee_shipped: AI extract failed or empty",
 			zap.String("subject", subject), zap.Error(err))
+		groupFailureCode = "ai_extract_failed"
+		groupFailureDetail = map[string]interface{}{"trace_id": traceID}
 		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: %w", err)
 	}
 	if len(orders) == 0 {
 		h.logger.Warn("shopee_shipped: AI extract failed or empty", zap.String("subject", subject))
+		groupFailureCode = "ai_extract_empty"
+		groupFailureDetail = map[string]interface{}{"trace_id": traceID}
 		return emailservice.ProcessOutcome{}, fmt.Errorf("AI extract shopee_shipped: empty orders")
 	}
 	if validation := validateShopeeExtractedOrderIDs(detectedOrderIDs, orders); len(detectedOrderIDs) > 0 && !validation.Valid() {
@@ -129,6 +162,8 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 			zap.Strings("unexpected_order_ids", validation.Unexpected),
 			zap.Strings("duplicate_order_ids", validation.Duplicate),
 		)
+		groupFailureCode = "shopee_order_id_mismatch"
+		groupFailureDetail = shopeeOrderIDMismatchDetail(traceID, detectedOrderIDs, validation)
 		return h.quarantineShopeeShippedInvalidOrderIDs(
 			subject, from, plainText, bodyHTML, messageID, source, traceID, detectedOrderIDs, validation,
 		)
@@ -145,12 +180,14 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	createdCount := 0
 	skippedCount := 0
 	failedCount := 0
+	failedOrderIDs := make([]string, 0)
 	for _, order := range orders {
 		created, err := h.processOneShippedOrder(
 			order, subject, from, bodyText, bodyHTML, messageID, fallbackPrices, traceID, startTime, source,
 		)
 		if err != nil {
 			failedCount++
+			failedOrderIDs = append(failedOrderIDs, normalizeShopeeOrderID(order.OrderID))
 			h.logger.Warn("shopee_shipped: order processing failed",
 				zap.String("order_id", order.OrderID), zap.Error(err))
 		}
@@ -158,6 +195,13 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 			createdCount++
 		} else {
 			skippedCount++
+		}
+	}
+	if failedCount > 0 {
+		groupFailureCode = "order_processing_failed"
+		groupFailureDetail = map[string]interface{}{
+			"trace_id":  traceID,
+			"order_ids": normalizedShopeeOrderIDs(failedOrderIDs),
 		}
 	}
 
@@ -707,6 +751,16 @@ func (h *EmailHandler) quarantineShopeeShippedInvalidOrderIDs(
 		"shopee_shipped_order_ids_quarantined",
 		"ไม่สร้างบิล: เลขคำสั่งซื้อที่ AI อ่านไม่ตรงกับอีเมลต้นทาง ระบบเก็บอีเมลไว้ให้ผู้ดูแลสั่งอ่านซ้ำ",
 	), nil
+}
+
+func shopeeOrderIDMismatchDetail(traceID string, expected []string, validation shopeeOrderIDValidation) map[string]interface{} {
+	return map[string]interface{}{
+		"trace_id":             traceID,
+		"expected_order_ids":   normalizedShopeeOrderIDs(expected),
+		"missing_order_ids":    normalizedShopeeOrderIDs(validation.Missing),
+		"unexpected_order_ids": normalizedShopeeOrderIDs(validation.Unexpected),
+		"duplicate_order_ids":  normalizedShopeeOrderIDs(validation.Duplicate),
+	}
 }
 
 func scopeShopeeTextToOrder(text, orderID string) string {
