@@ -484,6 +484,7 @@ func main() {
 		api.GET("/bills/bulk-send-jobs/active", middleware.RequireRole("admin", "staff"), billH.GetActiveBulkSendJob)
 		api.GET("/bills/bulk-send-jobs/:job_id", middleware.RequireRole("admin", "staff"), billH.GetBulkSendJob)
 		api.POST("/bills/bulk-send-jobs/:job_id/retry-failed", middleware.RequireRole("admin"), billH.RetryFailedBulkSendJob)
+		api.POST("/bills/:id/email-group/reconcile", middleware.RequireRole("admin", "staff"), billH.ReconcileMarketplaceEmailGroup)
 		api.GET("/bills/:id", billH.Get)
 		api.GET("/bills/:id/timeline", billH.Timeline)
 		api.POST("/bills/:id/retry", middleware.RequireRole("admin", "staff"), billH.Retry)

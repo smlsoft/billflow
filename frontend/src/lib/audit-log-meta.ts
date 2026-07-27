@@ -73,6 +73,7 @@ export const ACTION_META: Record<string, ActionMeta> = {
   shopee_email_received: { label: 'รับอีเมล Shopee Order', emoji: '📧', tone: 'info' },
   shopee_shipped_received: { label: 'รับอีเมล Shopee Shipped', emoji: '📦', tone: 'info' },
   shopee_shipped_order_ids_rejected: { label: 'ไม่สร้างบิล: เลขคำสั่งซื้อไม่ตรงอีเมล', emoji: '⛔', tone: 'danger' },
+  marketplace_email_group_reconciled: { label: 'ตรวจความครบอีเมลใหม่', emoji: '🔄', tone: 'info' },
   shopee_email_replay_requested: { label: 'สั่งอ่านอีเมล Shopee ซ้ำ', emoji: '🔄', tone: 'info' },
   lazada_email_received: { label: 'รับอีเมล Lazada', emoji: '📧', tone: 'info' },
   email_print_requested: { label: 'พิมพ์อีเมลต้นทาง', emoji: '🖨️', tone: 'info' },
@@ -350,6 +351,13 @@ export function summarize(log: AuditLog): string {
         duplicate.length ? `เลขซ้ำ ${duplicate.join(', ')}` : '',
       ].filter(Boolean).join(' · ')
     }
+    case 'marketplace_email_group_reconciled':
+      return [
+        d.status === 'complete' ? 'ครบแล้ว' : d.status ? String(d.status) : '',
+        d.resolved_order_count != null && d.expected_order_count != null
+          ? `${Number(d.resolved_order_count).toLocaleString('th-TH')}/${Number(d.expected_order_count).toLocaleString('th-TH')} คำสั่งซื้อ`
+          : '',
+      ].filter(Boolean).join(' · ')
     case 'shopee_email_replay_requested':
       return [
         d.created != null ? `สร้างบิล ${Number(d.created).toLocaleString('th-TH')}` : '',

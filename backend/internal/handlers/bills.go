@@ -711,6 +711,71 @@ func (h *BillHandler) ListMarketplaceEmailGroupAttention(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": groups})
 }
 
+// POST /api/bills/:id/email-group/reconcile
+// Recomputes the source-email completeness record from bills already stored
+// in BillFlow. It does not call AI, create bills, or send anything to SML.
+func (h *BillHandler) ReconcileMarketplaceEmailGroup(c *gin.Context) {
+	billID := c.Param("id")
+	bill, err := h.billRepo.FindByID(billID)
+	if err != nil {
+		h.log.Error("find bill for marketplace email group reconciliation", zap.String("bill_id", billID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	if bill == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bill not found"})
+		return
+	}
+	if h.emailGroupRepo == nil || !isMarketplacePurchaseEmailBill(bill) || bill.EmailGroup == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "บิลนี้ไม่มีข้อมูลอีเมล Marketplace สำหรับตรวจความครบ"})
+		return
+	}
+
+	messageID := strings.TrimSpace(bill.EmailGroup.MessageID)
+	if messageID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "บิลนี้ไม่มี message id ของอีเมลต้นทาง"})
+		return
+	}
+	if err := h.emailGroupRepo.Finalize(bill.Source, messageID, "", nil); err != nil {
+		h.log.Error("reconcile marketplace email group", zap.String("bill_id", bill.ID), zap.String("message_id", messageID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ตรวจความครบของอีเมลไม่สำเร็จ"})
+		return
+	}
+	group, err := h.emailGroupRepo.Get(bill.Source, messageID)
+	if err != nil {
+		h.log.Error("load reconciled marketplace email group", zap.String("bill_id", bill.ID), zap.String("message_id", messageID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "โหลดผลการตรวจความครบของอีเมลไม่สำเร็จ"})
+		return
+	}
+	if group == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "ไม่พบข้อมูลกลุ่มอีเมลต้นทาง"})
+		return
+	}
+
+	if h.auditRepo != nil {
+		var userID *string
+		if uid := strings.TrimSpace(c.GetString("user_id")); uid != "" {
+			userID = &uid
+		}
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action:   "marketplace_email_group_reconciled",
+			TargetID: &bill.ID,
+			UserID:   userID,
+			Source:   bill.Source,
+			Level:    "info",
+			TraceID:  c.GetString("trace_id"),
+			Detail: map[string]interface{}{
+				"message_id":           group.MessageID,
+				"status":               group.Status,
+				"expected_order_count": group.ExpectedOrderCount,
+				"resolved_order_count": group.ResolvedOrderCount,
+				"missing_order_count":  group.MissingOrderCount,
+			},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": group})
+}
+
 // GET /api/bills/email-print-candidates
 func (h *BillHandler) EmailPrintCandidates(c *gin.Context) {
 	var f models.BillListFilter

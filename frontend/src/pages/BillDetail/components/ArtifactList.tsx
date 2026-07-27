@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, Eye, History, Info, Loader2, Paperclip, Printer, Wrench, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Download, ExternalLink, Eye, History, Info, Loader2, Paperclip, Printer, RefreshCw, Wrench, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import axios from 'axios'
 import { toast } from 'sonner'
@@ -41,6 +41,7 @@ interface Props {
   smlPayload?: Record<string, unknown> | null
   onReload?: () => Promise<unknown>
   canRepairMarketplaceEmail?: boolean
+  canReconcileMarketplaceEmail?: boolean
   autoOpenRepair?: boolean
 }
 
@@ -727,12 +728,14 @@ export function ArtifactList({
   smlPayload,
   onReload,
   canRepairMarketplaceEmail = false,
+  canReconcileMarketplaceEmail = false,
   autoOpenRepair = false,
 }: Props) {
   const { items, loading } = useArtifacts(billId)
   const [previewArt, setPreviewArt] = useState<{ id: string; filename: string; contentType: string; displayName: string } | null>(null)
   const [printEvents, setPrintEvents] = useState<EmailPrintEvent[]>(emailGroup?.print_events ?? [])
   const [repairOpen, setRepairOpen] = useState(false)
+  const [reconcilingEmailGroup, setReconcilingEmailGroup] = useState(false)
 
   useEffect(() => {
     if (canRepairMarketplaceEmail && autoOpenRepair) {
@@ -780,6 +783,20 @@ export function ArtifactList({
     } catch (err) {
       console.error('artifact print failed', err)
       toast.warning('บันทึกประวัติการพิมพ์แล้ว แต่เปิดหน้าพิมพ์ไม่สำเร็จ')
+    }
+  }
+
+  const handleReconcileEmailGroup = async () => {
+    if (reconcilingEmailGroup) return
+    setReconcilingEmailGroup(true)
+    try {
+      await api.post(`/api/bills/${billId}/email-group/reconcile`)
+      await onReload?.()
+      toast.success('ตรวจความครบของอีเมลใหม่แล้ว')
+    } catch (err) {
+      toast.error(apiErrorMessage(err, 'ตรวจความครบของอีเมลไม่สำเร็จ'))
+    } finally {
+      setReconcilingEmailGroup(false)
     }
   }
 
@@ -858,6 +875,9 @@ export function ArtifactList({
             billId={billId}
             emailGroup={emailGroup}
             printEvents={printEvents}
+            canReconcile={canReconcileMarketplaceEmail}
+            reconciling={reconcilingEmailGroup}
+            onReconcile={handleReconcileEmailGroup}
           />
 
           <div className="space-y-1">
@@ -1273,10 +1293,16 @@ function EmailGroupContext({
   billId,
   emailGroup,
   printEvents,
+  canReconcile = false,
+  reconciling = false,
+  onReconcile,
 }: {
   billId: string
   emailGroup?: BillEmailGroup | null
   printEvents: EmailPrintEvent[]
+  canReconcile?: boolean
+  reconciling?: boolean
+  onReconcile?: () => void
 }) {
   if (!emailGroup?.message_id) return null
 
@@ -1309,6 +1335,19 @@ function EmailGroupContext({
             <div className="mt-1 text-warning/90">
               ระบบจะไม่อนุญาตให้พิมพ์อีเมลกลุ่มนี้ และเมื่อเปิดการป้องกันในระบบ จะไม่อนุญาตให้ส่งเข้า SML จนกว่าจะกู้ข้อมูลครบ
             </div>
+          )}
+          {isIncomplete && canReconcile && onReconcile && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2 h-7 gap-1.5 text-xs"
+              disabled={reconciling}
+              onClick={onReconcile}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${reconciling ? 'animate-spin' : ''}`} />
+              ตรวจความครบใหม่
+            </Button>
           )}
           {emailGroup.ingestion_orders && emailGroup.ingestion_orders.length > 0 && (
             <EmailGroupOrderList orders={emailGroup.ingestion_orders} currentBillID={billId} />

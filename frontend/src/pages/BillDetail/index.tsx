@@ -302,6 +302,10 @@ export default function BillDetail() {
     (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
     bill.bill_type === 'purchase' &&
     !bill.archived_at
+  const canReconcileMarketplaceEmail =
+    (user?.role === 'admin' || user?.role === 'staff') &&
+    (bill.source === 'shopee_shipped' || bill.source === 'lazada_email') &&
+    bill.bill_type === 'purchase'
   const shouldOpenRepairDialog = new URLSearchParams(location.search).get('open_repair') === '1'
 
   const handleItemDeleted = (itemId: string) => {
@@ -412,6 +416,7 @@ export default function BillDetail() {
             smlPayload={bill.sml_payload}
             onReload={reloadBill}
             canRepairMarketplaceEmail={canRepairMarketplaceEmail}
+            canReconcileMarketplaceEmail={canReconcileMarketplaceEmail}
             autoOpenRepair={shouldOpenRepairDialog}
           />
           <BillTimeline billId={bill.id} shopeeEvents={bill.shopee_events ?? []} />

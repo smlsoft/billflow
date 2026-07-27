@@ -28,6 +28,14 @@ type marketplaceEmailGroupOrderState struct {
 	Status string
 }
 
+type marketplaceEmailGroupOrderCandidate struct {
+	OrderRowID  string
+	OrderID     string
+	BillID      string
+	Archived    bool
+	SameMessage bool
+}
+
 func marketplaceEmailGroupCounts(orders []marketplaceEmailGroupOrderState) (resolved, missing int, status string) {
 	for _, order := range orders {
 		switch order.Status {
@@ -199,28 +207,46 @@ func (r *MarketplaceEmailGroupRepo) Finalize(source, messageID, failureCode stri
 	}
 	defer rows.Close()
 
-	states := []marketplaceEmailGroupOrderState{}
+	candidates := make([]marketplaceEmailGroupOrderCandidate, 0)
 	for rows.Next() {
-		var orderRowID, orderID, billID string
-		var archived, sameMessage bool
-		if err := rows.Scan(&orderRowID, &orderID, &billID, &archived, &sameMessage); err != nil {
+		candidate := marketplaceEmailGroupOrderCandidate{}
+		if err := rows.Scan(
+			&candidate.OrderRowID,
+			&candidate.OrderID,
+			&candidate.BillID,
+			&candidate.Archived,
+			&candidate.SameMessage,
+		); err != nil {
 			return err
 		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// PostgreSQL uses one connection per transaction. Release the result set
+	// before issuing UPDATE statements on that same transaction.
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	states := make([]marketplaceEmailGroupOrderState, 0, len(candidates))
+	for _, candidate := range candidates {
 		orderStatus := marketplaceEmailGroupOrderMissing
 		errorCode := failureCode
 		var billIDArg any
-		if billID != "" && !archived {
-			billIDArg = billID
+		if candidate.BillID != "" && !candidate.Archived {
+			billIDArg = candidate.BillID
 			errorCode = ""
-			if sameMessage {
+			if candidate.SameMessage {
 				orderStatus = marketplaceEmailGroupOrderCreated
 			} else {
 				orderStatus = marketplaceEmailGroupOrderExisting
 			}
-		} else if archived {
+		} else if candidate.Archived {
 			orderStatus = marketplaceEmailGroupOrderArchived
 			errorCode = "bill_archived"
-			billIDArg = billID
+			billIDArg = candidate.BillID
 		} else if failureCode != "" {
 			orderStatus = marketplaceEmailGroupOrderFailed
 		}
@@ -233,15 +259,9 @@ func (r *MarketplaceEmailGroupRepo) Finalize(source, messageID, failureCode stri
 			       error_detail=CASE WHEN $4='' THEN '{}'::jsonb ELSE $5::jsonb END,
 			       resolved_at=CASE WHEN $3 IN ('created','existing') THEN NOW() ELSE NULL END,
 			       updated_at=NOW()
-			 WHERE id=$1::uuid`, orderRowID, billIDArg, orderStatus, errorCode, string(detail)); err != nil {
-			return fmt.Errorf("update marketplace email group order %s: %w", orderID, err)
+			 WHERE id=$1::uuid`, candidate.OrderRowID, billIDArg, orderStatus, errorCode, string(detail)); err != nil {
+			return fmt.Errorf("update marketplace email group order %s: %w", candidate.OrderID, err)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
 	}
 	resolved, missing, groupStatus := marketplaceEmailGroupCounts(states)
 	if groupStatus == marketplaceEmailGroupComplete {
