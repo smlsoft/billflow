@@ -20,12 +20,19 @@ type IMAPSettingsHandler struct {
 	repo        *repository.ImapAccountRepo
 	jobRepo     *repository.IMAPPollJobRepo
 	coordinator *emailservice.Coordinator
+	billRepo    *repository.BillRepo
+	failureRepo *repository.EmailIngestionFailureRepo
+	auditRepo   *repository.AuditLogRepo
 	logger      *zap.Logger
 }
 
 type resetIMAPProgressRequest struct {
 	LookbackDays *int `json:"lookback_days"`
 	PollNow      bool `json:"poll_now"`
+}
+
+type replayIMAPMessageRequest struct {
+	MessageID string `json:"message_id"`
 }
 
 type imapAccountFilterOption struct {
@@ -38,9 +45,15 @@ func NewIMAPSettingsHandler(
 	repo *repository.ImapAccountRepo,
 	jobRepo *repository.IMAPPollJobRepo,
 	coordinator *emailservice.Coordinator,
+	billRepo *repository.BillRepo,
+	failureRepo *repository.EmailIngestionFailureRepo,
+	auditRepo *repository.AuditLogRepo,
 	logger *zap.Logger,
 ) *IMAPSettingsHandler {
-	return &IMAPSettingsHandler{repo: repo, jobRepo: jobRepo, coordinator: coordinator, logger: logger}
+	return &IMAPSettingsHandler{
+		repo: repo, jobRepo: jobRepo, coordinator: coordinator,
+		billRepo: billRepo, failureRepo: failureRepo, auditRepo: auditRepo, logger: logger,
+	}
 }
 
 // List returns all accounts. Passwords are scrubbed before sending to the client
@@ -179,6 +192,67 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 		return
 	}
 	resp := imapPollResponse(res)
+	c.JSON(http.StatusOK, resp)
+}
+
+// ReplayShopeeMessage reprocesses exactly one Shopee email by Message-ID. It
+// is deliberately admin-only and does not reset the rest of the mailbox.
+func (h *IMAPSettingsHandler) ReplayShopeeMessage(c *gin.Context) {
+	id := c.Param("id")
+	var req replayIMAPMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	req.MessageID = strings.TrimSpace(req.MessageID)
+	if req.MessageID == "" || len(req.MessageID) > 512 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "message_id is required"})
+		return
+	}
+	account, err := h.repo.GetByID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if account == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		return
+	}
+	if account.Channel != "shopee" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "replay is available only for Shopee mailboxes"})
+		return
+	}
+	cleared := int64(0)
+	if h.billRepo != nil {
+		cleared, err = h.billRepo.ClearProcessedEmailSummary("shopee_shipped", req.MessageID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "clear previous email marker: " + err.Error()})
+			return
+		}
+	}
+	res, err := h.coordinator.ReplayMessage(id, req.MessageID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if h.failureRepo != nil && res.Err == nil && res.Summary.Created+res.Summary.UpdatedExisting > 0 {
+		if err := h.failureRepo.Resolve("shopee_shipped", req.MessageID, "shopee_order_id_mismatch"); err != nil {
+			h.logger.Warn("imap replay failure resolution failed", zap.String("message_id", req.MessageID), zap.Error(err))
+		}
+	}
+	if h.auditRepo != nil {
+		_ = h.auditRepo.Log(models.AuditEntry{
+			Action: "shopee_email_replay_requested", Source: "shopee_shipped", Level: "info",
+			Detail: map[string]interface{}{
+				"imap_account_id": id, "message_id": req.MessageID,
+				"cleared_completion_marker_count": cleared,
+				"created":                         res.Summary.Created, "updated_existing": res.Summary.UpdatedExisting,
+				"failed": res.Summary.Failed, "status": res.Status(),
+			},
+		})
+	}
+	resp := imapPollResponse(res)
+	resp["cleared_completion_marker_count"] = cleared
 	c.JSON(http.StatusOK, resp)
 }
 

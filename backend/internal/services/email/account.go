@@ -153,6 +153,29 @@ func (p *AccountPoller) PollNow(ctx context.Context) PollResult {
 	return res
 }
 
+// ReplayMessage re-reads one explicit Message-ID without moving the mailbox
+// cursor. It shares the normal poll lock so it cannot race a scheduled poll.
+func (p *AccountPoller) ReplayMessage(ctx context.Context, messageID string) PollResult {
+	if !p.pollMu.TryLock() {
+		return PollResult{Err: fmt.Errorf("poll already running")}
+	}
+	defer p.pollMu.Unlock()
+
+	account, err := p.repo.GetByID(p.accountID)
+	if err != nil {
+		return PollResult{Err: err}
+	}
+	if account == nil {
+		return PollResult{Err: fmt.Errorf("account not found")}
+	}
+	if !account.Enabled {
+		return PollResult{Err: fmt.Errorf("account disabled")}
+	}
+	cfg := pollConfigFromAccount(account)
+	cfg.TargetMessageID = strings.TrimSpace(messageID)
+	return p.pollWithConfig(ctx, account, cfg, nil)
+}
+
 func (p *AccountPoller) IsPolling() bool {
 	if !p.pollMu.TryLock() {
 		return true
@@ -194,6 +217,10 @@ func (p *AccountPoller) pollCycleLocked(ctx context.Context) PollResult {
 
 func (p *AccountPoller) pollLoadedAccount(ctx context.Context, account *models.IMAPAccount, progress func(PollResult)) PollResult {
 	cfg := pollConfigFromAccount(account)
+	return p.pollWithConfig(ctx, account, cfg, progress)
+}
+
+func (p *AccountPoller) pollWithConfig(ctx context.Context, account *models.IMAPAccount, cfg PollConfig, progress func(PollResult)) PollResult {
 	cfg.Progress = progress
 	res := PollOnce(ctx, cfg, p.processors, p.logger)
 	canceled := errors.Is(res.Err, context.Canceled)

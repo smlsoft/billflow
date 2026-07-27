@@ -92,6 +92,7 @@ type EmailHandler struct {
 	shopeeAI             shopeeOrderExtractor
 	// Source-artifact storage (PDF/HTML/envelope)
 	artifactSvc *artifact.Service
+	failureRepo *repository.EmailIngestionFailureRepo
 }
 
 func NewEmailHandler(
@@ -145,6 +146,12 @@ func (h *EmailHandler) SetChannelDefaults(repo *repository.ChannelDefaultRepo) {
 // SetArtifactService wires source-artifact storage for evidence/audit trails.
 func (h *EmailHandler) SetArtifactService(svc *artifact.Service) {
 	h.artifactSvc = svc
+}
+
+// SetEmailIngestionFailureRepo stores quarantined source emails so admins can
+// investigate and replay them without resetting an entire mailbox.
+func (h *EmailHandler) SetEmailIngestionFailureRepo(repo *repository.EmailIngestionFailureRepo) {
+	h.failureRepo = repo
 }
 
 // saveEmailArtifacts persists the original source files (binary + envelope JSON)

@@ -483,9 +483,6 @@ func TestProcessShopeeShippedEmailBodySkipsInvalidOrderIDsWithoutCreatingBills(t
 		{OrderID: "260722C0U38XVW"},
 		{OrderID: "260722C0U38XWV"},
 	}}}
-	mock.ExpectExec("INSERT INTO processed_email_keys").
-		WithArgs("shopee_shipped", messageID, "").
-		WillReturnResult(sqlmock.NewResult(1, 1))
 	h := &EmailHandler{
 		billRepo:   repository.NewBillRepo(db),
 		catalogSvc: &catalog.SMLCatalogService{},
@@ -504,8 +501,75 @@ func TestProcessShopeeShippedEmailBodySkipsInvalidOrderIDsWithoutCreatingBills(t
 	if err != nil {
 		t.Fatalf("ProcessShopeeShippedEmailBody: %v", err)
 	}
-	if outcome.Kind != emailservice.ProcessOutcomeSkipped || outcome.Code != "shopee_shipped_invalid_order_ids" {
-		t.Fatalf("outcome = %#v, want skipped invalid order IDs", outcome)
+	if outcome.Kind != emailservice.ProcessOutcomeQuarantined || outcome.Code != "shopee_shipped_order_ids_quarantined" {
+		t.Fatalf("outcome = %#v, want quarantined invalid order IDs", outcome)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestExtractShopeeOrdersBoundedRecoversSingleScopedOrderWithSourceID(t *testing.T) {
+	const sourceOrderID = "260724H2923XSV"
+	price := 99.0
+	h := &EmailHandler{
+		shopeeAI: &testShopeeOrderExtractor{compactResults: [][]ai.ExtractedOrder{
+			{{OrderID: "260724H2923XSS", Items: []ai.ExtractedItem{{RawName: "สินค้า", Qty: 1, Price: &price}}}},
+			{{OrderID: "ยังอ่านเลขผิด", Items: []ai.ExtractedItem{{RawName: "สินค้า", Qty: 1, Price: &price}}}},
+		}},
+		logger: zap.NewNop(),
+	}
+
+	orders, err := h.extractShopeeOrdersBounded(
+		"ยืนยันการชำระเงินคำสั่งซื้อ #"+sourceOrderID,
+		"หมายเลขคำสั่งซื้อ #"+sourceOrderID+"\nสินค้า 1 ชิ้น",
+		"",
+		"trace-test",
+	)
+	if err != nil {
+		t.Fatalf("extractShopeeOrdersBounded: %v", err)
+	}
+	if len(orders) != 1 || orders[0].OrderID != sourceOrderID {
+		t.Fatalf("orders = %#v, want one source order %s", orders, sourceOrderID)
+	}
+}
+
+func TestProcessShopeeShippedEmailBodyStoresQuarantinedMismatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	const messageID = "shopee-quarantine@example.test"
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ #260724H2H2NBCY\nสินค้า A",
+		"หมายเลขคำสั่งซื้อ #260724H2H2NBD0\nสินค้า B",
+	}, "\n")
+	mock.ExpectExec("INSERT INTO email_ingestion_failures").
+		WithArgs(
+			"shopee_shipped", messageID, "imap-account-id", "", "ยืนยันการชำระเงินคำสั่งซื้อ",
+			"info@mail.shopee.co.th", mailSourceForTest().EmailDate, body, "", "shopee_order_id_mismatch", sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	h := &EmailHandler{
+		catalogSvc:  &catalog.SMLCatalogService{},
+		failureRepo: repository.NewEmailIngestionFailureRepo(db),
+		shopeeAI: &testShopeeOrderExtractor{compactResults: [][]ai.ExtractedOrder{{
+			{OrderID: "260724H2H2NBCS"},
+		}}},
+		logger: zap.NewNop(),
+	}
+
+	outcome, err := h.ProcessShopeeShippedEmailBody(
+		"ยืนยันการชำระเงินคำสั่งซื้อ", "info@mail.shopee.co.th", body, "", messageID, mailSourceForTest(),
+	)
+	if err != nil {
+		t.Fatalf("ProcessShopeeShippedEmailBody: %v", err)
+	}
+	if outcome.Kind != emailservice.ProcessOutcomeQuarantined {
+		t.Fatalf("outcome = %#v, want quarantined", outcome)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)

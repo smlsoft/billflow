@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +57,10 @@ type PollConfig struct {
 	LastSeenUID    int64
 	Channel        string   // "general" | "shopee" | "lazada"
 	ShopeeDomains  []string // accepted senders for channel="shopee" (legacy DB name)
-	Progress       func(PollResult)
+	// TargetMessageID runs a one-message admin replay without changing the
+	// account cursor. It is never set by scheduled polling.
+	TargetMessageID string
+	Progress        func(PollResult)
 }
 
 // PollResult summarises one poll cycle. Either Err is non-nil or the counts
@@ -155,6 +159,11 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	if lookback <= 0 {
 		lookback = 30
 	}
+	// A targeted admin replay must be able to recover an older quarantined
+	// message even when the normal mailbox lookback is intentionally short.
+	if strings.TrimSpace(cfg.TargetMessageID) != "" {
+		lookback = 90
+	}
 
 	logger.Info("imap_poll_start",
 		zap.String("trace_id", res.TraceID),
@@ -196,7 +205,10 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	// again within the lookback window.
 	criteria := &imap.SearchCriteria{Since: since}
 	if cfg.FilterFrom != "" {
-		criteria.Header = []imap.SearchCriteriaHeaderField{{Key: "From", Value: cfg.FilterFrom}}
+		criteria.Header = append(criteria.Header, imap.SearchCriteriaHeaderField{Key: "From", Value: cfg.FilterFrom})
+	}
+	if strings.TrimSpace(cfg.TargetMessageID) != "" {
+		criteria.Header = append(criteria.Header, imap.SearchCriteriaHeaderField{Key: "Message-ID", Value: strings.TrimSpace(cfg.TargetMessageID)})
 	}
 	if len(cfg.FilterSubjects) > 0 {
 		subjectCriteria := subjectSearchCriteria(cfg.FilterSubjects)
@@ -211,7 +223,13 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		return res
 	}
 
-	uidCandidates := candidateUIDs(searchData.AllUIDs(), cfg.LastSeenUID, configuredMaxMessagesPerRunForChannel(cfg.Channel))
+	lastSeenForSelection := cfg.LastSeenUID
+	maxMessages := configuredMaxMessagesPerRunForChannel(cfg.Channel)
+	if strings.TrimSpace(cfg.TargetMessageID) != "" {
+		lastSeenForSelection = 0
+		maxMessages = 1
+	}
+	uidCandidates := candidateUIDs(searchData.AllUIDs(), lastSeenForSelection, maxMessages)
 	uids := uidCandidates.Selected
 	res.MessagesFound = uidCandidates.Total
 	res.Limited = uidCandidates.Limited
@@ -265,6 +283,11 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 			emitPollProgress(cfg, res)
 			return res
 		}
+		// UID order is the durable cursor order. The IMAP server may stream a
+		// FETCH batch in a different order, so normalize before acknowledging.
+		sort.Slice(summaries, func(i, j int) bool {
+			return summaries[i].UID < summaries[j].UID
+		})
 		duplicateMessages := map[string]bool{}
 		if p != nil && p.DuplicateMessages != nil {
 			messageIDs := messageIDsFromSummaries(summaries)
@@ -295,16 +318,15 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		batchProcessed := 0
 		for _, summary := range summaries {
 			res.Summary.Scanned++
-			if int64(summary.UID) > res.LastSeenUID {
-				res.LastSeenUID = int64(summary.UID)
-			}
 			envelope := summary.Envelope
 			if envelope == nil {
 				res.ProcessWarnings = append(res.ProcessWarnings, "อ่านข้อมูลหัวอีเมลไม่ได้")
 				res.Summary.Failed++
 				res.addDetail(summary, "skipped", "missing_envelope", "อ่านข้อมูลหัวอีเมลไม่ได้")
 				res.Skipped++
-				continue
+				res.Err = fmt.Errorf("IMAP message uid %d has no envelope", summary.UID)
+				res.FailureStage = "process"
+				return finishPollAfterMessageFailure(c, cfg, res, uids, uidCandidates, batchProcessedUIDs, batchProcessed, logger)
 			}
 
 			if !matchesSubject(envelope.Subject, cfg.FilterSubjects) {
@@ -316,6 +338,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				res.Summary.SkippedUser++
 				res.addDetail(summary, "skipped", "subject_filter_mismatch", "หัวข้ออีเมลไม่ตรงคำกรอง")
 				res.Skipped++
+				acknowledgePollUID(&res, cfg, summary.UID)
 				continue
 			}
 
@@ -328,6 +351,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				res.Summary.SkippedUser++
 				res.addDetail(summary, "skipped", "sender_not_allowed", "ผู้ส่งไม่อยู่ในรายชื่อที่ยอมรับ")
 				res.Skipped++
+				acknowledgePollUID(&res, cfg, summary.UID)
 				continue
 			}
 			if cfg.Channel == "lazada" {
@@ -341,6 +365,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					res.Summary.SkippedUser++
 					res.addDetail(summary, "skipped", code, label)
 					res.Skipped++
+					acknowledgePollUID(&res, cfg, summary.UID)
 					continue
 				}
 			}
@@ -357,6 +382,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				res.Summary.SkippedUser++
 				res.addDetail(summary, "skipped", "duplicate", "เมลนี้เคยประมวลผลหรือเคยสร้างบิลแล้ว")
 				res.Skipped++
+				acknowledgePollUID(&res, cfg, summary.UID)
 				continue
 			}
 			if p != nil && p.DuplicateMessages == nil && p.DuplicateMessage != nil && strings.TrimSpace(messageID) != "" && !bypassDuplicatePrecheck {
@@ -379,6 +405,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					res.Summary.SkippedUser++
 					res.addDetail(summary, "skipped", "duplicate", "เมลนี้เคยประมวลผลหรือเคยสร้างบิลแล้ว")
 					res.Skipped++
+					acknowledgePollUID(&res, cfg, summary.UID)
 					continue
 				}
 			}
@@ -395,14 +422,18 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				res.Summary.Failed++
 				res.addDetail(summary, "skipped", "fetch_body_failed", "ดึงเนื้อหาอีเมลไม่สำเร็จ")
 				res.Skipped++
-				continue
+				res.Err = fmt.Errorf("IMAP fetch body uid %d: %w", summary.UID, err)
+				res.FailureStage = "fetch"
+				return finishPollAfterMessageFailure(c, cfg, res, uids, uidCandidates, batchProcessedUIDs, batchProcessed, logger)
 			}
 			if len(bodyBytes) == 0 {
 				res.ProcessWarnings = append(res.ProcessWarnings, "อีเมลไม่มีเนื้อหาที่ระบบอ่านได้")
 				res.Summary.Failed++
 				res.addDetail(summary, "skipped", "empty_body", "อีเมลไม่มีเนื้อหาที่ระบบอ่านได้")
 				res.Skipped++
-				continue
+				res.Err = fmt.Errorf("IMAP message uid %d has an empty body", summary.UID)
+				res.FailureStage = "process"
+				return finishPollAfterMessageFailure(c, cfg, res, uids, uidCandidates, batchProcessedUIDs, batchProcessed, logger)
 			}
 
 			logger.Info("imap_message_received",
@@ -422,6 +453,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				batchProcessedUIDs.AddNum(summary.UID)
 				batchProcessed++
 				res.Processed++
+				acknowledgePollUID(&res, cfg, summary.UID)
 				code, label := outcome.Code, outcome.Label
 				switch outcome.Kind {
 				case ProcessOutcomeUpdatedExisting:
@@ -442,6 +474,11 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 					}
 					res.addDetail(summary, "skipped", code, label)
 					continue
+				case ProcessOutcomeQuarantined:
+					res.Summary.Failed++
+					res.ProcessWarnings = append(res.ProcessWarnings, label)
+					res.addDetail(summary, "quarantined", code, label)
+					continue
 				default:
 					res.Summary.Created++
 					if code == "" {
@@ -453,11 +490,13 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				}
 				res.addDetail(summary, "processed", code, label)
 			} else {
+				retryableFailure := false
 				if warning != "" {
 					code, label, userSkipped := classifyDispatchWarning(warning)
 					if !userSkipped {
 						res.ProcessWarnings = append(res.ProcessWarnings, label)
 						res.Summary.Failed++
+						retryableFailure = true
 					} else {
 						res.Summary.SkippedUser++
 						if code == "duplicate" {
@@ -465,11 +504,20 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 						}
 					}
 					res.addDetail(summary, "skipped", code, label)
+					if userSkipped {
+						acknowledgePollUID(&res, cfg, summary.UID)
+					}
 				} else {
 					res.Summary.SkippedUser++
 					res.addDetail(summary, "skipped", "not_processed", "ไม่เข้าเงื่อนไขการสร้างบิล")
+					acknowledgePollUID(&res, cfg, summary.UID)
 				}
 				res.Skipped++
+				if retryableFailure {
+					res.Err = fmt.Errorf("IMAP process uid %d: %s", summary.UID, warning)
+					res.FailureStage = "process"
+					return finishPollAfterMessageFailure(c, cfg, res, uids, uidCandidates, batchProcessedUIDs, batchProcessed, logger)
+				}
 			}
 		}
 		if len(batchProcessedUIDs) > 0 {
@@ -500,6 +548,39 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 		zap.Int64("duration_ms", time.Since(pollStart).Milliseconds()),
 	)
 
+	emitPollProgress(cfg, res)
+	return res
+}
+
+func acknowledgePollUID(res *PollResult, cfg PollConfig, uid imap.UID) {
+	if res == nil || strings.TrimSpace(cfg.TargetMessageID) != "" {
+		return
+	}
+	if int64(uid) > res.LastSeenUID {
+		res.LastSeenUID = int64(uid)
+	}
+}
+
+func finishPollAfterMessageFailure(
+	c *imapclient.Client,
+	cfg PollConfig,
+	res PollResult,
+	uids []imap.UID,
+	candidates imapUIDCandidates,
+	batchProcessedUIDs imap.UIDSet,
+	batchProcessed int,
+	logger *zap.Logger,
+) PollResult {
+	if len(batchProcessedUIDs) > 0 {
+		markRead(c, batchProcessedUIDs, batchProcessed, logger, res.TraceID)
+	}
+	if strings.TrimSpace(cfg.TargetMessageID) != "" {
+		res.Backlog = 0
+		res.Limited = false
+	} else {
+		res.Backlog = countUIDsAfter(uids, res.LastSeenUID) + candidates.Backlog
+		res.Limited = res.Backlog > 0
+	}
 	emitPollProgress(cfg, res)
 	return res
 }

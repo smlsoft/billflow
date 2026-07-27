@@ -8,6 +8,9 @@ const (
 	ProcessOutcomeCreatedBill     ProcessOutcomeKind = "created_bill"
 	ProcessOutcomeUpdatedExisting ProcessOutcomeKind = "updated_existing"
 	ProcessOutcomeSkipped         ProcessOutcomeKind = "skipped"
+	// ProcessOutcomeQuarantined means the source email was retained for an
+	// admin replay, but must not create a bill until its discrepancy is fixed.
+	ProcessOutcomeQuarantined ProcessOutcomeKind = "quarantined"
 )
 
 type ProcessOutcome struct {
@@ -38,6 +41,16 @@ func SkippedOutcome(code, label string) ProcessOutcome {
 		label = fmt.Sprintf("ไม่สร้างบิลใหม่ (%s)", code)
 	}
 	return ProcessOutcome{Kind: ProcessOutcomeSkipped, Code: code, Label: label}
+}
+
+func QuarantinedOutcome(code, label string) ProcessOutcome {
+	if code == "" {
+		code = "quarantined"
+	}
+	if label == "" {
+		label = "เก็บอีเมลไว้ให้ผู้ดูแลตรวจสอบและสั่งอ่านซ้ำ"
+	}
+	return ProcessOutcome{Kind: ProcessOutcomeQuarantined, Code: code, Label: label}
 }
 
 type MessageSkipError struct {

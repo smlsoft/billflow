@@ -105,6 +105,7 @@ func main() {
 	lineOARepo := repository.NewLineOAAccountRepo(db)
 	appSettingsRepo := repository.NewAppSettingsRepo(db)
 	aiUsageRepo := repository.NewAIUsageRepo(db)
+	emailFailureRepo := repository.NewEmailIngestionFailureRepo(db)
 	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
 		logger.Warn("apply DB instance settings", zap.Error(err))
 	}
@@ -397,6 +398,7 @@ func main() {
 	emailH.SetMarketplaceAliasRepo(aliasRepo)
 	emailH.SetChannelDefaults(channelDefaultRepo)
 	emailH.SetArtifactService(artifactSvc)
+	emailH.SetEmailIngestionFailureRepo(emailFailureRepo)
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, cfg, cfg.AutoConfirmThreshold, logger)
 	go func() {
 		time.Sleep(3 * time.Second)
@@ -419,7 +421,7 @@ func main() {
 	aliasH := handlers.NewMarketplaceAliasHandler(aliasRepo, catalogRepo, auditLogRepo, logger)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
-	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapPollJobRepo, imapCoordinator, logger)
+	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapPollJobRepo, imapCoordinator, billRepo, emailFailureRepo, auditLogRepo, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
 	smlPartyH := handlers.NewSMLPartyHandler(partyCache, partyClient, auditLogRepo, logger)
 	smlPartyH.SetSMLConfig(cfg.ShopeeSMLURL, cfg.ShopeeSMLGUID, cfg.ShopeeSMLDatabase)
@@ -614,6 +616,7 @@ func main() {
 		api.PUT("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Update)
 		api.DELETE("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Delete)
 		api.POST("/settings/imap-accounts/:id/poll", middleware.RequireRole("admin"), imapSettingsH.PollNow)
+		api.POST("/settings/imap-accounts/:id/replay-message", middleware.RequireRole("admin"), imapSettingsH.ReplayShopeeMessage)
 		api.POST("/settings/imap-accounts/:id/poll-jobs", middleware.RequireRole("admin"), imapSettingsH.CreatePollJob)
 		api.POST("/settings/imap-accounts/:id/reset-progress", middleware.RequireRole("admin"), imapSettingsH.ResetProgress)
 		api.GET("/settings/imap-poll-jobs/active", middleware.RequireRole("admin"), imapSettingsH.ListActivePollJobs)

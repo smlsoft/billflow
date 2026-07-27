@@ -3,6 +3,7 @@ package emailservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -46,7 +47,7 @@ func NewCoordinator(
 		repo:       repo,
 		jobRepo:    jobRepo,
 		processors: processors,
-		notifier:    notifier,
+		notifier:   notifier,
 		logger:     logger.With(zap.String("component", "imap_coordinator")),
 		pollers:    map[string]*AccountPoller{},
 	}
@@ -158,6 +159,28 @@ func (c *Coordinator) PollNow(id string) (PollResult, error) {
 		return oneOff.PollNow(c.ctx), nil
 	}
 	return p.PollNow(c.ctx), nil
+}
+
+// ReplayMessage processes exactly one Message-ID without resetting the mailbox
+// cursor or scanning unrelated historic emails.
+func (c *Coordinator) ReplayMessage(id, messageID string) (PollResult, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return PollResult{}, fmt.Errorf("message id is required")
+	}
+	c.mu.Lock()
+	p := c.pollers[id]
+	c.mu.Unlock()
+	if p == nil {
+		account, err := c.repo.GetByID(id)
+		if err != nil {
+			return PollResult{}, err
+		}
+		if account == nil {
+			return PollResult{}, fmt.Errorf("account not found")
+		}
+		p = NewAccountPoller(account.ID, c.repo, c.jobRepo, c.processors, c.notifier, c.logger)
+	}
+	return p.ReplayMessage(c.ctx, messageID), nil
 }
 
 func (c *Coordinator) StartPollJob(id, userID, userEmail string) (*models.IMAPPollJob, error) {

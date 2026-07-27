@@ -273,6 +273,7 @@ c.Authenticate(sasl.NewPlainClient("", user, password))
 |---|---|
 | IMAP connect ล้มเหลว | log error + LINE admin notify (throttle 1 ครั้ง/ชม.) |
 | AI extract ล้มเหลว | log error + LINE admin notify, ไม่สร้าง bill |
+| AI อ่านเลข Shopee ไม่ตรงกับเลขในอีเมล | ไม่สร้าง bill, เก็บอีเมลต้นฉบับใน `email_ingestion_failures` เพื่อ replay เฉพาะฉบับ |
 | ไม่มี items ใน extract | log warning, ไม่สร้าง bill |
 | Items ไม่ match mapping | bill = `needs_review`/`pending` ตาม flow + LINE admin notify 📋 |
 | Lazada amount formula mismatch | bill = `needs_review`, block send SML จนกว่าจะตรวจ/แก้ |
@@ -306,6 +307,12 @@ AUTO_CONFIRM_THRESHOLD=0.85
 ---
 
 ## ขั้นตอน Debug เมื่อ email ไม่ถูก process
+
+### Replay เฉพาะอีเมล Shopee
+
+เมื่อ audit log แสดง `shopee_shipped_order_ids_rejected` ระบบจะไม่สร้างบิลหรือส่ง SML จากอีเมลฉบับนั้น และเก็บหลักฐานไว้ใน `email_ingestion_failures` แทนที่จะบันทึกเป็นอีเมลที่เสร็จแล้ว
+
+ผู้ดูแลสามารถเรียก `POST /api/settings/imap-accounts/:id/replay-message` พร้อม JSON `{"message_id":"..."}` เพื่ออ่านเฉพาะ Message-ID นั้นใหม่ได้ การ replay จะไม่ reset cursor และไม่สแกนอีเมลอื่นในกล่อง เมื่อลองอ่านใหม่ ระบบยังตรวจเลขคำสั่งซื้อจากอีเมลต้นทางก่อนสร้างบิลทุกครั้ง
 
 ```bash
 # 1. ดู logs

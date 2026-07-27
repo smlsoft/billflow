@@ -241,6 +241,19 @@ func TestCandidateUIDsUsesProgressAndLimit(t *testing.T) {
 	}
 }
 
+func TestAcknowledgePollUIDDoesNotMoveCursorForTargetedReplay(t *testing.T) {
+	res := PollResult{LastSeenUID: 42}
+	acknowledgePollUID(&res, PollConfig{TargetMessageID: "message@example.test"}, imap.UID(99))
+	if res.LastSeenUID != 42 {
+		t.Fatalf("targeted replay moved cursor to %d, want 42", res.LastSeenUID)
+	}
+
+	acknowledgePollUID(&res, PollConfig{}, imap.UID(99))
+	if res.LastSeenUID != 99 {
+		t.Fatalf("regular poll cursor = %d, want 99", res.LastSeenUID)
+	}
+}
+
 func TestClassifyLazadaEnvelope(t *testing.T) {
 	tests := []struct {
 		name     string
