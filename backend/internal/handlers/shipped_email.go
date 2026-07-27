@@ -61,7 +61,7 @@ func (h *EmailHandler) ProcessShopeeShippedEmailBody(subject, from, bodyText, bo
 	detectedOrderIDs := detectedShopeeBodyOrderIDs(plainText, bodyHTML)
 	isMultiOrderEmail := len(detectedOrderIDs) > 1
 
-	if messageID != "" && !isMultiOrderEmail {
+	if messageID != "" && !isMultiOrderEmail && !source.Replay {
 		var count int
 		_ = h.billRepo.DB().QueryRow(
 			`SELECT

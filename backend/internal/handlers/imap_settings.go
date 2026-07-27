@@ -20,7 +20,6 @@ type IMAPSettingsHandler struct {
 	repo        *repository.ImapAccountRepo
 	jobRepo     *repository.IMAPPollJobRepo
 	coordinator *emailservice.Coordinator
-	billRepo    *repository.BillRepo
 	failureRepo *repository.EmailIngestionFailureRepo
 	auditRepo   *repository.AuditLogRepo
 	logger      *zap.Logger
@@ -45,14 +44,13 @@ func NewIMAPSettingsHandler(
 	repo *repository.ImapAccountRepo,
 	jobRepo *repository.IMAPPollJobRepo,
 	coordinator *emailservice.Coordinator,
-	billRepo *repository.BillRepo,
 	failureRepo *repository.EmailIngestionFailureRepo,
 	auditRepo *repository.AuditLogRepo,
 	logger *zap.Logger,
 ) *IMAPSettingsHandler {
 	return &IMAPSettingsHandler{
 		repo: repo, jobRepo: jobRepo, coordinator: coordinator,
-		billRepo: billRepo, failureRepo: failureRepo, auditRepo: auditRepo, logger: logger,
+		failureRepo: failureRepo, auditRepo: auditRepo, logger: logger,
 	}
 }
 
@@ -222,14 +220,6 @@ func (h *IMAPSettingsHandler) ReplayShopeeMessage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "replay is available only for Shopee mailboxes"})
 		return
 	}
-	cleared := int64(0)
-	if h.billRepo != nil {
-		cleared, err = h.billRepo.ClearProcessedEmailSummary("shopee_shipped", req.MessageID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "clear previous email marker: " + err.Error()})
-			return
-		}
-	}
 	res, err := h.coordinator.ReplayMessage(id, req.MessageID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -245,14 +235,14 @@ func (h *IMAPSettingsHandler) ReplayShopeeMessage(c *gin.Context) {
 			Action: "shopee_email_replay_requested", Source: "shopee_shipped", Level: "info",
 			Detail: map[string]interface{}{
 				"imap_account_id": id, "message_id": req.MessageID,
-				"cleared_completion_marker_count": cleared,
-				"created":                         res.Summary.Created, "updated_existing": res.Summary.UpdatedExisting,
+				"targeted_replay": true,
+				"created":         res.Summary.Created, "updated_existing": res.Summary.UpdatedExisting,
 				"failed": res.Summary.Failed, "status": res.Status(),
 			},
 		})
 	}
 	resp := imapPollResponse(res)
-	resp["cleared_completion_marker_count"] = cleared
+	resp["targeted_replay"] = true
 	c.JSON(http.StatusOK, resp)
 }
 

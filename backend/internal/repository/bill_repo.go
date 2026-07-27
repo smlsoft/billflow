@@ -1211,20 +1211,6 @@ func (r *BillRepo) MarkProcessedEmailKey(source, messageID, orderID string) erro
 	return err
 }
 
-// ClearProcessedEmailSummary removes only the per-message completion marker.
-// Per-order markers and existing bills remain in place, so a targeted replay
-// cannot create duplicate orders that were already imported successfully.
-func (r *BillRepo) ClearProcessedEmailSummary(source, messageID string) (int64, error) {
-	result, err := r.db.Exec(
-		`DELETE FROM processed_email_keys WHERE source=$1 AND message_id=$2 AND order_id=''`,
-		strings.TrimSpace(source), strings.TrimSpace(messageID),
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 // InsertItemWithCandidates inserts a bill item including top-5 catalog candidates
 func (r *BillRepo) InsertItemWithCandidates(item *models.BillItem, candidatesJSON []byte) error {
 	return r.db.QueryRow(

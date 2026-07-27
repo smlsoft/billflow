@@ -254,6 +254,18 @@ func TestAcknowledgePollUIDDoesNotMoveCursorForTargetedReplay(t *testing.T) {
 	}
 }
 
+func TestMailSourceFromPollConfigMarksOnlyTargetedReplay(t *testing.T) {
+	base := PollConfig{AccountID: "account-1", AccountName: "Shopee", Username: "shop@example.test"}
+	if got := mailSourceFromPollConfig(base, "INBOX"); got.Replay {
+		t.Fatal("regular poll source must not be marked as replay")
+	}
+	base.TargetMessageID = "message@example.test"
+	got := mailSourceFromPollConfig(base, "INBOX")
+	if !got.Replay || got.Mailbox != "INBOX" || got.AccountID != "account-1" {
+		t.Fatalf("targeted source = %#v, want replay source metadata", got)
+	}
+}
+
 func TestClassifyLazadaEnvelope(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -30,6 +30,10 @@ type MailSource struct {
 	Username    string `json:"imap_username,omitempty"`
 	Mailbox     string `json:"imap_mailbox,omitempty"`
 	EmailDate   string `json:"email_date,omitempty"`
+	// Replay is set only for an admin-targeted IMAP replay. The downstream
+	// processor may bypass a legacy completion marker, but must still preserve
+	// its normal per-order duplicate safeguards.
+	Replay bool `json:"-"`
 }
 
 // AttachmentProcessor is called once per qualifying attachment found in email.
@@ -149,12 +153,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	if mailbox == "" {
 		mailbox = "INBOX"
 	}
-	source := MailSource{
-		AccountID:   cfg.AccountID,
-		AccountName: cfg.AccountName,
-		Username:    cfg.Username,
-		Mailbox:     mailbox,
-	}
+	source := mailSourceFromPollConfig(cfg, mailbox)
 	lookback := cfg.LookbackDays
 	if lookback <= 0 {
 		lookback = 30
@@ -550,6 +549,16 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 
 	emitPollProgress(cfg, res)
 	return res
+}
+
+func mailSourceFromPollConfig(cfg PollConfig, mailbox string) MailSource {
+	return MailSource{
+		AccountID:   cfg.AccountID,
+		AccountName: cfg.AccountName,
+		Username:    cfg.Username,
+		Mailbox:     mailbox,
+		Replay:      strings.TrimSpace(cfg.TargetMessageID) != "",
+	}
 }
 
 func acknowledgePollUID(res *PollResult, cfg PollConfig, uid imap.UID) {

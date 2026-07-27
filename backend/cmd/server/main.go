@@ -421,7 +421,7 @@ func main() {
 	aliasH := handlers.NewMarketplaceAliasHandler(aliasRepo, catalogRepo, auditLogRepo, logger)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
-	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapPollJobRepo, imapCoordinator, billRepo, emailFailureRepo, auditLogRepo, logger)
+	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapPollJobRepo, imapCoordinator, emailFailureRepo, auditLogRepo, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
 	smlPartyH := handlers.NewSMLPartyHandler(partyCache, partyClient, auditLogRepo, logger)
 	smlPartyH.SetSMLConfig(cfg.ShopeeSMLURL, cfg.ShopeeSMLGUID, cfg.ShopeeSMLDatabase)
