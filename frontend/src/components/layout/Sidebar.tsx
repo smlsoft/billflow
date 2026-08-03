@@ -216,7 +216,7 @@ export default function Sidebar() {
           {visibleNavGroups()
             .map((group) => ({
               ...group,
-              items: group.items.filter((i) => i.to !== '/settings/users' || user?.role === 'admin'),
+              items: group.items.filter((i) => !i.adminOnly || user?.role === 'admin'),
             }))
             .filter((group) => group.items.length > 0)
             .map((group, gi) => (

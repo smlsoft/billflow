@@ -26,6 +26,8 @@ backups/*.sql
 
 # Docker
 *.pid
+rclone.conf
+rclone-config/
 
 # IDE
 .DS_Store

@@ -2,6 +2,7 @@ import {
   Archive,
   Bot,
   Building2,
+  Cloud,
   ClipboardCheck,
   CreditCard,
   Database,
@@ -51,6 +52,7 @@ export interface NavItem {
   hint?: string
   minPhase?: number
   enabled?: boolean
+  adminOnly?: boolean
 }
 
 export interface NavGroup {
@@ -122,8 +124,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/settings/channels', label: 'เส้นทางเอกสาร SML', icon: Building2, hint: 'Document Routing' },
       { to: '/settings/old-data', label: 'จัดการข้อมูลเก่า', icon: Archive, hint: 'เก็บบิล / ลบถาวร' },
       { to: '/settings/ai-usage', label: 'การใช้งาน AI', icon: Bot, hint: 'ค่าใช้จ่าย / รุ่น AI' },
-      { to: '/settings/users', label: 'ผู้ใช้ระบบ', icon: UsersRound, hint: 'Roles and access' },
+      { to: '/settings/users', label: 'ผู้ใช้ระบบ', icon: UsersRound, hint: 'Roles and access', adminOnly: true },
       { to: '/settings/instance', label: 'การเชื่อมต่อระบบ', icon: Settings2, hint: 'SML / OpenRouter / ร้านนี้' },
+      { to: '/settings/google-drive', label: 'Google Drive อีเมล', icon: Cloud, hint: 'เก็บอีเมลหลังส่ง SML', adminOnly: true },
     ],
   },
 ]

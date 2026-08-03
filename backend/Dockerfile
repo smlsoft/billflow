@@ -19,8 +19,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o server ./cmd
 # Runtime stage
 FROM alpine:3.19
 
-# postgresql16-client provides pg_dump used by the in-container backup cron
-RUN apk add --no-cache ca-certificates tzdata postgresql16-client
+# postgresql16-client provides pg_dump used by the in-container backup cron.
+# rclone copies approved marketplace source emails using the server-owned
+# Google Drive remote; its config is mounted read-only at runtime.
+RUN apk add --no-cache ca-certificates tzdata postgresql16-client rclone
 
 WORKDIR /app
 

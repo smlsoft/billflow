@@ -107,6 +107,49 @@ func (r *BillArtifactRepo) FindEmailBodyByBillMessage(billID, messageID string) 
 	return &a, nil
 }
 
+// FindEmailBodyBySourceMessage finds the canonical original email for a
+// marketplace source/message pair. A single email may create multiple bills;
+// this deliberately reuses the first retained HTML/text artifact rather than
+// duplicating data for every PO in the group.
+func (r *BillArtifactRepo) FindEmailBodyBySourceMessage(source, messageID string) (*models.BillArtifact, error) {
+	if r == nil || source == "" || messageID == "" {
+		return nil, nil
+	}
+	var a models.BillArtifact
+	var meta sql.NullString
+	var ct, sha sql.NullString
+	err := r.db.QueryRow(
+		`SELECT a.id, a.bill_id, a.kind, a.filename, a.content_type, a.size_bytes, a.sha256, a.storage_path, a.source_meta, a.created_at
+		   FROM bill_artifacts a
+		   JOIN bills b ON b.id = a.bill_id
+		  WHERE b.source = $1
+		    AND a.kind IN ('email_html','email_text')
+		    AND a.source_meta->>'message_id' = $2
+		  ORDER BY CASE WHEN a.kind = 'email_html' THEN 0 ELSE 1 END, a.created_at ASC, a.id ASC
+		  LIMIT 1`,
+		source, messageID,
+	).Scan(
+		&a.ID, &a.BillID, &a.Kind, &a.Filename, &ct, &a.SizeBytes,
+		&sha, &a.StoragePath, &meta, &a.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if ct.Valid {
+		a.ContentType = ct.String
+	}
+	if sha.Valid {
+		a.SHA256 = sha.String
+	}
+	if meta.Valid && meta.String != "" {
+		a.SourceMeta = json.RawMessage(meta.String)
+	}
+	return &a, nil
+}
+
 func (r *BillArtifactRepo) GetOne(id string) (*models.BillArtifact, error) {
 	var a models.BillArtifact
 	var meta sql.NullString

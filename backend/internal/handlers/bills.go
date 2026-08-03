@@ -21,6 +21,7 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/artifact"
+	"billflow/internal/services/googledrive"
 	"billflow/internal/services/itemcode"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/sml"
@@ -47,6 +48,7 @@ type BillHandler struct {
 	appSettingsRepo      *repository.AppSettingsRepo    // runtime: sml.stock_request_url read per-send
 	marketplaceAliasRepo *repository.MarketplaceAliasRepo
 	emailGroupRepo       *repository.MarketplaceEmailGroupRepo
+	googleDriveExportSvc *googledrive.Service
 	log                  *zap.Logger
 }
 
@@ -60,6 +62,12 @@ func (h *BillHandler) SetMarketplaceAliasRepo(repo *repository.MarketplaceAliasR
 // marketplace purchase bills are sent to SML.
 func (h *BillHandler) SetMarketplaceEmailGroupRepo(repo *repository.MarketplaceEmailGroupRepo) {
 	h.emailGroupRepo = repo
+}
+
+// SetGoogleDriveExportService queues a non-blocking source-email upload after
+// SML accepts an eligible marketplace purchase bill.
+func (h *BillHandler) SetGoogleDriveExportService(service *googledrive.Service) {
+	h.googleDriveExportSvc = service
 }
 
 func NewBillHandler(
@@ -4265,9 +4273,6 @@ func (h *BillHandler) recordSuccess(c *gin.Context, id, source string, respJSON 
 }
 
 func (h *BillHandler) recordSuccessForSend(id, source string, respJSON []byte, docNo, route string, start time.Time, opts retrySendOptions) {
-	if h.auditRepo == nil {
-		return
-	}
 	billID := id
 	durMs := int(time.Since(start).Milliseconds())
 	var userID *string
@@ -4289,40 +4294,53 @@ func (h *BillHandler) recordSuccessForSend(id, source string, respJSON []byte, d
 	if opts.BulkItemSequence > 0 {
 		detail["bulk_item_sequence"] = opts.BulkItemSequence
 	}
-	_ = h.auditRepo.Log(models.AuditEntry{
-		Action:     "sml_sent",
-		TargetID:   &billID,
-		UserID:     userID,
-		Source:     source,
-		Level:      "info",
-		TraceID:    opts.TraceID,
-		DurationMs: &durMs,
-		Detail:     detail,
-	})
-	if warning := extractSMLERPLogWarning(respJSON); warning != "" {
-		warnDetail := map[string]interface{}{
-			"doc_no":         docNo,
-			"route":          route,
-			"message":        warning,
-			"via":            opts.Via,
-			"source_channel": source,
-		}
-		if opts.BulkJobID != "" {
-			warnDetail["bulk_job_id"] = opts.BulkJobID
-		}
-		if opts.BulkJobItemID != "" {
-			warnDetail["bulk_job_item_id"] = opts.BulkJobItemID
-		}
+	if h.auditRepo != nil {
 		_ = h.auditRepo.Log(models.AuditEntry{
-			Action:     "sml_erp_log_warning",
+			Action:     "sml_sent",
 			TargetID:   &billID,
 			UserID:     userID,
-			Source:     "sml",
-			Level:      "warn",
+			Source:     source,
+			Level:      "info",
 			TraceID:    opts.TraceID,
 			DurationMs: &durMs,
-			Detail:     warnDetail,
+			Detail:     detail,
 		})
+	}
+	if h.auditRepo != nil {
+		if warning := extractSMLERPLogWarning(respJSON); warning != "" {
+			warnDetail := map[string]interface{}{
+				"doc_no":         docNo,
+				"route":          route,
+				"message":        warning,
+				"via":            opts.Via,
+				"source_channel": source,
+			}
+			if opts.BulkJobID != "" {
+				warnDetail["bulk_job_id"] = opts.BulkJobID
+			}
+			if opts.BulkJobItemID != "" {
+				warnDetail["bulk_job_item_id"] = opts.BulkJobItemID
+			}
+			_ = h.auditRepo.Log(models.AuditEntry{
+				Action:     "sml_erp_log_warning",
+				TargetID:   &billID,
+				UserID:     userID,
+				Source:     "sml",
+				Level:      "warn",
+				TraceID:    opts.TraceID,
+				DurationMs: &durMs,
+				Detail:     warnDetail,
+			})
+		}
+	}
+	if h.googleDriveExportSvc != nil {
+		actorID := ""
+		if userID != nil {
+			actorID = *userID
+		}
+		if _, err := h.googleDriveExportSvc.EnqueueSentBill(id, actorID); err != nil {
+			h.log.Warn("queue Google Drive email export after SML send", zap.String("bill_id", id), zap.Error(err))
+		}
 	}
 	h.log.Info("SML bill sent", zap.String("bill", id), zap.String("doc", docNo), zap.String("via", opts.Via))
 }

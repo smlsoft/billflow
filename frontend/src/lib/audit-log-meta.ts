@@ -54,6 +54,15 @@ export const ACTION_META: Record<string, ActionMeta> = {
   bill_item_added: { label: 'เพิ่มรายการในบิล', emoji: '➕', tone: 'info' },
   bill_item_deleted: { label: 'ลบรายการในบิล', emoji: '➖', tone: 'muted' },
   bill_print_payment_method_updated: { label: 'แก้วิธีชำระเงินสำหรับพิมพ์', emoji: '💳', tone: 'info' },
+  google_drive_export_settings_updated: { label: 'แก้การตั้งค่า Google Drive อีเมล', emoji: '☁️', tone: 'info' },
+  google_drive_email_export_queued: { label: 'เพิ่มอีเมลเข้าคิว Google Drive', emoji: '📤', tone: 'info' },
+  google_drive_email_export_succeeded: { label: 'อัปโหลดอีเมลไป Google Drive สำเร็จ', emoji: '✅', tone: 'success' },
+  google_drive_email_export_retry_scheduled: { label: 'รอลองอัปโหลด Google Drive ใหม่', emoji: '🔄', tone: 'warning' },
+  google_drive_email_export_failed: { label: 'อัปโหลด Google Drive ไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
+  google_drive_email_export_conflict: { label: 'ไฟล์ Google Drive ชื่อซ้ำ', emoji: '⚠️', tone: 'danger' },
+  google_drive_email_export_skipped: { label: 'ข้ามอัปโหลด Google Drive', emoji: '⏭️', tone: 'muted' },
+  google_drive_email_export_backfill_queued: { label: 'เพิ่มอีเมลย้อนหลังเข้าคิว Google Drive', emoji: '📤', tone: 'info' },
+  google_drive_email_export_retried: { label: 'สั่งลองอัปโหลด Google Drive ใหม่', emoji: '🔄', tone: 'info' },
   bill_doc_no_regenerated: { label: 'ออกเลขเอกสารใหม่', emoji: '🔢', tone: 'primary' },
   bill_doc_no_regenerate_failed: { label: 'ออกเลขเอกสารใหม่ไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
   bill_doc_no_preview_failed: { label: 'ดึงเลขล่าสุดไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
@@ -169,6 +178,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   shopee_api: 'Shopee API',
   shopee_settlement: 'รับชำระ Shopee',
   credit_card_report: 'รายงานบัตรเครดิต',
+  google_drive: 'Google Drive',
 }
 
 export const SOURCE_TONE: Record<string, string> = {
@@ -191,6 +201,7 @@ export const SOURCE_TONE: Record<string, string> = {
   shopee_api: 'bg-warning/10 text-warning',
   shopee_settlement: 'bg-success/10 text-success',
   credit_card_report: 'bg-primary/10 text-primary',
+  google_drive: 'bg-info/10 text-info',
 }
 
 export const TONE_DOT: Record<Tone, string> = {
@@ -316,6 +327,16 @@ export function summarize(log: AuditLog): string {
         d.payment_method ? `วิธีชำระ: ${String(d.payment_method)}` : '',
         typeof d.updated_count === 'number' ? `อัปเดต ${d.updated_count.toLocaleString()} บิล` : '',
       ].filter(Boolean).join(' · ')
+    case 'google_drive_email_export_queued':
+    case 'google_drive_email_export_succeeded':
+      return [d.sml_doc_no, d.marketplace_order_id].filter(Boolean).join(' · ')
+    case 'google_drive_email_export_retry_scheduled':
+    case 'google_drive_email_export_failed':
+    case 'google_drive_email_export_conflict':
+    case 'google_drive_email_export_skipped':
+      return [d.reason, d.next_attempt_at ? `ลองใหม่ ${String(d.next_attempt_at)}` : ''].filter(Boolean).join(' · ')
+    case 'google_drive_email_export_backfill_queued':
+      return [`${d.date_from ?? ''} ถึง ${d.date_to ?? ''}`, typeof d.queued === 'number' ? `เพิ่ม ${d.queued.toLocaleString()} บิล` : ''].filter(Boolean).join(' · ')
     case 'bill_purchase_creditor_update_failed':
       return [
         d.doc_no,

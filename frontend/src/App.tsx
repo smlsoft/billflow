@@ -21,6 +21,7 @@ import CatalogSettings from './pages/CatalogSettings'
 import EmailAccounts from './pages/EmailAccounts'
 import ChannelDefaults from './pages/ChannelDefaults'
 import InstanceSettings from './pages/InstanceSettings'
+import GoogleDriveSettings from './pages/GoogleDriveSettings'
 import AIUsage from './pages/AIUsage'
 import UserSettings from './pages/UserSettings'
 import ChatTags from './pages/ChatTags'
@@ -81,6 +82,7 @@ export default function App() {
           <Route path="settings/email" element={<EmailAccounts />} />
           <Route path="settings/channels" element={<ChannelDefaults />} />
           <Route path="settings/instance" element={<InstanceSettings />} />
+          <Route path="settings/google-drive" element={<GoogleDriveSettings />} />
           <Route path="settings/ai-usage" element={<AIUsage />} />
           <Route path="settings/users" element={<UserSettings />} />
           <Route path="settings/line-oa" element={ENABLE_CHAT ? <LineOA /> : <Navigate to="/settings/instance" replace />} />

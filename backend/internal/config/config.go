@@ -122,6 +122,13 @@ type Config struct {
 	// Artifacts (original source files attached to each bill)
 	ArtifactsDir      string
 	ArtifactsMaxBytes int64
+
+	// Google Drive email export. The remote name/config file stay in the
+	// server environment; the UI can only enable the feature and choose a
+	// destination folder.
+	GoogleDriveRcloneRemote string
+	GoogleDriveRcloneConfig string
+	GoogleDriveRcloneBinary string
 }
 
 func Load() *Config {
@@ -188,6 +195,9 @@ func Load() *Config {
 		PurgeBatchSize:          getEnvInt("PURGE_BATCH_SIZE", 1000),
 		ArtifactsDir:            getEnv("ARTIFACTS_DIR", "/app/artifacts"),
 		ArtifactsMaxBytes:       int64(getEnvInt("ARTIFACTS_MAX_BYTES", 10*1024*1024)), // 10 MB
+		GoogleDriveRcloneRemote: getEnv("GOOGLE_DRIVE_RCLONE_REMOTE", ""),
+		GoogleDriveRcloneConfig: getEnv("RCLONE_CONFIG", "/run/secrets/rclone.conf"),
+		GoogleDriveRcloneBinary: getEnv("RCLONE_BINARY", "rclone"),
 	}
 
 	if c.JWTSecret == "" {

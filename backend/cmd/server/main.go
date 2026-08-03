@@ -28,6 +28,7 @@ import (
 	"billflow/internal/services/catalog"
 	emailservice "billflow/internal/services/email"
 	"billflow/internal/services/events"
+	"billflow/internal/services/googledrive"
 	"billflow/internal/services/insight"
 	lineservice "billflow/internal/services/line"
 	"billflow/internal/services/mapper"
@@ -107,6 +108,7 @@ func main() {
 	aiUsageRepo := repository.NewAIUsageRepo(db)
 	emailFailureRepo := repository.NewEmailIngestionFailureRepo(db)
 	marketplaceEmailGroupRepo := repository.NewMarketplaceEmailGroupRepo(db)
+	googleDriveExportRepo := repository.NewGoogleDriveEmailExportRepo(db)
 	if err := appSettingsRepo.ApplyToConfig(cfg); err != nil {
 		logger.Warn("apply DB instance settings", zap.Error(err))
 	}
@@ -360,9 +362,14 @@ func main() {
 	// Handlers
 	authH := handlers.NewAuthHandler(userRepo, cfg.JWTExpireHours, logger)
 	smlBulkJobRepo := repository.NewSMLBulkJobRepo(db)
+	googleDriveExportSvc := googledrive.NewEmailExportService(
+		cfg, appSettingsRepo, billRepo, artifactRepo, artifactSvc, googleDriveExportRepo, auditLogRepo, logger,
+	)
+	googleDriveExportSvc.RecoverInterrupted()
 	billH := handlers.NewBillHandler(billRepo, userRepo, mapperSvc, invoiceClient, saleOrderClient, poClient, docNoClient, cfg, telegramSvc, auditLogRepo, catalogRepo, channelDefaultRepo, docCounterRepo, smlBulkJobRepo, artifactSvc, warehouseCache, smlReadiness, appSettingsRepo, logger)
 	billH.SetMarketplaceAliasRepo(aliasRepo)
 	billH.SetMarketplaceEmailGroupRepo(marketplaceEmailGroupRepo)
+	billH.SetGoogleDriveExportService(googleDriveExportSvc)
 	billH.RecoverInterruptedBulkSendJobs()
 	creditCardReportH := handlers.NewCreditCardReportHandler(creditCardReportRepo, billRepo, auditLogRepo, logger)
 	mappingH := handlers.NewMappingHandler(mappingRepo, mapperSvc, catalogRepo, auditLogRepo, logger)
@@ -424,6 +431,7 @@ func main() {
 	aliasH := handlers.NewMarketplaceAliasHandler(aliasRepo, catalogRepo, auditLogRepo, logger)
 	settingsH := handlers.NewSettingsHandler(platformRepo, logger)
 	instanceSettingsH := handlers.NewInstanceSettingsHandler(appSettingsRepo, cfg, logger)
+	googleDriveExportH := handlers.NewGoogleDriveExportHandler(googleDriveExportSvc)
 	imapSettingsH := handlers.NewIMAPSettingsHandler(imapAccountRepo, imapPollJobRepo, imapCoordinator, emailFailureRepo, auditLogRepo, logger)
 	channelDefaultsH := handlers.NewChannelDefaultsHandler(channelDefaultRepo, auditLogRepo, logger)
 	smlPartyH := handlers.NewSMLPartyHandler(partyCache, partyClient, auditLogRepo, logger)
@@ -537,6 +545,13 @@ func main() {
 		api.PUT("/settings/instance", middleware.RequireRole("admin"), instanceSettingsH.Update)
 		api.POST("/settings/instance/restart", middleware.RequireRole("admin"), instanceSettingsH.Restart)
 		api.POST("/settings/instance/test-connection", middleware.RequireRole("admin"), instanceSettingsH.TestConnection)
+		api.GET("/settings/google-drive", middleware.RequireRole("admin"), googleDriveExportH.GetSettings)
+		api.PUT("/settings/google-drive", middleware.RequireRole("admin"), googleDriveExportH.UpdateSettings)
+		api.POST("/settings/google-drive/test", middleware.RequireRole("admin"), googleDriveExportH.TestConnection)
+		api.GET("/settings/google-drive/jobs", middleware.RequireRole("admin"), googleDriveExportH.ListJobs)
+		api.POST("/settings/google-drive/backfill/preview", middleware.RequireRole("admin"), googleDriveExportH.PreviewBackfill)
+		api.POST("/settings/google-drive/backfill", middleware.RequireRole("admin"), googleDriveExportH.EnqueueBackfill)
+		api.POST("/settings/google-drive/jobs/:id/retry", middleware.RequireRole("admin"), googleDriveExportH.RetryJob)
 
 		// Logs (Activity Log)
 		api.GET("/logs", middleware.RequireRole("admin", "staff"), logH.List)
@@ -761,6 +776,9 @@ func main() {
 	// this admin only finds out via "ลูกค้าได้รับรูปไม่ครบ" days later.
 	tunnelMon := jobs.NewTunnelDriftMonitor(cfg.PublicBaseURL, telegramSvc, cfg.ProjectName, logger)
 	tunnelMon.Register(c)
+
+	googleDriveExportCron := jobs.NewGoogleDriveEmailExportCron(googleDriveExportSvc, logger)
+	googleDriveExportCron.Register(c)
 
 	// Wire processors into the coordinator now that emailH is built, then
 	// boot the multi-account poller. Coordinator reads imap_accounts and
