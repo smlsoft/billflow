@@ -22,7 +22,17 @@ FROM alpine:3.19
 # postgresql16-client provides pg_dump used by the in-container backup cron.
 # rclone copies approved marketplace source emails using the server-owned
 # Google Drive remote; its config is mounted read-only at runtime.
-RUN apk add --no-cache ca-certificates tzdata postgresql16-client rclone
+RUN set -eux; \
+    for mirror in \
+        https://dl-cdn.alpinelinux.org/alpine \
+        https://mirror1.hs-esslingen.de/pub/Mirrors/alpine \
+        https://mirror.raiolanetworks.com/alpine; do \
+        printf '%s/v3.19/main\n%s/v3.19/community\n' "$mirror" "$mirror" > /etc/apk/repositories; \
+        if apk add --no-cache ca-certificates tzdata postgresql16-client rclone; then \
+            exit 0; \
+        fi; \
+    done; \
+    exit 1
 
 WORKDIR /app
 
