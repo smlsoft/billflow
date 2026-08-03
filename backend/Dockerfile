@@ -1,8 +1,6 @@
 # Build stage
 FROM golang:1.24-alpine AS builder
 
-RUN apk add --no-cache git
-
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -16,23 +14,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o server ./cmd
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o marketplace_order_url_backfill ./cmd/backfill/marketplace_order_url \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o shopee_item_images ./cmd/backfill/shopee_item_images
 
-# Runtime stage
-FROM alpine:3.19
+# The official rclone image is pulled from Docker Hub and supplies the static
+# binary without invoking Alpine's package mirrors during this build.
+FROM rclone/rclone:1.74.2 AS rclone
 
-# postgresql16-client provides pg_dump used by the in-container backup cron.
-# rclone copies approved marketplace source emails using the server-owned
-# Google Drive remote; its config is mounted read-only at runtime.
-RUN set -eux; \
-    for mirror in \
-        https://dl-cdn.alpinelinux.org/alpine \
-        https://mirror1.hs-esslingen.de/pub/Mirrors/alpine \
-        https://mirror.raiolanetworks.com/alpine; do \
-        printf '%s/v3.19/main\n%s/v3.19/community\n' "$mirror" "$mirror" > /etc/apk/repositories; \
-        if apk add --no-cache ca-certificates tzdata postgresql16-client rclone; then \
-            exit 0; \
-        fi; \
-    done; \
-    exit 1
+# postgres:16-alpine already supplies pg_dump, CA certificates, and timezone
+# data required by the backup cron. It is also the image used by this stack's
+# postgres service, so customer servers normally already have it locally.
+FROM postgres:16-alpine
+
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+
+# Do not inherit the Postgres entrypoint; this image runs BillFlow's server.
+ENTRYPOINT []
 
 WORKDIR /app
 
