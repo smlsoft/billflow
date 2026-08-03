@@ -247,6 +247,56 @@ func CalcShopeeCoinAmount(goodsTotal, shippingAmount, totalCouponDiscount, paidT
 	return coin, true
 }
 
+// DeriveShopeeCoinAmountForItems derives a Shopee Coin discount from an order's
+// original email and extracted product lines. In Shopee purchase emails,
+// "ยอดรวมค่าสินค้า" is the product subtotal after Coin but before coupon
+// discounts. The source totals must therefore satisfy:
+//
+//	paid total - shipping + coupon discounts = goods subtotal
+//
+// Refusing to derive a value unless that equation holds prevents a malformed
+// or wrongly-scoped email block from changing the SML amount.
+func DeriveShopeeCoinAmountForItems(items []models.BillItem, bodyText, bodyHTML, orderID string, couponDiscount float64) (float64, bool) {
+	grossGoodsTotal, ok := shopeeGrossGoodsTotal(items)
+	if !ok {
+		return 0, false
+	}
+	shippingAmount, hasShippingAmount := ExtractShopeeShippingAmount(bodyText, bodyHTML, orderID)
+	if !hasShippingAmount {
+		return 0, false
+	}
+	paidTotal, hasPaidTotal := ExtractShopeeMoneyLabel(bodyText, bodyHTML, orderID, "ยอดที่ต้องชำระทั้งหมด")
+	goodsSubtotal, hasGoodsSubtotal := ExtractShopeeMoneyLabel(bodyText, bodyHTML, orderID, "ยอดรวมค่าสินค้า")
+	if !hasPaidTotal || !hasGoodsSubtotal {
+		return 0, false
+	}
+	paidForGoods := roundMoney(paidTotal - shippingAmount)
+	expectedGoodsSubtotal := roundMoney(paidForGoods + couponDiscount)
+	if math.Abs(expectedGoodsSubtotal-goodsSubtotal) > 0.01 {
+		return 0, false
+	}
+	return CalcShopeeCoinAmount(grossGoodsTotal, shippingAmount, couponDiscount, paidTotal, true)
+}
+
+func shopeeGrossGoodsTotal(items []models.BillItem) (float64, bool) {
+	total := 0.0
+	hasProduct := false
+	for _, item := range items {
+		if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
+			continue
+		}
+		if item.Price == nil || item.Qty <= 0 {
+			return 0, false
+		}
+		total += item.Qty * *item.Price
+		hasProduct = true
+	}
+	if !hasProduct || total <= 0 {
+		return 0, false
+	}
+	return roundMoney(total), true
+}
+
 // AllocateShopeeDiscountsByLine splits total discount proportionally across
 // item rows by gross amount, excluding marketplace fee/shipping rows.
 // ใช้ proportional allocation แทน equal split เพื่อความถูกต้องทางบัญชี

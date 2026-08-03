@@ -632,7 +632,7 @@ func (h *EmailHandler) buildShopeeRepairItems(orderID string, validItems []ai.Ex
 	)
 	effectiveDiscount := discountSummary.TotalDiscountAmount
 	if hasCoin {
-		effectiveDiscount = roundShopeeMoney(effectiveDiscount + coinAmount)
+		effectiveDiscount = math.Round((effectiveDiscount+coinAmount)*100) / 100
 	}
 	if discountSummary.HasAny() || effectiveDiscount > 0 {
 		repository.ApplyShopeeDiscountsToItems(itemCopies, effectiveDiscount)

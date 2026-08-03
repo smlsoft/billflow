@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -1153,57 +1152,10 @@ func (h *EmailHandler) processOneShippedOrder(
 	return true, nil
 }
 
-// shopeeCoinAmountForItems derives Shopee Coin only when the email totals
-// reconcile. The email's goods total is already net of discounts, so the
-// gross amount must come from the individual purchase lines.
+// shopeeCoinAmountForItems keeps the email ingestion flow on the same
+// derivation rule used by active-bill backfills.
 func shopeeCoinAmountForItems(items []models.BillItem, bodyText, bodyHTML, orderID string, couponDiscount float64) (float64, bool) {
-	grossGoodsTotal, ok := shopeeGrossGoodsTotal(items)
-	if !ok {
-		return 0, false
-	}
-	shippingAmount, hasShippingAmount := repository.ExtractShopeeShippingAmount(bodyText, bodyHTML, orderID)
-	if !hasShippingAmount {
-		return 0, false
-	}
-	paidTotal, hasPaidTotal := shopeeMoneyLabel(bodyText, bodyHTML, orderID, "ยอดที่ต้องชำระทั้งหมด")
-	netGoodsTotal, hasNetGoodsTotal := shopeeMoneyLabel(bodyText, bodyHTML, orderID, "ยอดรวมค่าสินค้า")
-	if !hasPaidTotal || !hasNetGoodsTotal {
-		return 0, false
-	}
-	if math.Abs(roundShopeeMoney(paidTotal-shippingAmount)-roundShopeeMoney(netGoodsTotal)) > 0.01 {
-		return 0, false
-	}
-	return repository.CalcShopeeCoinAmount(grossGoodsTotal, shippingAmount, couponDiscount, paidTotal, true)
-}
-
-func shopeeGrossGoodsTotal(items []models.BillItem) (float64, bool) {
-	total := 0.0
-	hasProduct := false
-	for _, item := range items {
-		if models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
-			continue
-		}
-		if item.Price == nil || item.Qty <= 0 {
-			return 0, false
-		}
-		total += item.Qty * *item.Price
-		hasProduct = true
-	}
-	if !hasProduct || total <= 0 {
-		return 0, false
-	}
-	return roundShopeeMoney(total), true
-}
-
-func shopeeMoneyLabel(bodyText, bodyHTML, orderID, label string) (float64, bool) {
-	if amount, ok := repository.ExtractShopeeMoneyLabel("", bodyHTML, orderID, label); ok {
-		return amount, true
-	}
-	return repository.ExtractShopeeMoneyLabel(bodyText, "", orderID, label)
-}
-
-func roundShopeeMoney(amount float64) float64 {
-	return math.Round(amount*100) / 100
+	return repository.DeriveShopeeCoinAmountForItems(items, bodyText, bodyHTML, orderID, couponDiscount)
 }
 
 func (h *EmailHandler) saveShopeeShippedEmailArtifacts(billID, subject, from, bodyText, bodyHTML, messageID string) {

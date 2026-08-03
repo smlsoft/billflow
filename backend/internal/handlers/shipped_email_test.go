@@ -89,6 +89,50 @@ func TestShopeeCoinAmountForItemsUsesGrossLineTotal(t *testing.T) {
 	}
 }
 
+func TestShopeeCoinAmountForItemsCombinesCouponAndCoin(t *testing.T) {
+	price := 67.0
+	shipping := 72.0
+	items := []models.BillItem{
+		{RawName: "ตะกร้าพลาสติก", Qty: 5, Price: &price},
+		{RawName: "ค่าขนส่งบิลซื้อ", SourceSKU: models.ShopeeShippingSourceSKU, Qty: 1, Price: &shipping},
+	}
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ: #26080181CVHFBN",
+		"ยอดรวมค่าสินค้า: ฿333",
+		"โค้ดส่วนลดของ Shopee: ฿57",
+		"ค่าจัดส่งสินค้า: ฿72",
+		"ยอดที่ต้องชำระทั้งหมด: ฿348",
+	}, "\n")
+
+	coin, ok := shopeeCoinAmountForItems(items, body, "", "26080181CVHFBN", 57)
+	if !ok || coin != 2 {
+		t.Fatalf("coin = (%v, %v), want (2, true)", coin, ok)
+	}
+}
+
+func TestShopeeCoinAmountForItemsCombinesCouponAndCoinAcrossLines(t *testing.T) {
+	price68 := 68.0
+	price67 := 67.0
+	shipping := 92.0
+	items := []models.BillItem{
+		{RawName: "ตะกร้าพลาสติก", Qty: 1, Price: &price68},
+		{RawName: "ตะกร้าพลาสติก", Qty: 5, Price: &price67},
+		{RawName: "ค่าขนส่งบิลซื้อ", SourceSKU: models.ShopeeShippingSourceSKU, Qty: 1, Price: &shipping},
+	}
+	body := strings.Join([]string{
+		"หมายเลขคำสั่งซื้อ: #26080181A2WE87",
+		"ยอดรวมค่าสินค้า: ฿401",
+		"โค้ดส่วนลดของ Shopee: ฿101",
+		"ค่าจัดส่งสินค้า: ฿92",
+		"ยอดที่ต้องชำระทั้งหมด: ฿392",
+	}, "\n")
+
+	coin, ok := shopeeCoinAmountForItems(items, body, "", "26080181A2WE87", 101)
+	if !ok || coin != 2 {
+		t.Fatalf("coin = (%v, %v), want (2, true)", coin, ok)
+	}
+}
+
 func TestShopeeCoinAmountForItemsRejectsInconsistentEmailTotals(t *testing.T) {
 	price := 100.0
 	items := []models.BillItem{{RawName: "สินค้า", Qty: 1, Price: &price}}

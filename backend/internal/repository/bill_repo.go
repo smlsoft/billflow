@@ -1332,10 +1332,6 @@ func (r *BillRepo) BackfillShopeePurchasePaymentSummaries() (int, error) {
 }
 
 func (r *BillRepo) ApplyShopeePurchaseDiscountsToBill(billID string, summary ShopeeDiscountSummary) (bool, error) {
-	if !summary.HasAny() {
-		return false, nil
-	}
-
 	var rawData json.RawMessage
 	err := r.db.QueryRow(`
 		SELECT raw_data
@@ -1357,16 +1353,39 @@ func (r *BillRepo) ApplyShopeePurchaseDiscountsToBill(billID string, summary Sho
 	if err := json.Unmarshal(rawData, &raw); err != nil {
 		raw = map[string]interface{}{}
 	}
+	orderID := strings.TrimSpace(stringField(raw, "order_id"))
+	if orderID == "" {
+		orderID = strings.TrimSpace(stringField(raw, "shopee_order_id"))
+	}
+	if orderID == "" {
+		return false, nil
+	}
 	items, err := r.findItems(billID)
 	if err != nil {
 		return false, err
 	}
 	effectiveDiscount := summary.TotalDiscountAmount
-	if coin := floatField(raw, "shopee_coin_amount"); coin > 0 {
-		effectiveDiscount = roundMoney(effectiveDiscount + coin)
+	coinAmount, hasCoin := DeriveShopeeCoinAmountForItems(
+		items,
+		stringField(raw, "body_text"),
+		stringField(raw, "body_html"),
+		orderID,
+		summary.TotalDiscountAmount,
+	)
+	if !hasCoin {
+		coinAmount = floatField(raw, "shopee_coin_amount")
+	}
+	if coinAmount > 0 {
+		effectiveDiscount = roundMoney(effectiveDiscount + coinAmount)
+		raw["shopee_coin_amount"] = coinAmount
+	}
+	if effectiveDiscount <= 0 {
+		return false, nil
 	}
 	ApplyShopeeDiscountsToItems(items, effectiveDiscount)
-	raw["discount_summary"] = summary
+	if summary.HasAny() {
+		raw["discount_summary"] = summary
+	}
 	rawJSON, _ := json.Marshal(raw)
 
 	tx, err := r.db.Begin()
@@ -1519,9 +1538,6 @@ func (r *BillRepo) backfillShopeePurchaseDiscount(billID string, rawData json.Ra
 		return false, nil
 	}
 	summary := ExtractShopeeDiscountSummary(stringField(raw, "body_text"), stringField(raw, "body_html"), orderID)
-	if !summary.HasAny() {
-		return false, nil
-	}
 	return r.ApplyShopeePurchaseDiscountsToBill(billID, summary)
 }
 
