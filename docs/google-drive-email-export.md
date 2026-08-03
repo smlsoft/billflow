@@ -17,12 +17,15 @@ the BillFlow web UI.
 
 ```dotenv
 GOOGLE_DRIVE_RCLONE_REMOTE=thaisunsport_gdrive
-RCLONE_CONFIG_HOST_PATH=/root/.config/rclone/rclone.conf
+RCLONE_CONFIG_HOST_DIR=/root/.config/rclone
+RCLONE_CONFIG=/run/secrets/rclone/rclone.conf
 ```
 
-`RCLONE_CONFIG_HOST_PATH` is a host path. Docker mounts it read-only at
-`/run/secrets/rclone.conf` in the backend. Keep the actual `rclone.conf`
-outside Git and never put its refresh token in `.env` or the UI.
+`RCLONE_CONFIG_HOST_DIR` is a root-owned directory on the host. Docker mounts
+it at `/run/secrets/rclone` so rclone can atomically write refreshed Google
+OAuth tokens to `rclone.conf`. Keep the actual config outside Git and never
+put its refresh token in `.env` or the UI. On the host, use directory mode
+`700` and file mode `600`.
 
 If the rclone configuration is encrypted, set `RCLONE_CONFIG_PASS` only in the
 deployment `.env`; do not add it to the tracked `.env.example`.

@@ -34,10 +34,11 @@ services:
       - ./backups:/app/backups
       # Bill source artifacts (PDFs/HTML/etc.) for audit/legal trail
       - ./artifacts:/app/artifacts
-      # Google Drive rclone config is server-owned and read-only. The tracked
-      # fallback is intentionally empty, so no remote can be used until the
-      # operator supplies RCLONE_CONFIG_HOST_PATH in .env.
-      - ${RCLONE_CONFIG_HOST_PATH:-./docker/rclone-empty.conf}:/run/secrets/rclone.conf:ro
+      # rclone refreshes Google OAuth tokens in its config. Mount the config
+      # directory (not an individual file) so its atomic rename can persist.
+      # The tracked fallback is intentionally empty; production supplies a
+      # root-owned directory through RCLONE_CONFIG_HOST_DIR in .env.
+      - ${RCLONE_CONFIG_HOST_DIR:-./docker/rclone-empty}:/run/secrets/rclone
     depends_on:
       postgres:
         condition: service_healthy
