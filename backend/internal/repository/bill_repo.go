@@ -738,7 +738,7 @@ func (r *BillRepo) UpdateBillItem(itemID, itemCode, unitCode, mappingID string, 
 
 // UpdateBillItemFields applies a partial update to a bill_item row.
 // Each pointer is applied only when non-nil; setting item_code also marks the row mapped.
-func (r *BillRepo) UpdateBillItemFields(itemID string, itemCode, unitCode *string, qty, price *float64) error {
+func (r *BillRepo) UpdateBillItemFields(itemID string, itemCode, unitCode *string, qty, price, discountAmount *float64) error {
 	sets := []string{}
 	args := []interface{}{}
 	idx := 1
@@ -764,6 +764,11 @@ func (r *BillRepo) UpdateBillItemFields(itemID string, itemCode, unitCode *strin
 	if price != nil {
 		sets = append(sets, fmt.Sprintf("price=$%d", idx))
 		args = append(args, *price)
+		idx++
+	}
+	if discountAmount != nil {
+		sets = append(sets, fmt.Sprintf("discount_amount=$%d", idx))
+		args = append(args, *discountAmount)
 		idx++
 	}
 	if len(sets) == 0 {

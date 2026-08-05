@@ -32,6 +32,7 @@ interface Props {
   bill: Bill
   canEdit: boolean
   canDeleteItems: boolean
+  canEditMarketplaceAmounts: boolean
   onItemDeleted: (itemId: string) => void
   onItemAdded: (item: BillItem) => void
   onRefresh: () => Promise<unknown>
@@ -217,6 +218,7 @@ export function BillItemsTable({
   bill,
   canEdit,
   canDeleteItems,
+  canEditMarketplaceAmounts,
   onItemDeleted,
   onItemAdded,
   onRefresh,
@@ -372,6 +374,7 @@ export function BillItemsTable({
                   billId={bill.id}
                   editable={canEdit}
                   canDelete={canDeleteItems}
+                  canEditMarketplaceAmounts={canEditMarketplaceAmounts}
                   lockSourceAmounts={lockSourceAmounts}
                   onDeleted={onItemDeleted}
                   onRefresh={onRefresh}

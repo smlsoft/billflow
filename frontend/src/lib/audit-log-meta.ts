@@ -53,6 +53,7 @@ export const ACTION_META: Record<string, ActionMeta> = {
   bill_restored: { label: 'กู้คืนบิล', emoji: '♻️', tone: 'info' },
   bill_item_added: { label: 'เพิ่มรายการในบิล', emoji: '➕', tone: 'info' },
   bill_item_deleted: { label: 'ลบรายการในบิล', emoji: '➖', tone: 'muted' },
+  bill_item_amounts_updated: { label: 'แก้ราคา/ส่วนลดรายการ', emoji: '💰', tone: 'info' },
   bill_print_payment_method_updated: { label: 'แก้วิธีชำระเงินสำหรับพิมพ์', emoji: '💳', tone: 'info' },
   google_drive_export_settings_updated: { label: 'แก้การตั้งค่า Google Drive อีเมล', emoji: '☁️', tone: 'info' },
   google_drive_email_export_queued: { label: 'เพิ่มอีเมลเข้าคิว Google Drive', emoji: '📤', tone: 'info' },
@@ -328,6 +329,23 @@ export function summarize(log: AuditLog): string {
         d.payment_method ? `วิธีชำระ: ${String(d.payment_method)}` : '',
         typeof d.updated_count === 'number' ? `อัปเดต ${d.updated_count.toLocaleString()} บิล` : '',
       ].filter(Boolean).join(' · ')
+    case 'bill_item_amounts_updated': {
+      const money = (value: unknown) => {
+        const amount = Number(value)
+        if (!Number.isFinite(amount)) return ''
+        return `฿${amount.toLocaleString('th-TH', { maximumFractionDigits: 2 })}`
+      }
+      return [
+        d.raw_name ? String(d.raw_name) : '',
+        d.old_price != null && d.new_price != null ? `ราคา ${money(d.old_price)} → ${money(d.new_price)}` : '',
+        d.old_discount_amount != null && d.new_discount_amount != null
+          ? `ส่วนลด ${money(d.old_discount_amount)} → ${money(d.new_discount_amount)}`
+          : '',
+        d.old_line_total != null && d.new_line_total != null
+          ? `ยอดสุทธิ ${money(d.old_line_total)} → ${money(d.new_line_total)}`
+          : '',
+      ].filter(Boolean).join(' · ')
+    }
     case 'google_drive_email_export_queued':
     case 'google_drive_email_export_succeeded':
       return [d.sml_doc_no, d.marketplace_order_id].filter(Boolean).join(' · ')

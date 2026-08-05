@@ -41,6 +41,7 @@ interface Props {
   billId: string
   editable: boolean
   canDelete: boolean
+  canEditMarketplaceAmounts: boolean
   onDeleted: (itemId: string) => void
   onRefresh: () => Promise<unknown>
   lockSourceAmounts?: boolean
@@ -90,6 +91,7 @@ export function BillItemRow({
   billId,
   editable,
   canDelete,
+  canEditMarketplaceAmounts,
   onDeleted,
   onRefresh,
   lockSourceAmounts = false,
@@ -127,7 +129,10 @@ export function BillItemRow({
     unit_code: item.unit_code ?? '',
     qty: String(item.qty ?? 0),
     price: String(item.price ?? 0),
+    discount_amount: String(item.discount_amount ?? 0),
+    line_total: String(Math.max((item.qty ?? 0) * (item.price ?? 0) - (item.discount_amount ?? 0), 0)),
   })
+  const [amountEditMode, setAmountEditMode] = useState<'discount' | 'line_total' | null>(null)
 
   const reset = () => {
     setPickedMatch(null)
@@ -136,7 +141,10 @@ export function BillItemRow({
       unit_code: item.unit_code ?? '',
       qty: String(item.qty ?? 0),
       price: String(item.price ?? 0),
+      discount_amount: String(item.discount_amount ?? 0),
+      line_total: String(Math.max((item.qty ?? 0) * (item.price ?? 0) - (item.discount_amount ?? 0), 0)),
     })
+    setAmountEditMode(null)
   }
 
   const handleSave = async () => {
@@ -147,6 +155,8 @@ export function BillItemRow({
         unit_code: string
         qty?: number
         price?: number
+        discount_amount?: number
+        line_total?: number
       } = {
         item_code: draft.item_code,
         unit_code: draft.unit_code,
@@ -154,6 +164,17 @@ export function BillItemRow({
       if (!lockSourceAmounts) {
         payload.qty = Number(draft.qty)
         payload.price = Number(draft.price)
+      } else if (canEditMarketplaceAmounts) {
+        const nextPrice = Number(draft.price)
+        if (nextPrice !== (item.price ?? 0)) {
+          payload.price = nextPrice
+        }
+        if (amountEditMode === 'discount') {
+          payload.discount_amount = Number(draft.discount_amount)
+        }
+        if (amountEditMode === 'line_total') {
+          payload.line_total = Number(draft.line_total)
+        }
       }
       const { data } = await api.put<{
         mapping_scope?: 'item_only' | 'source_sku' | 'raw_name'
@@ -183,7 +204,10 @@ export function BillItemRow({
       setPickedMatch(null)
     } catch (err) {
       console.error('update item failed', err)
-      toast.error('บันทึกไม่สำเร็จ')
+      const detail = (err as { response?: { data?: { error?: unknown } } })?.response?.data?.error
+      toast.error('บันทึกไม่สำเร็จ', {
+        description: typeof detail === 'string' ? detail : undefined,
+      })
     } finally {
       setSaving(false)
     }
@@ -244,7 +268,15 @@ export function BillItemRow({
   const grossAmount = (item.qty ?? 0) * billPrice
   const netAmount = Math.max(grossAmount - discountAmount, 0)
   const editQty = lockSourceAmounts ? item.qty ?? 0 : Number(draft.qty || 0)
-  const editPrice = lockSourceAmounts ? item.price ?? 0 : Number(draft.price || 0)
+  const editPrice = lockSourceAmounts && !canEditMarketplaceAmounts ? item.price ?? 0 : Number(draft.price || 0)
+  const editDiscount = lockSourceAmounts && canEditMarketplaceAmounts
+    ? amountEditMode === 'line_total'
+      ? Math.max(editQty * editPrice - Number(draft.line_total || 0), 0)
+      : Number(draft.discount_amount || 0)
+    : discountAmount
+  const editLineTotal = amountEditMode === 'line_total'
+    ? Number(draft.line_total || 0)
+    : Math.max(editQty * editPrice - editDiscount, 0)
 
   if (!editing) {
     return (
@@ -573,7 +605,7 @@ export function BillItemRow({
                 </div>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">ราคา</span>
-                  {lockSourceAmounts ? (
+                  {lockSourceAmounts && !canEditMarketplaceAmounts ? (
                     <div className="flex h-10 items-center justify-end rounded-md border border-border bg-muted/40 px-3 text-sm tabular-nums text-foreground">
                       ฿{(item.price ?? 0).toLocaleString()}
                     </div>
@@ -586,24 +618,58 @@ export function BillItemRow({
                       className="h-10 text-right"
                     />
                   )}
-                  {lockSourceAmounts && (
+                  {lockSourceAmounts && !canEditMarketplaceAmounts && (
                     <span className="block text-[11px] text-muted-foreground">ดึงจากอีเมล</span>
                   )}
                 </label>
                 {showDiscountColumn && (
-                  <div className="space-y-1.5">
+                  <label className="space-y-1.5">
                     <span className="text-xs font-medium text-muted-foreground">ส่วนลด</span>
-                    <div className="flex h-10 items-center justify-end rounded-md border border-border bg-muted/40 px-3 text-sm tabular-nums text-muted-foreground">
-                      {discountAmount > 0 ? `-฿${discountAmount.toLocaleString()}` : '—'}
-                    </div>
+                    {canEditMarketplaceAmounts ? (
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={amountEditMode === 'discount' ? draft.discount_amount : String(editDiscount)}
+                        onChange={(e) => {
+                          setAmountEditMode('discount')
+                          setDraft((d) => ({ ...d, discount_amount: e.target.value }))
+                        }}
+                        className="h-10 text-right"
+                        aria-label="ส่วนลดรายการนี้"
+                      />
+                    ) : (
+                      <div className="flex h-10 items-center justify-end rounded-md border border-border bg-muted/40 px-3 text-sm tabular-nums text-muted-foreground">
+                        {discountAmount > 0 ? `-฿${discountAmount.toLocaleString()}` : '—'}
+                      </div>
+                    )}
+                  </label>
+                )}
+                {canEditMarketplaceAmounts && showDiscountColumn ? (
+                  <label className="col-span-4 grid gap-1.5 sm:grid-cols-[1fr_180px] sm:items-center">
+                    <span className="text-xs font-medium text-muted-foreground">รวมรายการนี้</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={amountEditMode === 'line_total' ? draft.line_total : String(editLineTotal)}
+                      onChange={(e) => {
+                        setAmountEditMode('line_total')
+                        setDraft((d) => ({ ...d, line_total: e.target.value }))
+                      }}
+                      className="h-10 text-right font-semibold tabular-nums"
+                      aria-label="ยอดรวมรายการนี้"
+                    />
+                    <span className="sm:col-span-2 text-[11px] text-muted-foreground">แก้ยอดรวมแล้วระบบจะคำนวณส่วนลดให้ หรือแก้ส่วนลดเพื่อคำนวณยอดรวม</span>
+                  </label>
+                ) : (
+                  <div className={cn('flex items-center justify-between rounded-md bg-muted/50 px-3 py-2', showDiscountColumn ? 'col-span-4' : 'col-span-3')}>
+                    <span className="text-xs font-medium text-muted-foreground">รวมรายการนี้</span>
+                    <span className="tabular-nums text-sm font-semibold text-foreground">
+                      ฿{Math.max(editQty * editPrice - editDiscount, 0).toLocaleString()}
+                    </span>
                   </div>
                 )}
-                <div className={cn('flex items-center justify-between rounded-md bg-muted/50 px-3 py-2', showDiscountColumn ? 'col-span-4' : 'col-span-3')}>
-                  <span className="text-xs font-medium text-muted-foreground">รวมรายการนี้</span>
-                  <span className="tabular-nums text-sm font-semibold text-foreground">
-                    ฿{Math.max(editQty * editPrice - discountAmount, 0).toLocaleString()}
-                  </span>
-                </div>
                 <div className={cn('flex justify-end gap-2', showDiscountColumn ? 'col-span-4' : 'col-span-3')}>
                   <Button
                     type="button"

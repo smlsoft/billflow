@@ -283,6 +283,7 @@ export default function BillDetail() {
     bill.status === 'needs_review'
   const canEdit = canSendToSML && canSend
   const canDeleteItems = user?.role === 'admin' && canEdit
+  const canEditMarketplaceAmounts = user?.role === 'admin' && canEdit
   const canUpdatePurchaseCreditor =
     user?.role === 'admin' &&
     bill.status === 'sent' &&
@@ -355,6 +356,7 @@ export default function BillDetail() {
         bill={bill}
         canEdit={canEdit}
         canDeleteItems={canDeleteItems}
+        canEditMarketplaceAmounts={canEditMarketplaceAmounts}
         onItemDeleted={handleItemDeleted}
         onItemAdded={handleItemAdded}
         onRefresh={reloadBill}

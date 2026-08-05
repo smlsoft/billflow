@@ -4563,10 +4563,12 @@ func (h *BillHandler) DeleteItemRow(c *gin.Context) {
 
 // PUT /api/bills/:id/items/:item_id — edit item code/unit/qty/price before sending.
 type updateItemRequest struct {
-	ItemCode *string  `json:"item_code"`
-	UnitCode *string  `json:"unit_code"`
-	Qty      *float64 `json:"qty"`
-	Price    *float64 `json:"price"`
+	ItemCode       *string  `json:"item_code"`
+	UnitCode       *string  `json:"unit_code"`
+	Qty            *float64 `json:"qty"`
+	Price          *float64 `json:"price"`
+	DiscountAmount *float64 `json:"discount_amount"`
+	LineTotal      *float64 `json:"line_total"`
 }
 
 type itemMappingScope string
@@ -4753,12 +4755,23 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "บิลซื้อจาก Marketplace ต้องใช้จำนวนจากอีเมล ไม่อนุญาตให้แก้จำนวนจากหน้าจับคู่สินค้า"})
 			return
 		}
-		if req.Price != nil && !sameMarketplaceOptionalNumber(req.Price, existingItem.Price) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "บิลซื้อจาก Marketplace ต้องใช้ราคาจากอีเมล ไม่อนุญาตให้แก้ราคาจากหน้าจับคู่สินค้า"})
+		manualAmountEdit := req.Price != nil || req.DiscountAmount != nil || req.LineTotal != nil
+		if manualAmountEdit && c.GetString("user_role") != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "แก้ราคา ส่วนลด หรือยอดรวมของบิล Marketplace ได้เฉพาะผู้ดูแลระบบ"})
+			return
+		}
+		if req.DiscountAmount != nil && req.LineTotal != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "กรุณาแก้ส่วนลดหรือยอดรวมเพียงช่องเดียวต่อครั้ง"})
+			return
+		}
+		if err := validateMarketplaceItemAmountEdit(existingItem, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		req.Qty = nil
-		req.Price = nil
+	} else if req.DiscountAmount != nil || req.LineTotal != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "แก้ส่วนลดหรือยอดรวมด้วยตนเองได้เฉพาะบิลซื้อจาก Marketplace"})
+		return
 	}
 
 	// If user is changing item_code, fill unit_code from catalog if not provided.
@@ -4770,11 +4783,12 @@ func (h *BillHandler) UpdateItem(c *gin.Context) {
 		}
 	}
 
-	if err := h.billRepo.UpdateBillItemFields(itemID, req.ItemCode, req.UnitCode, req.Qty, req.Price); err != nil {
+	if err := h.billRepo.UpdateBillItemFields(itemID, req.ItemCode, req.UnitCode, req.Qty, req.Price, req.DiscountAmount); err != nil {
 		h.log.Error("UpdateItem", zap.String("bill", billID), zap.String("item", itemID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
 		return
 	}
+	h.auditMarketplaceItemAmountUpdate(c, bill, existingItem, req.Price, req.DiscountAmount, req.LineTotal != nil)
 
 	feedback := h.applyItemMappingFeedback(c, bill, existingItem, req.ItemCode, req.UnitCode)
 	c.JSON(http.StatusOK, gin.H{
@@ -4893,14 +4907,116 @@ func sameMarketplaceNumber(a, b float64) bool {
 	return math.Abs(a-b) <= 0.000001
 }
 
-func sameMarketplaceOptionalNumber(in *float64, current *float64) bool {
-	if in == nil {
-		return true
+func validateMarketplaceItemAmountEdit(item *models.BillItem, req *updateItemRequest) error {
+	if item == nil || req == nil {
+		return errors.New("ไม่พบรายการสินค้า")
 	}
-	if current == nil {
-		return math.Abs(*in) <= 0.000001
+	amounts := []struct {
+		field string
+		value *float64
+	}{
+		{field: "ราคา", value: req.Price},
+		{field: "ส่วนลด", value: req.DiscountAmount},
+		{field: "ยอดรวม", value: req.LineTotal},
 	}
-	return sameMarketplaceNumber(*in, *current)
+	for _, amount := range amounts {
+		field, value := amount.field, amount.value
+		if value == nil {
+			continue
+		}
+		if math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
+			return fmt.Errorf("%sต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป", field)
+		}
+		if math.Abs(*value*100-math.Round(*value*100)) > 0.000001 {
+			return fmt.Errorf("%sระบุได้ไม่เกิน 2 ตำแหน่งทศนิยม", field)
+		}
+	}
+	if req.DiscountAmount != nil && req.LineTotal != nil {
+		return errors.New("กรุณาแก้ส่วนลดหรือยอดรวมเพียงช่องเดียวต่อครั้ง")
+	}
+
+	price := 0.0
+	if item.Price != nil {
+		price = *item.Price
+	}
+	if req.Price != nil {
+		price = *req.Price
+		if price == 0 && !models.IsMarketplaceFeeSourceSKU(item.SourceSKU) {
+			return errors.New("ราคาสินค้าต้องมากกว่า 0")
+		}
+	}
+	gross := roundMoneyForBill(item.Qty * price)
+	if req.DiscountAmount != nil && *req.DiscountAmount > gross+0.000001 {
+		return errors.New("ส่วนลดต้องไม่มากกว่าราคา x จำนวน")
+	}
+	if req.LineTotal != nil {
+		if *req.LineTotal > gross+0.000001 {
+			return errors.New("ยอดรวมต้องไม่มากกว่าราคา x จำนวน; หากต้องเพิ่มยอดให้แก้ราคา")
+		}
+		discount := roundMoneyForBill(gross - *req.LineTotal)
+		req.DiscountAmount = &discount
+	}
+	return nil
+}
+
+func (h *BillHandler) auditMarketplaceItemAmountUpdate(
+	c *gin.Context,
+	bill *models.Bill,
+	item *models.BillItem,
+	updatedPrice, updatedDiscount *float64,
+	editedViaLineTotal bool,
+) {
+	if h.auditRepo == nil || bill == nil || item == nil || (!isMarketplacePurchaseEmailBill(bill)) {
+		return
+	}
+	oldPrice := 0.0
+	if item.Price != nil {
+		oldPrice = *item.Price
+	}
+	newPrice := oldPrice
+	if updatedPrice != nil {
+		newPrice = *updatedPrice
+	}
+	oldDiscount := item.DiscountAmount
+	newDiscount := oldDiscount
+	if updatedDiscount != nil {
+		newDiscount = *updatedDiscount
+	}
+	oldNet := roundMoneyForBill(math.Max(item.Qty*oldPrice-oldDiscount, 0))
+	newNet := roundMoneyForBill(math.Max(item.Qty*newPrice-newDiscount, 0))
+	if sameMarketplaceNumber(oldPrice, newPrice) && sameMarketplaceNumber(oldDiscount, newDiscount) {
+		return
+	}
+
+	var userID *string
+	if uid := c.GetString("user_id"); uid != "" {
+		userID = &uid
+	}
+	editedVia := "price_or_discount"
+	if editedViaLineTotal {
+		editedVia = "line_total"
+	}
+	_ = h.auditRepo.Log(models.AuditEntry{
+		Action:   "bill_item_amounts_updated",
+		TargetID: &bill.ID,
+		UserID:   userID,
+		Source:   bill.Source,
+		Level:    "info",
+		TraceID:  c.GetString("trace_id"),
+		Detail: map[string]interface{}{
+			"item_id":             item.ID,
+			"raw_name":            item.RawName,
+			"source_sku":          item.SourceSKU,
+			"qty":                 item.Qty,
+			"old_price":           oldPrice,
+			"new_price":           newPrice,
+			"old_discount_amount": oldDiscount,
+			"new_discount_amount": newDiscount,
+			"old_line_total":      oldNet,
+			"new_line_total":      newNet,
+			"edited_via":          editedVia,
+		},
+	})
 }
 
 // ─── Source artifact endpoints ────────────────────────────────────────────────
