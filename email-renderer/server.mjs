@@ -1,14 +1,26 @@
 import http from 'node:http'
 import { chromium } from 'playwright'
+import {
+  defaultAllowedImageHostSuffixes,
+  defaultSilentBlockedImageHostSuffixes,
+  imageHost,
+  isAllowedImageURL,
+  parseHostSuffixes,
+  shouldWarnForBlockedImageURL,
+} from './image-policy.mjs'
 
 const port = Number.parseInt(process.env.PORT ?? '8080', 10)
 const token = String(process.env.EMAIL_PDF_RENDERER_TOKEN ?? '').trim()
 const maxHTMLBytes = 10 * 1024 * 1024
 const maxPDFBytes = 20 * 1024 * 1024
-const allowedSuffixes = String(process.env.EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES ?? 'shopee.co.th,shopee.sg,susercontent.com,lazada.co.th,alicdn.com,slatic.net,lazcdn.com')
-  .split(',')
-  .map((value) => value.trim().toLowerCase())
-  .filter(Boolean)
+const allowedSuffixes = parseHostSuffixes(
+  process.env.EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES,
+  defaultAllowedImageHostSuffixes,
+)
+const silentBlockedSuffixes = parseHostSuffixes(
+  process.env.EMAIL_PDF_SILENT_BLOCKED_IMAGE_HOST_SUFFIXES,
+  defaultSilentBlockedImageHostSuffixes,
+)
 
 function json(res, status, body) {
   const data = Buffer.from(JSON.stringify(body))
@@ -18,18 +30,6 @@ function json(res, status, body) {
 
 function isAuthorized(req) {
   return token !== '' && req.headers['x-billflow-renderer-token'] === token
-}
-
-function isAllowedImageURL(value) {
-  if (value.startsWith('data:image/')) return true
-  try {
-    const url = new URL(value)
-    if (url.protocol !== 'https:') return false
-    const host = url.hostname.toLowerCase()
-    return allowedSuffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))
-  } catch {
-    return false
-  }
 }
 
 function warningHeader(warnings) {
@@ -50,8 +50,10 @@ async function renderPDF(html) {
         await route.abort('blockedbyclient')
         return
       }
-      if (!isAllowedImageURL(request.url())) {
-        try { blockedHosts.add(new URL(request.url()).hostname) } catch { blockedHosts.add('รูปที่มี URL ไม่ถูกต้อง') }
+      if (!isAllowedImageURL(request.url(), allowedSuffixes)) {
+        if (shouldWarnForBlockedImageURL(request.url(), silentBlockedSuffixes)) {
+          blockedHosts.add(imageHost(request.url()) || 'รูปที่มี URL ไม่ถูกต้อง')
+        }
         await route.abort('blockedbyclient')
         return
       }
@@ -59,7 +61,8 @@ async function renderPDF(html) {
     })
     page.on('requestfailed', (request) => {
       if (request.resourceType() !== 'image') return
-      try { failedHosts.add(new URL(request.url()).hostname) } catch { failedHosts.add('รูปที่โหลดไม่สำเร็จ') }
+      if (!shouldWarnForBlockedImageURL(request.url(), silentBlockedSuffixes)) return
+      failedHosts.add(imageHost(request.url()) || 'รูปที่โหลดไม่สำเร็จ')
     })
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 20000 })
     await page.waitForFunction(() => Array.from(document.images).every((image) => image.complete), undefined, { timeout: 10000 }).catch(() => {})
@@ -67,7 +70,8 @@ async function renderPDF(html) {
       .filter((image) => image.src && image.complete && image.naturalWidth === 0)
       .map((image) => image.src))
     for (const source of broken) {
-      try { failedHosts.add(new URL(source).hostname) } catch { failedHosts.add('รูปที่โหลดไม่สำเร็จ') }
+      if (!shouldWarnForBlockedImageURL(source, silentBlockedSuffixes)) continue
+      failedHosts.add(imageHost(source) || 'รูปที่โหลดไม่สำเร็จ')
     }
     const pdf = await page.pdf({
       format: 'A4',
@@ -88,7 +92,11 @@ async function renderPDF(html) {
 
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
-    return json(res, 200, { status: 'ok', allowed_image_host_suffixes: allowedSuffixes })
+    return json(res, 200, {
+      status: 'ok',
+      allowed_image_host_suffixes: allowedSuffixes,
+      silent_blocked_image_host_suffixes: silentBlockedSuffixes,
+    })
   }
   if (req.method !== 'POST' || req.url !== '/v1/render') return json(res, 404, { error: 'not found' })
   if (!isAuthorized(req)) return json(res, 401, { error: 'unauthorized' })

@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "playwright": "1.62.0"
   }

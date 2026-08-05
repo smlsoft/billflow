@@ -24,6 +24,8 @@ RCLONE_CONFIG=/run/secrets/rclone/rclone.conf
 GOOGLE_DRIVE_EMAIL_EXPORT_FORMAT=pdf
 EMAIL_PDF_RENDERER_URL=http://email-renderer:8080
 EMAIL_PDF_RENDERER_TOKEN=<random-server-secret>
+EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES=shopee.co.th,shopee.sg,susercontent.com,lazada.co.th,alicdn.com,slatic.net,lazcdn.com
+EMAIL_PDF_SILENT_BLOCKED_IMAGE_HOST_SUFFIXES=mmstat.com
 ```
 
 Generate the renderer token on the server, then keep it only in deployment
@@ -89,9 +91,9 @@ administrator to resolve.
 
 The renderer disables email JavaScript and blocks every network request except
 embedded `data:image` content and HTTPS image requests to configured
-marketplace/CDN suffixes. Its default list
-is `shopee.co.th`, `susercontent.com`, `lazada.co.th`, `alicdn.com`,
-`slatic.net`, and `lazcdn.com`. Add a suffix through
+marketplace/CDN suffixes. Its default list is `shopee.co.th`, `shopee.sg`,
+`susercontent.com`, `lazada.co.th`, `alicdn.com`, `slatic.net`, and
+`lazcdn.com`. Add a suffix through
 `EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES` only after verifying it appears in a
 real marketplace email; do not add a wildcard or a private/internal domain.
 
@@ -100,4 +102,8 @@ the Drive copy remains readable even when a marketplace image URL later
 expires. If an image is blocked or cannot be loaded, the PDF is still uploaded
 but the export history shows a **ตรวจรูป** warning with the host name. That
 warning is intentionally visible: it prevents a partial visual snapshot from
-looking silently complete.
+looking silently complete. Known transparent tracking pixels stay blocked but
+are omitted from that warning through
+`EMAIL_PDF_SILENT_BLOCKED_IMAGE_HOST_SUFFIXES`; its default is `mmstat.com`
+for Lazada's hidden email-open tracking endpoint. This setting never permits
+the domain to load.

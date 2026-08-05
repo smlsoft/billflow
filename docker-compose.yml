@@ -57,6 +57,7 @@ services:
       XDG_CACHE_HOME: /tmp/cache
       EMAIL_PDF_RENDERER_TOKEN: ${EMAIL_PDF_RENDERER_TOKEN:-}
       EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES: ${EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES:-shopee.co.th,shopee.sg,susercontent.com,lazada.co.th,alicdn.com,slatic.net,lazcdn.com}
+      EMAIL_PDF_SILENT_BLOCKED_IMAGE_HOST_SUFFIXES: ${EMAIL_PDF_SILENT_BLOCKED_IMAGE_HOST_SUFFIXES:-mmstat.com}
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
