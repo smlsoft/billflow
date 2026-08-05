@@ -5,7 +5,7 @@ const port = Number.parseInt(process.env.PORT ?? '8080', 10)
 const token = String(process.env.EMAIL_PDF_RENDERER_TOKEN ?? '').trim()
 const maxHTMLBytes = 10 * 1024 * 1024
 const maxPDFBytes = 20 * 1024 * 1024
-const allowedSuffixes = String(process.env.EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES ?? 'shopee.co.th,susercontent.com,lazada.co.th,alicdn.com,slatic.net,lazcdn.com')
+const allowedSuffixes = String(process.env.EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES ?? 'shopee.co.th,shopee.sg,susercontent.com,lazada.co.th,alicdn.com,slatic.net,lazcdn.com')
   .split(',')
   .map((value) => value.trim().toLowerCase())
   .filter(Boolean)
