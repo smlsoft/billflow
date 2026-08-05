@@ -10,13 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	stdhtml "html"
 	"os"
 	"os/exec"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -25,6 +25,7 @@ import (
 	"billflow/internal/models"
 	"billflow/internal/repository"
 	"billflow/internal/services/artifact"
+	"billflow/internal/services/emailpreview"
 )
 
 const (
@@ -62,6 +63,7 @@ type RuntimeStatus struct {
 	Enabled      bool   `json:"enabled"`
 	RootFolder   string `json:"root_folder"`
 	Remote       string `json:"remote"`
+	OutputFormat string `json:"output_format"`
 	RuntimeReady bool   `json:"runtime_ready"`
 	RuntimeError string `json:"runtime_error,omitempty"`
 	MaxAttempts  int    `json:"max_attempts"`
@@ -92,6 +94,7 @@ type Service struct {
 	auditRepo    *repository.AuditLogRepo
 	log          *zap.Logger
 	runner       Runner
+	pdfRenderer  PDFRenderer
 	now          func() time.Time
 }
 
@@ -105,10 +108,14 @@ func NewEmailExportService(
 	auditRepo *repository.AuditLogRepo,
 	logger *zap.Logger,
 ) *Service {
+	var renderer PDFRenderer
+	if cfg != nil {
+		renderer = newHTTPPDFRenderer(cfg.EmailPDFRendererURL, cfg.EmailPDFRendererToken)
+	}
 	return &Service{
 		cfg: cfg, settingsRepo: settingsRepo, billRepo: billRepo, artifactRepo: artifactRepo,
 		artifactSvc: artifactSvc, exportRepo: exportRepo, auditRepo: auditRepo, log: logger,
-		runner: commandRunner{}, now: time.Now,
+		runner: commandRunner{}, pdfRenderer: renderer, now: time.Now,
 	}
 }
 
@@ -120,12 +127,21 @@ func (s *Service) SetRunner(r Runner) {
 	}
 }
 
+// SetPDFRenderer is used by focused service tests. Production uses the
+// private email-renderer Compose service.
+func (s *Service) SetPDFRenderer(renderer PDFRenderer) {
+	if renderer != nil {
+		s.pdfRenderer = renderer
+	}
+}
+
 func (s *Service) Status() RuntimeStatus {
 	status := RuntimeStatus{MaxAttempts: maxAttempts}
 	if s == nil || s.cfg == nil {
 		return status
 	}
 	status.Remote = strings.TrimSpace(s.cfg.GoogleDriveRcloneRemote)
+	status.OutputFormat, _ = s.exportFormat()
 	if s.settingsRepo == nil {
 		status.RuntimeReady, status.RuntimeError = s.runtimeReady()
 		return status
@@ -178,6 +194,21 @@ func (s *Service) TestConnection(rootFolder string) error {
 }
 
 func (s *Service) testConnection(root string) error {
+	format, err := s.exportFormat()
+	if err != nil {
+		return err
+	}
+	if format == "pdf" {
+		if s.pdfRenderer == nil {
+			return errors.New("PDF renderer ไม่พร้อมใช้งาน")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := s.pdfRenderer.Render(ctx, "<!doctype html><html><body><p>BillFlow PDF renderer test</p></body></html>"); err != nil {
+			return fmt.Errorf("ทดสอบ PDF renderer ไม่สำเร็จ: %w", err)
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	probe := path.Join(root, ".billflow-connection-test-"+strconv.FormatInt(s.now().UnixNano(), 10))
@@ -258,7 +289,13 @@ func (s *Service) buildJob(billID, userID string) (*models.GoogleDriveEmailExpor
 	channel := channelName(bill.Source)
 	charge := chargeAmount(bill, raw)
 	ext := "txt"
-	if sourceArtifact.Kind == "email_html" || strings.Contains(strings.ToLower(sourceArtifact.ContentType), "html") {
+	format, err := s.exportFormat()
+	if err != nil {
+		return nil, err
+	}
+	if format == "pdf" {
+		ext = "pdf"
+	} else if sourceArtifact.Kind == "email_html" || strings.Contains(strings.ToLower(sourceArtifact.ContentType), "html") {
 		ext = "html"
 	}
 	fileName := strings.Join([]string{
@@ -278,7 +315,7 @@ func (s *Service) buildJob(billID, userID string) (*models.GoogleDriveEmailExpor
 		SourceContentType: sourceArtifact.ContentType, SourceFilename: sourceArtifact.Filename,
 		SourceChannel: channel, OrderDate: orderDate.Format("2006-01-02"), PaymentToken: payment,
 		SMLDocNo: *bill.SMLDocNo, MarketplaceOrderID: orderID, ChargeAmount: charge,
-		RemotePath: remotePath, Priority: 100, CreatedBy: createdBy,
+		OutputFormat: format, RemotePath: remotePath, Priority: 100, CreatedBy: createdBy,
 	}, nil
 }
 
@@ -286,32 +323,32 @@ func (s *Service) RunDue(ctx context.Context) {
 	if s == nil || !s.Status().Enabled {
 		return
 	}
-	jobs, err := s.exportRepo.ClaimDue(2)
+	// Chromium rendering is intentionally serialized. It avoids a burst of
+	// browser processes competing with SML and the primary backend on a small
+	// customer server; rclone verification still runs in the same durable job.
+	jobs, err := s.exportRepo.ClaimDue(1)
 	if err != nil {
 		s.log.Warn("claim google drive exports", zap.Error(err))
 		return
 	}
-	var wg sync.WaitGroup
 	for i := range jobs {
-		job := jobs[i]
-		wg.Add(1)
-		go func() { defer wg.Done(); s.processOne(ctx, job) }()
+		s.processOne(ctx, jobs[i])
 	}
-	wg.Wait()
 }
 
 func (s *Service) processOne(parent context.Context, job models.GoogleDriveEmailExport) {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
-	result, message := s.upload(ctx, job)
+	result, message, warning := s.upload(ctx, job)
 	switch result {
 	case "succeeded":
-		if err := s.exportRepo.MarkSucceeded(job.ID); err != nil {
+		if err := s.exportRepo.MarkSucceeded(job.ID, warning); err != nil {
 			s.log.Error("mark google drive export succeeded", zap.Error(err))
 			return
 		}
 		s.logAudit("google_drive_email_export_succeeded", &job.BillID, "", map[string]interface{}{
-			"sml_doc_no": job.SMLDocNo, "marketplace_order_id": job.MarketplaceOrderID, "attempt": job.AttemptCount,
+			"sml_doc_no": job.SMLDocNo, "marketplace_order_id": job.MarketplaceOrderID,
+			"attempt": job.AttemptCount, "output_format": job.OutputFormat, "render_warning": warning != "",
 		})
 	case "conflict":
 		_ = s.exportRepo.MarkConflict(job.ID, message)
@@ -333,41 +370,50 @@ func (s *Service) processOne(parent context.Context, job models.GoogleDriveEmail
 	}
 }
 
-func (s *Service) upload(ctx context.Context, job models.GoogleDriveEmailExport) (string, string) {
+func (s *Service) upload(ctx context.Context, job models.GoogleDriveEmailExport) (string, string, string) {
 	if ok, reason := s.runtimeReady(); !ok {
-		return "retry", reason
+		return "retry", reason, ""
+	}
+	if normalizedJobOutputFormat(job.OutputFormat) == "pdf" {
+		if ok, reason := s.rendererReady("pdf"); !ok {
+			return "retry", reason, ""
+		}
 	}
 	if job.SourceArtifactID == "" {
-		return "skipped", "ไม่พบไฟล์อีเมลต้นทางในคิว"
+		return "skipped", "ไม่พบไฟล์อีเมลต้นทางในคิว", ""
 	}
 	data, sourceArtifact, err := s.artifactSvc.Read(job.SourceArtifactID)
 	if err != nil {
-		return "retry", "อ่านไฟล์อีเมลต้นทางไม่สำเร็จ"
+		return "retry", "อ่านไฟล์อีเมลต้นทางไม่สำเร็จ", ""
 	}
 	if sourceArtifact == nil || len(data) == 0 {
-		return "skipped", "ไม่พบไฟล์อีเมลต้นทาง"
+		return "skipped", "ไม่พบไฟล์อีเมลต้นทาง", ""
 	}
 	if job.SourceSHA256 != "" && sourceArtifact.SHA256 != "" && job.SourceSHA256 != sourceArtifact.SHA256 {
-		return "conflict", "ไฟล์อีเมลต้นทางเปลี่ยนหลังสร้างคิว"
+		return "conflict", "ไฟล์อีเมลต้นทางเปลี่ยนหลังสร้างคิว", ""
+	}
+	data, renderWarning, err := s.exportData(ctx, job, sourceArtifact, data)
+	if err != nil {
+		return "retry", err.Error(), ""
 	}
 	localMD5 := md5.Sum(data)
 	localMD5Hex := hex.EncodeToString(localMD5[:])
 	tmp, err := os.CreateTemp("", "billflow-google-drive-*")
 	if err != nil {
-		return "retry", "สร้างไฟล์ชั่วคราวไม่สำเร็จ"
+		return "retry", "สร้างไฟล์ชั่วคราวไม่สำเร็จ", ""
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return "retry", "ตั้งค่าสิทธิ์ไฟล์ชั่วคราวไม่สำเร็จ"
+		return "retry", "ตั้งค่าสิทธิ์ไฟล์ชั่วคราวไม่สำเร็จ", ""
 	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		return "retry", "เขียนไฟล์ชั่วคราวไม่สำเร็จ"
+		return "retry", "เขียนไฟล์ชั่วคราวไม่สำเร็จ", ""
 	}
 	if err := tmp.Close(); err != nil {
-		return "retry", "ปิดไฟล์ชั่วคราวไม่สำเร็จ"
+		return "retry", "ปิดไฟล์ชั่วคราวไม่สำเร็จ", ""
 	}
 	remote := s.remotePath(job.RemotePath)
 	remoteTemp := s.remotePath(job.RemotePath + ".partial-" + safeComponent(job.ID) + "-" + strconv.Itoa(job.AttemptCount))
@@ -377,32 +423,51 @@ func (s *Service) upload(ctx context.Context, job models.GoogleDriveEmailExport)
 		_, _ = s.run(cleanupCtx, "deletefile", remoteTemp)
 	}()
 	if output, err := s.run(ctx, "copyto", "--checksum", "--retries", "1", "--low-level-retries", "1", tmpName, remoteTemp); err != nil {
-		return "retry", "อัปโหลด Google Drive ไม่สำเร็จ: " + cleanCommandError(output, err)
+		return "retry", "อัปโหลด Google Drive ไม่สำเร็จ: " + cleanCommandError(output, err), ""
 	}
 	exists, same, err := s.remoteMatches(ctx, remoteTemp, int64(len(data)), localMD5Hex)
 	if err != nil {
-		return "retry", "ตรวจไฟล์ชั่วคราวหลังอัปโหลดไม่สำเร็จ"
+		return "retry", "ตรวจไฟล์ชั่วคราวหลังอัปโหลดไม่สำเร็จ", ""
 	}
 	if !exists {
-		return "retry", "ไม่พบไฟล์ชั่วคราวหลังอัปโหลด"
+		return "retry", "ไม่พบไฟล์ชั่วคราวหลังอัปโหลด", ""
 	}
 	if !same {
-		return "conflict", "ไฟล์ชั่วคราวบน Google Drive ไม่ตรงกับต้นฉบับ"
+		return "conflict", "ไฟล์ชั่วคราวบน Google Drive ไม่ตรงกับต้นฉบับ", ""
 	}
 	if output, err := s.run(ctx, "moveto", "--ignore-existing", remoteTemp, remote); err != nil {
-		return "retry", "ย้ายไฟล์ไปชื่อปลายทางไม่สำเร็จ: " + cleanCommandError(output, err)
+		return "retry", "ย้ายไฟล์ไปชื่อปลายทางไม่สำเร็จ: " + cleanCommandError(output, err), ""
 	}
 	exists, same, err = s.remoteMatches(ctx, remote, int64(len(data)), localMD5Hex)
 	if err != nil {
-		return "retry", "ตรวจไฟล์หลังย้ายไม่สำเร็จ"
+		return "retry", "ตรวจไฟล์หลังย้ายไม่สำเร็จ", ""
 	}
 	if !exists {
-		return "retry", "ไม่พบไฟล์หลังย้าย"
+		return "retry", "ไม่พบไฟล์หลังย้าย", ""
 	}
 	if !same {
-		return "conflict", "พบชื่อไฟล์เดิมบน Google Drive แต่เนื้อหาไม่ตรงกัน"
+		return "conflict", "พบชื่อไฟล์เดิมบน Google Drive แต่เนื้อหาไม่ตรงกัน", ""
 	}
-	return "succeeded", ""
+	return "succeeded", "", renderWarning
+}
+
+func (s *Service) exportData(ctx context.Context, job models.GoogleDriveEmailExport, source *models.BillArtifact, data []byte) ([]byte, string, error) {
+	if normalizedJobOutputFormat(job.OutputFormat) != "pdf" {
+		return data, "", nil
+	}
+	if s.pdfRenderer == nil {
+		return nil, "", errors.New("PDF renderer ไม่พร้อมใช้งาน")
+	}
+	html := string(data)
+	if source == nil || (strings.ToLower(source.Kind) != "email_html" && !strings.Contains(strings.ToLower(source.ContentType), "html")) {
+		html = "<!doctype html><html><head><meta charset=\"utf-8\"></head><body><pre style=\"white-space:pre-wrap;font-family:sans-serif\">" + stdhtml.EscapeString(html) + "</pre></body></html>"
+	}
+	result, err := s.pdfRenderer.Render(ctx, emailpreview.PrepareHTML(html))
+	if err != nil {
+		return nil, "", fmt.Errorf("สร้าง PDF จากอีเมลไม่สำเร็จ: %w", err)
+	}
+	warning := strings.Join(result.Warnings, " · ")
+	return result.PDF, warning, nil
 }
 
 type remoteObject struct {
@@ -521,6 +586,17 @@ func (s *Service) Retry(id, userID string) (bool, error) {
 	return ok, err
 }
 
+func (s *Service) RequeueAsPDF(id, userID string) (bool, error) {
+	if ok, reason := s.rendererReady("pdf"); !ok {
+		return false, errors.New(reason)
+	}
+	ok, err := s.exportRepo.RequeueAsPDF(id)
+	if ok {
+		s.logAudit("google_drive_email_export_pdf_queued", nil, userID, map[string]interface{}{"job_id": id})
+	}
+	return ok, err
+}
+
 func (s *Service) currentRoot() (string, error) {
 	root, err := s.settingsRepo.GetValue(settingRoot)
 	if err != nil {
@@ -532,6 +608,10 @@ func (s *Service) currentRoot() (string, error) {
 func (s *Service) runtimeReady() (bool, string) {
 	if s == nil || s.cfg == nil {
 		return false, "Google Drive export service ไม่พร้อม"
+	}
+	format, err := s.exportFormat()
+	if err != nil {
+		return false, err.Error()
 	}
 	if !remoteNamePattern.MatchString(strings.TrimSpace(s.cfg.GoogleDriveRcloneRemote)) {
 		return false, "ยังไม่ได้ตั้งค่า GOOGLE_DRIVE_RCLONE_REMOTE บน server"
@@ -562,12 +642,62 @@ func (s *Service) runtimeReady() (bool, string) {
 		}
 		for _, line := range strings.Split(string(output), "\n") {
 			if strings.TrimSuffix(strings.TrimSpace(line), ":") == strings.TrimSpace(s.cfg.GoogleDriveRcloneRemote) {
-				return true, ""
+				return s.rendererReady(format)
 			}
 		}
 		return false, "ไม่พบ remote Google Drive ที่ตั้งไว้ใน rclone.conf"
 	}
+	return s.rendererReady(format)
+}
+
+func (s *Service) exportFormat() (string, error) {
+	if s == nil || s.cfg == nil {
+		return "", errors.New("Google Drive export service ไม่พร้อม")
+	}
+	format := strings.ToLower(strings.TrimSpace(s.cfg.GoogleDriveExportFormat))
+	if format == "" {
+		format = "pdf"
+	}
+	if format != "pdf" && format != "html" {
+		return "", errors.New("GOOGLE_DRIVE_EMAIL_EXPORT_FORMAT ต้องเป็น pdf หรือ html")
+	}
+	return format, nil
+}
+
+func normalizedJobOutputFormat(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "pdf") {
+		return "pdf"
+	}
+	return "html"
+}
+
+func (s *Service) rendererReady(format string) (bool, string) {
+	if format != "pdf" {
+		return true, ""
+	}
+	if strings.TrimSpace(s.cfg.EmailPDFRendererToken) == "" {
+		return false, "ยังไม่ได้ตั้งค่า EMAIL_PDF_RENDERER_TOKEN บน server"
+	}
+	if s.pdfRenderer == nil {
+		return false, "PDF renderer ไม่พร้อมใช้งาน"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.pdfRenderer.Health(ctx); err != nil {
+		return false, "PDF renderer ไม่พร้อม: " + cleanRendererError(err)
+	}
 	return true, ""
+}
+
+func cleanRendererError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	if len(message) > 220 {
+		return message[:220]
+	}
+	return message
 }
 
 func rcloneConfigIsEncrypted(data []byte) bool {

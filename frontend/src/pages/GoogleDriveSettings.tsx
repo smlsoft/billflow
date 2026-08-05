@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Cloud, RefreshCw, RotateCw, Save, Upload } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Cloud, FileText, RefreshCw, RotateCw, Save, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 
 import client from '@/api/client'
@@ -18,6 +18,7 @@ type ExportStatus = {
   enabled: boolean
   root_folder: string
   remote: string
+  output_format: 'pdf' | 'html'
   runtime_ready: boolean
   runtime_error?: string
   max_attempts: number
@@ -32,12 +33,14 @@ type ExportJob = {
   sml_doc_no: string
   marketplace_order_id: string
   charge_amount: string
+  output_format: 'pdf' | 'html'
   remote_path: string
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'conflict'
   attempt_count: number
   next_attempt_at: string
   uploaded_at?: string | null
   last_error?: string
+  render_warning?: string
   updated_at: string
 }
 
@@ -75,6 +78,7 @@ export default function GoogleDriveSettings() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [retrying, setRetrying] = useState<string | null>(null)
+  const [converting, setConverting] = useState<string | null>(null)
   const [dateFrom, setDateFrom] = useState(today())
   const [dateTo, setDateTo] = useState(today())
   const [preview, setPreview] = useState<BackfillPreview | null>(null)
@@ -176,6 +180,19 @@ export default function GoogleDriveSettings() {
     }
   }
 
+  const convertToPDF = async (jobID: string) => {
+    setConverting(jobID)
+    try {
+      await client.post(`/api/settings/google-drive/jobs/${jobID}/pdf`)
+      toast.success('เพิ่มงานสร้าง PDF แล้ว โดยจะเก็บไฟล์ HTML เดิมไว้')
+      await load()
+    } catch (error: any) {
+      toast.error(error?.response?.data?.error ?? 'สั่งสร้าง PDF ไม่สำเร็จ')
+    } finally {
+      setConverting(null)
+    }
+  }
+
   const settingsChanged = status == null || status.enabled !== enabled || status.root_folder !== rootFolder
   const canQueueBackfill = Boolean(status?.enabled && status.runtime_ready && preview && !preview.limited && preview.candidate_count > 0)
 
@@ -187,7 +204,7 @@ export default function GoogleDriveSettings() {
     <div className="space-y-5">
       <PageHeader
         title="Google Drive อีเมล"
-        description="เก็บสำเนาอีเมล Shopee และ Lazada หลังส่ง SML สำเร็จ"
+        description="เก็บ PDF ของอีเมล Shopee และ Lazada หลังส่ง SML สำเร็จ"
         actions={
           <Button variant="outline" size="icon" onClick={() => void load(true)} disabled={loading || saving} title="รีเฟรชสถานะ">
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
@@ -203,9 +220,9 @@ export default function GoogleDriveSettings() {
           <div className={cn('flex gap-3 rounded-md border p-3 text-sm', status?.runtime_ready ? 'border-success/30 bg-success/[0.05]' : 'border-warning/35 bg-warning/[0.07]')}>
             {status?.runtime_ready ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />}
             <div>
-              <p className="font-medium">{status?.runtime_ready ? `พร้อมใช้ remote ${status.remote}` : 'ยังไม่พร้อมใช้งานบน server'}</p>
+              <p className="font-medium">{status?.runtime_ready ? `พร้อมสร้าง ${status.output_format?.toUpperCase() ?? 'PDF'} ด้วย remote ${status.remote}` : 'ยังไม่พร้อมใช้งานบน server'}</p>
               <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                {status?.runtime_ready ? 'การตั้งค่านี้ใช้ rclone ของ server โดยไม่เก็บ Google token ใน BillFlow' : status?.runtime_error ?? 'กำลังตรวจการตั้งค่า server'}
+                {status?.runtime_ready ? 'ไฟล์ PDF ใช้ข้อมูลและรูปแบบเดียวกับหน้าดูอีเมลใน BillFlow โดยไม่เก็บ Google token ในระบบ' : status?.runtime_error ?? 'กำลังตรวจการตั้งค่า server'}
               </p>
             </div>
           </div>
@@ -213,7 +230,7 @@ export default function GoogleDriveSettings() {
           <div className="flex items-center justify-between gap-4 rounded-md border p-3">
             <div>
               <Label htmlFor="google-drive-enabled" className="text-sm font-medium">อัปโหลดอัตโนมัติหลังส่ง SML</Label>
-              <p className="mt-0.5 text-xs text-muted-foreground">เฉพาะใบสั่งซื้อจาก Shopee และ Lazada ที่ส่ง SML สำเร็จแล้ว</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">เฉพาะใบสั่งซื้อจาก Shopee และ Lazada ที่ส่ง SML สำเร็จแล้ว ระบบจะสร้าง PDF ให้เปิดดูได้ทันทีใน Drive</p>
             </div>
             <Switch id="google-drive-enabled" checked={enabled} onCheckedChange={setEnabled} disabled={loading || saving} />
           </div>
@@ -258,7 +275,7 @@ export default function GoogleDriveSettings() {
         <CardContent className="px-0 pb-0">
           {jobs.length === 0 ? <div className="px-6 pb-6 text-sm text-muted-foreground">ยังไม่มีงานอัปโหลดอีเมล</div> : <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead className="border-y bg-muted/35 text-left text-xs text-muted-foreground"><tr><th className="px-6 py-3 font-medium">เอกสาร</th><th className="px-3 py-3 font-medium">วันที่/ช่องทาง</th><th className="px-3 py-3 font-medium">สถานะ</th><th className="px-3 py-3 font-medium">อัปเดตล่าสุด</th><th className="px-3 py-3 font-medium">รายละเอียด</th><th className="px-6 py-3 text-right font-medium">จัดการ</th></tr></thead><tbody>{jobs.map((job) => {
             const meta = STATUS_META[job.status]
-            return <tr key={job.id} className="border-b last:border-0"><td className="px-6 py-3"><p className="font-medium">{job.sml_doc_no}</p><p className="mt-0.5 font-mono text-xs text-muted-foreground">{job.marketplace_order_id}</p></td><td className="px-3 py-3"><p>{job.order_date}</p><p className="mt-0.5 text-xs text-muted-foreground">{job.source_channel} · {job.payment_token}</p></td><td className="px-3 py-3"><Badge variant="outline" className={meta.cls}>{meta.label}</Badge></td><td className="px-3 py-3 text-xs text-muted-foreground">{dateTime(job.uploaded_at ?? job.updated_at)}</td><td className="max-w-[300px] px-3 py-3 text-xs text-muted-foreground"><p className="truncate" title={job.remote_path}>{job.remote_path}</p>{job.last_error && <p className="mt-1 text-destructive">{job.last_error}</p>}</td><td className="px-6 py-3 text-right">{['failed', 'conflict', 'skipped'].includes(job.status) && <Button variant="outline" size="sm" onClick={() => void retry(job.id)} disabled={retrying === job.id}><RotateCw className={cn('h-3.5 w-3.5', retrying === job.id && 'animate-spin')} />ลองใหม่</Button>}</td></tr>
+            return <tr key={job.id} className="border-b last:border-0"><td className="px-6 py-3"><div className="flex items-center gap-1.5"><p className="font-medium">{job.sml_doc_no}</p><Badge variant="outline" className="text-[10px]">{job.output_format.toUpperCase()}</Badge></div><p className="mt-0.5 font-mono text-xs text-muted-foreground">{job.marketplace_order_id}</p></td><td className="px-3 py-3"><p>{job.order_date}</p><p className="mt-0.5 text-xs text-muted-foreground">{job.source_channel} · {job.payment_token}</p></td><td className="px-3 py-3"><Badge variant="outline" className={meta.cls}>{meta.label}</Badge></td><td className="px-3 py-3 text-xs text-muted-foreground">{dateTime(job.uploaded_at ?? job.updated_at)}</td><td className="max-w-[300px] px-3 py-3 text-xs text-muted-foreground"><p className="truncate" title={job.remote_path}>{job.remote_path}</p>{job.last_error && <p className="mt-1 text-destructive">{job.last_error}</p>}{job.render_warning && <p className="mt-1 text-warning" title={job.render_warning}>ตรวจรูป: {job.render_warning}</p>}</td><td className="px-6 py-3 text-right"><div className="flex justify-end gap-2">{job.status === 'succeeded' && job.output_format === 'html' && <Button variant="outline" size="sm" onClick={() => void convertToPDF(job.id)} disabled={converting === job.id}><FileText className={cn('h-3.5 w-3.5', converting === job.id && 'animate-pulse')} />สร้าง PDF</Button>}{['failed', 'conflict', 'skipped'].includes(job.status) && <Button variant="outline" size="sm" onClick={() => void retry(job.id)} disabled={retrying === job.id}><RotateCw className={cn('h-3.5 w-3.5', retrying === job.id && 'animate-spin')} />ลองใหม่</Button>}</div></td></tr>
           })}</tbody></table></div>}
         </CardContent>
       </Card>

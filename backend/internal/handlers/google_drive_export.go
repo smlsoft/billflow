@@ -58,7 +58,7 @@ func (h *GoogleDriveExportHandler) TestConnection(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "detail": "เชื่อมต่อ Google Drive และทดสอบสิทธิ์สร้าง/ลบโฟลเดอร์สำเร็จ"})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "detail": "เชื่อมต่อ Google Drive และ PDF renderer สำเร็จ พร้อมทดสอบสิทธิ์สร้าง/ลบโฟลเดอร์"})
 }
 
 func (h *GoogleDriveExportHandler) ListJobs(c *gin.Context) {
@@ -110,4 +110,17 @@ func (h *GoogleDriveExportHandler) RetryJob(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *GoogleDriveExportHandler) RequeueAsPDF(c *gin.Context) {
+	ok, err := h.service.RequeueAsPDF(c.Param("id"), c.GetString("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusConflict, gin.H{"error": "งานนี้ไม่ใช่ไฟล์ HTML ที่อัปโหลดสำเร็จแล้ว"})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"ok": true})
 }

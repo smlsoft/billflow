@@ -11,6 +11,7 @@ backend/tmp/
 
 # Node
 frontend/node_modules/
+email-renderer/node_modules/
 frontend/dist/
 frontend/.vite/
 

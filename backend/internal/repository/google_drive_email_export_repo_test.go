@@ -29,3 +29,27 @@ func TestGoogleDriveEmailExportRetryResetsAttemptCount(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGoogleDriveEmailExportRequeueAsPDFKeepsExistingHTML(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	jobID := "11111111-1111-1111-1111-111111111111"
+	mock.ExpectExec("UPDATE google_drive_email_exports[\\s\\S]*output_format = 'pdf'[\\s\\S]*status = 'succeeded' AND output_format = 'html'").
+		WithArgs(jobID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	ok, err := NewGoogleDriveEmailExportRepo(db).RequeueAsPDF(jobID)
+	if err != nil {
+		t.Fatalf("RequeueAsPDF: %v", err)
+	}
+	if !ok {
+		t.Fatal("RequeueAsPDF returned false, want true")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -63,6 +63,7 @@ export const ACTION_META: Record<string, ActionMeta> = {
   google_drive_email_export_skipped: { label: 'ข้ามอัปโหลด Google Drive', emoji: '⏭️', tone: 'muted' },
   google_drive_email_export_backfill_queued: { label: 'เพิ่มอีเมลย้อนหลังเข้าคิว Google Drive', emoji: '📤', tone: 'info' },
   google_drive_email_export_retried: { label: 'สั่งลองอัปโหลด Google Drive ใหม่', emoji: '🔄', tone: 'info' },
+  google_drive_email_export_pdf_queued: { label: 'สั่งสร้าง PDF อีเมลเพื่ออัปโหลด Google Drive', emoji: '📄', tone: 'info' },
   bill_doc_no_regenerated: { label: 'ออกเลขเอกสารใหม่', emoji: '🔢', tone: 'primary' },
   bill_doc_no_regenerate_failed: { label: 'ออกเลขเอกสารใหม่ไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },
   bill_doc_no_preview_failed: { label: 'ดึงเลขล่าสุดไม่สำเร็จ', emoji: '⚠️', tone: 'danger' },

@@ -552,6 +552,7 @@ func main() {
 		api.POST("/settings/google-drive/backfill/preview", middleware.RequireRole("admin"), googleDriveExportH.PreviewBackfill)
 		api.POST("/settings/google-drive/backfill", middleware.RequireRole("admin"), googleDriveExportH.EnqueueBackfill)
 		api.POST("/settings/google-drive/jobs/:id/retry", middleware.RequireRole("admin"), googleDriveExportH.RetryJob)
+		api.POST("/settings/google-drive/jobs/:id/pdf", middleware.RequireRole("admin"), googleDriveExportH.RequeueAsPDF)
 
 		// Logs (Activity Log)
 		api.GET("/logs", middleware.RequireRole("admin", "staff"), logH.List)

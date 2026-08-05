@@ -144,12 +144,9 @@ function EmailPreviewModal({
         if (!alive) return
         const ct = (res.headers['content-type'] ?? '').toString() || 'text/html; charset=utf-8'
         return res.data.text().then((html: string) => {
-          // Reset body margin so the email starts at the top of the iframe,
-          // and patch every <a> to open in a new tab.
-          const resetCss = `<style>*{box-sizing:border-box}html,body{margin:0!important;padding:0!important;background:#fff!important}img{display:block;max-width:100%}table{margin:0!important}</style>`
-          const patched = html
-            .replace(/<head([^>]*)>/i, `<head$1>${resetCss}`)
-            .replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ')
+          // The server prepares the shared preview CSS for both this dialog
+          // and the immutable Google Drive PDF. Patch links only for the UI.
+          const patched = html.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer" ')
           const blob = new Blob([patched], { type: ct })
           objectURL = URL.createObjectURL(blob)
           if (alive) setSrc(objectURL)

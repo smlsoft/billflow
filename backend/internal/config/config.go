@@ -129,6 +129,9 @@ type Config struct {
 	GoogleDriveRcloneRemote string
 	GoogleDriveRcloneConfig string
 	GoogleDriveRcloneBinary string
+	GoogleDriveExportFormat string
+	EmailPDFRendererURL     string
+	EmailPDFRendererToken   string
 }
 
 func Load() *Config {
@@ -198,6 +201,9 @@ func Load() *Config {
 		GoogleDriveRcloneRemote: getEnv("GOOGLE_DRIVE_RCLONE_REMOTE", ""),
 		GoogleDriveRcloneConfig: getEnv("RCLONE_CONFIG", "/run/secrets/rclone.conf"),
 		GoogleDriveRcloneBinary: getEnv("RCLONE_BINARY", "rclone"),
+		GoogleDriveExportFormat: getEnv("GOOGLE_DRIVE_EMAIL_EXPORT_FORMAT", "pdf"),
+		EmailPDFRendererURL:     getEnv("EMAIL_PDF_RENDERER_URL", "http://email-renderer:8080"),
+		EmailPDFRendererToken:   getEnv("EMAIL_PDF_RENDERER_TOKEN", ""),
 	}
 
 	if c.JWTSecret == "" {

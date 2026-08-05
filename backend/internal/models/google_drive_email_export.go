@@ -18,6 +18,7 @@ type GoogleDriveEmailExport struct {
 	SMLDocNo           string     `json:"sml_doc_no"`
 	MarketplaceOrderID string     `json:"marketplace_order_id"`
 	ChargeAmount       string     `json:"charge_amount"`
+	OutputFormat       string     `json:"output_format"`
 	RemotePath         string     `json:"remote_path"`
 	Status             string     `json:"status"`
 	Priority           int        `json:"priority"`
@@ -27,6 +28,7 @@ type GoogleDriveEmailExport struct {
 	StartedAt          *time.Time `json:"started_at,omitempty"`
 	UploadedAt         *time.Time `json:"uploaded_at,omitempty"`
 	LastError          string     `json:"last_error,omitempty"`
+	RenderWarning      string     `json:"render_warning,omitempty"`
 	CreatedBy          *string    `json:"created_by,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,22 @@ type runnerFunc func(context.Context, string, ...string) ([]byte, error)
 
 func (f runnerFunc) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return f(ctx, name, args...)
+}
+
+type pdfRendererFunc struct {
+	health func(context.Context) error
+	render func(context.Context, string) (PDFRenderResult, error)
+}
+
+func (f pdfRendererFunc) Health(ctx context.Context) error {
+	if f.health == nil {
+		return nil
+	}
+	return f.health(ctx)
+}
+
+func (f pdfRendererFunc) Render(ctx context.Context, html string) (PDFRenderResult, error) {
+	return f.render(ctx, html)
 }
 
 func TestValidateRootFolder(t *testing.T) {
@@ -129,6 +146,7 @@ func TestRuntimeReadySupportsEncryptedRcloneConfig(t *testing.T) {
 			GoogleDriveRcloneRemote: "thaisunsport_gdrive",
 			GoogleDriveRcloneConfig: configFile,
 			GoogleDriveRcloneBinary: "sh",
+			GoogleDriveExportFormat: "html",
 		},
 		runner: runnerFunc(func(_ context.Context, name string, args ...string) ([]byte, error) {
 			if name != "sh" || len(args) != 3 || args[2] != "listremotes" {
@@ -155,6 +173,78 @@ func TestCommandRunnerKeepsSuccessfulStdoutClean(t *testing.T) {
 	output, err = runner.Run(context.Background(), "sh", "-c", `printf 'rclone failure' >&2; exit 1`)
 	if err == nil || string(output) != "rclone failure" {
 		t.Fatalf("failure output = %q, err = %v", output, err)
+	}
+}
+
+func TestExportDataPDFUsesSharedDialogPreviewHTML(t *testing.T) {
+	var renderedHTML string
+	svc := &Service{pdfRenderer: pdfRendererFunc{render: func(_ context.Context, html string) (PDFRenderResult, error) {
+		renderedHTML = html
+		return PDFRenderResult{PDF: []byte("%PDF-1.7 test"), Warnings: []string{"โหลดรูปจาก cdn.example ไม่สำเร็จ"}}, nil
+	}}}
+
+	pdf, warning, err := svc.exportData(context.Background(), models.GoogleDriveEmailExport{OutputFormat: "pdf"}, &models.BillArtifact{Kind: "email_html", ContentType: "text/html"}, []byte(`<html><body><table><tr><td>ยอดที่ต้องชำระทั้งหมด:</td><td>฿216</td></tr></table></body></html>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(pdf) != "%PDF-1.7 test" || warning == "" {
+		t.Fatalf("unexpected PDF result: %q / %q", pdf, warning)
+	}
+	for _, want := range []string{`id="billflow-email-preview-reset"`, `data-billflow-print-highlight="true"`, `฿216`} {
+		if !strings.Contains(renderedHTML, want) {
+			t.Fatalf("renderer did not receive shared preview HTML %q:\n%s", want, renderedHTML)
+		}
+	}
+}
+
+func TestExportDataLegacyHTMLDoesNotInvokePDFRenderer(t *testing.T) {
+	svc := &Service{pdfRenderer: pdfRendererFunc{render: func(context.Context, string) (PDFRenderResult, error) {
+		t.Fatal("legacy HTML export must not render PDF")
+		return PDFRenderResult{}, nil
+	}}}
+	source := []byte("<html>original</html>")
+	got, warning, err := svc.exportData(context.Background(), models.GoogleDriveEmailExport{OutputFormat: "html"}, nil, source)
+	if err != nil || warning != "" || string(got) != string(source) {
+		t.Fatalf("legacy export = %q / %q / %v", got, warning, err)
+	}
+}
+
+func TestTestConnectionRendersPDFBeforeWritingGoogleDriveProbe(t *testing.T) {
+	configFile := t.TempDir() + "/rclone.conf"
+	if err := os.WriteFile(configFile, []byte("[thaisunsport_gdrive]\ntype = drive\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rendered := false
+	svc := &Service{
+		cfg: &config.Config{
+			GoogleDriveRcloneRemote: "thaisunsport_gdrive",
+			GoogleDriveRcloneConfig: configFile,
+			GoogleDriveRcloneBinary: "rclone",
+			GoogleDriveExportFormat: "pdf",
+		},
+		pdfRenderer: pdfRendererFunc{render: func(_ context.Context, html string) (PDFRenderResult, error) {
+			rendered = strings.Contains(html, "BillFlow PDF renderer test")
+			return PDFRenderResult{PDF: []byte("%PDF-1.7 test")}, nil
+		}},
+		runner: runnerFunc(func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name != "rclone" || len(args) < 3 {
+				t.Fatalf("unexpected command: %s %v", name, args)
+			}
+			switch args[2] {
+			case "mkdir", "rmdir":
+				return nil, nil
+			default:
+				t.Fatalf("unexpected rclone operation: %v", args)
+				return nil, nil
+			}
+		}),
+		now: func() time.Time { return time.Unix(1, 0) },
+	}
+	if err := svc.testConnection("BillFlowEmail"); err != nil {
+		t.Fatal(err)
+	}
+	if !rendered {
+		t.Fatal("PDF renderer was not tested")
 	}
 }
 

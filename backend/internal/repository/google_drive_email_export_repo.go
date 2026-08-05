@@ -29,16 +29,16 @@ func (r *GoogleDriveEmailExportRepo) InsertQueued(job *models.GoogleDriveEmailEx
 		createdBy = *job.CreatedBy
 	}
 	err := r.db.QueryRow(`
-		INSERT INTO google_drive_email_exports
-		  (bill_id, source_artifact_id, source_sha256, source_content_type, source_filename,
-		   source_channel, order_date, payment_token, sml_doc_no, marketplace_order_id,
-		   charge_amount, remote_path, status, priority, next_attempt_at, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7::date,$8,$9,$10,$11,$12,'queued',$13,NOW(),$14)
-		ON CONFLICT (bill_id) DO NOTHING
-		RETURNING id, created_at, updated_at`,
+			INSERT INTO google_drive_email_exports
+			  (bill_id, source_artifact_id, source_sha256, source_content_type, source_filename,
+			   source_channel, order_date, payment_token, sml_doc_no, marketplace_order_id,
+			   charge_amount, output_format, remote_path, status, priority, next_attempt_at, created_by)
+			VALUES ($1,$2,$3,$4,$5,$6,$7::date,$8,$9,$10,$11,$12,$13,'queued',$14,NOW(),$15)
+			ON CONFLICT (bill_id) DO NOTHING
+			RETURNING id, created_at, updated_at`,
 		job.BillID, artifactID, job.SourceSHA256, job.SourceContentType, job.SourceFilename,
 		job.SourceChannel, job.OrderDate, job.PaymentToken, job.SMLDocNo, job.MarketplaceOrderID,
-		job.ChargeAmount, job.RemotePath, job.Priority, createdBy,
+		job.ChargeAmount, job.OutputFormat, job.RemotePath, job.Priority, createdBy,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -78,12 +78,12 @@ func (r *GoogleDriveEmailExportRepo) ClaimDue(limit int) ([]models.GoogleDriveEm
 		       updated_at = NOW()
 		  FROM due
 		 WHERE e.id = due.id
-		 RETURNING e.id, e.bill_id, COALESCE(e.source_artifact_id::text, ''), e.source_sha256,
+		RETURNING e.id, e.bill_id, COALESCE(e.source_artifact_id::text, ''), e.source_sha256,
 		           e.source_content_type, e.source_filename, e.source_channel, e.order_date::text,
 		           e.payment_token, e.sml_doc_no, e.marketplace_order_id, e.charge_amount,
-		           e.remote_path, e.status, e.priority, e.attempt_count, e.next_attempt_at,
+		           e.output_format, e.remote_path, e.status, e.priority, e.attempt_count, e.next_attempt_at,
 		           e.last_attempt_at, e.started_at, e.uploaded_at, e.last_error,
-		           e.created_by::text, e.created_at, e.updated_at`, limit)
+		           e.render_warning, e.created_by::text, e.created_at, e.updated_at`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim google drive exports: %w", err)
 	}
@@ -99,11 +99,11 @@ func (r *GoogleDriveEmailExportRepo) ClaimDue(limit int) ([]models.GoogleDriveEm
 	return jobs, rows.Err()
 }
 
-func (r *GoogleDriveEmailExportRepo) MarkSucceeded(id string) error {
+func (r *GoogleDriveEmailExportRepo) MarkSucceeded(id, warning string) error {
 	_, err := r.db.Exec(`
 		UPDATE google_drive_email_exports
-		   SET status = 'succeeded', uploaded_at = NOW(), last_error = '', updated_at = NOW()
-		 WHERE id = $1`, id)
+		   SET status = 'succeeded', uploaded_at = NOW(), last_error = '', render_warning = $2, updated_at = NOW()
+		 WHERE id = $1`, id, warning)
 	return err
 }
 
@@ -147,6 +147,30 @@ func (r *GoogleDriveEmailExportRepo) Retry(id string) (bool, error) {
 	return n > 0, err
 }
 
+// RequeueAsPDF preserves the previously uploaded HTML file and schedules a
+// separate PDF snapshot beside it. Only old successful HTML jobs need this.
+func (r *GoogleDriveEmailExportRepo) RequeueAsPDF(id string) (bool, error) {
+	res, err := r.db.Exec(`
+		UPDATE google_drive_email_exports
+		   SET output_format = 'pdf',
+		       remote_path = CASE
+		         WHEN remote_path ~* '\.(html|txt)$' THEN REGEXP_REPLACE(remote_path, '\.(html|txt)$', '.pdf', 'i')
+		         ELSE remote_path || '.pdf'
+		       END,
+		       status = 'queued',
+		       attempt_count = 0,
+		       next_attempt_at = NOW(),
+		       last_error = '',
+		       render_warning = '',
+		       updated_at = NOW()
+		 WHERE id = $1 AND status = 'succeeded' AND output_format = 'html'`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func (r *GoogleDriveEmailExportRepo) RecoverInterrupted() (int64, error) {
 	res, err := r.db.Exec(`
 		UPDATE google_drive_email_exports
@@ -176,8 +200,8 @@ func (r *GoogleDriveEmailExportRepo) List(limit int) ([]models.GoogleDriveEmailE
 		SELECT id, bill_id, COALESCE(source_artifact_id::text, ''), source_sha256,
 		       source_content_type, source_filename, source_channel, order_date::text,
 		       payment_token, sml_doc_no, marketplace_order_id, charge_amount,
-		       remote_path, status, priority, attempt_count, next_attempt_at,
-		       last_attempt_at, started_at, uploaded_at, last_error, created_by::text, created_at, updated_at
+		       output_format, remote_path, status, priority, attempt_count, next_attempt_at,
+		       last_attempt_at, started_at, uploaded_at, last_error, render_warning, created_by::text, created_at, updated_at
 	  FROM google_drive_email_exports
 	 ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'failed' THEN 2 WHEN 'conflict' THEN 3 ELSE 4 END,
 	          updated_at DESC
@@ -273,8 +297,8 @@ func scanGoogleDriveEmailExport(s googleDriveEmailExportScanner) (models.GoogleD
 		&job.ID, &job.BillID, &sourceArtifactID, &job.SourceSHA256,
 		&job.SourceContentType, &job.SourceFilename, &job.SourceChannel, &job.OrderDate,
 		&job.PaymentToken, &job.SMLDocNo, &job.MarketplaceOrderID, &job.ChargeAmount,
-		&job.RemotePath, &job.Status, &job.Priority, &job.AttemptCount, &job.NextAttemptAt,
-		&job.LastAttemptAt, &job.StartedAt, &job.UploadedAt, &job.LastError, &createdBy,
+		&job.OutputFormat, &job.RemotePath, &job.Status, &job.Priority, &job.AttemptCount, &job.NextAttemptAt,
+		&job.LastAttemptAt, &job.StartedAt, &job.UploadedAt, &job.LastError, &job.RenderWarning, &createdBy,
 		&job.CreatedAt, &job.UpdatedAt,
 	); err != nil {
 		return job, err
