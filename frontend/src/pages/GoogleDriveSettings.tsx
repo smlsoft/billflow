@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 type ExportStatus = {
   enabled: boolean
   root_folder: string
+  start_date: string
   remote: string
   output_format: 'pdf' | 'html'
   runtime_ready: boolean
@@ -71,6 +72,7 @@ export default function GoogleDriveSettings() {
   const { user } = useAuth()
   const [status, setStatus] = useState<ExportStatus | null>(null)
   const [rootFolder, setRootFolder] = useState('')
+  const [startDate, setStartDate] = useState('')
   const [enabled, setEnabled] = useState(false)
   const [jobs, setJobs] = useState<ExportJob[]>([])
   const [counts, setCounts] = useState<JobCounts | null>(null)
@@ -94,6 +96,7 @@ export default function GoogleDriveSettings() {
       ])
       setStatus(settingsRes.data)
       setRootFolder(settingsRes.data.root_folder ?? '')
+      setStartDate(settingsRes.data.start_date ?? '')
       setEnabled(settingsRes.data.enabled)
       setJobs(jobsRes.data.data ?? [])
       setCounts(jobsRes.data.counts ?? null)
@@ -115,9 +118,10 @@ export default function GoogleDriveSettings() {
   const save = async () => {
     setSaving(true)
     try {
-      const res = await client.put<ExportStatus>('/api/settings/google-drive', { enabled, root_folder: rootFolder }, { timeout: 45000 })
+      const res = await client.put<ExportStatus>('/api/settings/google-drive', { enabled, root_folder: rootFolder, start_date: startDate }, { timeout: 45000 })
       setStatus(res.data)
       setRootFolder(res.data.root_folder)
+      setStartDate(res.data.start_date ?? '')
       setEnabled(res.data.enabled)
       toast.success(res.data.enabled ? 'เปิดอัปโหลดอีเมลไป Google Drive แล้ว' : 'ปิดอัปโหลดอีเมลไป Google Drive แล้ว')
     } catch (error: any) {
@@ -193,7 +197,7 @@ export default function GoogleDriveSettings() {
     }
   }
 
-  const settingsChanged = status == null || status.enabled !== enabled || status.root_folder !== rootFolder
+  const settingsChanged = status == null || status.enabled !== enabled || status.root_folder !== rootFolder || status.start_date !== startDate
   const canQueueBackfill = Boolean(status?.enabled && status.runtime_ready && preview && !preview.limited && preview.candidate_count > 0)
 
   if (user?.role !== 'admin') {
@@ -239,6 +243,12 @@ export default function GoogleDriveSettings() {
             <Label htmlFor="google-drive-root">โฟลเดอร์หลักบน Google Drive</Label>
             <Input id="google-drive-root" value={rootFolder} onChange={(event) => setRootFolder(event.target.value)} placeholder="BillFlow Email/Thaisunsport" disabled={loading || saving} />
             <p className="text-xs leading-relaxed text-muted-foreground">ระบบจะแยกต่อเป็น ปี/เดือน/วัน/Shopee หรือ Lazada/วิธีชำระเงิน และตั้งชื่อไฟล์จากข้อมูล SML กับคำสั่งซื้อ</p>
+          </div>
+
+          <div className="max-w-xs space-y-2">
+            <Label htmlFor="google-drive-start-date">เริ่มเก็บตั้งแต่วันที่สั่งซื้อ</Label>
+            <Input id="google-drive-start-date" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} disabled={loading || saving} />
+            <p className="text-xs leading-relaxed text-muted-foreground">บิลก่อนวันที่ตั้งไว้จะไม่ถูกเพิ่มเข้าคิว แม้เพิ่งส่ง SML ย้อนหลัง</p>
           </div>
 
           <div className="flex flex-wrap gap-2">

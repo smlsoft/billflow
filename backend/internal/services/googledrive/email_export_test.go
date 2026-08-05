@@ -89,6 +89,46 @@ func TestOrderDateAndChargeAmount(t *testing.T) {
 	}
 }
 
+func TestValidateExportStartDate(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		want  string
+		ok    bool
+	}{
+		{input: "", want: "", ok: true},
+		{input: " 2026-08-04 ", want: "2026-08-04", ok: true},
+		{input: "04/08/2026", ok: false},
+		{input: "2026-02-30", ok: false},
+	} {
+		got, err := validateExportStartDate(tt.input)
+		if (err == nil) != tt.ok || got != tt.want {
+			t.Fatalf("validateExportStartDate(%q) = %q, %v; want %q, ok=%t", tt.input, got, err, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestOrderDateMeetsExportStartDate(t *testing.T) {
+	start := time.Date(2026, time.August, 4, 0, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name string
+		date time.Time
+		want bool
+	}{
+		{name: "before start", date: time.Date(2026, time.August, 3, 23, 59, 59, 0, time.UTC), want: false},
+		{name: "at start", date: start, want: true},
+		{name: "after start", date: time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC), want: true},
+		{name: "no cutoff", date: time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC), want: true},
+	} {
+		var cutoff time.Time
+		if tt.name != "no cutoff" {
+			cutoff = start
+		}
+		if got := orderDateMeetsExportStartDate(tt.date, cutoff); got != tt.want {
+			t.Errorf("%s: orderDateMeetsExportStartDate(%s, %s) = %t, want %t", tt.name, tt.date, cutoff, got, tt.want)
+		}
+	}
+}
+
 func TestRetryDelay(t *testing.T) {
 	got := []time.Duration{retryDelay(1), retryDelay(2), retryDelay(3), retryDelay(4), retryDelay(5)}
 	want := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 6 * time.Hour}

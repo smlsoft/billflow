@@ -23,6 +23,7 @@ func NewGoogleDriveExportHandler(service *googledrive.Service) *GoogleDriveExpor
 type googleDriveExportSettingsRequest struct {
 	Enabled    bool   `json:"enabled"`
 	RootFolder string `json:"root_folder"`
+	StartDate  string `json:"start_date"`
 }
 
 type googleDriveBackfillRequest struct {
@@ -40,7 +41,7 @@ func (h *GoogleDriveExportHandler) UpdateSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ข้อมูลตั้งค่าไม่ถูกต้อง"})
 		return
 	}
-	status, err := h.service.UpdateSettings(req.Enabled, req.RootFolder, c.GetString("user_id"))
+	status, err := h.service.UpdateSettings(req.Enabled, req.RootFolder, req.StartDate, c.GetString("user_id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

@@ -29,12 +29,14 @@ import (
 )
 
 const (
-	settingEnabled = "google_drive_export.enabled"
-	settingRoot    = "google_drive_export.root_folder"
-	maxAttempts    = 8
+	settingEnabled   = "google_drive_export.enabled"
+	settingRoot      = "google_drive_export.root_folder"
+	settingStartDate = "google_drive_export.start_date"
+	maxAttempts      = 8
 )
 
 var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var errOrderBeforeExportStartDate = errors.New("วันที่สั่งซื้อก่อนวันเริ่มเก็บ Google Drive")
 
 type Runner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
@@ -62,6 +64,7 @@ func (commandRunner) Run(ctx context.Context, name string, args ...string) ([]by
 type RuntimeStatus struct {
 	Enabled      bool   `json:"enabled"`
 	RootFolder   string `json:"root_folder"`
+	StartDate    string `json:"start_date"`
 	Remote       string `json:"remote"`
 	OutputFormat string `json:"output_format"`
 	RuntimeReady bool   `json:"runtime_ready"`
@@ -148,17 +151,23 @@ func (s *Service) Status() RuntimeStatus {
 	}
 	enabled, _ := s.settingsRepo.GetValue(settingEnabled)
 	root, _ := s.settingsRepo.GetValue(settingRoot)
+	startDate, _ := s.settingsRepo.GetValue(settingStartDate)
 	status.Enabled = enabled == "true"
 	status.RootFolder = root
+	status.StartDate = startDate
 	status.RuntimeReady, status.RuntimeError = s.runtimeReady()
 	return status
 }
 
-func (s *Service) UpdateSettings(enabled bool, rootFolder, userID string) (RuntimeStatus, error) {
+func (s *Service) UpdateSettings(enabled bool, rootFolder, startDate, userID string) (RuntimeStatus, error) {
 	if s == nil || s.settingsRepo == nil {
 		return RuntimeStatus{}, errors.New("google drive export service not configured")
 	}
 	root, err := validateRootFolder(rootFolder)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	startDate, err = validateExportStartDate(startDate)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -171,13 +180,13 @@ func (s *Service) UpdateSettings(enabled bool, rootFolder, userID string) (Runti
 		}
 	}
 	if err := s.settingsRepo.UpsertMany(map[string]string{
-		settingEnabled: strconv.FormatBool(enabled), settingRoot: root,
+		settingEnabled: strconv.FormatBool(enabled), settingRoot: root, settingStartDate: startDate,
 	}, map[string]bool{}, userID); err != nil {
 		return RuntimeStatus{}, err
 	}
 	status := s.Status()
 	s.logAudit("google_drive_export_settings_updated", nil, userID, map[string]interface{}{
-		"enabled": enabled, "root_folder": root,
+		"enabled": enabled, "root_folder": root, "start_date": startDate,
 	})
 	return status, nil
 }
@@ -229,8 +238,15 @@ func (s *Service) EnqueueSentBill(billID, userID string) (bool, error) {
 	if !status.Enabled {
 		return false, nil
 	}
-	job, err := s.buildJob(billID, userID)
+	startDate, err := s.exportStartDate()
 	if err != nil {
+		return false, err
+	}
+	job, err := s.buildJob(billID, userID, startDate)
+	if err != nil {
+		if errors.Is(err, errOrderBeforeExportStartDate) {
+			return false, nil
+		}
 		return false, err
 	}
 	created, err := s.exportRepo.InsertQueued(job)
@@ -245,7 +261,7 @@ func (s *Service) EnqueueSentBill(billID, userID string) (bool, error) {
 	return created, nil
 }
 
-func (s *Service) buildJob(billID, userID string) (*models.GoogleDriveEmailExport, error) {
+func (s *Service) buildJob(billID, userID string, startDate time.Time) (*models.GoogleDriveEmailExport, error) {
 	if s == nil || s.billRepo == nil || s.artifactRepo == nil || s.exportRepo == nil {
 		return nil, errors.New("google drive export service not configured")
 	}
@@ -280,6 +296,9 @@ func (s *Service) buildJob(billID, userID string) (*models.GoogleDriveEmailExpor
 	orderDate, err := orderDate(raw)
 	if err != nil {
 		return nil, err
+	}
+	if !orderDateMeetsExportStartDate(orderDate, startDate) {
+		return nil, fmt.Errorf("%w: %s", errOrderBeforeExportStartDate, resultDate(startDate))
 	}
 	orderID := strings.TrimLeft(stringRaw(raw, "order_id", "shopee_order_id", "order_no"), "#")
 	if orderID == "" {
@@ -505,6 +524,9 @@ func (s *Service) PreviewBackfill(dateFrom, dateTo string) (BackfillPreview, err
 	if err != nil {
 		return BackfillPreview{}, err
 	}
+	if err := s.validateBackfillExportStart(from); err != nil {
+		return BackfillPreview{}, err
+	}
 	ids, err := s.exportRepo.ListBackfillBillIDs(from.Format("2006-01-02"), to.Format("2006-01-02"), 501)
 	if err != nil {
 		return BackfillPreview{}, err
@@ -518,6 +540,9 @@ func (s *Service) EnqueueBackfill(dateFrom, dateTo, userID string) (BackfillResu
 	}
 	from, to, err := parseBackfillRange(dateFrom, dateTo)
 	if err != nil {
+		return BackfillResult{}, err
+	}
+	if err := s.validateBackfillExportStart(from); err != nil {
 		return BackfillResult{}, err
 	}
 	ids, err := s.exportRepo.ListBackfillBillIDs(from.Format("2006-01-02"), to.Format("2006-01-02"), 501)
@@ -919,6 +944,53 @@ func cleanCommandError(output []byte, err error) string {
 		message = message[:300]
 	}
 	return message
+}
+
+func (s *Service) exportStartDate() (time.Time, error) {
+	if s == nil || s.settingsRepo == nil {
+		return time.Time{}, errors.New("google drive export service not configured")
+	}
+	raw, err := s.settingsRepo.GetValue(settingStartDate)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("อ่านวันที่เริ่มเก็บ Google Drive: %w", err)
+	}
+	normalized, err := validateExportStartDate(raw)
+	if err != nil || normalized == "" {
+		return time.Time{}, err
+	}
+	return time.Parse("2006-01-02", normalized)
+}
+
+func (s *Service) validateBackfillExportStart(from time.Time) error {
+	startDate, err := s.exportStartDate()
+	if err != nil {
+		return err
+	}
+	if !startDate.IsZero() && from.Before(startDate) {
+		return fmt.Errorf("Google Drive ตั้งค่าให้เริ่มเก็บตั้งแต่วันที่ %s", resultDate(startDate))
+	}
+	return nil
+}
+
+func validateExportStartDate(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return "", errors.New("วันที่เริ่มเก็บ Google Drive ไม่ถูกต้อง")
+	}
+	return parsed.Format("2006-01-02"), nil
+}
+
+func orderDateMeetsExportStartDate(orderDate, startDate time.Time) bool {
+	if startDate.IsZero() {
+		return true
+	}
+	orderDay := time.Date(orderDate.Year(), orderDate.Month(), orderDate.Day(), 0, 0, 0, 0, time.UTC)
+	startDay := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, time.UTC)
+	return !orderDay.Before(startDay)
 }
 
 func parseBackfillRange(rawFrom, rawTo string) (time.Time, time.Time, error) {
