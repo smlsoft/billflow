@@ -4,8 +4,10 @@
 package googledrive
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,6 +36,7 @@ const (
 	settingRoot      = "google_drive_export.root_folder"
 	settingStartDate = "google_drive_export.start_date"
 	maxAttempts      = 8
+	pdfCacheDirName  = ".google-drive-pdf-cache"
 )
 
 var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -365,6 +369,9 @@ func (s *Service) processOne(parent context.Context, job models.GoogleDriveEmail
 			s.log.Error("mark google drive export succeeded", zap.Error(err))
 			return
 		}
+		if err := s.removeCachedPDF(job.ID); err != nil {
+			s.log.Warn("remove cached google drive PDF", zap.String("job_id", job.ID), zap.Error(err))
+		}
 		s.logAudit("google_drive_email_export_succeeded", &job.BillID, "", map[string]interface{}{
 			"sml_doc_no": job.SMLDocNo, "marketplace_order_id": job.MarketplaceOrderID,
 			"attempt": job.AttemptCount, "output_format": job.OutputFormat, "render_warning": warning != "",
@@ -442,16 +449,20 @@ func (s *Service) upload(ctx context.Context, job models.GoogleDriveEmailExport)
 		_, _ = s.run(cleanupCtx, "deletefile", remoteTemp)
 	}()
 	if output, err := s.run(ctx, "copyto", "--checksum", "--retries", "1", "--low-level-retries", "1", tmpName, remoteTemp); err != nil {
+		s.discardCachedPDF(job)
 		return "retry", "อัปโหลด Google Drive ไม่สำเร็จ: " + cleanCommandError(output, err), ""
 	}
 	exists, same, err := s.remoteMatches(ctx, remoteTemp, int64(len(data)), localMD5Hex)
 	if err != nil {
+		s.discardCachedPDF(job)
 		return "retry", "ตรวจไฟล์ชั่วคราวหลังอัปโหลดไม่สำเร็จ", ""
 	}
 	if !exists {
+		s.discardCachedPDF(job)
 		return "retry", "ไม่พบไฟล์ชั่วคราวหลังอัปโหลด", ""
 	}
 	if !same {
+		s.discardCachedPDF(job)
 		return "conflict", "ไฟล์ชั่วคราวบน Google Drive ไม่ตรงกับต้นฉบับ", ""
 	}
 	if output, err := s.run(ctx, "moveto", "--ignore-existing", remoteTemp, remote); err != nil {
@@ -474,6 +485,11 @@ func (s *Service) exportData(ctx context.Context, job models.GoogleDriveEmailExp
 	if normalizedJobOutputFormat(job.OutputFormat) != "pdf" {
 		return data, "", nil
 	}
+	if cachedPDF, cachedWarning, found, err := s.readCachedPDF(job.ID); err != nil {
+		return nil, "", err
+	} else if found {
+		return cachedPDF, cachedWarning, nil
+	}
 	if s.pdfRenderer == nil {
 		return nil, "", errors.New("PDF renderer ไม่พร้อมใช้งาน")
 	}
@@ -486,7 +502,122 @@ func (s *Service) exportData(ctx context.Context, job models.GoogleDriveEmailExp
 		return nil, "", fmt.Errorf("สร้าง PDF จากอีเมลไม่สำเร็จ: %w", err)
 	}
 	warning := strings.Join(result.Warnings, " · ")
+	if err := s.cachePDF(job.ID, result.PDF, warning); err != nil {
+		return nil, "", err
+	}
 	return result.PDF, warning, nil
+}
+
+// PDF bytes from Chromium include generation metadata and are not stable across
+// renders. Retrying an upload must therefore reuse the first render so its MD5
+// still matches a final Drive file written just before an interrupted process.
+func (s *Service) readCachedPDF(jobID string) ([]byte, string, bool, error) {
+	pdfPath, warningPath, err := s.cachedPDFPaths(jobID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	data, err := os.ReadFile(pdfPath)
+	if os.IsNotExist(err) {
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, "", false, fmt.Errorf("อ่าน PDF ที่เตรียมอัปโหลดไม่สำเร็จ: %w", err)
+	}
+	if len(data) == 0 || len(data) > maxRenderedPDFBytes || !bytes.HasPrefix(data, []byte("%PDF-")) {
+		return nil, "", false, errors.New("PDF ที่เตรียมอัปโหลดไม่ถูกต้อง")
+	}
+	warning, err := os.ReadFile(warningPath)
+	if os.IsNotExist(err) {
+		return data, "", true, nil
+	}
+	if err != nil {
+		return nil, "", false, fmt.Errorf("อ่านคำเตือน PDF ที่เตรียมอัปโหลดไม่สำเร็จ: %w", err)
+	}
+	return data, string(warning), true, nil
+}
+
+func (s *Service) cachePDF(jobID string, data []byte, warning string) error {
+	if len(data) == 0 || len(data) > maxRenderedPDFBytes || !bytes.HasPrefix(data, []byte("%PDF-")) {
+		return errors.New("PDF ที่เตรียมอัปโหลดไม่ถูกต้อง")
+	}
+	pdfPath, warningPath, err := s.cachedPDFPaths(jobID)
+	if err != nil {
+		return err
+	}
+	if _, _, found, err := s.readCachedPDF(jobID); err != nil {
+		return err
+	} else if found {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(pdfPath), 0o700); err != nil {
+		return fmt.Errorf("สร้างพื้นที่เก็บ PDF สำหรับ retry ไม่สำเร็จ: %w", err)
+	}
+	// Write the warning first. A completed PDF cache always has its matching
+	// warning metadata, even if the server stops immediately after rendering.
+	if err := atomicWriteFile(warningPath, []byte(warning)); err != nil {
+		return fmt.Errorf("เก็บคำเตือน PDF สำหรับ retry ไม่สำเร็จ: %w", err)
+	}
+	if err := atomicWriteFile(pdfPath, data); err != nil {
+		return fmt.Errorf("เก็บ PDF สำหรับ retry ไม่สำเร็จ: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) removeCachedPDF(jobID string) error {
+	pdfPath, warningPath, err := s.cachedPDFPaths(jobID)
+	if err != nil {
+		return err
+	}
+	for _, filename := range []string{pdfPath, warningPath} {
+		if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// A cache is only required after a move has been attempted, because Drive may
+// already contain the exact PDF while the process has not marked success yet.
+// Earlier upload failures cannot leave the final object behind, so drop the
+// cache and avoid retaining PDFs during a prolonged Drive outage.
+func (s *Service) discardCachedPDF(job models.GoogleDriveEmailExport) {
+	if normalizedJobOutputFormat(job.OutputFormat) != "pdf" {
+		return
+	}
+	if err := s.removeCachedPDF(job.ID); err != nil && s.log != nil {
+		s.log.Warn("discard cached google drive PDF", zap.String("job_id", job.ID), zap.Error(err))
+	}
+}
+
+func (s *Service) cachedPDFPaths(jobID string) (string, string, error) {
+	if s == nil || s.cfg == nil || strings.TrimSpace(s.cfg.ArtifactsDir) == "" || strings.TrimSpace(jobID) == "" {
+		return "", "", errors.New("พื้นที่เก็บ PDF สำหรับ retry ไม่พร้อมใช้งาน")
+	}
+	sum := sha256.Sum256([]byte(jobID))
+	base := hex.EncodeToString(sum[:])
+	dir := filepath.Join(s.cfg.ArtifactsDir, pdfCacheDirName)
+	return filepath.Join(dir, base+".pdf"), filepath.Join(dir, base+".warning"), nil
+}
+
+func atomicWriteFile(filename string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(filename), ".billflow-write-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filename)
 }
 
 type remoteObject struct {

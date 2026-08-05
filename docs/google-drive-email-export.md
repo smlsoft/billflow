@@ -87,6 +87,12 @@ Google Drive, then renames it to the final filename. It never overwrites a
 different file with the same final name; such a case stays `ต้องตรวจ` for an
 administrator to resolve.
 
+Chromium includes generation metadata in each PDF, so retrying a render would
+otherwise produce different bytes for the same email. BillFlow keeps the first
+render temporarily in the mounted artifact volume and reuses it during retry.
+The cache is removed after success and also after failures before any final
+Drive filename could have been created.
+
 ## Image Safety And Visual Checks
 
 The renderer disables email JavaScript and blocks every network request except

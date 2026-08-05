@@ -218,12 +218,12 @@ func TestCommandRunnerKeepsSuccessfulStdoutClean(t *testing.T) {
 
 func TestExportDataPDFUsesSharedDialogPreviewHTML(t *testing.T) {
 	var renderedHTML string
-	svc := &Service{pdfRenderer: pdfRendererFunc{render: func(_ context.Context, html string) (PDFRenderResult, error) {
+	svc := &Service{cfg: &config.Config{ArtifactsDir: t.TempDir()}, pdfRenderer: pdfRendererFunc{render: func(_ context.Context, html string) (PDFRenderResult, error) {
 		renderedHTML = html
 		return PDFRenderResult{PDF: []byte("%PDF-1.7 test"), Warnings: []string{"โหลดรูปจาก cdn.example ไม่สำเร็จ"}}, nil
 	}}}
 
-	pdf, warning, err := svc.exportData(context.Background(), models.GoogleDriveEmailExport{OutputFormat: "pdf"}, &models.BillArtifact{Kind: "email_html", ContentType: "text/html"}, []byte(`<html><body><table><tr><td>ยอดที่ต้องชำระทั้งหมด:</td><td>฿216</td></tr></table></body></html>`))
+	pdf, warning, err := svc.exportData(context.Background(), models.GoogleDriveEmailExport{ID: "test-pdf-job", OutputFormat: "pdf"}, &models.BillArtifact{Kind: "email_html", ContentType: "text/html"}, []byte(`<html><body><table><tr><td>ยอดที่ต้องชำระทั้งหมด:</td><td>฿216</td></tr></table></body></html>`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,6 +234,40 @@ func TestExportDataPDFUsesSharedDialogPreviewHTML(t *testing.T) {
 		if !strings.Contains(renderedHTML, want) {
 			t.Fatalf("renderer did not receive shared preview HTML %q:\n%s", want, renderedHTML)
 		}
+	}
+}
+
+func TestExportDataPDFReusesFirstRenderForRetry(t *testing.T) {
+	renderCount := 0
+	svc := &Service{
+		cfg: &config.Config{ArtifactsDir: t.TempDir()},
+		pdfRenderer: pdfRendererFunc{render: func(_ context.Context, _ string) (PDFRenderResult, error) {
+			renderCount++
+			return PDFRenderResult{PDF: []byte("%PDF-first-render"), Warnings: []string{"โหลดรูปจาก cdn.example ไม่สำเร็จ"}}, nil
+		}},
+	}
+	job := models.GoogleDriveEmailExport{ID: "retry-job", OutputFormat: "pdf"}
+	source := &models.BillArtifact{Kind: "email_html", ContentType: "text/html"}
+
+	firstPDF, firstWarning, err := svc.exportData(context.Background(), job, source, []byte("<html>source</html>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPDF, secondWarning, err := svc.exportData(context.Background(), job, source, []byte("<html>source</html>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renderCount != 1 {
+		t.Fatalf("renderer calls = %d, want 1", renderCount)
+	}
+	if string(firstPDF) != string(secondPDF) || firstWarning != secondWarning {
+		t.Fatalf("retry did not reuse cached render: %q/%q vs %q/%q", firstPDF, firstWarning, secondPDF, secondWarning)
+	}
+	if err := svc.removeCachedPDF(job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, found, err := svc.readCachedPDF(job.ID); err != nil || found {
+		t.Fatalf("cache after cleanup = found:%t err:%v", found, err)
 	}
 }
 
