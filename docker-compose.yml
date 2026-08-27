@@ -51,6 +51,7 @@ services:
   # from backend and has no host port or mounted customer data.
   email-renderer:
     build: ./email-renderer
+    init: true
     environment:
       PORT: "8080"
       HOME: /tmp

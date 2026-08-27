@@ -137,6 +137,20 @@ func TestRetryDelay(t *testing.T) {
 	}
 }
 
+func TestRunDueGuardPreventsOverlappingCronTicks(t *testing.T) {
+	svc := &Service{}
+	if !svc.runDueActive.CompareAndSwap(false, true) {
+		t.Fatal("first cron tick should acquire the guard")
+	}
+	if svc.runDueActive.CompareAndSwap(false, true) {
+		t.Fatal("overlapping cron tick must not acquire the guard")
+	}
+	svc.runDueActive.Store(false)
+	if !svc.runDueActive.CompareAndSwap(false, true) {
+		t.Fatal("a later cron tick should acquire the released guard")
+	}
+}
+
 func TestRemoteMatchesRequiresSameSizeAndMD5(t *testing.T) {
 	svc := &Service{
 		cfg: &config.Config{GoogleDriveRcloneConfig: "/run/secrets/rclone.conf", GoogleDriveRcloneBinary: "rclone"},

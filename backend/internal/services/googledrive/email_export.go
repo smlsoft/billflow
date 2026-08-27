@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -103,6 +104,7 @@ type Service struct {
 	runner       Runner
 	pdfRenderer  PDFRenderer
 	now          func() time.Time
+	runDueActive atomic.Bool
 }
 
 func NewEmailExportService(
@@ -346,6 +348,13 @@ func (s *Service) RunDue(ctx context.Context) {
 	if s == nil || !s.Status().Enabled {
 		return
 	}
+	if !s.runDueActive.CompareAndSwap(false, true) {
+		if s.log != nil {
+			s.log.Debug("skip overlapping google drive email export tick")
+		}
+		return
+	}
+	defer s.runDueActive.Store(false)
 	// Chromium rendering is intentionally serialized. It avoids a burst of
 	// browser processes competing with SML and the primary backend on a small
 	// customer server; rclone verification still runs in the same durable job.
