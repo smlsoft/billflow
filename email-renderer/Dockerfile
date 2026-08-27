@@ -5,7 +5,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev --no-audit --no-fund
 
-COPY server.mjs image-policy.mjs ./
+# Keep every local ES module alongside the entry point. This prevents a
+# successful Node syntax test on the host from becoming a missing-module crash
+# only after the production image starts.
+COPY *.mjs ./
 
 USER pwuser
 
