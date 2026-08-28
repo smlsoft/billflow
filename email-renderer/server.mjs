@@ -1,6 +1,7 @@
 import http from 'node:http'
 import { chromium } from 'playwright'
 import { requiresRendererRestart } from './failure-policy.mjs'
+import { isPIDBudgetAtRisk, readPIDBudget } from './pid-budget.mjs'
 import { createSerialQueue } from './render-queue.mjs'
 import { withTimeout } from './with-timeout.mjs'
 import {
@@ -16,6 +17,9 @@ const port = Number.parseInt(process.env.PORT ?? '8080', 10)
 const token = String(process.env.EMAIL_PDF_RENDERER_TOKEN ?? '').trim()
 const maxHTMLBytes = 10 * 1024 * 1024
 const maxPDFBytes = 20 * 1024 * 1024
+const browserLaunchTimeoutMs = 30000
+const renderDeadlineMs = 70000
+const renderWatchdogIntervalMs = 5000
 const allowedSuffixes = parseHostSuffixes(
   process.env.EMAIL_PDF_ALLOWED_IMAGE_HOST_SUFFIXES,
   defaultAllowedImageHostSuffixes,
@@ -26,6 +30,7 @@ const silentBlockedSuffixes = parseHostSuffixes(
 )
 const renderQueue = createSerialQueue()
 let activeBrowser = null
+let activeRenderStartedAt = 0
 let shuttingDown = false
 
 function json(res, status, body) {
@@ -47,12 +52,23 @@ async function renderPDF(html) {
   const failedHosts = new Set()
   let browser
   let context
+  let page
+  activeRenderStartedAt = Date.now()
   try {
-    browser = await chromium.launch({ headless: true, timeout: 30000 })
+    const pidBudget = await readPIDBudget()
+    if (isPIDBudgetAtRisk(pidBudget)) {
+      requestRestart(`PID budget nearly exhausted (${pidBudget.current}/${pidBudget.max})`)
+      throw new Error('PDF renderer กำลังเริ่มใหม่เพื่อล้าง Chromium ที่ค้าง')
+    }
+    browser = await withTimeout(
+      chromium.launch({ headless: true, timeout: browserLaunchTimeoutMs }),
+      browserLaunchTimeoutMs,
+      'Chromium launch timed out',
+    )
     activeBrowser = browser
     context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1080, height: 1440 } })
     context.setDefaultTimeout(30000)
-    const page = await context.newPage()
+    page = await context.newPage()
     await page.emulateMedia({ media: 'screen' })
     await page.route('**/*', async (route) => {
       const request = route.request()
@@ -102,6 +118,12 @@ async function renderPDF(html) {
     // Explicitly close the context before Chromium. A failed cleanup is worse
     // than a retry: retain no process that can consume the renderer PID quota.
     let cleanupFailed = false
+    if (page) {
+      await withTimeout(page.close(), 5000, 'Playwright page cleanup timed out').catch((error) => {
+        cleanupFailed = true
+        console.error('Failed to close Playwright page:', error)
+      })
+    }
     if (context) {
       await withTimeout(context.close(), 5000, 'Playwright context cleanup timed out').catch((error) => {
         cleanupFailed = true
@@ -115,6 +137,7 @@ async function renderPDF(html) {
       })
     }
     if (activeBrowser === browser) activeBrowser = null
+    activeRenderStartedAt = 0
     if (cleanupFailed) requestRestart('Playwright cleanup failed')
   }
 }
@@ -123,8 +146,17 @@ function requestRestart(reason) {
   if (shuttingDown) return
   shuttingDown = true
   console.error(`Restarting PDF renderer: ${reason}`)
-  setTimeout(() => process.exit(1), 100).unref()
+  void activeBrowser?.close().catch((error) => console.error('Failed to close browser before renderer restart:', error))
+  setTimeout(() => process.exit(1), 250)
 }
+
+const renderWatchdog = setInterval(() => {
+  if (shuttingDown || activeRenderStartedAt === 0) return
+  if (Date.now() - activeRenderStartedAt >= renderDeadlineMs) {
+    requestRestart('PDF render exceeded hard deadline')
+  }
+}, renderWatchdogIntervalMs)
+renderWatchdog.unref()
 
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {

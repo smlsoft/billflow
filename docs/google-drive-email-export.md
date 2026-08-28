@@ -63,10 +63,13 @@ private renderer serialize PDF work, so overlapping cron ticks, manual
 connection tests, and Chromium cannot compete for the renderer PID budget on
 customer hardware. Docker runs the renderer beneath an init process, and a
 renderer cleanup failure deliberately restarts only that container instead of
-leaving Chrome children behind. It retries after 1, 5, 15, and 60 minutes,
-then every 6 hours, with at most 8 attempts. A backend restart returns
-interrupted work to the queue. It also reconciles sent bills from the preceding
-24 hours every 10 minutes.
+leaving Chrome children behind. Before launching Chromium it also checks the
+container PID budget and recycles itself at 80% usage; an active render has a
+70-second hard watchdog, which restarts the renderer before a stuck browser can
+block later jobs. It retries after 1, 5, 15, and 60 minutes, then every 6
+hours, with at most 8 attempts. A backend restart returns interrupted work to
+the queue. It also reconciles sent bills from the preceding 24 hours every 10
+minutes.
 
 ## Output Naming
 
