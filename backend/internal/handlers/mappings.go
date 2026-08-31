@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -25,15 +26,40 @@ func NewMappingHandler(mappingRepo *repository.MappingRepo, mapperSvc *mapper.Se
 	return &MappingHandler{mappingRepo: mappingRepo, mapperSvc: mapperSvc, catalogRepo: catalogRepo, auditRepo: auditRepo, log: log}
 }
 
-// GET /api/mappings
+const (
+	mappingListDefaultPerPage = 50
+	mappingListMaxPerPage     = 100
+	mappingListQueryMaxLen    = 200
+)
+
+// GET /api/mappings?page=1&per_page=50&q=...
 func (h *MappingHandler) List(c *gin.Context) {
-	mappings, err := h.mappingRepo.ListAll()
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", strconv.Itoa(mappingListDefaultPerPage)))
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 || perPage > mappingListMaxPerPage {
+		perPage = mappingListDefaultPerPage
+	}
+	query := strings.TrimSpace(c.Query("q"))
+	if len([]rune(query)) > mappingListQueryMaxLen {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "คำค้นหายาวเกิน 200 ตัวอักษร"})
+		return
+	}
+
+	mappings, total, err := h.mappingRepo.ListPage(page, perPage, query)
 	if err != nil {
-		h.log.Error("ListAll mappings", zap.Error(err))
+		h.log.Error("List mappings", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": mappings})
+	c.JSON(http.StatusOK, gin.H{
+		"data":     mappings,
+		"total":    total,
+		"page":     page,
+		"per_page": perPage,
+	})
 }
 
 // POST /api/mappings

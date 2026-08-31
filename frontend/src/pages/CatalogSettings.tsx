@@ -116,6 +116,11 @@ interface CatalogPullResponse {
     duplicate: number
   }
   results: CatalogPullResult[]
+  auto_embedding?: {
+    status: 'not_needed' | 'started' | 'queued' | 'not_configured' | 'error'
+    total: number
+    message?: string
+  }
 }
 
 interface HiddenCatalogCodesResponse {
@@ -432,6 +437,7 @@ function CatalogPullDialog({
   const [input, setInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [results, setResults] = useState<CatalogPullResult[]>([])
+  const [autoEmbedding, setAutoEmbedding] = useState<CatalogPullResponse['auto_embedding']>()
   const [error, setError] = useState('')
   const { codes, duplicates } = useMemo(() => parseCatalogCodes(input), [input])
   const hiddenCodes = useMemo(
@@ -483,6 +489,7 @@ function CatalogPullDialog({
     if (!canSubmit) return
     setSubmitting(true)
     setError('')
+    setAutoEmbedding(undefined)
     const duplicateResults: CatalogPullResult[] = duplicates.map((code) => {
       const meta = inspectCatalogCode(code)
       return {
@@ -497,6 +504,7 @@ function CatalogPullDialog({
       const res = await api.post<CatalogPullResponse>('/api/catalog/refresh-batch', { codes })
       const nextResults = [...duplicateResults, ...(res.data.results ?? [])]
       setResults(nextResults)
+      setAutoEmbedding(res.data.auto_embedding)
       const firstSuccess = nextResults.find((row) => row.status === 'success')
       const firstCode = firstSuccess?.item?.item_code || firstSuccess?.code
       if (firstCode) {
@@ -516,6 +524,7 @@ function CatalogPullDialog({
     if (!nextOpen) {
       setError('')
       setResults([])
+      setAutoEmbedding(undefined)
     }
   }
 
@@ -528,7 +537,7 @@ function CatalogPullDialog({
 
         <div className="-mx-6 space-y-4 overflow-y-auto px-6 py-2">
           <div className="rounded-md border border-info/25 bg-info/[0.04] px-3 py-2 text-xs text-muted-foreground">
-            กรอกรหัสสินค้า SML ที่มีอยู่แล้วได้หลายรหัส ระบบจะดึงเฉพาะรหัสที่ระบุ ไม่ซิงก์สินค้าทั้งหมด และไม่สร้างข้อมูลจับคู่อัตโนมัติ
+            กรอกรหัสสินค้า SML ที่มีอยู่แล้วได้หลายรหัส ระบบจะดึงเฉพาะรหัสที่ระบุ ไม่ซิงก์สินค้าทั้งหมด และจะสร้างข้อมูลจับคู่ให้อัตโนมัติเมื่อเชื่อมต่อ OpenRouter แล้ว
           </div>
 
           <div className="space-y-1.5">
@@ -539,6 +548,7 @@ function CatalogPullDialog({
                 setInput(e.target.value)
                 setError('')
                 setResults([])
+                setAutoEmbedding(undefined)
               }}
               placeholder={'ITEM001\nITEM002\nITEM003'}
               className="min-h-40 font-mono text-sm"
@@ -642,7 +652,7 @@ function CatalogPullDialog({
 
           {resultCounts.success > 0 && (
             <div className="rounded-md border border-success/30 bg-success/[0.06] px-3 py-2 text-xs text-success">
-              ดึงสินค้าเรียบร้อยแล้ว ถ้าต้องการให้ระบบจับคู่จากชื่อสินค้าแบบ semantic matching ให้กด “สร้างข้อมูลจับคู่”
+              {autoEmbedding?.message ?? 'ดึงสินค้าเรียบร้อยแล้ว ระบบกำลังสร้างข้อมูลจับคู่ให้อัตโนมัติ'}
             </div>
           )}
         </div>

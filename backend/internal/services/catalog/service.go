@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,6 +61,8 @@ type EmbedStatus struct {
 	Errors     int        `json:"errors"`
 	Error      string     `json:"error,omitempty"`
 }
+
+var ErrEmbedAlreadyRunning = errors.New("embedding already running")
 
 func NewSMLCatalogService(
 	repo *repository.SMLCatalogRepo,
@@ -598,6 +601,86 @@ func (s *SMLCatalogService) EmbedProduct(embSvc *EmbeddingService, itemCode stri
 	return s.embedProductWithSession(embSvc, itemCode, newOpenRouterSessionID("catalog-embed-single", itemCode))
 }
 
+// StartEmbedCodes embeds only the selected catalog codes in the background.
+// Calls are serialized with EmbedAllPending so a batch pull cannot burst
+// OpenRouter with concurrent embedding requests.
+func (s *SMLCatalogService) StartEmbedCodes(embSvc *EmbeddingService, itemCodes []string, onComplete func()) (bool, error) {
+	if embSvc == nil || !embSvc.IsConfigured() {
+		return false, fmt.Errorf("embedding service not configured")
+	}
+
+	codes := make([]string, 0, len(itemCodes))
+	seen := make(map[string]struct{}, len(itemCodes))
+	for _, itemCode := range itemCodes {
+		code := strings.TrimSpace(itemCode)
+		if code == "" {
+			continue
+		}
+		if _, exists := seen[code]; exists {
+			continue
+		}
+		seen[code] = struct{}{}
+		codes = append(codes, code)
+	}
+	if len(codes) == 0 {
+		return false, nil
+	}
+	if !s.embedRunning.CompareAndSwap(0, 1) {
+		return false, ErrEmbedAlreadyRunning
+	}
+
+	startedAt := time.Now()
+	sessionID := newOpenRouterSessionID("catalog-embed-refresh", strconv.Itoa(len(codes)))
+	s.setEmbedStatus(EmbedStatus{
+		Running:   true,
+		SessionID: sessionID,
+		StartedAt: &startedAt,
+		Total:     len(codes),
+	})
+
+	go func() {
+		done, errs := 0, 0
+		defer func() {
+			finishedAt := time.Now()
+			status := s.EmbedStatus()
+			status.Running = false
+			status.FinishedAt = &finishedAt
+			status.Done = done
+			status.Errors = errs
+			s.setEmbedStatus(status)
+			s.embedRunning.Store(0)
+			if onComplete != nil {
+				onComplete()
+			}
+		}()
+
+		s.logger.Info("catalog: selected embed started", zap.String("session_id", sessionID), zap.Int("total", len(codes)))
+		for _, code := range codes {
+			item, err := s.repo.GetOne(code)
+			if err != nil || item == nil {
+				errs++
+				s.logger.Warn("catalog: selected embed item unavailable", zap.String("code", code), zap.Error(err))
+			} else if item.EmbeddingStatus != "done" {
+				if err := s.embedProductWithSession(embSvc, code, sessionID); err != nil {
+					errs++
+					s.logger.Warn("catalog: selected embed failed", zap.String("code", code), zap.Error(err))
+				} else {
+					done++
+				}
+			}
+
+			status := s.EmbedStatus()
+			status.Done = done
+			status.Errors = errs
+			s.setEmbedStatus(status)
+			time.Sleep(50 * time.Millisecond)
+		}
+		s.logger.Info("catalog: selected embed complete", zap.Int("done", done), zap.Int("errors", errs))
+	}()
+
+	return true, nil
+}
+
 func (s *SMLCatalogService) embedProductWithSession(embSvc *EmbeddingService, itemCode, sessionID string) error {
 	item, err := s.repo.GetOne(itemCode)
 	if err != nil || item == nil {
@@ -618,12 +701,32 @@ func (s *SMLCatalogService) embedProductWithSession(embSvc *EmbeddingService, it
 	return s.repo.SetEmbedding(itemCode, emb, EmbeddingModel)
 }
 
-// EmbedAllPending runs background embedding for all pending items.
-// Returns (done, errors).
+// StartEmbedAllPending reserves the embedding worker before starting the
+// background run so selected-item jobs and full jobs cannot overlap.
+func (s *SMLCatalogService) StartEmbedAllPending(embSvc *EmbeddingService, onComplete func(done, errs int, err error)) (bool, error) {
+	if !s.embedRunning.CompareAndSwap(0, 1) {
+		return false, ErrEmbedAlreadyRunning
+	}
+	go func() {
+		done, errs, err := s.embedAllPendingReserved(embSvc)
+		if onComplete != nil {
+			onComplete(done, errs, err)
+		}
+	}()
+	return true, nil
+}
+
+// EmbedAllPending runs embedding for all pending items in the caller's
+// goroutine. Prefer StartEmbedAllPending for HTTP-triggered work.
 func (s *SMLCatalogService) EmbedAllPending(embSvc *EmbeddingService) (int, int, error) {
 	if !s.embedRunning.CompareAndSwap(0, 1) {
-		return 0, 0, fmt.Errorf("embedding already running")
+		return 0, 0, ErrEmbedAlreadyRunning
 	}
+	return s.embedAllPendingReserved(embSvc)
+}
+
+// embedAllPendingReserved requires embedRunning to have been reserved.
+func (s *SMLCatalogService) embedAllPendingReserved(embSvc *EmbeddingService) (int, int, error) {
 	defer s.embedRunning.Store(0)
 
 	done, errs := 0, 0

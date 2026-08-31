@@ -58,6 +58,7 @@ type catalogUnitOption struct {
 const (
 	catalogRefreshBatchLimit      = 50
 	catalogRefreshBatchCodeMaxLen = 64
+	catalogAutoEmbedRetryWindow   = 5 * time.Minute
 )
 
 type catalogRefreshBatchRequest struct {
@@ -77,6 +78,12 @@ type catalogRefreshBatchResult struct {
 	HasHiddenChars  bool                `json:"has_hidden_chars,omitempty"`
 	CleanItemCode   string              `json:"clean_item_code,omitempty"`
 	HiddenCharKinds []string            `json:"hidden_char_kinds,omitempty"`
+}
+
+type catalogAutoEmbeddingResult struct {
+	Status  string `json:"status"`
+	Total   int    `json:"total"`
+	Message string `json:"message,omitempty"`
 }
 
 func catalogCodeFromJSON(c *gin.Context) (string, bool) {
@@ -395,6 +402,7 @@ func (h *CatalogHandler) RefreshBatch(c *gin.Context) {
 	}
 
 	successCount := 0
+	successCodes := make([]string, 0, len(codes))
 	for _, code := range codes {
 		meta := itemcode.Inspect(code)
 		result := catalogRefreshBatchResult{
@@ -428,6 +436,7 @@ func (h *CatalogHandler) RefreshBatch(c *gin.Context) {
 		result.Status = "success"
 		summary.Success++
 		successCount++
+		successCodes = append(successCodes, code)
 		results = append(results, result)
 	}
 
@@ -436,6 +445,7 @@ func (h *CatalogHandler) RefreshBatch(c *gin.Context) {
 			h.logger.Warn("catalog: reload index after refresh batch", zap.Error(err))
 		}
 	}
+	autoEmbedding := h.startRefreshBatchAutoEmbedding(successCodes)
 	if h.auditRepo != nil {
 		var userID *string
 		if uid := c.GetString("user_id"); uid != "" {
@@ -448,19 +458,85 @@ func (h *CatalogHandler) RefreshBatch(c *gin.Context) {
 			Level:   "info",
 			TraceID: c.GetString("trace_id"),
 			Detail: map[string]interface{}{
-				"total":     summary.Total,
-				"success":   summary.Success,
-				"not_found": summary.NotFound,
-				"failed":    summary.Failed,
-				"duplicate": summary.Duplicate,
+				"total":                 summary.Total,
+				"success":               summary.Success,
+				"not_found":             summary.NotFound,
+				"failed":                summary.Failed,
+				"duplicate":             summary.Duplicate,
+				"auto_embedding_status": autoEmbedding.Status,
+				"auto_embedding_total":  autoEmbedding.Total,
 			},
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"summary": summary,
-		"results": results,
+		"summary":        summary,
+		"results":        results,
+		"auto_embedding": autoEmbedding,
 	})
+}
+
+func (h *CatalogHandler) startRefreshBatchAutoEmbedding(codes []string) catalogAutoEmbeddingResult {
+	result := catalogAutoEmbeddingResult{Status: "not_needed", Total: len(codes)}
+	if len(codes) == 0 {
+		return result
+	}
+	if h.embSvc == nil || !h.embSvc.IsConfigured() {
+		result.Status = "not_configured"
+		result.Message = "ดึงสินค้าแล้ว แต่ยังไม่ได้สร้างข้อมูลจับคู่ เพราะยังไม่ได้ตั้งค่า OpenRouter"
+		return result
+	}
+	if h.catalogSvc == nil {
+		result.Status = "error"
+		result.Message = "ดึงสินค้าแล้ว แต่ไม่สามารถเริ่มสร้างข้อมูลจับคู่ได้"
+		return result
+	}
+
+	started, err := h.startAutoEmbeddingCodes(codes)
+	if err == nil && started {
+		result.Status = "started"
+		result.Message = "ระบบกำลังสร้างข้อมูลจับคู่ให้อัตโนมัติ"
+		return result
+	}
+	if errors.Is(err, catalog.ErrEmbedAlreadyRunning) {
+		result.Status = "queued"
+		result.Message = "มีงานสร้างข้อมูลจับคู่อื่นกำลังทำอยู่ ระบบจะเริ่มรายการนี้ต่อให้อัตโนมัติ"
+		go h.retryAutoEmbeddingCodes(codes)
+		return result
+	}
+
+	h.logger.Warn("catalog: auto embed after refresh batch failed to start", zap.Error(err))
+	result.Status = "error"
+	result.Message = "ดึงสินค้าแล้ว แต่เริ่มสร้างข้อมูลจับคู่ไม่สำเร็จ"
+	return result
+}
+
+func (h *CatalogHandler) startAutoEmbeddingCodes(codes []string) (bool, error) {
+	return h.catalogSvc.StartEmbedCodes(h.embSvc, codes, func() {
+		if h.catalogIdx == nil || h.catalogRepo == nil {
+			return
+		}
+		if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
+			h.logger.Warn("catalog: reload index after automatic embed", zap.Error(err))
+		}
+	})
+}
+
+func (h *CatalogHandler) retryAutoEmbeddingCodes(codes []string) {
+	deadline := time.Now().Add(catalogAutoEmbedRetryWindow)
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Second)
+		started, err := h.startAutoEmbeddingCodes(codes)
+		if err == nil && started {
+			h.logger.Info("catalog: queued automatic embed started", zap.Int("total", len(codes)))
+			return
+		}
+		if err != nil && !errors.Is(err, catalog.ErrEmbedAlreadyRunning) {
+			h.logger.Warn("catalog: queued automatic embed failed to start", zap.Error(err))
+			return
+		}
+	}
+	h.logger.Warn("catalog: queued automatic embed timed out", zap.Int("total", len(codes)))
 }
 
 func catalogRefreshUserError(err error) string {
@@ -626,9 +702,6 @@ func (h *CatalogHandler) StartEmbedAll(reason string) (bool, error) {
 	if !h.embSvc.IsConfigured() {
 		return false, errCatalogEmbedNotConfigured
 	}
-	if h.catalogSvc.IsEmbedRunning() {
-		return false, errCatalogEmbedAlreadyRunning
-	}
 	pending, err := h.catalogRepo.CountPending()
 	if err != nil {
 		return false, err
@@ -637,20 +710,26 @@ func (h *CatalogHandler) StartEmbedAll(reason string) (bool, error) {
 		return false, nil
 	}
 
-	// Run in background goroutine
-	go func() {
-		h.logger.Info("catalog: embed-all started", zap.String("reason", reason), zap.Int("pending", pending))
-		done, errs, err := h.catalogSvc.EmbedAllPending(h.embSvc)
-		if err != nil {
-			h.logger.Error("catalog: embed-all background", zap.Error(err))
+	started, err := h.catalogSvc.StartEmbedAllPending(h.embSvc, func(done, errs int, embedErr error) {
+		if embedErr != nil {
+			h.logger.Error("catalog: embed-all background", zap.Error(embedErr))
 		}
 		// Reload memory index after embedding
 		if err := h.catalogIdx.Reload(h.catalogRepo); err != nil {
 			h.logger.Warn("catalog: reload index after embed-all", zap.Error(err))
 		}
 		h.logger.Info("catalog: embed-all done", zap.Int("done", done), zap.Int("errors", errs))
-	}()
-	return true, nil
+	})
+	if err != nil {
+		if errors.Is(err, catalog.ErrEmbedAlreadyRunning) {
+			return false, errCatalogEmbedAlreadyRunning
+		}
+		return false, err
+	}
+	if started {
+		h.logger.Info("catalog: embed-all started", zap.String("reason", reason), zap.Int("pending", pending))
+	}
+	return started, nil
 }
 
 // POST /api/catalog/reload-index  — manually reload in-memory index

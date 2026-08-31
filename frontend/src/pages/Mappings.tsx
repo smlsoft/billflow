@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, BookOpen, Check, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -43,10 +43,22 @@ interface ReviewHotspot {
   firstRoute: string
 }
 
+interface MappingListResponse {
+  data: Mapping[]
+  total: number
+  page: number
+  per_page: number
+}
+
 const emptyDraft: MappingDraft = { raw_name: '', item_code: '', unit_code: '' }
+const MAPPINGS_PER_PAGE = 50
 
 export default function Mappings() {
   const [mappings, setMappings] = useState<Mapping[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [query, setQuery] = useState('')
+  const [searchDraft, setSearchDraft] = useState('')
   const [stats, setStats] = useState<MappingStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [editId, setEditId] = useState<string | null>(null)
@@ -107,26 +119,54 @@ export default function Mappings() {
     }
   }
 
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
     setLoading(true)
     try {
       const [mRes, sRes] = await Promise.all([
-        client.get<{ data: Mapping[] }>('/api/mappings'),
+        client.get<MappingListResponse>('/api/mappings', {
+          params: { page, per_page: MAPPINGS_PER_PAGE, q: query || undefined },
+        }),
         client.get<MappingStats>('/api/mappings/stats'),
       ])
+      const nextTotal = mRes.data.total ?? mRes.data.data?.length ?? 0
+      const totalPages = Math.max(1, Math.ceil(nextTotal / MAPPINGS_PER_PAGE))
+      if (nextTotal > 0 && page > totalPages) {
+        setPage(totalPages)
+        return
+      }
       setMappings(mRes.data.data ?? [])
+      setTotal(nextTotal)
       setStats(sRes.data)
-      void fetchReviewHotspots()
     } catch {
       toast.error('โหลด mapping ไม่สำเร็จ')
     } finally {
       setLoading(false)
     }
-  }
+  }, [page, query])
 
   useEffect(() => {
-    fetchAll()
+    void fetchAll()
+  }, [fetchAll])
+
+  useEffect(() => {
+    void fetchReviewHotspots()
   }, [])
+
+  const totalPages = Math.max(1, Math.ceil(total / MAPPINGS_PER_PAGE))
+  const pageStart = total === 0 ? 0 : (page - 1) * MAPPINGS_PER_PAGE + 1
+  const pageEnd = Math.min(page * MAPPINGS_PER_PAGE, total)
+
+  const handleSearch = (event: React.FormEvent) => {
+    event.preventDefault()
+    setPage(1)
+    setQuery(searchDraft.trim())
+  }
+
+  const clearSearch = () => {
+    setSearchDraft('')
+    setQuery('')
+    setPage(1)
+  }
 
   const startEdit = (m: Mapping) => {
     setEditId(m.id)
@@ -218,6 +258,39 @@ export default function Mappings() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         {/* Table */}
         <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <div className="flex flex-col gap-3 border-b border-border px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <form className="flex w-full max-w-xl items-center gap-2" onSubmit={handleSearch}>
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchDraft}
+                  onChange={(event) => setSearchDraft(event.target.value)}
+                  placeholder="ค้นหาชื่อสินค้า, รหัส SML หรือหน่วย"
+                  className="h-9 pl-9 pr-9 text-sm"
+                  aria-label="ค้นหาตารางจับคู่สินค้า"
+                />
+                {searchDraft && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="absolute right-0.5 top-0.5 h-8 w-8"
+                    onClick={clearSearch}
+                    aria-label="ล้างคำค้นหา"
+                    title="ล้างคำค้นหา"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+              <Button type="submit" size="icon" variant="outline" aria-label="ค้นหา" title="ค้นหา">
+                <Search className="h-4 w-4" />
+              </Button>
+            </form>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+              {total.toLocaleString()} รายการ
+            </span>
+          </div>
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/40 hover:bg-muted/40">
@@ -255,7 +328,9 @@ export default function Mappings() {
                   <TableCell colSpan={6} className="py-12">
                     <EmptyState
                       title="ยังไม่มี mapping"
-                      description="ระบบจะเรียนรู้อัตโนมัติเมื่อ admin ยืนยันบิลที่รอตรวจสอบ — หรือเพิ่ม mapping เองจากฟอร์มด้านขวา"
+                      description={query
+                        ? 'ไม่พบรายการที่ตรงกับคำค้นหา ลองค้นหาด้วยชื่อสินค้า รหัส SML หรือหน่วย'
+                        : 'ระบบจะเรียนรู้อัตโนมัติเมื่อ admin ยืนยันบิลที่รอตรวจสอบ — หรือเพิ่ม mapping เองจากฟอร์มด้านขวา'}
                       action={
                         <Button asChild variant="outline" size="sm">
                           <Link to="/bills?status=needs_review">
@@ -381,6 +456,42 @@ export default function Mappings() {
               )}
             </TableBody>
           </Table>
+          {!loading && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-3 py-2.5 text-xs text-muted-foreground">
+              <span>
+                {total > 0
+                  ? `แสดง ${pageStart.toLocaleString()}-${pageEnd.toLocaleString()} จาก ${total.toLocaleString()} รายการ`
+                  : 'ไม่พบรายการ'}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="h-8 w-8"
+                  disabled={page <= 1}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  aria-label="หน้าก่อน"
+                  title="หน้าก่อน"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="min-w-[76px] text-center tabular-nums">
+                  หน้า {page.toLocaleString()} / {totalPages.toLocaleString()}
+                </span>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="h-8 w-8"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  aria-label="หน้าถัดไป"
+                  title="หน้าถัดไป"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}

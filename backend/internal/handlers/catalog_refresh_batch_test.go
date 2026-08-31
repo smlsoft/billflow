@@ -69,8 +69,9 @@ func TestCatalogRefreshBatchPartialSuccessAndDuplicate(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var body struct {
-		Summary catalogRefreshBatchSummary  `json:"summary"`
-		Results []catalogRefreshBatchResult `json:"results"`
+		Summary       catalogRefreshBatchSummary  `json:"summary"`
+		Results       []catalogRefreshBatchResult `json:"results"`
+		AutoEmbedding catalogAutoEmbeddingResult  `json:"auto_embedding"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -84,6 +85,9 @@ func TestCatalogRefreshBatchPartialSuccessAndDuplicate(t *testing.T) {
 	}
 	if statuses["success"] != 1 || statuses["not_found"] != 1 || statuses["duplicate"] != 1 {
 		t.Fatalf("statuses = %+v, results = %+v", statuses, body.Results)
+	}
+	if body.AutoEmbedding.Status != "not_configured" || body.AutoEmbedding.Total != 1 {
+		t.Fatalf("auto embedding = %+v", body.AutoEmbedding)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
