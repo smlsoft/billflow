@@ -64,6 +64,10 @@ type catalogRefreshBatchRequest struct {
 	Codes []string `json:"codes"`
 }
 
+type catalogCodeRequest struct {
+	Code string `json:"code"`
+}
+
 type catalogRefreshBatchResult struct {
 	Code            string              `json:"code"`
 	Status          string              `json:"status"`
@@ -73,6 +77,24 @@ type catalogRefreshBatchResult struct {
 	HasHiddenChars  bool                `json:"has_hidden_chars,omitempty"`
 	CleanItemCode   string              `json:"clean_item_code,omitempty"`
 	HiddenCharKinds []string            `json:"hidden_char_kinds,omitempty"`
+}
+
+func catalogCodeFromJSON(c *gin.Context) (string, bool) {
+	var req catalogCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "item code required"})
+		return "", false
+	}
+	if strings.ContainsAny(req.Code, "\x00\r\n") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item code"})
+		return "", false
+	}
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid item code"})
+		return "", false
+	}
+	return code, true
 }
 
 type catalogRefreshBatchSummary struct {
@@ -251,7 +273,20 @@ func (h *CatalogHandler) hasPendingRestart(c *gin.Context) bool {
 // POST /api/catalog/:code/refresh — refresh a single row from SML 248
 // Used by the per-row "รีเฟรช" button on /settings/catalog.
 func (h *CatalogHandler) RefreshOne(c *gin.Context) {
-	code := c.Param("code")
+	h.refreshOne(c, c.Param("code"))
+}
+
+// POST /api/catalog/refresh — refresh one catalog row using a JSON code.
+// This supports SML item codes containing URL-reserved characters such as '/'.
+func (h *CatalogHandler) RefreshOneByCode(c *gin.Context) {
+	code, ok := catalogCodeFromJSON(c)
+	if !ok {
+		return
+	}
+	h.refreshOne(c, code)
+}
+
+func (h *CatalogHandler) refreshOne(c *gin.Context, code string) {
 	if code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "item code required"})
 		return
@@ -453,7 +488,20 @@ func catalogRefreshUserError(err error) string {
 // SML 248 is NOT touched — this is for pruning local zombies left over after
 // an SML-side delete, or for clearing rows the admin doesn't want matched.
 func (h *CatalogHandler) DeleteOne(c *gin.Context) {
-	code := c.Param("code")
+	h.deleteOne(c, c.Param("code"))
+}
+
+// DELETE /api/catalog — delete one catalog row using a JSON code.
+// SML is not touched; this exists for codes containing URL-reserved characters.
+func (h *CatalogHandler) DeleteOneByCode(c *gin.Context) {
+	code, ok := catalogCodeFromJSON(c)
+	if !ok {
+		return
+	}
+	h.deleteOne(c, code)
+}
+
+func (h *CatalogHandler) deleteOne(c *gin.Context, code string) {
 	if code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "item code required"})
 		return
@@ -514,7 +562,20 @@ func (h *CatalogHandler) ImportCSV(c *gin.Context) {
 
 // POST /api/catalog/:code/embed  — embed a single product
 func (h *CatalogHandler) EmbedOne(c *gin.Context) {
-	code := c.Param("code")
+	h.embedOne(c, c.Param("code"))
+}
+
+// POST /api/catalog/embed — embed one catalog row using a JSON code.
+// A request body avoids path routing ambiguity for codes such as MD3Y4TH/A.
+func (h *CatalogHandler) EmbedOneByCode(c *gin.Context) {
+	code, ok := catalogCodeFromJSON(c)
+	if !ok {
+		return
+	}
+	h.embedOne(c, code)
+}
+
+func (h *CatalogHandler) embedOne(c *gin.Context, code string) {
 	if code == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "item code required"})
 		return

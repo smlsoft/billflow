@@ -663,9 +663,12 @@ func main() {
 		api.POST("/catalog/refresh-batch", middleware.RequireRole("admin"), catalogH.RefreshBatch)
 		api.POST("/catalog/import-csv", middleware.RequireRole("admin"), catalogH.ImportCSV)
 		api.POST("/catalog/embed-all", middleware.RequireRole("admin"), catalogH.EmbedAll)
+		api.POST("/catalog/embed", middleware.RequireRole("admin"), catalogH.EmbedOneByCode)
 		api.POST("/catalog/reload-index", middleware.RequireRole("admin"), catalogH.ReloadIndex)
+		api.POST("/catalog/refresh", middleware.RequireRole("admin"), catalogH.RefreshOneByCode)
 		api.POST("/catalog/:code/embed", middleware.RequireRole("admin"), catalogH.EmbedOne)
 		api.POST("/catalog/:code/refresh", middleware.RequireRole("admin"), catalogH.RefreshOne)
+		api.DELETE("/catalog", middleware.RequireRole("admin"), catalogH.DeleteOneByCode)
 		api.DELETE("/catalog/:code", middleware.RequireRole("admin"), catalogH.DeleteOne)
 
 		// Confirm catalog match for a needs_review bill item

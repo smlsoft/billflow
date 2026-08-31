@@ -959,7 +959,7 @@ export default function CatalogSettings() {
 
   async function handleEmbedOne(code: string) {
     try {
-      await api.post(`/api/catalog/${code}/embed`)
+      await api.post('/api/catalog/embed', { code })
       notify(`Embed ${code} สำเร็จ`)
       fetchStats()
       fetchItems(params)
@@ -977,7 +977,7 @@ export default function CatalogSettings() {
   async function handleRefreshOne(code: string) {
     setBusyRow({ code, action: 'refresh' })
     try {
-      await api.post(`/api/catalog/${code}/refresh`)
+      await api.post('/api/catalog/refresh', { code })
       notify(`รีเฟรช ${code} จาก SML สำเร็จ`)
       fetchItems(params)
     } catch (err: unknown) {
@@ -1004,7 +1004,7 @@ export default function CatalogSettings() {
   async function handleDeleteOne(code: string) {
     setBusyRow({ code, action: 'delete' })
     try {
-      await api.delete(`/api/catalog/${code}`)
+      await api.delete('/api/catalog', { data: { code } })
       notify(`ลบ ${code} จาก BillFlow แล้ว (SML ไม่ถูกแตะ)`)
       fetchStats()
       fetchItems(params)
