@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -279,8 +280,8 @@ type singleProductV3Response struct {
 //     the user the product no longer exists in SML and offer Delete).
 //   - the upserted item otherwise.
 func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogItem, notFound bool, err error) {
-	url := fmt.Sprintf("%s/api/v1/ic/products/%s", s.smlBaseURL, itemCode)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	productURL := fmt.Sprintf("%s/api/v1/ic/products/%s", s.smlBaseURL, url.PathEscape(itemCode))
+	req, err := http.NewRequest(http.MethodGet, productURL, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -289,11 +290,14 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return nil, false, fmt.Errorf("GET %s: %w", url, err)
+		return nil, false, fmt.Errorf("GET %s: %w", productURL, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusNotFound {
+		if strings.Contains(itemCode, "/") {
+			return s.refreshOneFromCatalogSearch(itemCode)
+		}
 		return nil, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -307,8 +311,12 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	//   - 200 {"success":false}  (some versions)
 	//   - 200 {"success":true, "data":null}  (current — what 192.168.2.248 returns)
 	//   - 200 {"success":true, "data":{"code":"", ...}}  (defensive)
-	// All three mean "no such product" → caller should offer Delete instead.
+	// All three mean "no such product". Codes containing a slash are additionally
+	// checked through the list endpoint because their detail route is unsupported.
 	if !r.Success || r.Data.Code == "" {
+		if strings.Contains(itemCode, "/") {
+			return s.refreshOneFromCatalogSearch(itemCode)
+		}
 		return nil, true, nil
 	}
 	d := r.Data
@@ -337,8 +345,70 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	}
 	bq := d.BalanceQty
 	ci.BalanceQty = &bq
-	// Preserve price from existing row — single-product GET endpoint doesn't
-	// return prices, so leaving ci.Price nil would wipe what's already stored.
+	return s.upsertRefreshedItem(itemCode, ci)
+}
+
+// refreshOneFromCatalogSearch handles SML master codes that cannot be routed
+// through GET /products/:code, such as codes containing a slash. The list API
+// accepts the code as a query parameter, so we only accept an exact code match
+// and never treat a partial search result as the requested product.
+func (s *SMLCatalogService) refreshOneFromCatalogSearch(itemCode string) (item *models.CatalogItem, notFound bool, err error) {
+	searchURL := fmt.Sprintf("%s/api/v1/ic/products?page=1&size=50&search=%s",
+		s.smlBaseURL,
+		url.QueryEscape(itemCode),
+	)
+	req, err := http.NewRequest(http.MethodGet, searchURL, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	for k, v := range s.smlHeaders {
+		req.Header.Set(k, v)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("GET %s: %w", searchURL, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, true, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("SML API %d: %s", resp.StatusCode, string(body))
+	}
+
+	items, _, _, err := parseProductV4Response(body)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse search response: %w", err)
+	}
+	for _, candidate := range items {
+		if strings.TrimSpace(candidate.Code) != itemCode {
+			continue
+		}
+		groupCode := firstNonEmpty(candidate.GroupCode, candidate.GroupCodeV1)
+		ci := models.CatalogItem{
+			ItemCode:   candidate.Code,
+			ItemName:   candidate.Name,
+			ItemName2:  candidate.Name2,
+			UnitCode:   candidate.Unit,
+			GroupCode:  groupCode,
+			BalanceQty: &candidate.BalanceQty,
+			// Search responses do not include reliable image metadata. Preserve any
+			// existing image fields instead of clearing them during this fallback.
+			ImageMetadataSynced: false,
+		}
+		if s.logger != nil {
+			s.logger.Info("catalog: refreshed item through exact search fallback",
+				zap.String("item_code", itemCode))
+		}
+		return s.upsertRefreshedItem(itemCode, ci)
+	}
+	return nil, true, nil
+}
+
+func (s *SMLCatalogService) upsertRefreshedItem(itemCode string, ci models.CatalogItem) (*models.CatalogItem, bool, error) {
+	// Preserve price from the local row — neither the single-product endpoint
+	// nor the search fallback can be trusted to return the catalog sale price.
 	if existing, _ := s.repo.GetOne(itemCode); existing != nil && existing.Price != nil {
 		p := *existing.Price
 		ci.Price = &p
@@ -346,8 +416,7 @@ func (s *SMLCatalogService) RefreshOne(itemCode string) (item *models.CatalogIte
 	if err := s.repo.Upsert(ci); err != nil {
 		return nil, false, fmt.Errorf("upsert: %w", err)
 	}
-	// Re-fetch so the caller sees the canonical row (with timestamps + price
-	// preserved from the prior version).
+	// Re-fetch so the caller sees the canonical row with timestamps and price.
 	out, err := s.repo.GetOne(itemCode)
 	if err != nil {
 		return nil, false, fmt.Errorf("readback: %w", err)
