@@ -119,9 +119,14 @@ interface CatalogPullResponse {
   auto_embedding?: {
     status: 'not_needed' | 'started' | 'queued' | 'not_configured' | 'error'
     total: number
+    session_id?: string
     message?: string
   }
 }
+
+type CatalogPullEmbeddingState = 'idle' | 'queued' | 'running' | 'succeeded' | 'partial' | 'failed' | 'interrupted'
+
+const CATALOG_PULL_EMBED_WAIT_TIMEOUT_MS = 6 * 60 * 1000
 
 interface HiddenCatalogCodesResponse {
   data: CatalogItem[]
@@ -438,6 +443,8 @@ function CatalogPullDialog({
   const [submitting, setSubmitting] = useState(false)
   const [results, setResults] = useState<CatalogPullResult[]>([])
   const [autoEmbedding, setAutoEmbedding] = useState<CatalogPullResponse['auto_embedding']>()
+  const [pullEmbeddingState, setPullEmbeddingState] = useState<CatalogPullEmbeddingState>('idle')
+  const [pullEmbeddingStatus, setPullEmbeddingStatus] = useState<CatalogStats['embed_status']>()
   const [error, setError] = useState('')
   const { codes, duplicates } = useMemo(() => parseCatalogCodes(input), [input])
   const hiddenCodes = useMemo(
@@ -466,7 +473,56 @@ function CatalogPullDialog({
     codes.length > 0 &&
     codes.length <= CATALOG_PULL_LIMIT &&
     invalidLengthCodes.length === 0 &&
-    !submitting
+    !submitting &&
+    pullEmbeddingState !== 'queued' &&
+    pullEmbeddingState !== 'running'
+
+  const pullEmbeddingProcessed = (pullEmbeddingStatus?.done ?? 0) + (pullEmbeddingStatus?.errors ?? 0)
+  const pullEmbeddingTotal = pullEmbeddingStatus?.total ?? autoEmbedding?.total ?? 0
+
+  useEffect(() => {
+    const sessionID = autoEmbedding?.session_id
+    const shouldTrack = pullEmbeddingState === 'queued' || pullEmbeddingState === 'running'
+    if (!open || !sessionID || !shouldTrack) return
+
+    let cancelled = false
+    const deadline = Date.now() + CATALOG_PULL_EMBED_WAIT_TIMEOUT_MS
+
+    const checkStatus = async () => {
+      try {
+        const res = await api.get<CatalogStats>('/api/catalog/stats')
+        if (cancelled) return
+
+        const status = res.data.embed_status
+        if (!status || status.session_id !== sessionID) {
+          if (Date.now() >= deadline) {
+            setPullEmbeddingState('interrupted')
+          }
+          return
+        }
+
+        setPullEmbeddingStatus(status)
+        if (status.running) {
+          setPullEmbeddingState('running')
+          return
+        }
+        if (status.error || status.errors > 0) {
+          setPullEmbeddingState(status.done > 0 ? 'partial' : 'failed')
+          return
+        }
+        setPullEmbeddingState('succeeded')
+      } catch {
+        // A transient status request must not be shown as a failed background task.
+      }
+    }
+
+    void checkStatus()
+    const timer = window.setInterval(() => void checkStatus(), 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [autoEmbedding?.session_id, open, pullEmbeddingState])
 
   async function copyProblemCodes() {
     if (problemCodes.length === 0) return
@@ -490,6 +546,8 @@ function CatalogPullDialog({
     setSubmitting(true)
     setError('')
     setAutoEmbedding(undefined)
+    setPullEmbeddingStatus(undefined)
+    setPullEmbeddingState('idle')
     const duplicateResults: CatalogPullResult[] = duplicates.map((code) => {
       const meta = inspectCatalogCode(code)
       return {
@@ -505,6 +563,13 @@ function CatalogPullDialog({
       const nextResults = [...duplicateResults, ...(res.data.results ?? [])]
       setResults(nextResults)
       setAutoEmbedding(res.data.auto_embedding)
+      if (res.data.auto_embedding?.status === 'queued' && res.data.auto_embedding.session_id) {
+        setPullEmbeddingState('queued')
+      } else if (res.data.auto_embedding?.status === 'started' && res.data.auto_embedding.session_id) {
+        setPullEmbeddingState('running')
+      } else if (res.data.auto_embedding?.status === 'error') {
+        setPullEmbeddingState('failed')
+      }
       const firstSuccess = nextResults.find((row) => row.status === 'success')
       const firstCode = firstSuccess?.item?.item_code || firstSuccess?.code
       if (firstCode) {
@@ -525,6 +590,8 @@ function CatalogPullDialog({
       setError('')
       setResults([])
       setAutoEmbedding(undefined)
+      setPullEmbeddingStatus(undefined)
+      setPullEmbeddingState('idle')
     }
   }
 
@@ -552,7 +619,7 @@ function CatalogPullDialog({
               }}
               placeholder={'ITEM001\nITEM002\nITEM003'}
               className="min-h-40 font-mono text-sm"
-              disabled={submitting}
+              disabled={submitting || pullEmbeddingState === 'queued' || pullEmbeddingState === 'running'}
             />
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span>{codes.length.toLocaleString()} / {CATALOG_PULL_LIMIT} รหัสที่จะดึง</span>
@@ -650,10 +717,15 @@ function CatalogPullDialog({
             </div>
           )}
 
-          {resultCounts.success > 0 && (
-            <div className="rounded-md border border-success/30 bg-success/[0.06] px-3 py-2 text-xs text-success">
-              {autoEmbedding?.message ?? 'ดึงสินค้าเรียบร้อยแล้ว ระบบกำลังสร้างข้อมูลจับคู่ให้อัตโนมัติ'}
-            </div>
+          {resultCounts.success > 0 && autoEmbedding && (
+            <CatalogPullEmbeddingStatus
+              autoEmbedding={autoEmbedding}
+              state={pullEmbeddingState}
+              processed={pullEmbeddingProcessed}
+              total={pullEmbeddingTotal}
+              errors={pullEmbeddingStatus?.errors ?? 0}
+              error={pullEmbeddingStatus?.error}
+            />
           )}
         </div>
 
@@ -682,6 +754,76 @@ function CatalogPullStatusBadge({ status }: { status: CatalogPullStatus }) {
     return <span className="text-muted-foreground">ซ้ำ</span>
   }
   return <span className="inline-flex items-center gap-1 text-destructive"><AlertCircle className="h-3.5 w-3.5" />ล้มเหลว</span>
+}
+
+function CatalogPullEmbeddingStatus({
+  autoEmbedding,
+  state,
+  processed,
+  total,
+  errors,
+  error,
+}: {
+  autoEmbedding: NonNullable<CatalogPullResponse['auto_embedding']>
+  state: CatalogPullEmbeddingState
+  processed: number
+  total: number
+  errors: number
+  error?: string
+}) {
+  const progressText = total > 0
+    ? `${processed.toLocaleString()} / ${total.toLocaleString()} รายการ`
+    : `${processed.toLocaleString()} รายการ`
+
+  let tone = 'border-success/30 bg-success/[0.06] text-success'
+  let title = 'ดึงสินค้าเรียบร้อยแล้ว'
+  let detail = autoEmbedding.message ?? 'ระบบกำลังสร้างข้อมูลจับคู่ให้อัตโนมัติ'
+  let icon = <CheckCircle2 className="h-4 w-4 shrink-0" />
+
+  if (autoEmbedding.status === 'not_configured') {
+    tone = 'border-warning/35 bg-warning/[0.08] text-warning'
+    title = 'ยังไม่ได้สร้างข้อมูลจับคู่'
+    detail = autoEmbedding.message ?? 'กรุณาตั้งค่า OpenRouter ก่อน'
+    icon = <AlertTriangle className="h-4 w-4 shrink-0" />
+  } else if (autoEmbedding.status === 'error' || state === 'failed') {
+    tone = 'border-destructive/30 bg-destructive/[0.06] text-destructive'
+    title = 'เริ่มสร้างข้อมูลจับคู่ไม่สำเร็จ'
+    detail = error || autoEmbedding.message || 'กรุณาลองใหม่อีกครั้ง'
+    icon = <AlertCircle className="h-4 w-4 shrink-0" />
+  } else if (state === 'queued') {
+    tone = 'border-info/25 bg-info/[0.05] text-info'
+    title = 'รอคิวสร้างข้อมูลจับคู่'
+    detail = 'มีงานอื่นกำลังทำอยู่ ระบบจะเริ่มรอบนี้ต่อเอง'
+    icon = <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+  } else if (state === 'running') {
+    tone = 'border-info/25 bg-info/[0.05] text-info'
+    title = `กำลังสร้างข้อมูลจับคู่ ${progressText}`
+    detail = errors > 0 ? `พบปัญหาแล้ว ${errors.toLocaleString()} รายการ ระบบกำลังทำรายการที่เหลือต่อ` : 'ปิดหน้าต่างได้ ระบบจะทำงานต่อจนเสร็จ'
+    icon = <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+  } else if (state === 'succeeded') {
+    title = `เตรียมข้อมูลจับคู่สำเร็จ ${progressText}`
+    detail = 'สินค้าพร้อมใช้สำหรับการจับคู่แล้ว'
+  } else if (state === 'partial') {
+    tone = 'border-warning/35 bg-warning/[0.08] text-warning'
+    title = `เตรียมข้อมูลจับคู่สำเร็จ ${(processed - errors).toLocaleString()} รายการ`
+    detail = `มีปัญหา ${errors.toLocaleString()} รายการ กรุณาตรวจในแท็บ มีปัญหา`
+    icon = <AlertTriangle className="h-4 w-4 shrink-0" />
+  } else if (state === 'interrupted') {
+    tone = 'border-warning/35 bg-warning/[0.08] text-warning'
+    title = 'ยังยืนยันสถานะงานนี้ไม่ได้'
+    detail = 'งานอาจถูกขัดจังหวะจากการรีสตาร์ตระบบ กรุณาตรวจในแท็บ รอดำเนินการ หรือดึงรหัสนี้อีกครั้ง'
+    icon = <AlertTriangle className="h-4 w-4 shrink-0" />
+  }
+
+  return (
+    <div className={cn('flex gap-2 rounded-md border px-3 py-2 text-xs', tone)}>
+      {icon}
+      <div className="min-w-0">
+        <div className="font-medium">{title}</div>
+        <div className="mt-0.5 text-muted-foreground">{detail}</div>
+      </div>
+    </div>
+  )
 }
 
 function HiddenCodesDialog({

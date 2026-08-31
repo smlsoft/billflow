@@ -81,9 +81,10 @@ type catalogRefreshBatchResult struct {
 }
 
 type catalogAutoEmbeddingResult struct {
-	Status  string `json:"status"`
-	Total   int    `json:"total"`
-	Message string `json:"message,omitempty"`
+	Status    string `json:"status"`
+	Total     int    `json:"total"`
+	SessionID string `json:"session_id,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 func catalogCodeFromJSON(c *gin.Context) (string, bool) {
@@ -492,7 +493,8 @@ func (h *CatalogHandler) startRefreshBatchAutoEmbedding(codes []string) catalogA
 		return result
 	}
 
-	started, err := h.startAutoEmbeddingCodes(codes)
+	sessionID, started, err := h.startAutoEmbeddingCodes(codes, "")
+	result.SessionID = sessionID
 	if err == nil && started {
 		result.Status = "started"
 		result.Message = "ระบบกำลังสร้างข้อมูลจับคู่ให้อัตโนมัติ"
@@ -501,7 +503,7 @@ func (h *CatalogHandler) startRefreshBatchAutoEmbedding(codes []string) catalogA
 	if errors.Is(err, catalog.ErrEmbedAlreadyRunning) {
 		result.Status = "queued"
 		result.Message = "มีงานสร้างข้อมูลจับคู่อื่นกำลังทำอยู่ ระบบจะเริ่มรายการนี้ต่อให้อัตโนมัติ"
-		go h.retryAutoEmbeddingCodes(codes)
+		go h.retryAutoEmbeddingCodes(codes, sessionID)
 		return result
 	}
 
@@ -511,8 +513,8 @@ func (h *CatalogHandler) startRefreshBatchAutoEmbedding(codes []string) catalogA
 	return result
 }
 
-func (h *CatalogHandler) startAutoEmbeddingCodes(codes []string) (bool, error) {
-	return h.catalogSvc.StartEmbedCodes(h.embSvc, codes, func() {
+func (h *CatalogHandler) startAutoEmbeddingCodes(codes []string, sessionID string) (string, bool, error) {
+	return h.catalogSvc.StartEmbedCodes(h.embSvc, codes, sessionID, func() {
 		if h.catalogIdx == nil || h.catalogRepo == nil {
 			return
 		}
@@ -522,11 +524,11 @@ func (h *CatalogHandler) startAutoEmbeddingCodes(codes []string) (bool, error) {
 	})
 }
 
-func (h *CatalogHandler) retryAutoEmbeddingCodes(codes []string) {
+func (h *CatalogHandler) retryAutoEmbeddingCodes(codes []string, sessionID string) {
 	deadline := time.Now().Add(catalogAutoEmbedRetryWindow)
 	for time.Now().Before(deadline) {
 		time.Sleep(time.Second)
-		started, err := h.startAutoEmbeddingCodes(codes)
+		_, started, err := h.startAutoEmbeddingCodes(codes, sessionID)
 		if err == nil && started {
 			h.logger.Info("catalog: queued automatic embed started", zap.Int("total", len(codes)))
 			return

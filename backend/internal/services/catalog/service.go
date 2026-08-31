@@ -602,11 +602,13 @@ func (s *SMLCatalogService) EmbedProduct(embSvc *EmbeddingService, itemCode stri
 }
 
 // StartEmbedCodes embeds only the selected catalog codes in the background.
+// sessionID is retained when a queued pull retries, so callers can follow the
+// exact background task instead of another catalog embedding run.
 // Calls are serialized with EmbedAllPending so a batch pull cannot burst
 // OpenRouter with concurrent embedding requests.
-func (s *SMLCatalogService) StartEmbedCodes(embSvc *EmbeddingService, itemCodes []string, onComplete func()) (bool, error) {
+func (s *SMLCatalogService) StartEmbedCodes(embSvc *EmbeddingService, itemCodes []string, sessionID string, onComplete func()) (string, bool, error) {
 	if embSvc == nil || !embSvc.IsConfigured() {
-		return false, fmt.Errorf("embedding service not configured")
+		return sessionID, false, fmt.Errorf("embedding service not configured")
 	}
 
 	codes := make([]string, 0, len(itemCodes))
@@ -623,14 +625,16 @@ func (s *SMLCatalogService) StartEmbedCodes(embSvc *EmbeddingService, itemCodes 
 		codes = append(codes, code)
 	}
 	if len(codes) == 0 {
-		return false, nil
+		return sessionID, false, nil
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = newOpenRouterSessionID("catalog-embed-refresh", strconv.Itoa(len(codes)))
 	}
 	if !s.embedRunning.CompareAndSwap(0, 1) {
-		return false, ErrEmbedAlreadyRunning
+		return sessionID, false, ErrEmbedAlreadyRunning
 	}
 
 	startedAt := time.Now()
-	sessionID := newOpenRouterSessionID("catalog-embed-refresh", strconv.Itoa(len(codes)))
 	s.setEmbedStatus(EmbedStatus{
 		Running:   true,
 		SessionID: sessionID,
@@ -667,6 +671,10 @@ func (s *SMLCatalogService) StartEmbedCodes(embSvc *EmbeddingService, itemCodes 
 				} else {
 					done++
 				}
+			} else {
+				// An existing embedding is already ready for matching. Count it as
+				// processed so the progress always reaches the selected total.
+				done++
 			}
 
 			status := s.EmbedStatus()
@@ -678,7 +686,7 @@ func (s *SMLCatalogService) StartEmbedCodes(embSvc *EmbeddingService, itemCodes 
 		s.logger.Info("catalog: selected embed complete", zap.Int("done", done), zap.Int("errors", errs))
 	}()
 
-	return true, nil
+	return sessionID, true, nil
 }
 
 func (s *SMLCatalogService) embedProductWithSession(embSvc *EmbeddingService, itemCode, sessionID string) error {
