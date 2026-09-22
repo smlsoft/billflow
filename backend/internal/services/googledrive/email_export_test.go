@@ -251,6 +251,39 @@ func TestExportDataPDFUsesSharedDialogPreviewHTML(t *testing.T) {
 	}
 }
 
+func TestExportDataPDFAddsPOLAndCardPaymentToDriveHTML(t *testing.T) {
+	var renderedHTML string
+	svc := &Service{cfg: &config.Config{ArtifactsDir: t.TempDir()}, pdfRenderer: pdfRendererFunc{render: func(_ context.Context, html string) (PDFRenderResult, error) {
+		renderedHTML = html
+		return PDFRenderResult{PDF: []byte("%PDF-1.7 test")}, nil
+	}}}
+
+	_, _, err := svc.exportData(context.Background(), models.GoogleDriveEmailExport{
+		ID:                 "annotated-pdf-job",
+		OutputFormat:       "pdf",
+		SourceChannel:      "Shopee",
+		PaymentToken:       "TT9630",
+		SMLDocNo:           "POL26080483",
+		MarketplaceOrderID: "260820TRCU7Q7G",
+	}, &models.BillArtifact{Kind: "email_html", ContentType: "text/html"}, []byte(`
+		<html><body><table><tr><td>หมายเลขคำสั่งซื้อ:</td><td><a href="https://shopee.example/order">#260820TRCU7Q7G</a></td></tr></table></body></html>
+	`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`data-billflow-order-label="true"`,
+		`→ POL26080483`,
+		`data-billflow-print="true"`,
+		`จ่ายบัตรเครดิต`,
+		`TT9630`,
+	} {
+		if !strings.Contains(renderedHTML, want) {
+			t.Fatalf("renderer did not receive Drive annotation %q:\n%s", want, renderedHTML)
+		}
+	}
+}
+
 func TestExportDataPDFReusesFirstRenderForRetry(t *testing.T) {
 	renderCount := 0
 	svc := &Service{

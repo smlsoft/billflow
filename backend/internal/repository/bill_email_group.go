@@ -406,6 +406,28 @@ func (r *BillRepo) ListBillsByEmailMessageID(messageID, currentBillID string, li
 	return out, rows.Err()
 }
 
+// FindEmailMessageIDForBill returns the canonical source message id without
+// loading the bill's items, status events, or full email-group presentation.
+// Background exporters only need this narrow lookup before listing the group.
+func (r *BillRepo) FindEmailMessageIDForBill(billID string) (string, error) {
+	billID = strings.TrimSpace(billID)
+	if billID == "" {
+		return "", nil
+	}
+	var messageID string
+	err := r.db.QueryRow(`
+		SELECT COALESCE(NULLIF(raw_data->>'email_message_id', ''), NULLIF(raw_data->>'message_id', ''), '')
+		  FROM bills
+		 WHERE id = $1`, billID).Scan(&messageID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find email message id for bill: %w", err)
+	}
+	return strings.TrimSpace(messageID), nil
+}
+
 func (r *BillRepo) ListEmailPrintEvents(messageID string, limit int) ([]models.EmailPrintEvent, error) {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {

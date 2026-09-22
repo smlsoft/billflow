@@ -2,11 +2,17 @@
 
 BillFlow can save an immutable PDF snapshot of a marketplace email to a
 customer-owned Google Drive only after the associated purchase order has been
-accepted by SML. The PDF uses the same prepared HTML as the **ดูอีเมล** dialog
-in BillFlow, including marketplace layout, Thai text, source product images,
-and the payment-total highlight. It supports `shopee_shipped` and
-`lazada_email` purchase bills. The feature uses the existing server-owned
-rclone remote, never a Google token entered in the BillFlow web UI.
+accepted by SML. The PDF uses the same prepared marketplace HTML as the
+**ดูอีเมล** dialog, including layout, Thai text, source product images, and
+the payment-total highlight. It also adds the operational print context: every
+available order in that source email receives its POL label, and `TTxxxx`
+payment methods receive a **จ่ายบัตรเครดิต** stamp. It supports
+`shopee_shipped` and `lazada_email` purchase bills. The feature uses the
+existing server-owned rclone remote, never a Google token entered in the
+BillFlow web UI.
+
+Those annotations are rendered only for new PDF uploads. Existing Drive files
+are intentionally immutable and are never rewritten.
 
 ## Before Enabling
 

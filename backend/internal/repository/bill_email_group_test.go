@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -9,6 +10,38 @@ import (
 	"billflow/internal/models"
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestFindEmailMessageIDForBillUsesCanonicalEmailFields(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	repo := NewBillRepo(db)
+	mock.ExpectQuery("SELECT COALESCE").
+		WithArgs("bill-id").
+		WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow("canonical-message@example.test"))
+
+	messageID, err := repo.FindEmailMessageIDForBill("bill-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messageID != "canonical-message@example.test" {
+		t.Fatalf("message ID = %q", messageID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+
+	mock.ExpectQuery("SELECT COALESCE").
+		WithArgs("missing-bill").
+		WillReturnError(sql.ErrNoRows)
+	messageID, err = repo.FindEmailMessageIDForBill("missing-bill")
+	if err != nil || messageID != "" {
+		t.Fatalf("missing bill = %q, %v", messageID, err)
+	}
+}
 
 func TestRecordEmailPrintEventUsesArtifactSourceMeta(t *testing.T) {
 	db, mock, err := sqlmock.New()

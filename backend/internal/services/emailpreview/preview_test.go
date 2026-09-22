@@ -31,3 +31,37 @@ func TestPrepareHTMLWrapsFragmentAndIsIdempotent(t *testing.T) {
 		t.Fatalf("expected UTF-8 wrapper:\n%s", second)
 	}
 }
+
+func TestPreparePrintableHTMLAddsEveryPOLAndOneCardStamp(t *testing.T) {
+	input := `<html><body><table>
+		<tr><td>หมายเลขคำสั่งซื้อ:</td><td><a href="/one">#260820TRCU7Q7G</a></td></tr>
+		<tr><td>หมายเลขคำสั่งซื้อ:</td><td><a href="/two">#260820TRCU7Q7H</a></td></tr>
+	</table></body></html>`
+
+	got := PreparePrintableHTML(input, PrintContext{
+		SourceChannel: "Shopee",
+		Orders: []PrintOrder{
+			{OrderID: "260820TRCU7Q7G", SMLDocNo: "POL26080483", PaymentMethod: "tt9630"},
+			{OrderID: "#260820TRCU7Q7H", SMLDocNo: "POL26080496", PaymentMethod: "TT9630"},
+		},
+	})
+
+	for _, want := range []string{
+		`#260820TRCU7Q7G</a><span data-billflow-order-label="true"`,
+		`→ POL26080483`,
+		`→ POL26080496`,
+		`จ่ายบัตรเครดิต`,
+		`TT9630`,
+		`position:fixed;right:10mm;top:8mm`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prepared printable HTML missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, `data-billflow-order-label="true"`) != 2 {
+		t.Fatalf("POL labels = %d, want 2:\n%s", strings.Count(got, `data-billflow-order-label="true"`), got)
+	}
+	if strings.Count(got, `data-billflow-print="true"`) != 1 {
+		t.Fatalf("card stamps = %d, want 1:\n%s", strings.Count(got, `data-billflow-print="true"`), got)
+	}
+}

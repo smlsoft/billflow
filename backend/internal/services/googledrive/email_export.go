@@ -506,7 +506,11 @@ func (s *Service) exportData(ctx context.Context, job models.GoogleDriveEmailExp
 	if source == nil || (strings.ToLower(source.Kind) != "email_html" && !strings.Contains(strings.ToLower(source.ContentType), "html")) {
 		html = "<!doctype html><html><head><meta charset=\"utf-8\"></head><body><pre style=\"white-space:pre-wrap;font-family:sans-serif\">" + stdhtml.EscapeString(html) + "</pre></body></html>"
 	}
-	result, err := s.pdfRenderer.Render(ctx, emailpreview.PrepareHTML(html))
+	printContext, err := s.printContextForJob(job)
+	if err != nil {
+		return nil, "", err
+	}
+	result, err := s.pdfRenderer.Render(ctx, emailpreview.PreparePrintableHTML(html, printContext))
 	if err != nil {
 		return nil, "", fmt.Errorf("สร้าง PDF จากอีเมลไม่สำเร็จ: %w", err)
 	}
@@ -515,6 +519,41 @@ func (s *Service) exportData(ctx context.Context, job models.GoogleDriveEmailExp
 		return nil, "", err
 	}
 	return result.PDF, warning, nil
+}
+
+func (s *Service) printContextForJob(job models.GoogleDriveEmailExport) (emailpreview.PrintContext, error) {
+	context := emailpreview.PrintContext{
+		SourceChannel: job.SourceChannel,
+		Orders: []emailpreview.PrintOrder{{
+			OrderID: job.MarketplaceOrderID, SMLDocNo: job.SMLDocNo, PaymentMethod: job.PaymentToken,
+		}},
+	}
+	if s == nil || s.billRepo == nil || job.BillID == "" {
+		return context, nil
+	}
+
+	messageID, err := s.billRepo.FindEmailMessageIDForBill(job.BillID)
+	if err != nil {
+		return emailpreview.PrintContext{}, fmt.Errorf("load Google Drive email message id: %w", err)
+	}
+	if messageID == "" {
+		return context, nil
+	}
+	related, err := s.billRepo.ListBillsByEmailMessageID(messageID, job.BillID, 50)
+	if err != nil {
+		return emailpreview.PrintContext{}, fmt.Errorf("load Google Drive email group: %w", err)
+	}
+	for _, relatedBill := range related {
+		if relatedBill.BillType != "purchase" || (relatedBill.Source != "shopee_shipped" && relatedBill.Source != "lazada_email") {
+			continue
+		}
+		context.Orders = append(context.Orders, emailpreview.PrintOrder{
+			OrderID:       relatedBill.OrderID,
+			SMLDocNo:      relatedBill.SMLDocNo,
+			PaymentMethod: relatedBill.EffectivePrintPaymentMethod,
+		})
+	}
+	return context, nil
 }
 
 // PDF bytes from Chromium include generation metadata and are not stable across
