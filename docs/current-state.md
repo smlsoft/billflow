@@ -1,7 +1,7 @@
 # BillFlow — Current State
 
-> Updated: 2026-06-18 +07
-> Source of truth checked: local code/tests, frontend production build, Docker Compose deploy on `192.168.2.109`, thaisunsport DB/SML repair queries, container health checks, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
+> Updated: 2026-10-08 +07
+> Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
 ## Latest Handoff For New Chat
 
@@ -9,9 +9,10 @@
 
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
-- **Post-v1.0 marketplace purchase work deployed through 2026-06-15 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
+- **Post-v1.0 marketplace purchase work deployed through 2026-10-08 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
-- Migration ล่าสุดใน code + `billflow-thaisunsport`: `064_credit_card_report_runs.sql`. Production main ที่บันทึกล่าสุดยังอยู่ที่ `063_lazada_charge_group_key.sql`.
+- Migration ล่าสุดที่ยืนยันจาก `billflow-thaisunsport` backend startup: `073_mappings_list_index.sql`.
+- **Shopee email order links (2026-10-08)**: รองรับ order anchor ที่ Shopee ครอบด้วย SendGrid click tracking โดยจับคู่ visible order ID แบบ exact; production backfill เติมลิงก์ได้ 17 บิลและยืนยัน `2610071VH4259C` มีลิงก์แล้ว ส่วน 10 บิลที่หา URL ที่ปลอดภัยไม่ได้ถูกปล่อยไว้โดยไม่เดา.
 - Lazada email purchase is live on thaisunsport with review-first flow; 3 Lazada IMAP accounts enabled, `lookback_days=1`, `poll_interval_seconds=600`.
 - Marketplace purchase print readiness now depends on POL completeness plus BillFlow-only payment method rules, not creditor prefix.
 - Single-bill and bulk SML send dialogs do **not** require `วิธีการชำระเงิน`; if supplier code/name starts with `TTxxxx`, BillFlow auto-syncs and locks the method to that `TTxxxx`.
@@ -20,6 +21,18 @@
 - **Credit card report v1**: เพิ่มหน้า `/credit-card-reports` สำหรับ export รายงานยอดรูดจาก BillFlow เท่านั้น; user เลือกช่วงวันที่/บัตร TT/ช่องทาง แล้วเลือกกลุ่มยอดรูดเอง โดยเฉพาะวันหัว-ท้ายรอบ statement. Deployed to `billflow-thaisunsport` on 2026-06-18.
 - **sml-api-bybos**: เพิ่มและ deploy `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` + BillFlow `PATCH /api/bills/:id/sml-doc-ref` (admin) สำหรับแก้ doc_ref ย้อนหลัง
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
+
+## Latest Deploy 2026-10-08 — Shopee Email Order Links
+
+- Deploy target: Thaisunsport production hardware, backend only (`/home/thaisunspot/billflow-thaisunsport`, port `8100`). Frontend, BillFlow main, and Nexflow were not deployed.
+- Commit: `e9e4200 fix: support Shopee SendGrid order links`.
+- Root cause: Shopee payment emails contained the correct per-order anchors, but their `href` values used `https://<subdomain>.ct.sendgrid.net/ls/click`; the previous extractor accepted only canonical Shopee hosts, so `raw_data.marketplace_order_url` stayed empty.
+- Fix: parse HTML anchors, require visible anchor text to match the requested order ID exactly, prefer canonical Shopee URLs, and otherwise accept only validated HTTPS SendGrid links on a real `*.ct.sendgrid.net` subdomain with path `/ls/click` and a Shopee-style `upn` value. This prevents a multi-order email from assigning a neighboring order's link.
+- Local verification: focused Shopee marketplace URL tests and `cd backend && go test ./...` passed.
+- Production deploy: backend image rebuilt and container recreated. Initial health probes hit the startup window; the stable check later returned HTTP 200 with `database=ok`, and the container was running without restart, exit, or OOM.
+- Backfill dry-run found 27 missing marketplace order URLs: 17 safe exact matches and 10 no-match rows. Apply updated all 17 safe matches (the reported 15-order email group plus 2 older exact matches); the 10 ambiguous/no-match rows were intentionally unchanged.
+- Post-apply reconciliation: `would_update=0`, `no_artifact=0`, `no_match=10`, `read_errors=0`; bill `924db074-b1e6-481b-9e5e-f3f53693ab4f` / order `2610071VH4259C` has `marketplace_order_url` present.
+- New Shopee purchase emails use the corrected extractor automatically. Existing rows with no unambiguous safe URL continue to render without a link rather than receiving a guessed destination.
 
 ## Latest Deploy 2026-06-18 — Credit Card Report From BillFlow
 

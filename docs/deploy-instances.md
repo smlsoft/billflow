@@ -164,7 +164,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
   - `PUBLIC_BASE_URL=https://thaisunsport.thddns.net:9981`. Caddy will obtain the Let's Encrypt certificate after router forwarding is live.
   - 2026-07-06 +07 frontend patch deployed on production hardware: `/settings/instance` hides the Shopee Open API disabled banner when `VITE_ENABLE_SHOPEE_EXCEL=false`, matching Thaisunsport Phase 1 purchase-only policy.
   - Current SML readiness caveat on staging LAN: after switching to customer LAN DB `192.168.1.50:5432`, `/health/ready` is expected to fail while the hardware is still on developer LAN `192.168.2.x`. Recheck after moving the server to customer LAN `192.168.1.x`. `sml.stock_request_url` is preconfigured for LAN SML JavaWebService: `http://192.168.1.50:8080`.
-- Latest deploy verified: 2026-06-15 +07 (TT payment auto-sync, Lazada charge group key backfill, SML doc_ref repair, and SML gateway doc_ref patch endpoint).
+- Latest deploy verified: 2026-10-08 +07 (backend-only Shopee SendGrid order-link extraction and historical safe-link backfill; earlier TT/Lazada/SML work remains deployed).
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
   - `VITE_PHASE=1`
@@ -197,6 +197,14 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
   - Latest repair manifest: `backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv`
 
 ## Latest Shared Deploy
+
+### 2026-10-08 — Thaisunsport Shopee email order links
+
+- Deploy target: Thaisunsport production hardware only (`/home/thaisunspot/billflow-thaisunsport`, backend `8100`); frontend, BillFlow main, and Nexflow were skipped.
+- Deployed commit: `e9e4200 fix: support Shopee SendGrid order links`.
+- Scope: Shopee email ingestion now maps an order to its exact visible order anchor even when the destination is wrapped by an approved SendGrid tracking URL. The extractor validates scheme, real `*.ct.sendgrid.net` hostname, path, query shape, and exact order text before storing the link.
+- Historical repair: backfill updated 17 safe exact matches, including all 15 orders in the reported email group and 2 older orders. Ten rows without an unambiguous safe URL remained unchanged.
+- Verification: backend health `8100` returned HTTP 200 with database `ok`; container remained running without restart/OOM; post-apply dry-run reported `would_update=0`, `no_artifact=0`, `no_match=10`, `read_errors=0`; order `2610071VH4259C` has an order link.
 
 - 2026-06-15 +07: TT payment auto-sync + Lazada charge-group doc_ref repair deployed to `billflow-thaisunsport` and `sml-api-bybos`.
 - Scope: (1) purchase send dialogs auto-sync/lock payment method when selected supplier code/name starts with `TT`; (2) non-TT suppliers can leave payment method blank and still send SML; (3) Lazada card send requires `raw_data.lazada_charge_group_key`; (4) backend Docker image includes `/app/lazada_group_key`; (5) `sml-api-bybos` exposes `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` with dry-run/expected-value guards.
