@@ -2,6 +2,33 @@ package repository
 
 import "testing"
 
+func TestExtractShopeeMarketplaceOrderURLFromSendGridOrderAnchor(t *testing.T) {
+	trackedURL := "https://u35776146.ct.sendgrid.net/ls/click?upn=u001.synthetic-order-token"
+	html := `
+		<a href="https://u35776146.ct.sendgrid.net/ls/click?upn=u001.first-order-token">#2610071VH42598</a>
+		<a href="` + trackedURL + `"><font color="#e67e22"> #2610071VH4259C </font></a>
+		<a href="https://u35776146.ct.sendgrid.net/ls/click?upn=u001.next-order-token">#2610071VH4259D</a>
+	`
+	got := ExtractShopeeMarketplaceOrderURL("", html, "2610071VH4259C")
+	if got != trackedURL {
+		t.Fatalf("url = %q, want %q", got, trackedURL)
+	}
+}
+
+func TestExtractShopeeMarketplaceOrderURLRejectsSendGridAnchorForDifferentOrder(t *testing.T) {
+	html := `<a href="https://u35776146.ct.sendgrid.net/ls/click?upn=u001.other-order-token">#2610071VH42598</a>`
+	if got := ExtractShopeeMarketplaceOrderURL("", html, "2610071VH4259C"); got != "" {
+		t.Fatalf("url = %q, want empty", got)
+	}
+}
+
+func TestExtractShopeeMarketplaceOrderURLRejectsLookalikeSendGridHost(t *testing.T) {
+	html := `<a href="https://u35776146.ct.sendgrid.net.evil.example/ls/click?upn=u001.token">#2610071VH4259C</a>`
+	if got := ExtractShopeeMarketplaceOrderURL("", html, "2610071VH4259C"); got != "" {
+		t.Fatalf("url = %q, want empty", got)
+	}
+}
+
 func TestExtractShopeeMarketplaceOrderURLFromRedirectNearOrderBlock(t *testing.T) {
 	html := `
 		<a href="https://th.shp.ee/open/noti_email?redir=https%3A%2F%2Fshopee.co.th%2Funiversal-link%2Fuser%2Fpurchase%2Forder%2F234608149246041%2F%3Fdeep_and_deferred%3D1%26shopid%3D123%26utm_source%3Dnoti">ดูคำสั่งซื้อ</a>

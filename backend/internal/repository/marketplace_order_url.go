@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	nethtml "golang.org/x/net/html"
 )
 
 var (
@@ -13,9 +15,9 @@ var (
 	lazadaTradeOrderPattern        = regexp.MustCompile(`(?i)tradeOrderId(?:%3[dD]|=)(\d+)`)
 )
 
-// ExtractMarketplaceOrderURL extracts a safe, canonical marketplace order URL
-// from the source email. It is deterministic and intentionally refuses to guess
-// when the email does not clearly map a URL to the requested order.
+// ExtractMarketplaceOrderURL extracts a safe marketplace order URL from the
+// source email. It is deterministic and intentionally refuses to guess when the
+// email does not clearly map a URL to the requested order.
 func ExtractMarketplaceOrderURL(source, bodyText, bodyHTML, orderID string) string {
 	switch source {
 	case "shopee_shipped":
@@ -31,6 +33,9 @@ func ExtractShopeeMarketplaceOrderURL(bodyText, bodyHTML, orderID string) string
 	orderID = strings.TrimSpace(strings.TrimLeft(orderID, "#"))
 	if orderID == "" {
 		return ""
+	}
+	if orderURL := extractShopeeOrderAnchorURL(bodyHTML, orderID); orderURL != "" {
+		return orderURL
 	}
 	body := marketplaceURLBody(bodyText, bodyHTML)
 	if body == "" {
@@ -81,6 +86,87 @@ func ExtractShopeeMarketplaceOrderURL(bodyText, bodyHTML, orderID string) string
 		}
 	}
 	return best
+}
+
+// extractShopeeOrderAnchorURL handles Shopee payment emails whose order links
+// are wrapped by SendGrid click tracking. The tracked URL is accepted only when
+// it is the href of an anchor whose visible text exactly matches the requested
+// order ID; this prevents a multi-order email from linking a bill to a nearby
+// order or to one of the many unrelated tracked links in the template.
+func extractShopeeOrderAnchorURL(bodyHTML, orderID string) string {
+	bodyHTML = strings.TrimSpace(bodyHTML)
+	orderID = normalizeShopeeOrderAnchorText(orderID)
+	if bodyHTML == "" || orderID == "" {
+		return ""
+	}
+
+	tokenizer := nethtml.NewTokenizer(strings.NewReader(bodyHTML))
+	var href string
+	var text strings.Builder
+	inAnchor := false
+	for {
+		switch tokenizer.Next() {
+		case nethtml.ErrorToken:
+			return ""
+		case nethtml.StartTagToken:
+			token := tokenizer.Token()
+			if strings.EqualFold(token.Data, "a") {
+				inAnchor = true
+				href = ""
+				text.Reset()
+				for _, attr := range token.Attr {
+					if strings.EqualFold(attr.Key, "href") {
+						href = strings.TrimSpace(attr.Val)
+						break
+					}
+				}
+			}
+		case nethtml.TextToken:
+			if inAnchor {
+				text.Write(tokenizer.Text())
+			}
+		case nethtml.EndTagToken:
+			token := tokenizer.Token()
+			if !inAnchor || !strings.EqualFold(token.Data, "a") {
+				continue
+			}
+			if normalizeShopeeOrderAnchorText(text.String()) == orderID {
+				if canonical, ok := CanonicalShopeeMarketplaceOrderURL(href); ok {
+					return canonical
+				}
+				if tracked, ok := safeShopeeSendGridURL(href); ok {
+					return tracked
+				}
+			}
+			inAnchor = false
+			href = ""
+			text.Reset()
+		}
+	}
+}
+
+func normalizeShopeeOrderAnchorText(value string) string {
+	value = strings.Join(strings.Fields(value), "")
+	return strings.ToUpper(strings.TrimLeft(value, "#"))
+}
+
+func safeShopeeSendGridURL(raw string) (string, bool) {
+	target := strings.TrimSpace(html.UnescapeString(raw))
+	if target == "" || len(target) > 8192 {
+		return "", false
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil || parsed.Port() != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "ct.sendgrid.net" || !strings.HasSuffix(host, ".ct.sendgrid.net") || parsed.EscapedPath() != "/ls/click" {
+		return "", false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(parsed.Query().Get("upn")), "u001.") {
+		return "", false
+	}
+	return target, true
 }
 
 func ExtractLazadaMarketplaceOrderURL(bodyText, bodyHTML, orderID string) string {
