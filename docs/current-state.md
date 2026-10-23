@@ -7,10 +7,10 @@
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
-- **Pending customer rollout 2026-10-23 — Lazada duplicate-title rows**: source HTML card parsing replaces AI-collapsed item rows; subtotal-derived price inflation removed in intake and rebuild. Scoped dry-run/repair command plus backend-only deploy script are ready for order `1124675871588966`. Customer deployment and historical repair are not yet confirmed. See [Lazada source item repair](lazada-source-item-repair.md).
+- **Deployed and repaired 2026-10-23 — Lazada duplicate-title rows**: Thaisunsport backend health passed; source HTML preserves each product card and no longer inflates prices to match the subtotal. Scoped apply succeeded for order `1124675871588966`: SKU `21099144072` and `21099144071`, each quantity 2 at 678 with discount 144; shipping 134 and net 2558 unchanged. Status remains `needs_review`, awaiting user mapping/visual verification and feedback. See [Lazada source item repair](lazada-source-item-repair.md).
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
-- **Post-v1.0 marketplace purchase work deployed through 2026-10-08 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
+- **Post-v1.0 marketplace purchase work deployed through 2026-10-23 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
 - Instances ที่ active: `billflow` (main) + `billflow-thaisunsport` เท่านั้น. `billflow-henna` → ย้ายเป็น **Nexflow** แล้ว (deploy จาก repo แยก).
 - Migration ล่าสุดที่ยืนยันจาก `billflow-thaisunsport` backend startup: `073_mappings_list_index.sql`.
 - **Shopee email order links (2026-10-08)**: รองรับ order anchor ที่ Shopee ครอบด้วย SendGrid click tracking โดยจับคู่ visible order ID แบบ exact; production backfill เติมลิงก์ได้ 17 บิลและยืนยัน `2610071VH4259C` มีลิงก์แล้ว ส่วน 10 บิลที่หา URL ที่ปลอดภัยไม่ได้ถูกปล่อยไว้โดยไม่เดา.
@@ -22,6 +22,16 @@
 - **Credit card report v1**: เพิ่มหน้า `/credit-card-reports` สำหรับ export รายงานยอดรูดจาก BillFlow เท่านั้น; user เลือกช่วงวันที่/บัตร TT/ช่องทาง แล้วเลือกกลุ่มยอดรูดเอง โดยเฉพาะวันหัว-ท้ายรอบ statement. Deployed to `billflow-thaisunsport` on 2026-06-18.
 - **sml-api-bybos**: เพิ่มและ deploy `PATCH /api/v1/ic/purchase-orders/:doc_no/doc-ref` + BillFlow `PATCH /api/bills/:id/sml-doc-ref` (admin) สำหรับแก้ doc_ref ย้อนหลัง
 - sml-api-bybos ล่าสุด: เพิ่ม tenant `smlerpmaindata` (thaisunsport.thddns.net:9983) + endpoint `GET /api/v1/erp/sml-user-list` + `user_request` field ใน `ic_trans` INSERT.
+
+## Latest Deploy 2026-10-23 — Lazada Source Rows And Scoped Repair
+
+- Target: Thaisunsport production backend only (`/home/thaisunspot/billflow-thaisunsport`, `8100`); frontend, BillFlow main/demo, SML gateway, and Nexflow skipped.
+- Release checkout: `fd80db9`, including fix `300ac80` and repair/deploy tooling `08cb2d5`.
+- Evidence: customer terminal output supplied through AnyDesk workflow. Docker build and source HTML dry-run passed; startup health eventually returned success after initial connection resets. Apply finished with `applied: source items restored, fee preserved, status=needs_review` using the reviewed plan hash.
+- Order `1124675871588966` / bill `e25e856f-8cee-4765-99cb-5b597c1dc4d3`: restored two goods rows, SKUs `21099144072` and `21099144071`, quantity 2 each, unit price 678, discount 144 per row. Goods 2712, coupon 288, preserved shipping 134, paid total 2558.
+- Backup directory: `/home/thaisunspot/billflow-thaisunsport/backups/lazada-source-items-20261023-104141`; rollback image `billflow-lazada-rollback:20261023-104141`.
+- Prevention: intake and rebuild use source-card quantity/price checks; incomplete or mismatched rows stop processing, unsupported templates are marked unverified and blocked from SML send. Historical bills are not mass-reprocessed.
+- Follow-up: awaiting user refresh/visual confirmation, correct SKU/color mapping and unit selection, and subsequent feedback. No SML send or fresh post-repair database query has been confirmed in this chat; successful apply is the current repair evidence.
 
 ## Latest Deploy 2026-10-08 — Shopee Email Order Links
 

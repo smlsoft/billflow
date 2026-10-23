@@ -1,13 +1,15 @@
 # Lazada Email Purchase Intake
 
-> Updated: 2026-06-15 +07
-> Current prod scope: `billflow-thaisunsport`; shared marketplace print/payment UI also exists on `billflow` main, but the latest 2026-06-15 repair/backfill was deployed to thaisunsport only.
+> Updated: 2026-10-23 +07
+> Current prod scope: `billflow-thaisunsport`; latest source-item fix and scoped historical repair were deployed to Thaisunsport production backend only on 2026-10-23.
 
 ## Status
 
+- 2026-10-23: source HTML item rows now preserve duplicate titles/variants, SKU, image, quantity, and unit price. Intake and rebuild no longer inflate a single remaining row's unit price to force a matching subtotal. All quantity blocks and the goods subtotal must reconcile; unsupported templates remain unverified and blocked from SML send.
+- Scoped repair applied successfully for order `1124675871588966`: SKUs `21099144072` and `21099144071`, each qty 2 at 678, discount 144 each; preserved shipping 134, net 2558, status `needs_review`. User visual confirmation/mapping and feedback remain pending. See [source item repair and verified rollout](lazada-source-item-repair.md).
 - Deployed to thaisunsport: frontend `3020`, backend `8100`, PostgreSQL `5448`.
 - Migration deployed for intake: `057_lazada_email_purchase.sql`.
-- Latest deployed migrations include print/payment and charge-group support through `063_lazada_charge_group_key.sql`.
+- Latest migration confirmed in the prior production startup log is `073_mappings_list_index.sql`; the 2026-10-23 source-item fix adds no migration.
 - Lazada IMAP accounts are enabled on thaisunsport with `lookback_days=1` and `poll_interval_seconds=600`.
 - Initial 7 Lazada email bills were backfilled from stored email HTML artifacts; customer later confirmed the numbers were correct and one Lazada PO was sent to SML successfully.
 - Latest group-key backfill on 2026-06-15 updated 28 Lazada bills from stored email artifacts with `raw_data.lazada_charge_group_key` (`no_artifact=0`, `no_match=0`).

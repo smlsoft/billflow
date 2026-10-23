@@ -164,7 +164,7 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
   - `PUBLIC_BASE_URL=https://thaisunsport.thddns.net:9981`. Caddy will obtain the Let's Encrypt certificate after router forwarding is live.
   - 2026-07-06 +07 frontend patch deployed on production hardware: `/settings/instance` hides the Shopee Open API disabled banner when `VITE_ENABLE_SHOPEE_EXCEL=false`, matching Thaisunsport Phase 1 purchase-only policy.
   - Current SML readiness caveat on staging LAN: after switching to customer LAN DB `192.168.1.50:5432`, `/health/ready` is expected to fail while the hardware is still on developer LAN `192.168.2.x`. Recheck after moving the server to customer LAN `192.168.1.x`. `sml.stock_request_url` is preconfigured for LAN SML JavaWebService: `http://192.168.1.50:8080`.
-- Latest deploy verified: 2026-10-08 +07 (backend-only Shopee SendGrid order-link extraction and historical safe-link backfill; earlier TT/Lazada/SML work remains deployed).
+- Latest deploy verified: 2026-10-23 +07 (backend-only Lazada source-card item extraction and scoped repair for order `1124675871588966`; awaiting user feedback).
 - Current purpose: customer demo for Phase 1 purchase flow only.
 - Keep sale features disabled until the user explicitly asks to open Phase 1+ for this customer:
   - `VITE_PHASE=1`
@@ -197,6 +197,15 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
   - Latest repair manifest: `backups/manual-backups/lazada-doc-ref-repair-manifest-20260615-104241.csv`
 
 ## Latest Shared Deploy
+
+### 2026-10-23 — Thaisunsport Lazada source product rows
+
+- Target: Thaisunsport production backend only (`/home/thaisunspot/billflow-thaisunsport`, `8100`); frontend, BillFlow main/demo, SML gateway, and all Nexflow instances skipped.
+- Release checkout `fd80db9`, including fix `300ac80` and scoped repair/deploy tool `08cb2d5`.
+- Customer-run Docker build, matching source HTML dry-run, and backend health verification passed. Initial startup connection resets resolved before the script reported healthy.
+- Scoped apply succeeded for bill `e25e856f-8cee-4765-99cb-5b597c1dc4d3` / order `1124675871588966`: SKU `21099144072` and `21099144071`, each qty 2 at 678, discount 144; existing fee 134 preserved, net 2558. Status `needs_review`; no automatic SML send.
+- Backup: `backups/lazada-source-items-20261023-104141`; rollback image `billflow-lazada-rollback:20261023-104141`. Original item/raw-data snapshot is recorded atomically in audit action `lazada_source_items_repaired`.
+- Prevention now uses each source card and checks quantities/prices without subtotal-driven price inflation. Awaiting user visual verification, per-color mapping, and feedback; see [repair runbook](lazada-source-item-repair.md).
 
 ### 2026-10-08 — Thaisunsport Shopee email order links
 

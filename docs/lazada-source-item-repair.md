@@ -1,6 +1,16 @@
 # Lazada source item rows — 2026-10-23
 
-Status: implementation and local verification; customer deployment and repair are pending AnyDesk execution. No customer database was accessed from the development machine.
+Status: deployed to Thaisunsport production and scoped repair applied successfully on 2026-10-23 through user-run AnyDesk commands. Awaiting user visual verification/mapping and feedback. No direct customer database access was used from the development machine.
+
+## Confirmed customer result
+
+- Release checkout `fd80db9`, fix `300ac80`, repair/deployment tooling `08cb2d5`.
+- Docker build and real-artifact preflight succeeded. Backend startup initially returned connection resets, then the script confirmed `SUCCESS: backend healthy`.
+- Real source rows: SKU `21099144072` and `21099144071`, each quantity 2, unit price 678, allocated discount 144. Goods 2712, coupon 288, shipping 134, paid total 2558.
+- Reviewed plan hash: `a557ba82ae5239d86196447f1eb6479cbb2766fd5fbac5752031a48679c4e7bc`.
+- Apply output: `applied: source items restored, fee preserved, status=needs_review; map each variant before SML`.
+- Backup directory: `/home/thaisunspot/billflow-thaisunsport/backups/lazada-source-items-20261023-104141` (source copy, `database.sql.gz`, and `dry-run.txt`); rollback image: `billflow-lazada-rollback:20261023-104141`.
+- Successful apply confirms the repair transaction committed. A subsequent SQL query, refreshed UI screenshot, correct SML color mapping, and SML send have not been supplied; await customer feedback. Do not rerun repair simply because feedback is still pending.
 
 ## Report and cause
 
@@ -19,7 +29,7 @@ Lazada extraction sends stripped text to AI, which omits image differences and p
 
 Expected repair: 2 goods rows, each `qty=2`, `price=678`, `discount=144`, plus the existing shipping row `134`; net remains `2558`.
 
-Local validation: backend `go test ./...`, `go vet ./...`, Linux/CGO-disabled `go build ./...`, deployment script `bash -n`, and `git diff --check`. Regression cases cover duplicate titles/SKUs, missing or collapsed AI rows, nested HTML/split currency cells, recommendations, incomplete quantity blocks, incorrect subtotals, blocked SML send, duplicate follow-up notifications, read-only dry-run, changed-plan refusal, and rollback on audit failure. Docker is unavailable on the development machine; full image execution remains a customer preflight check. Graphify was rebuilt locally; its 38 MB graph exceeds the existing 20 MB preflight budget and remains untracked.
+Local validation: backend `go test ./...`, `go vet ./...`, Linux/CGO-disabled `go build ./...`, deployment script `bash -n`, and `git diff --check`. Regression cases cover duplicate titles/SKUs, missing or collapsed AI rows, nested HTML/split currency cells, recommendations, incomplete quantity blocks, incorrect subtotals, blocked SML send, duplicate follow-up notifications, read-only dry-run, changed-plan refusal, and rollback on audit failure. Docker was unavailable on the development machine; image build/execution was subsequently verified on the customer machine. Graphify was rebuilt locally; its 38 MB graph exceeds the existing 20 MB preflight budget and remains untracked.
 
 ## Customer backend deployment and source preflight
 
@@ -38,7 +48,7 @@ bash "$SOURCE/scripts/update-customer-lazada-source-items.sh"
 
 The script saves the running image under a rollback tag, copies old backend source, dumps PostgreSQL with gzip verification, builds the new backend, and runs a read-only dry-run against this exact bill's matching source HTML before recreating the backend. If source parsing fails, the running container is not replaced; preserve the output and inspect that template. The old source and database dump are under the printed `backups/lazada-source-items-<stamp>/` directory. Successful health verification does not mean the historical bill has been repaired.
 
-The HTML artifact for this order has not been supplied locally: tests use representative Lazada HTML and the reported quantities/prices. Review the real preflight result before applying. If it cannot verify two source rows at 678 each, stop and provide the original HTML or diagnostic output; do not manually inflate prices or guess SKUs.
+The HTML artifact was not supplied locally: tests use representative Lazada HTML and reported quantities/prices. Customer preflight subsequently verified the real artifact and both SKUs listed above. For future repairs, review the real preflight result before applying; if source rows cannot be verified, inspect the original HTML and diagnostics rather than manually inflating prices or guessing SKUs.
 
 ## Scoped repair
 
