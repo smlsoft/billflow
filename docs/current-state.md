@@ -1,12 +1,13 @@
 # BillFlow — Current State
 
-> Updated: 2026-10-08 +07
+> Updated: 2026-10-23 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
 ## Latest Handoff For New Chat
 
 ถ้าเปิดแชทใหม่ ให้เริ่มจากสถานะนี้:
 
+- **Pending customer rollout 2026-10-23 — Lazada duplicate-title rows**: source HTML card parsing replaces AI-collapsed item rows; subtotal-derived price inflation removed in intake and rebuild. Scoped dry-run/repair command plus backend-only deploy script are ready for order `1124675871588966`. Customer deployment and historical repair are not yet confirmed. See [Lazada source item repair](lazada-source-item-repair.md).
 - BillFlow ปกติยังอยู่ที่ `http://192.168.2.109:3010` / backend `8090`.
 - **Production release v1.0.0 deployed 2026-06-04** — git tag `v1.0.0`, commit `ac06ac3`.
 - **Post-v1.0 marketplace purchase work deployed through 2026-10-08 on thaisunsport** — not tagged as `v1.0.0`; next feature release should be `v1.1.0` or later.
