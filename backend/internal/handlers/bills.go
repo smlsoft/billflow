@@ -2582,6 +2582,9 @@ func validateMarketplaceAmountReadyForSend(bill *models.Bill) error {
 	}
 	rd := rawDataMapFromBill(bill)
 	orderID := marketplaceOrderIDFromRawData(rd)
+	if rd["source_items_status"] == "unverified" {
+		return &marketplaceAmountReconciliationError{message: fmt.Sprintf("Lazada order %s ยังยืนยันรายการสินค้าและราคาต่อหน่วยจากอีเมลไม่ได้ — กรุณาตรวจสอบต้นฉบับก่อนส่ง SML", orderID)}
+	}
 	groupKey := strings.TrimSpace(fmt.Sprint(rd["lazada_charge_group_key"]))
 	if groupKey == "" || groupKey == "<nil>" {
 		return &marketplaceAmountReconciliationError{message: fmt.Sprintf("Lazada order %s ยังไม่มี group key จากเวลาในเนื้อหาอีเมลสำหรับรวมยอดรูดบัตร — กรุณา run lazada_group_key backfill ก่อนส่ง SML", orderID)}

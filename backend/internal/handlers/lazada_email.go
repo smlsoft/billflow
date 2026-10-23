@@ -204,30 +204,8 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		return false, nil
 	}
 
-	validItems := make([]ai.ExtractedItem, 0, len(order.Items))
-	for _, extItem := range order.Items {
-		extItem.RawName = strings.TrimSpace(extItem.RawName)
-		if extItem.RawName == "" || extItem.Qty <= 0 {
-			continue
-		}
-		validItems = append(validItems, extItem)
-	}
-	if len(validItems) == 0 {
-		h.logger.Warn("lazada_email: skipping order without usable items",
-			zap.String("message_id", messageID),
-			zap.String("order_id", orderID),
-			zap.String("subject", subject),
-		)
-		if messageID != "" {
-			_ = h.billRepo.MarkProcessedEmailKey(lazadaEmailSource, messageID, orderID)
-		}
-		return false, nil
-	}
-	validItems, sourceMetadata := attachLazadaItemSourceMetadata(validItems, bodyHTML)
-	amountSummary := repository.ExtractLazadaAmountSummary(plainText, bodyHTML)
-	validItems = applyLazadaEmailSummaryPrices(validItems, amountSummary)
-	itemsGrossDelta := lazadaExtractedItemsGrossDelta(validItems, amountSummary)
-
+	// Duplicate notifications need not have the same product-card template.
+	// Preserve their artifact without trying to rebuild an existing order.
 	if existingBillID, exists, err := h.findExistingLazadaEmailBillID(orderID); err != nil {
 		return false, fmt.Errorf("lookup existing lazada_email order: %w", err)
 	} else if exists {
@@ -235,11 +213,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 			_ = h.billRepo.MarkProcessedEmailKey(lazadaEmailSource, messageID, orderID)
 		}
 		h.saveLazadaEmailArtifacts(existingBillID, subject, from, plainText, bodyHTML, messageID)
-		h.logger.Info("lazada_email: skipping duplicate order",
-			zap.String("message_id", messageID),
-			zap.String("order_id", orderID),
-			zap.String("bill_id", existingBillID),
-		)
+		h.logger.Info("lazada_email: skipping duplicate order", zap.String("order_id", orderID), zap.String("bill_id", existingBillID))
 		return false, nil
 	}
 	if messageID != "" {
@@ -251,6 +225,28 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 			return false, nil
 		}
 	}
+	validItems := make([]ai.ExtractedItem, 0, len(order.Items))
+	for _, extItem := range order.Items {
+		extItem.RawName = strings.TrimSpace(extItem.RawName)
+		if extItem.RawName == "" || extItem.Qty <= 0 {
+			continue
+		}
+		validItems = append(validItems, extItem)
+	}
+	amountSummary := repository.ExtractLazadaAmountSummary(plainText, bodyHTML)
+	validItems, sourceMetadata, sourceVerified, err := prepareLazadaSourceItems(validItems, bodyHTML, amountSummary)
+	if err != nil {
+		return false, fmt.Errorf("Lazada source items for order %s: %w", orderID, err)
+	}
+	if len(validItems) == 0 {
+		h.logger.Warn("lazada_email: skipping order without usable items",
+			zap.String("message_id", messageID),
+			zap.String("order_id", orderID),
+			zap.String("subject", subject),
+		)
+		return false, fmt.Errorf("Lazada order %s has no usable source or extracted items", orderID)
+	}
+	itemsGrossDelta := lazadaExtractedItemsGrossDelta(validItems, amountSummary)
 
 	itemsWithCandidates, allHighConfidence := h.mapLazadaItems(validItems, sourceMetadata)
 	if len(itemsWithCandidates) == 0 {
@@ -258,7 +254,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 	}
 	configReady := h.lazadaEmailChannelReady()
 	feeConfigReady := h.lazadaEmailFeeConfigReady(amountSummary)
-	amountReady := amountSummary.ReconciliationStatus == repository.LazadaReconciliationOK
+	amountReady := sourceVerified && amountSummary.ReconciliationStatus == repository.LazadaReconciliationOK
 	if amountSummary.HasGoodsTotalAmount && itemsGrossDelta != nil && absFloat(*itemsGrossDelta) > 0.01 {
 		amountReady = false
 	}
@@ -304,6 +300,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		rawDataMap["marketplace_order_url_source"] = "email_html"
 	}
 	applyLazadaAmountSummaryRawData(rawDataMap, amountSummary, itemsGrossDelta)
+	applyLazadaSourceVerification(rawDataMap, sourceVerified, len(validItems))
 	if amountSummary.HasPaidTotalAmount {
 		rawDataMap["total_amount"] = amountSummary.PaidTotalAmount
 	} else if order.TotalAmount != nil {
@@ -386,15 +383,33 @@ func resolveLazadaEmailSellerName(aiSellerName, plainText, bodyHTML string) stri
 	return "Lazada"
 }
 
-func applyLazadaEmailSummaryPrices(items []ai.ExtractedItem, summary repository.LazadaAmountSummary) []ai.ExtractedItem {
-	if !summary.HasGoodsTotalAmount || len(items) != 1 || items[0].Qty <= 0 {
-		return items
+func prepareLazadaSourceItems(items []ai.ExtractedItem, bodyHTML string, summary repository.LazadaAmountSummary) ([]ai.ExtractedItem, []lazadaItemSourceMetadata, bool, error) {
+	rows, err := repository.ParseLazadaEmailItems(bodyHTML, summary)
+	if err != nil {
+		return nil, nil, false, err
 	}
-	out := make([]ai.ExtractedItem, len(items))
-	copy(out, items)
-	price := round2(summary.GoodsTotalAmount / out[0].Qty)
-	out[0].Price = &price
-	return out
+	if len(rows) == 0 {
+		out, metadata := attachLazadaItemSourceMetadata(items, bodyHTML)
+		return out, metadata, false, nil
+	}
+	out := make([]ai.ExtractedItem, len(rows))
+	metadata := make([]lazadaItemSourceMetadata, len(rows))
+	for i, row := range rows {
+		out[i] = ai.ExtractedItem{RawName: row.RawName, Qty: row.Qty, Price: row.Price, ImageURL: row.SourceImageURL}
+		metadata[i] = lazadaItemSourceMetadata{SourceSKU: row.SourceSKU, SourceLineNo: row.SourceLineNo}
+	}
+	return out, metadata, true, nil
+}
+
+func applyLazadaSourceVerification(raw map[string]interface{}, verified bool, count int) {
+	raw["source_item_count"] = count
+	if verified {
+		raw["source_items_status"] = "verified_html"
+		return
+	}
+	raw["source_items_status"] = "unverified"
+	raw["amount_reconciliation_status"] = repository.LazadaReconciliationMissing
+	raw["amount_reconciliation_warning"] = "ยังยืนยันจำนวนรายการสินค้าและราคาต่อหน่วยจากอีเมล Lazada ไม่ได้ กรุณาตรวจสอบต้นฉบับ"
 }
 
 func lazadaExtractedItemsGrossDelta(items []ai.ExtractedItem, summary repository.LazadaAmountSummary) *float64 {

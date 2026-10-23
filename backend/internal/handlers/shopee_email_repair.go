@@ -802,12 +802,14 @@ func (s *ShopeeEmailRepairService) rebuildOneLazadaBillFromConfirmation(
 		}
 		validItems = append(validItems, extItem)
 	}
+	amountSummary := repository.ExtractLazadaAmountSummary(plainText, bodyHTML)
+	validItems, sourceMetadata, sourceVerified, err := prepareLazadaSourceItems(validItems, bodyHTML, amountSummary)
+	if err != nil {
+		return "", fmt.Errorf("Lazada source items for order %s: %w", orderID, err)
+	}
 	if len(validItems) == 0 {
 		return "", fmt.Errorf("rebuild lazada bill %s: no usable items", orderID)
 	}
-	validItems, sourceMetadata := attachLazadaItemSourceMetadata(validItems, bodyHTML)
-	amountSummary := repository.ExtractLazadaAmountSummary(plainText, bodyHTML)
-	validItems = applyLazadaEmailSummaryPrices(validItems, amountSummary)
 	itemsGrossDelta := lazadaExtractedItemsGrossDelta(validItems, amountSummary)
 	itemsWithCandidates, allHighConfidence := emailHandler.mapLazadaItems(validItems, sourceMetadata)
 	if len(itemsWithCandidates) == 0 {
@@ -815,7 +817,7 @@ func (s *ShopeeEmailRepairService) rebuildOneLazadaBillFromConfirmation(
 	}
 	configReady := emailHandler.lazadaEmailChannelReady()
 	feeConfigReady := emailHandler.lazadaEmailFeeConfigReady(amountSummary)
-	amountReady := amountSummary.ReconciliationStatus == repository.LazadaReconciliationOK
+	amountReady := sourceVerified && amountSummary.ReconciliationStatus == repository.LazadaReconciliationOK
 	if amountSummary.HasGoodsTotalAmount && itemsGrossDelta != nil && absFloat(*itemsGrossDelta) > 0.01 {
 		amountReady = false
 	}
@@ -860,6 +862,7 @@ func (s *ShopeeEmailRepairService) rebuildOneLazadaBillFromConfirmation(
 		rawDataMap["marketplace_order_url_source"] = "email_html"
 	}
 	applyLazadaAmountSummaryRawData(rawDataMap, amountSummary, itemsGrossDelta)
+	applyLazadaSourceVerification(rawDataMap, sourceVerified, len(validItems))
 	if amountSummary.HasPaidTotalAmount {
 		rawDataMap["total_amount"] = amountSummary.PaidTotalAmount
 	} else if order.TotalAmount != nil {
@@ -1328,6 +1331,12 @@ func (s *ShopeeEmailRepairService) inspectLazadaTarget(target shopeeRepairTarget
 	summary := repository.ExtractLazadaAmountSummary(plainText, body.HTML)
 	total := 0.0
 	warnings := []string{}
+	sourceRows, sourceErr := repository.ParseLazadaEmailItems(body.HTML, summary)
+	if sourceErr != nil {
+		warnings = append(warnings, "ยืนยันรายการสินค้า Lazada จากอีเมลไม่ได้: "+sourceErr.Error())
+	} else if len(sourceRows) == 0 {
+		warnings = append(warnings, "ไม่พบแถวสินค้าต้นฉบับที่ยืนยันจำนวนและราคาต่อหน่วยได้")
+	}
 	if summary.HasPaidTotalAmount {
 		total = math.Round(summary.PaidTotalAmount*100) / 100
 	} else {
@@ -1363,7 +1372,7 @@ func (s *ShopeeEmailRepairService) inspectLazadaTarget(target shopeeRepairTarget
 		HasStaleTombstones:     len(stale) > 0,
 		StaleTombstoneOrderIDs: stale,
 		Warnings:               warnings,
-		CanRepair:              (len(missing) > 0 || len(rebuildOrderIDs) > 0) && total > 0,
+		CanRepair:              (len(missing) > 0 || len(rebuildOrderIDs) > 0) && total > 0 && sourceErr == nil && len(sourceRows) > 0,
 	}, nil
 }
 

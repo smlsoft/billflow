@@ -178,6 +178,7 @@ func TestShopeeEmailRepairPreviewSupportsLazadaConfirmationSubject(t *testing.T)
 		"คูปองส่วนลด: THB 0.00",
 		"ยอดรวมทั้งหมด(รวม VAT): THB 750.00",
 	}, "\n")
+	html := `<table><tr><td><img src="https://th-live-01.slatic.net/p/clock.jpg"></td><td><a href="https://lazada.co.th/products/i1-s1.html">นาฬิกา LED</a><div>THB 700.00</div><div>จำนวน: 1</div></td></tr></table>`
 
 	mock.ExpectQuery("FROM bills").
 		WithArgs(sqlmock.AnyArg(), lazadaEmailSource).
@@ -190,7 +191,7 @@ func TestShopeeEmailRepairPreviewSupportsLazadaConfirmationSubject(t *testing.T)
 			MessageID: messageID,
 			Subject:   "ยืนยันคำสั่งซื้อหมายเลข 1094738208195692",
 		},
-		shopeeRepairEmailBody{Text: body, ArtifactID: "artifact-1"},
+		shopeeRepairEmailBody{Text: body, HTML: html, ArtifactID: "artifact-1"},
 	)
 	if err != nil {
 		t.Fatalf("inspectTarget: %v", err)
