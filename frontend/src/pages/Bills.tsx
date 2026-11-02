@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Filter, Mail, Printer, Search, Send, Settings, Store, UploadCloud } from 'lucide-react'
+import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Mail, Printer, Search, Send, Settings, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import BillTable from '@/components/BillTable'
-import { BillSourceBadge } from '@/components/BillSourceBadge'
 import { EmptyState } from '@/components/common/EmptyState'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { DateRangePicker } from '@/components/common/DateRangePicker'
@@ -34,6 +34,7 @@ import {
 import type { Bill, EmailPrintCandidate, MarketplaceEmailGroupAttention } from '@/types'
 import type { Party } from '@/pages/ChannelDefaults/PartyPicker'
 import { DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS } from '@/pages/ChannelDefaults/labels'
+import { billPaymentMethods, type PaymentMethodChannel } from '@/lib/bill-payment-methods'
 
 const DEFAULT_PER_PAGE = 20
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
@@ -237,7 +238,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     readURLFilter(searchParams, 'email_completeness', VALID_EMAIL_COMPLETENESS),
   )
   const [printReadyOnly, setPrintReadyOnly] = useState(() => searchParams.get('print_ready') === '1')
-  const [sourceFilterOpen, setSourceFilterOpen] = useState(false)
+  const [paymentMethodChannels, setPaymentMethodChannels] = useState<PaymentMethodChannel[] | null>(null)
+  const [paymentMethodsLoading, setPaymentMethodsLoading] = useState(true)
+  const [paymentMethodsError, setPaymentMethodsError] = useState(false)
+  const [paymentMethodsRevision, setPaymentMethodsRevision] = useState(0)
   const [shopeeShopId, setShopeeShopId] = useState(() => searchParams.get('shopee_shop_id') || ALL)
   const [emailAccountId, setEmailAccountId] = useState(() => searchParams.get('email_account_id') || ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
@@ -305,18 +309,12 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   })
   const bills = data?.data ?? []
   const paymentMethodOptions = useMemo(() => {
-    const values = new Set<string>()
-    DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS.forEach((method) => values.add(method))
-    bills.forEach((bill) => {
-      const method = effectivePrintPaymentMethodFromBill(bill)
-      if (method) values.add(method)
-    })
-    if (activePaymentMethod) values.add(activePaymentMethod)
+    const values = billPaymentMethods(paymentMethodChannels, activeSource, bills, activePaymentMethod, DEFAULT_MARKETPLACE_PRINT_PAYMENT_METHODS)
     return [
       { value: ALL, label: PAYMENT_METHOD_ALL_LABEL },
-      ...Array.from(values).map((method) => ({ value: method, label: method })),
+      ...values.map((method) => ({ value: method, label: method })),
     ]
-  }, [activePaymentMethod, bills])
+  }, [paymentMethodChannels, activeSource, activePaymentMethod, bills])
   const selectedPaymentMethodLabel =
     paymentMethodOptions.find((o) => o.value === paymentMethodFilter)?.label ?? paymentMethodFilter
   const total = typeof data?.total === 'number' ? data.total : counts.total
@@ -384,6 +382,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
 
   const refreshAll = () => {
     setPage(1)
+    setPaymentMethodsRevision((version) => version + 1)
     refetch()
     fetchCounts()
   }
@@ -637,6 +636,36 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   }
 
   useEffect(() => {
+    if (!showPurchaseSourceFilter) return
+    let alive = true
+    let requestVersion = 0
+    const load = async () => {
+      const version = ++requestVersion
+      setPaymentMethodsLoading(true)
+      try {
+        const response = await client.get<{ data: PaymentMethodChannel[] }>('/api/bills/payment-method-options')
+        if (alive && version === requestVersion) {
+          setPaymentMethodChannels(response.data.data ?? [])
+          setPaymentMethodsError(false)
+        }
+      } catch {
+        if (alive && version === requestVersion) setPaymentMethodsError(true)
+      } finally {
+        if (alive && version === requestVersion) setPaymentMethodsLoading(false)
+      }
+    }
+    const reloadVisible = () => { if (document.visibilityState === 'visible') void load() }
+    void load()
+    window.addEventListener('focus', reloadVisible)
+    document.addEventListener('visibilitychange', reloadVisible)
+    return () => {
+      alive = false
+      window.removeEventListener('focus', reloadVisible)
+      document.removeEventListener('visibilitychange', reloadVisible)
+    }
+  }, [showPurchaseSourceFilter, paymentMethodsRevision])
+
+  useEffect(() => {
     let alive = true
     client.get<{ data: InboxOption[] }>('/api/bills/email-inboxes')
       .then((res) => {
@@ -862,61 +891,63 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               </span>
             )}
             {showPurchaseSourceFilter && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-9 w-full justify-start gap-1.5 sm:w-[210px]"
-                onClick={() => setSourceFilterOpen(true)}
-                title="กรองตามช่องทางบิลซื้อ"
-              >
-                <Filter className="h-3.5 w-3.5" />
-                <span className="truncate">{activeSourceOption.label}</span>
-              </Button>
+              <Select value={sourceFilter} onValueChange={(value) => resetPage(() => setSourceFilter(value))}>
+                <SelectTrigger className="h-9 w-full text-xs sm:w-[210px]" aria-label="กรองตามช่องทางบิลซื้อ">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PURCHASE_SOURCE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} title={option.description}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
 
             {showPurchaseSourceFilter && (
-              <select
+              <Select
                 value={emailCompleteness}
-                onChange={(e) => resetPage(() => setEmailCompleteness(e.target.value))}
-                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[190px]"
-                aria-label="กรองตามความครบของอีเมล"
+                onValueChange={(value) => resetPage(() => setEmailCompleteness(value))}
               >
-                {EMAIL_COMPLETENESS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 w-full text-xs sm:w-[190px]" aria-label="กรองตามความครบของอีเมล"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {EMAIL_COMPLETENESS_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
             {showPurchaseSourceFilter && (
-              <select
+              <Select
                 value={paymentMethodFilter}
-                onChange={(e) => resetPage(() => setPaymentMethodFilter(e.target.value))}
-                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[210px]"
-                aria-label="กรองตามวิธีชำระเงิน BillFlow"
-                title="กรองตามวิธีชำระเงินที่ BillFlow ใช้สำหรับส่ง/ปริ้น"
+                onValueChange={(value) => resetPage(() => setPaymentMethodFilter(value))}
+                disabled={paymentMethodsLoading && paymentMethodChannels === null}
               >
-                {paymentMethodOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 w-full text-xs sm:w-[210px]" aria-label="กรองตามวิธีชำระเงิน BillFlow" aria-busy={paymentMethodsLoading} title="กรองตามวิธีชำระเงินที่ BillFlow ใช้สำหรับส่ง/ปริ้น"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {paymentMethodOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
             {showShopeeStatusFilter && (
-              <select
+              <Select
                 value={shopeeStatus}
-                onChange={(e) => resetPage(() => setShopeeStatus(e.target.value))}
-                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[210px]"
-                aria-label="กรองตามสถานะคำสั่งซื้อ Shopee"
+                onValueChange={(value) => resetPage(() => setShopeeStatus(value))}
               >
-                {SHOPEE_STATUS_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 w-full text-xs sm:w-[210px]" aria-label="กรองตามสถานะคำสั่งซื้อ Shopee"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SHOPEE_STATUS_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
             <div className="w-full sm:w-[250px]">
               <DateRangePicker
@@ -960,43 +991,49 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
             )}
 
             {showShopeeShopFilter && shopeeShops.length > 0 && (
-              <label className="flex h-9 w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground sm:w-[260px]">
-                <Store className="h-3.5 w-3.5 text-primary" />
-                <select
-                  value={shopeeShopId}
-                  onChange={(e) => resetPage(() => setShopeeShopId(e.target.value))}
-                  className="h-full min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
-                  aria-label="กรองตามร้าน Shopee"
-                >
-                  <option value={ALL}>ทุกร้าน Shopee</option>
+              <Select
+                value={shopeeShopId}
+                onValueChange={(value) => resetPage(() => setShopeeShopId(value))}
+              >
+                <SelectTrigger className="h-9 w-full text-xs sm:w-[260px]" aria-label="กรองตามร้าน Shopee"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>ทุกร้าน Shopee</SelectItem>
                   {shopeeShops.map((shop) => (
-                    <option key={shop.id} value={String(shop.shop_id)}>
+                    <SelectItem key={shop.id} value={String(shop.shop_id)}>
                       {shop.label || shop.shop_name || 'Shopee shop'} · {shop.shop_id}
-                    </option>
+                    </SelectItem>
                   ))}
-                </select>
-              </label>
+                </SelectContent>
+              </Select>
             )}
             {inboxes.length > 0 && config.routeTo === '/settings/email' && (
-              <select
+              <Select
                 value={emailAccountId}
-                onChange={(e) => resetPage(() => setEmailAccountId(e.target.value))}
-                className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-xs text-foreground sm:w-[280px]"
-                aria-label="กรองตามกล่องอีเมล"
+                onValueChange={(value) => resetPage(() => setEmailAccountId(value))}
               >
-                <option value={ALL}>ทุกกล่องอีเมล</option>
-                {inboxes.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} · {a.username}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-9 w-full text-xs sm:w-[280px]" aria-label="กรองตามกล่องอีเมล"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>ทุกกล่องอีเมล</SelectItem>
+                  {inboxes.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name} · {a.username}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
 
             <div className="min-w-0 flex-1 truncate rounded-md bg-muted/45 px-2.5 py-2 text-[11px] text-muted-foreground">
               {activeFilterSummary.join(' · ')}
             </div>
           </div>
+
+          {showPurchaseSourceFilter && paymentMethodsError && (
+            <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+              <span>{paymentMethodChannels === null ? 'โหลดรายการวิธีชำระเงินจากการตั้งค่าไม่สำเร็จ กำลังแสดงรายการสำรอง' : 'อัปเดตรายการวิธีชำระเงินไม่สำเร็จ กำลังแสดงค่าที่โหลดไว้ก่อนหน้า'}</span>
+              <Button type="button" variant="outline" size="sm" className="h-8" disabled={paymentMethodsLoading} onClick={() => setPaymentMethodsRevision((version) => version + 1)}>ลองใหม่</Button>
+            </div>
+          )}
 
           <div className="flex flex-col gap-2 border-t border-border/70 pt-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-[11px] text-muted-foreground">
@@ -1137,18 +1174,19 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           <label className="inline-flex items-center gap-1.5">
             <span>ต่อหน้า</span>
-            <select
+            <Select
               value={String(perPage)}
-              onChange={(e) => handlePerPageChange(e.target.value)}
-              className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
-              aria-label="จำนวนรายการต่อหน้า"
+              onValueChange={handlePerPageChange}
             >
-              {PAGE_SIZE_OPTIONS.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="h-8 w-[76px] text-xs" aria-label="จำนวนรายการต่อหน้า"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map((size) => (
+                  <SelectItem key={size} value={String(size)}>
+                    {size}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
           <Button
             variant="outline"
@@ -1321,59 +1359,6 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </DialogContent>
       </Dialog>
 
-      <Dialog open={sourceFilterOpen} onOpenChange={setSourceFilterOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>กรองตามช่องทาง</DialogTitle>
-            <DialogDescription>
-              เลือกช่องทางของบิลซื้อที่ต้องการดูและส่งเข้า SML
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            {PURCHASE_SOURCE_OPTIONS.map((option) => {
-              const selected = sourceFilter === option.value
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={[
-                    'flex w-full items-start justify-between gap-3 rounded-lg border p-3 text-left transition-colors',
-                    selected
-                      ? 'border-primary bg-primary/10 text-foreground'
-                      : 'border-border bg-background text-foreground hover:bg-accent/70',
-                  ].join(' ')}
-                  onClick={() => {
-                    resetPage(() => setSourceFilter(option.value))
-                    setSourceFilterOpen(false)
-                  }}
-                >
-                  <span className="min-w-0 space-y-1">
-                    {option.value === ALL ? (
-                      <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
-                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" aria-hidden="true" />
-                        {option.label}
-                      </span>
-                    ) : (
-                      <BillSourceBadge source={option.value} />
-                    )}
-                    <span className="block text-xs leading-snug text-muted-foreground">
-                      {option.description}
-                    </span>
-                  </span>
-                  <span
-                    className={[
-                      'mt-1 h-2.5 w-2.5 shrink-0 rounded-full border',
-                      selected ? 'border-primary bg-primary' : 'border-muted-foreground/40',
-                    ].join(' ')}
-                    aria-hidden="true"
-                  />
-                </button>
-              )
-            })}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       <ConfirmDialog
         open={confirmAction !== null}
         onOpenChange={(open) => !open && setConfirmAction(null)}
@@ -1442,10 +1427,6 @@ function printContextFromCandidate(candidate: EmailPrintCandidate): ArtifactPrin
 function payloadString(payload: Record<string, unknown> | null | undefined, key: string): string {
   const value = payload?.[key]
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function effectivePrintPaymentMethodFromBill(bill: Bill): string {
-  return (bill.effective_print_payment_method || bill.print_payment_method || '').trim()
 }
 
 function formatPrintPaymentMethod(method?: string): string {
