@@ -62,6 +62,7 @@ import {
   type IMAPPollJob,
 } from '@/hooks/useIMAPPollJobs'
 import type { IMAPAccount } from '@/pages/EmailAccounts/AccountDialog'
+import { ShippingCheckSettings } from '@/pages/EmailAccounts/ShippingCheckSettings'
 import { AccountDialog } from '@/pages/EmailAccounts/AccountDialog'
 
 const PHASE = Number(import.meta.env.VITE_PHASE ?? 99)
@@ -1256,6 +1257,7 @@ export default function EmailAccounts() {
       )}
 
       <HelpBanner />
+      {!loading && <ShippingCheckSettings accounts={accounts} />}
 
       {!loading && warningAccounts.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-sm text-warning">

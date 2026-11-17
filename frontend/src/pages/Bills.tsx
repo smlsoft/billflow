@@ -237,6 +237,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [emailCompleteness, setEmailCompleteness] = useState<string>(() =>
     readURLFilter(searchParams, 'email_completeness', VALID_EMAIL_COMPLETENESS),
   )
+  const [shippingAttention, setShippingAttention] = useState(() => searchParams.get('shipping_check') === 'attention')
   const [printReadyOnly, setPrintReadyOnly] = useState(() => searchParams.get('print_ready') === '1')
   const [paymentMethodChannels, setPaymentMethodChannels] = useState<PaymentMethodChannel[] | null>(null)
   const [paymentMethodsLoading, setPaymentMethodsLoading] = useState(true)
@@ -298,6 +299,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     document_route: config.documentRoute,
     print_ready: showPurchaseSourceFilter && printReadyOnly,
     email_account_id: emailAccountId === ALL ? '' : emailAccountId,
+    shipping_check: showPurchaseSourceFilter && shippingAttention ? 'attention' : undefined,
     email_completeness: showPurchaseSourceFilter && emailCompleteness === 'attention' ? 'attention' : undefined,
     shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
     search,
@@ -368,6 +370,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     `ช่องทาง: ${sourceSummary}`,
     showShopeeStatusFilter ? `สถานะคำสั่งซื้อ: ${selectedShopeeStatus}` : '',
     showPurchaseSourceFilter && emailCompleteness === 'attention' ? `ความครบอีเมล: ${selectedEmailCompleteness}` : '',
+    showPurchaseSourceFilter && shippingAttention ? 'ข้อมูลจัดส่งผิดปกติ' : '',
     showPurchaseSourceFilter && printReadyOnly ? 'รอพิมพ์อีเมล' : '',
     showPurchaseSourceFilter && activePaymentMethod ? `วิธีชำระ: ${selectedPaymentMethodLabel}` : '',
     `กล่อง/ร้าน: ${inboxSummary}`,
@@ -417,6 +420,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     params.set('bill_type', config.billType)
     if (config.documentRoute) params.set('document_route', config.documentRoute)
     if (emailAccountId !== ALL) params.set('email_account_id', emailAccountId)
+    if (showPurchaseSourceFilter && shippingAttention) params.set('shipping_check', 'attention')
     if (showPurchaseSourceFilter && emailCompleteness === 'attention') params.set('email_completeness', 'attention')
     if (archiveMode !== 'active') params.set('archived', archiveMode)
     if (showPurchaseSourceFilter && printReadyOnly) params.set('print_ready', '1')
@@ -545,6 +549,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   }
 
   const currentPrintFilters = () => ({
+    shipping_check: showPurchaseSourceFilter && shippingAttention ? 'attention' as const : undefined,
     source: activeSource,
     bill_type: config.billType,
     document_route: config.documentRoute,
@@ -700,7 +705,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
       setCounts({ needs_review: 0, pending: 0, sent: 0, failed: 0, skipped: 0, total: 0, print_ready_orders: 0, print_ready_groups: 0 })
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSource, activePaymentMethod, config.billType, config.documentRoute, emailAccountId, emailCompleteness, archiveMode, shopeeStatus, shopeeShopId, search, printReadyOnly, dateFrom, dateTo])
+  }, [activeSource, activePaymentMethod, config.billType, config.documentRoute, emailAccountId, emailCompleteness, shippingAttention, archiveMode, shopeeStatus, shopeeShopId, search, printReadyOnly, dateFrom, dateTo])
 
   useEffect(() => {
     if (!showPurchaseSourceFilter || archiveMode !== 'active') {
@@ -752,6 +757,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     setSourceFilter((prev) => (prev === nextSource ? prev : nextSource))
     setPrintReadyOnly((prev) => (prev === (searchParams.get('print_ready') === '1') ? prev : searchParams.get('print_ready') === '1'))
     setShopeeShopId((prev) => (prev === (searchParams.get('shopee_shop_id') || ALL) ? prev : searchParams.get('shopee_shop_id') || ALL))
+    setShippingAttention(searchParams.get('shipping_check') === 'attention')
     setEmailAccountId((prev) => (prev === (searchParams.get('email_account_id') || ALL) ? prev : searchParams.get('email_account_id') || ALL))
     setSearchInput((prev) => (prev === nextSearchInput ? prev : nextSearchInput))
     setSearch((prev) => (prev === nextSearchInput.trim() ? prev : nextSearchInput.trim()))
@@ -782,6 +788,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     else next.delete('shopee_status')
     if (showPurchaseSourceFilter && sourceFilter !== ALL) next.set('source', sourceFilter)
     else next.delete('source')
+    if (showPurchaseSourceFilter && shippingAttention) next.set('shipping_check', 'attention')
+    else next.delete('shipping_check')
     if (showPurchaseSourceFilter && emailCompleteness === 'attention') next.set('email_completeness', 'attention')
     else next.delete('email_completeness')
     if (showPurchaseSourceFilter && printReadyOnly) next.set('print_ready', '1')
@@ -816,6 +824,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     shopeeStatus,
     sourceFilter,
     emailCompleteness,
+    shippingAttention,
     printReadyOnly,
     activePaymentMethod,
     archiveMode,
@@ -903,6 +912,20 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               </Select>
             )}
 
+            {showPurchaseSourceFilter && (
+              <Select
+                value={shippingAttention ? 'attention' : ALL}
+                onValueChange={(value) => resetPage(() => setShippingAttention(value === 'attention'))}
+              >
+                <SelectTrigger className="h-9 w-full text-xs sm:w-[210px]" aria-label="กรองข้อมูลจัดส่ง">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>ข้อมูลจัดส่งทั้งหมด</SelectItem>
+                  <SelectItem value="attention">ข้อมูลจัดส่งผิดปกติ</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             {showPurchaseSourceFilter && (
               <Select
                 value={emailCompleteness}
@@ -1245,6 +1268,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
           source: activeSource,
           bill_type: config.billType,
           document_route: config.documentRoute,
+          shipping_check: showPurchaseSourceFilter && shippingAttention ? 'attention' : '',
           email_account_id: emailAccountId === ALL ? '' : emailAccountId,
           shopee_status: showShopeeStatusFilter && shopeeStatus !== ALL ? shopeeStatus : '',
           shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',

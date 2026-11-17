@@ -191,6 +191,7 @@ function bulkJobStorageKey(filters: Props['filters']) {
     filters.document_route || '',
     filters.shopee_shop_id || '',
     filters.print_payment_method || '',
+    filters.shipping_check || '',
   ].join(':')
 }
 
@@ -242,6 +243,7 @@ interface Props {
     shopee_status?: string
     shopee_shop_id?: string
     search?: string
+    shipping_check?: string
     print_payment_method?: string
   }
   onDone?: () => void
@@ -282,7 +284,7 @@ export function BulkSendDialog({
   const [showSlowHint, setShowSlowHint] = useState(false)
   const [mode, setMode] = useState<BulkDialogMode>('setup')
   const { readiness: smlReadiness, loading: smlReadinessLoading } = useSMLReadiness()
-  const storageKey = useMemo(() => bulkJobStorageKey(filters), [filters.source, filters.bill_type, filters.document_route, filters.shopee_shop_id])
+  const storageKey = useMemo(() => bulkJobStorageKey(filters), [filters.source, filters.bill_type, filters.document_route, filters.shopee_shop_id, filters.print_payment_method, filters.shipping_check])
 
   // Sync payment method to TT supplier code when party changes; clear if party becomes non-TT.
   useEffect(() => {
@@ -551,6 +553,7 @@ export function BulkSendDialog({
         }
 
         const active = await getActiveBulkSendJob({
+          shipping_check: filters.shipping_check,
           source: filters.source,
           bill_type: filters.bill_type,
           document_route: filters.document_route,
@@ -589,6 +592,7 @@ export function BulkSendDialog({
           include_total: 'true',
         })
         if (filters.document_route) params.set('document_route', filters.document_route)
+        if (filters.shipping_check) params.set('shipping_check', filters.shipping_check)
         if (filters.email_account_id) params.set('email_account_id', filters.email_account_id)
         if (filters.shopee_status) params.set('shopee_status', filters.shopee_status)
         if (filters.shopee_shop_id) params.set('shopee_shop_id', filters.shopee_shop_id)
@@ -635,6 +639,7 @@ export function BulkSendDialog({
     filters.bill_type,
     filters.document_route,
     filters.email_account_id,
+    filters.shipping_check,
     filters.shopee_status,
     filters.shopee_shop_id,
     filters.search,

@@ -1,3 +1,4 @@
+import { ShippingCheckBadge } from '@/components/shipping/ShippingCheckBadge'
 import dayjs from 'dayjs'
 import { Fragment, type MouseEvent, type ReactNode } from 'react'
 import { AlertTriangle, Archive, CheckCircle2, Copy, CreditCard, ExternalLink, Loader2, Mail, MoreHorizontal, Printer, RotateCcw, Sparkles, Store, Trash2, UserCog } from 'lucide-react'
@@ -220,8 +221,9 @@ export default function BillTable({
           headerClassName: 'text-center',
           className: 'px-3 py-1.5 text-center',
           cell: (b) => (
-            <div className="flex justify-center whitespace-nowrap">
+            <div className="flex flex-col items-center gap-1 whitespace-nowrap">
               <BillStatusBadge status={b.status} />
+              <ShippingCheckBadge bill={b} />
             </div>
           ),
         },

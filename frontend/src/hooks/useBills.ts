@@ -6,6 +6,7 @@ import type { Bill, BillItem, BillListResponse } from '../types'
 import type { EmailPrintCandidate, EmailPrintEvent } from '../types'
 
 interface BillsFilter {
+  shipping_check?: 'attention'
   page?: number
   per_page?: number
   status?: string
@@ -179,6 +180,7 @@ export function useBills(filter: BillsFilter = {}) {
       if (filter.document_route) params.set('document_route', filter.document_route)
       if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
       if (filter.email_completeness) params.set('email_completeness', filter.email_completeness)
+      if (filter.shipping_check) params.set('shipping_check', filter.shipping_check)
       if (filter.search) params.set('search', filter.search)
       if (filter.print_payment_method) params.set('print_payment_method', filter.print_payment_method)
       if (filter.shopee_shop_id) params.set('shopee_shop_id', filter.shopee_shop_id)
@@ -217,6 +219,7 @@ export async function getEmailPrintCandidates(filter: BillsFilter = {}): Promise
   if (filter.source) params.set('source', filter.source)
   if (filter.bill_type) params.set('bill_type', filter.bill_type)
   if (filter.document_route) params.set('document_route', filter.document_route)
+  if (filter.shipping_check) params.set('shipping_check', filter.shipping_check)
   if (filter.email_account_id) params.set('email_account_id', filter.email_account_id)
   if (filter.search) params.set('search', filter.search)
   if (filter.print_payment_method) params.set('print_payment_method', filter.print_payment_method)
@@ -387,6 +390,7 @@ export async function listBulkSendJobs(params: {
 }
 
 export async function getActiveBulkSendJob(params: {
+  shipping_check?: string
   source: string
   bill_type: string
   document_route?: string
@@ -396,6 +400,7 @@ export async function getActiveBulkSendJob(params: {
   if (params.source) search.set('source', params.source)
   if (params.bill_type) search.set('bill_type', params.bill_type)
   if (params.document_route) search.set('document_route', params.document_route)
+  if (params.shipping_check) search.set('shipping_check', params.shipping_check)
   if (params.shopee_shop_id) search.set('shopee_shop_id', params.shopee_shop_id)
   try {
     const res = await client.get<BulkSendJob>(`/api/bills/bulk-send-jobs/active?${search}`)

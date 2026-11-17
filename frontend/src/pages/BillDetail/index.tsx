@@ -9,6 +9,7 @@ import type { BillItem } from '@/types'
 
 import { useBillData } from './hooks/useBillData'
 import { useAuth } from '@/hooks/useAuth'
+import { ShippingCheckCard } from '@/components/shipping/ShippingCheckCard'
 import { BillHeader } from './components/BillHeader'
 import { BillFailureCard } from './components/BillFailureCard'
 import { BillTotal } from './components/BillTotal'
@@ -326,6 +327,7 @@ export default function BillDetail() {
   return (
     <div className="space-y-4">
       <BillHeader bill={bill} onBack={handleBack} />
+      <ShippingCheckCard bill={bill} />
 
       {(bill.error_msg || retryError) && (
         <BillFailureCard
