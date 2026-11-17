@@ -365,3 +365,90 @@ docker exec billflow-postgres psql -U billflow -d billflow \
 | `backend/internal/services/ai/openrouter.go` | ExtractText, ExtractImage, ExtractPDF |
 | `backend/internal/repository/bill_repo.go` | Create, UpdateStatus, UpdateBillItem, UpdatePriceHistory |
 | `backend/internal/handlers/bills.go` | Retry handler — re-map + re-send SML |
+
+
+## Shipping checks — warning-only (2026-11-17)
+
+Shipping checks apply to new marketplace purchase bills (`shopee_shipped`,
+`lazada_email`) only when enabled for their IMAP account. They do not alter bill
+status, totals, mapping, SML eligibility, or send payloads. No LINE notification is
+sent. Missing invoice information is irrelevant: only the explicit shipping
+section is inspected, deterministically, from retained/source HTML.
+
+### Configure and preview
+
+1. Open `/settings/email` → **ตั้งค่าและทดลองตรวจ** → select the mailbox.
+2. Create/select the shared company address profile and fill house number, moo,
+   district, amphoe, province and postcode. Add English area aliases where used in
+   the actual emails (for example `Khlong Ma Duea`, `Krathum Baen`, `Samut Sakhon`).
+3. Enter each approved recipient name and press Enter. Names such as `PD01` or a
+   company name ending `05` are not automatically approved.
+4. Select a historical sample from that mailbox and click **ทดลองตรวจ**. This uses
+   the unsaved form values and the original purchase email; it does not save a
+   result, enrol an old bill, create a bill, or send anything to SML.
+5. Enable the switch and save. Empty deployment config is OFF by default. Only
+   admins can read/change this config or run previews; changes are audited.
+
+A shared profile edit affects future bills in every mailbox that selects it.
+Each newly enrolled bill freezes its own rules; follow-up emails use that frozen
+snapshot. Turning off a mailbox stops enrolment of future bills, but enrolled
+bills continue recording follow-ups. Neither editing config nor receiving a
+matching follow-up clears an earlier warning.
+
+### Results and evidence
+
+The bills list shows a shipping badge separately from the normal bill/SML status.
+The **ข้อมูลจัดส่งผิดปกติ** filter includes both mismatches and unverifiable checks,
+and applies before pagination. Detail shows each field's expected/observed values,
+rule revision, timestamp, history and a sandboxed original-email viewer.
+
+- `match`: required recipient and address components match the frozen rules.
+- `mismatch`: at least one observed required value conflicts with the rules.
+- `unverifiable`: missing/unsupported/ambiguous source data; never treated as a pass.
+- No enrolment/result: **ยังไม่ได้ตรวจ**, including historical bills.
+
+A single unambiguous shared shipping block can serve a multi-order email; multiple
+shipping blocks or recipients are unverifiable. Extra soi text is allowed; soi is
+not separately validated in v1. Unknown English address text remains unverifiable
+instead of being silently ignored. HTML templates can change, so customer smoke
+checks remain necessary. This feature flags source recipient/destination changes;
+it does not establish whether a purchase was authorised or what happened to goods.
+
+### Storage and interfaces
+
+- Config: non-secret `app_settings` key `email.shipping_checks`; revision-checked
+  writes and audit insert occur in one transaction.
+- New bills: `raw_data.shipping_check_policy` snapshots the applicable profile,
+  recipient names and config revision; `shipping_check_summary` carries current
+  status plus cumulative `attention`/`has_warning` flags.
+- Migration `074_shipping_checks.sql`: append-only per-bill/message result ledger,
+  evidence reference, history index and partial attention index. No old-bill scan.
+- `GET/PUT /api/settings/shipping-checks` (admin); PUT sends the full returned
+  config with `revision`, returns 409 for stale edits.
+- `POST /api/settings/shipping-checks/preview` (admin): `{account_id,bill_id,config}`
+  returns `{result,artifact_id?,artifact_bill_id?}`; bill and shared evidence must
+  belong to the same mailbox/source.
+- `GET /api/bills/:id/shipping-checks`: `{data:[...]}` using existing bill-reader
+  access. Config endpoints expose no mailbox credentials.
+- `GET /api/bills?shipping_check=attention` and counts use the cumulative warning
+  flag. Shipping alerts do not participate in SML validation.
+
+### Thaisunsport deployment and acceptance
+
+Use `scripts/update-customer-shipping-checks.sh` from an immutable release checkout
+with `SOURCE_DIR`, `DEPLOY_DIR=/home/thaisunspot/billflow-thaisunsport`,
+`EXPECTED_COMMIT=<full release hash>`, `BACKEND_PORT=8100`, `FRONTEND_PORT=3020`.
+The operator runs it via AnyDesk; no direct customer-server deployment was performed
+from this workspace. The script preserves Compose/feature flags, backs up source
+and database, tags previous images, builds/recreates backend/frontend and waits
+for both health endpoints. It prints a standalone `backups/shipping-checks-*/rollback.sh`
+command. Rollback restores previous source/images, retains the additive migration
+and does not restore the database over newer customer transactions.
+
+After configuration, customer acceptance needs three **new orders/new emails**:
+approved name/address, changed recipient, changed destination. Changing only the
+marketplace address book or refreshing an old bill does not trigger inspection.
+Confirm both the list badge/filter and field-level evidence in detail.
+
+Local verification is recorded in `docs/current-state.md`; production migration,
+Docker build, real IMAP intake and customer acceptance are pending operator results.

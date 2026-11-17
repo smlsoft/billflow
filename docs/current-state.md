@@ -1,7 +1,28 @@
 # BillFlow — Current State
 
-> Updated: 2026-10-23 +07
+> Updated: 2026-11-17 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
+
+## Prepared 2026-11-17 — Shipping recipient/address warnings
+
+- Implemented new-bill-only Shopee/Lazada shipping checks, shared company address
+  profiles with per-mailbox approved names, draft preview, list badge/filter,
+  field-level evidence/history and admin audit/revision protection.
+- OFF by default. Checks are warning-only, independent of bill status/SML readiness.
+  Historical bills are not enrolled; rules are frozen per newly enrolled bill.
+- Additive migration `074_shipping_checks.sql`; customer deploy script:
+  `scripts/update-customer-shipping-checks.sh`, with a full `EXPECTED_COMMIT`.
+  It generates a standalone rollback script and retains live DB data on rollback.
+- Verification: backend tests, frontend build/tests, disposable PostgreSQL 14 ledger
+  integration, and browser settings interactions with mocked API data. Direct
+  parser checks against both user-supplied HTML examples passed with explicitly
+  configured matching recipient names. Docker daemon is unavailable locally;
+  customer PostgreSQL 16 migration/build, actual IMAP intake and acceptance are
+  not yet verified. Build retains existing chunk-size/dynamic-import warnings.
+- **Not deployed to customer.** Next: operator runs the pinned-release script via
+  AnyDesk, configures/tries a sample under `/settings/email`, enables the mailbox,
+  then customer tests new matching/changed-recipient/changed-address orders.
+- Details, APIs, matching limits and acceptance steps: [Email shipping checks](email.md#shipping-checks--warning-only-2026-11-17).
 
 ## Latest Handoff For New Chat
 
