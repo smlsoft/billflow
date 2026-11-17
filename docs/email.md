@@ -439,7 +439,8 @@ Use `scripts/update-customer-shipping-checks.sh` from an immutable release check
 with `SOURCE_DIR`, `DEPLOY_DIR=/home/thaisunspot/billflow-thaisunsport`,
 `EXPECTED_COMMIT=<full release hash>`, `BACKEND_PORT=8100`, `FRONTEND_PORT=3020`.
 The operator runs it via AnyDesk; no direct customer-server deployment was performed
-from this workspace. The script preserves Compose/feature flags, backs up source
+from this workspace. The operator subsequently confirmed both containers healthy
+for release `207228e` (backup `shipping-checks-20261117-163147`). The script preserves Compose/feature flags, backs up source
 and database, tags previous images, builds/recreates backend/frontend and waits
 for both health endpoints. It prints a standalone `backups/shipping-checks-*/rollback.sh`
 command. Rollback restores previous source/images, retains the additive migration
@@ -450,5 +451,16 @@ approved name/address, changed recipient, changed destination. Changing only the
 marketplace address book or refreshing an old bill does not trigger inspection.
 Confirm both the list badge/filter and field-level evidence in detail.
 
-Local verification is recorded in `docs/current-state.md`; production migration,
-Docker build, real IMAP intake and customer acceptance are pending operator results.
+Local verification is recorded in `docs/current-state.md`; customer Docker deployment/health has been confirmed by operator output;
+real IMAP warning behaviour and customer acceptance remain pending configuration/tests.
+
+
+To fill the provided company address without typing it repeatedly, run
+`scripts/configure-customer-shipping-profile.sh` on the customer server. It adds
+profile `thaisunsport-hq-368` (368 moo 10, Khlong Ma Duea, Krathum Baen, Samut Sakhon,
+74110) if absent and assigns it only to mailbox policies not already configured.
+It does not overwrite saved profiles/policies, approve names from historical
+emails, enable checks, reprocess bills or require a service restart. The operator
+must still enter approved recipient names per mailbox, preview, enable and save.
+The config change records before/after values under actor `server_operator` rather
+than attributing the shell operation to an arbitrary application user.

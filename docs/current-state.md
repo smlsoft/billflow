@@ -3,7 +3,7 @@
 > Updated: 2026-11-17 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
-## Prepared 2026-11-17 — Shipping recipient/address warnings
+## Deployed 2026-11-17 — Shipping recipient/address warnings
 
 - Implemented new-bill-only Shopee/Lazada shipping checks, shared company address
   profiles with per-mailbox approved names, draft preview, list badge/filter,
@@ -19,9 +19,19 @@
   configured matching recipient names. Docker daemon is unavailable locally;
   customer PostgreSQL 16 migration/build, actual IMAP intake and acceptance are
   not yet verified. Build retains existing chunk-size/dynamic-import warnings.
-- **Not deployed to customer.** Next: operator runs the pinned-release script via
-  AnyDesk, configures/tries a sample under `/settings/email`, enables the mailbox,
-  then customer tests new matching/changed-recipient/changed-address orders.
+- **Customer deployment confirmed by operator output:** release `207228e`, backend
+  and frontend healthy/running. Backup:
+  `/home/thaisunspot/billflow-thaisunsport/backups/shipping-checks-20261117-163147`.
+  Real IMAP warning behaviour and customer acceptance remain pending configuration
+  and new-order tests.
+- Helper `scripts/configure-customer-shipping-profile.sh` adds the supplied company
+  address/English aliases and selects it for previously unconfigured marketplace
+  inboxes. It preserves saved config, adds no recipient approvals, keeps new
+  policies OFF, audits changes and can be rerun. SQL was exercised twice against a
+  disposable PostgreSQL 14 schema with only one config-change audit event.
+- Next: configure/preview approved recipient names per mailbox under
+  `/settings/email`, enable and save, then test new matching/changed-name/changed-address
+  orders. The helper requires no service restart or app redeployment.
 - Details, APIs, matching limits and acceptance steps: [Email shipping checks](email.md#shipping-checks--warning-only-2026-11-17).
 
 ## Latest Handoff For New Chat
