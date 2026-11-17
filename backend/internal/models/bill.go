@@ -181,6 +181,7 @@ func IsMarketplaceFeeSourceSKU(sourceSKU string) bool {
 }
 
 type BillListFilter struct {
+	ShippingCheck      string `form:"shipping_check"`
 	Status             string `form:"status"`
 	Source             string `form:"source"`
 	BillType           string `form:"bill_type"`

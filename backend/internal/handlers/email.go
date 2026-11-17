@@ -20,6 +20,7 @@ import (
 	emailservice "billflow/internal/services/email"
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/mistral"
+	"billflow/internal/services/shippingcheck"
 )
 
 // Date extraction patterns for Shopee email bodies. Priority order matches
@@ -73,15 +74,16 @@ func extractShopeeImageURLs(html string) []string {
 // EmailHandler processes email attachments through the AI pipeline
 // It is NOT an HTTP handler — it implements emailservice.AttachmentProcessor
 type EmailHandler struct {
-	aiClient   *ai.Client
-	ocrClient  *mistral.OCRClient
-	mapperSvc  *mapper.Service
-	anomalySvc *anomaly.Service
-	billRepo   *repository.BillRepo
-	auditRepo  *repository.AuditLogRepo
-	notifier   Notifier
-	threshold  float64
-	logger     *zap.Logger
+	shippingChecks *shippingcheck.Store
+	aiClient       *ai.Client
+	ocrClient      *mistral.OCRClient
+	mapperSvc      *mapper.Service
+	anomalySvc     *anomaly.Service
+	billRepo       *repository.BillRepo
+	auditRepo      *repository.AuditLogRepo
+	notifier       Notifier
+	threshold      float64
+	logger         *zap.Logger
 	// Catalog-based matching (Shopee email flow)
 	catalogSvc           *catalog.SMLCatalogService
 	embSvc               *catalog.EmbeddingService
@@ -91,8 +93,8 @@ type EmailHandler struct {
 	channelDefaults      *repository.ChannelDefaultRepo
 	shopeeAI             shopeeOrderExtractor
 	// Source-artifact storage (PDF/HTML/envelope)
-	artifactSvc *artifact.Service
-	failureRepo *repository.EmailIngestionFailureRepo
+	artifactSvc    *artifact.Service
+	failureRepo    *repository.EmailIngestionFailureRepo
 	emailGroupRepo *repository.MarketplaceEmailGroupRepo
 }
 

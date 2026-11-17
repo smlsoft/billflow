@@ -307,6 +307,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 		rawDataMap["total_amount"] = *order.TotalAmount
 	}
 	applyMailSource(rawDataMap, source)
+	h.enrollShippingCheck(rawDataMap, source.AccountID)
 	if confirmedAt, groupKey := ExtractLazadaConfirmedAt(plainText, bodyHTML, source.AccountID); confirmedAt != "" {
 		rawDataMap["lazada_confirmed_at"] = confirmedAt
 		rawDataMap["lazada_charge_group_key"] = groupKey
@@ -888,6 +889,7 @@ func (h *EmailHandler) lazadaEmailFeeConfigReady(summary repository.LazadaAmount
 }
 
 func (h *EmailHandler) saveLazadaEmailArtifacts(billID, subject, from, plainText, bodyHTML, messageID string) {
+	defer h.recordShippingCheck(billID, messageID, bodyHTML)
 	if bodyHTML != "" {
 		h.saveEmailArtifacts(billID, "email_html", "lazada-email.html", "text/html; charset=utf-8",
 			[]byte(bodyHTML), subject, from, messageID)

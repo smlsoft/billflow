@@ -298,6 +298,9 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 
 func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 	where := "WHERE 1=1"
+	if f.ShippingCheck == "attention" {
+		where += " AND b.raw_data->'shipping_check_summary'->>'attention' = 'true'"
+	}
 	args := []interface{}{}
 	argN := 1
 
@@ -1401,7 +1404,9 @@ func (r *BillRepo) ApplyShopeePurchaseDiscountsToBill(billID string, summary Sho
 
 	if _, err := tx.Exec(`
 		UPDATE bills
-		   SET raw_data = $1
+		   SET raw_data = $1::jsonb || jsonb_strip_nulls(jsonb_build_object(
+             'shipping_check_policy', raw_data->'shipping_check_policy',
+             'shipping_check_summary', raw_data->'shipping_check_summary'))
 		 WHERE id = $2
 		   AND source = 'shopee_shipped'
 		   AND bill_type = 'purchase'
@@ -1454,7 +1459,9 @@ func (r *BillRepo) ApplyShopeePurchasePaymentSummaryToBill(billID string, summar
 	rawJSON, _ := json.Marshal(raw)
 	res, err := r.db.Exec(`
 		UPDATE bills
-		   SET raw_data = $1
+		   SET raw_data = $1::jsonb || jsonb_strip_nulls(jsonb_build_object(
+             'shipping_check_policy', raw_data->'shipping_check_policy',
+             'shipping_check_summary', raw_data->'shipping_check_summary'))
 		 WHERE id = $2
 		   AND source = 'shopee_shipped'
 		   AND bill_type = 'purchase'

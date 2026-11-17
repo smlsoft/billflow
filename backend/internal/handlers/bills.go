@@ -2791,7 +2791,7 @@ func (h *BillHandler) GetActiveBulkSendJob(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "active bulk send job not found"})
 		return
 	}
-	if !bulkJobMatchesSnapshotFilter(job.FilterSnapshot, "shopee_shop_id", c.Query("shopee_shop_id")) {
+	if !bulkJobMatchesSnapshotFilter(job.FilterSnapshot, "shipping_check", c.Query("shipping_check")) || !bulkJobMatchesSnapshotFilter(job.FilterSnapshot, "shopee_shop_id", c.Query("shopee_shop_id")) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "active bulk send job not found"})
 		return
 	}

@@ -34,6 +34,7 @@ import (
 	"billflow/internal/services/mapper"
 	"billflow/internal/services/media"
 	"billflow/internal/services/mistral"
+	"billflow/internal/services/shippingcheck"
 	"billflow/internal/services/sml"
 	telegramservice "billflow/internal/services/telegram"
 	"billflow/internal/worker"
@@ -402,11 +403,14 @@ func main() {
 	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, mediaSigner, eventBroker, cfg.PublicBaseURL, logger)
 	publicMediaH := handlers.NewPublicMediaHandler(chatMediaRepo, mediaSigner, logger)
 	sseH := handlers.NewSSEHandler(eventBroker, mediaSigner)
+	shippingStore := shippingcheck.NewStore(db)
+	shippingCheckH := handlers.NewShippingCheckHandler(shippingStore, artifactRepo, artifactSvc, logger)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, billRepo, auditLogRepo, telegramSvc, cfg.AutoConfirmThreshold, logger)
 	emailH.SetCatalogServices(catalogSvc, embSvc, catalogIdx, catalogRepo)
 	emailH.SetMarketplaceAliasRepo(aliasRepo)
 	emailH.SetChannelDefaults(channelDefaultRepo)
 	emailH.SetArtifactService(artifactSvc)
+	emailH.SetShippingCheckStore(shippingStore)
 	emailH.SetEmailIngestionFailureRepo(emailFailureRepo)
 	emailH.SetMarketplaceEmailGroupRepo(marketplaceEmailGroupRepo)
 	catalogH := handlers.NewCatalogHandler(catalogSvc, embSvc, catalogIdx, catalogRepo, productClient, auditLogRepo, appSettingsRepo, cfg, cfg.AutoConfirmThreshold, logger)
@@ -480,6 +484,10 @@ func main() {
 		api.POST("/bills/old-data/archive", middleware.RequireRole("admin"), oldDataH.Archive)
 		api.POST("/bills/old-data/purge", middleware.RequireRole("admin"), oldDataH.Purge)
 
+		api.GET("/settings/shipping-checks", middleware.RequireRole("admin"), shippingCheckH.Settings)
+		api.PUT("/settings/shipping-checks", middleware.RequireRole("admin"), shippingCheckH.Save)
+		api.POST("/settings/shipping-checks/preview", middleware.RequireRole("admin"), shippingCheckH.Preview)
+		api.GET("/bills/:id/shipping-checks", shippingCheckH.History)
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)

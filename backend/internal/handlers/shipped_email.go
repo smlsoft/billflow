@@ -1080,6 +1080,7 @@ func (h *EmailHandler) processOneShippedOrder(
 		rawDataMap["payment_summary"] = paymentSummary
 	}
 	applyMailSource(rawDataMap, source)
+	h.enrollShippingCheck(rawDataMap, source.AccountID)
 	rawDataBytes, _ := json.Marshal(rawDataMap)
 
 	status := "needs_review"
@@ -1109,6 +1110,8 @@ func (h *EmailHandler) processOneShippedOrder(
 	if count == 0 {
 		h.saveShopeeShippedEmailArtifacts(bill.ID, subject, from, bodyText, bodyHTML, messageID)
 	}
+
+	h.recordShippingCheck(bill.ID, messageID, bodyHTML)
 
 	for _, iwc := range itemsWithCandidates {
 		item := iwc.item
@@ -1159,6 +1162,7 @@ func shopeeCoinAmountForItems(items []models.BillItem, bodyText, bodyHTML, order
 }
 
 func (h *EmailHandler) saveShopeeShippedEmailArtifacts(billID, subject, from, bodyText, bodyHTML, messageID string) {
+	defer h.recordShippingCheck(billID, messageID, bodyHTML)
 	if bodyHTML != "" {
 		h.saveEmailArtifacts(billID, "email_html", "shopee-shipped.html", "text/html; charset=utf-8",
 			[]byte(bodyHTML), subject, from, messageID)
