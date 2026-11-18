@@ -3,6 +3,25 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — House number following company name
+
+- Customer order `261117HQV8MY6M` / POL `POL26110505` displays a complete address
+  beginning `บริษัท ไทยซันสปอร์ต จำกัด(สำนักงานใหญ่) 368 หมู่10 ...`, but the
+  previous extractor only accepted a leading number or explicit house-number label.
+- Parser `shipping-v2` now accepts a bare house number after an exact normalized
+  recipient/approved-name prefix, taking the longest matching name. It still
+  rejects unknown prefixes and does not pick numbers from a soi, postcode or tax
+  id by matching the configured expected house number.
+- Regression covers the supplied address, changed house/slash suffix, tax-id name
+  prefixes, unknown names and concatenated numeric recipient suffixes. Full
+  backend tests passed for this change. Existing results remain historical;
+  the operator must deploy and click a fresh manual check on the affected bill.
+- Customer also asked where warnings appear (Bills list/filter and Bill Detail;
+  no external LINE notification) and whether manual checks can block SML send.
+  A business-rule question was sent: require a manual passing check, accept an
+  automatic pass, or require only a click regardless of result. No SML blocking
+  rule has been implemented or enabled pending that decision.
+
 ## Prepared 2026-11-18 — Public logo permissions
 
 - Customer screenshot shows a broken logo. Direct public checks found

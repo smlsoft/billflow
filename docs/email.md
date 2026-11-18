@@ -519,3 +519,15 @@ sets UTF-8 and leaves original artifacts untouched. Browser regression: serve a
 Thai HTML body **without** a meta charset via the authenticated preview endpoint,
 open the shipping evidence dialog and verify the Thai recipient/address and UTF-8
 character set; the empty iframe sandbox must continue blocking embedded scripts.
+
+
+Parser `shipping-v2` (2026-11-18) also reads a bare house number immediately after
+an exact normalized recipient/approved-name prefix. This handles a shipping line
+such as `บริษัท ไทยซันสปอร์ต จำกัด(สำนักงานใหญ่) 368 หมู่10 ...` without an
+explicit `เลขที่` label. The longest known prefix wins so a tax id included in an
+approved recipient name is not misread as the house number. Unknown prefixes and
+numbers embedded in other address details remain unverifiable. It does not infer
+house numbers by searching for the configured expected number. Old results are
+retained; click **ตรวจจัดส่งอีกครั้ง** to record a new v2 result after deployment.
+SML send remains warning-only; a newly requested mandatory-check policy is pending
+clarification and is not part of this parser fix.

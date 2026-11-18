@@ -6,11 +6,12 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 )
 
-const Version = "shipping-v1"
+const Version = "shipping-v2"
 
 type Profile struct {
 	ID              string   `json:"id"`
@@ -218,7 +219,7 @@ func Check(src string, p Profile, recipients []string) Result {
 		}
 	}
 	add("ชื่อผู้รับ", strings.Join(recipients, " / "), r.Recipient, ok)
-	house := extractHouse(r.Address)
+	house := extractHouse(r.Address, append([]string{r.Recipient}, recipients...)...)
 	add("บ้านเลขที่", p.House, house, house == p.House)
 	moo := regexp.MustCompile(`หมู่(?:ที่)?\s*(\d+(?:[/.\-]\d+)*)`).FindAllStringSubmatch(r.Address, -1)
 	mv := uniqueCaptures(moo)
@@ -288,12 +289,54 @@ func uniqueCaptures(matches [][]string) string {
 	}
 	return strings.Join(values, " / ")
 }
-func extractHouse(s string) string {
+func extractHouse(s string, recipients ...string) string {
 	matches := [][]string{}
 	for _, pattern := range []string{`(?:บ้านเลขที่|เลขที่)\s*(\d+(?:[/.\-]\d+)*[A-Za-z]?)`, `^\s*(\d+(?:[/.\-]\d+)*[A-Za-z]?)\b`} {
 		matches = append(matches, regexp.MustCompile(pattern).FindAllStringSubmatch(s, -1)...)
 	}
+	// Some marketplace emails repeat the recipient before an unlabelled house
+	// number. Strip only a known name prefix, never scan arbitrary address numbers.
+	if rest, ok := afterRecipientPrefix(s, recipients); ok {
+		matches = append(matches, regexp.MustCompile(`^\s*(\d+(?:[/.\-]\d+)*[A-Za-z]?)\b`).FindAllStringSubmatch(rest, -1)...)
+	}
 	return uniqueCaptures(matches)
+}
+func afterRecipientPrefix(address string, recipients []string) (string, bool) {
+	longest := 0
+	for _, recipient := range recipients {
+		wanted := []rune(norm(recipient))
+		if len(wanted) == 0 {
+			continue
+		}
+		position := 0
+		for index, r := range address {
+			if unicode.IsSpace(r) || unicode.IsPunct(r) {
+				continue
+			}
+			if unicode.ToLower(r) != wanted[position] {
+				break
+			}
+			position++
+			if position == len(wanted) {
+				end := index + utf8.RuneLen(r)
+				// A name ending in digits must not consume the prefix of a larger number.
+				if end < len(address) {
+					next, _ := utf8.DecodeRuneInString(address[end:])
+					if unicode.IsLetter(next) || unicode.IsDigit(next) {
+						break
+					}
+				}
+				if end > longest {
+					longest = end
+				}
+				break
+			}
+		}
+	}
+	if longest == 0 {
+		return "", false
+	}
+	return strings.TrimLeft(address[longest:], " \t\r\n),，.:：]"), true
 }
 func area(s, label string, allowed []string) (string, bool) {
 	// Insert boundaries before Thai administrative labels even when joined together.

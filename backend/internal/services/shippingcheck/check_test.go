@@ -101,3 +101,51 @@ func TestExtractShippingDetailsWithoutPolicy(t *testing.T) {
 		t.Fatal("reading source is not a successful policy check")
 	}
 }
+
+func TestHouseNumberAfterRecipientCompanyPrefix(t *testing.T) {
+	name := "บริษัท ไทยซันสปอร์ต จำกัด (สำนักงานใหญ่)"
+	for _, tt := range []struct{ name, address, want string }{
+		{"customer screenshot", "บริษัท ไทยซันสปอร์ต จำกัด(สำนักงานใหญ่) 368 หมู่10 ตำบลคลองมะเดื่อ อำเภอกระทุ่มแบน จังหวัดสมุทรสาคร 74110", "match"},
+		{"changed number", "บริษัท ไทยซันสปอร์ต จำกัด(สำนักงานใหญ่) 369 หมู่10 ตำบลคลองมะเดื่อ อำเภอกระทุ่มแบน จังหวัดสมุทรสาคร 74110", "mismatch"},
+		{"slash suffix", "บริษัท ไทยซันสปอร์ต จำกัด(สำนักงานใหญ่) 368/1 หมู่10 ตำบลคลองมะเดื่อ อำเภอกระทุ่มแบน จังหวัดสมุทรสาคร 74110", "mismatch"},
+		{"unknown company prefix", "บริษัท อื่น จำกัด 368 หมู่10 ตำบลคลองมะเดื่อ อำเภอกระทุ่มแบน จังหวัดสมุทรสาคร 74110", "unverifiable"},
+		{"number is not a house", "บริษัท ไทยซันสปอร์ต จำกัด(สำนักงานใหญ่) ซอย 368 หมู่10 ตำบลคลองมะเดื่อ อำเภอกระทุ่มแบน จังหวัดสมุทรสาคร 74110", "unverifiable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html := `<h3>รายละเอียดการส่งสินค้า</h3><p>ชื่อผู้รับ: ` + name + `</p><p>ที่อยู่ในการส่งสินค้า: ` + tt.address + `</p><p>เบอร์โทร: 000</p>`
+			got := Check(html, testProfile(), []string{name})
+			if got.Status != tt.want {
+				t.Fatalf("got=%s want=%s findings=%+v", got.Status, tt.want, got.Findings)
+			}
+		})
+	}
+}
+
+func TestCompanyPrefixUsesLongestApprovedNameWithoutNumericGuessing(t *testing.T) {
+	name := "บริษัท ไทยซันสปอร์ต จำกัด (สำนักงานใหญ่)"
+	render := func(recipient, address string) string {
+		return `<h3>รายละเอียดการส่งสินค้า</h3><p>ชื่อผู้รับ: ` + recipient + `</p><p>ที่อยู่: ` + address + `</p><p>เบอร์โทร: 000</p>`
+	}
+	address := name + " 0105559145296 368 หมู่10 ตำบลคลองมะเดื่อ อำเภอกระทุ่มแบน จังหวัดสมุทรสาคร 74110"
+	got := Check(render(name, address), testProfile(), []string{"บริษัท ไทยซันสปอร์ต จำกัด", name, name + " 0105559145296"})
+	if got.Status != "match" {
+		t.Fatalf("tax id must not become the house number: %+v", got)
+	}
+	numberedName := "บริษัท ไทยซันสปอร์ต จำกัด 05"
+	got = Check(render(numberedName, "บริษัท ไทยซันสปอร์ต จำกัด 05368 หมู่10 ตำบลคลองมะเดื่อ อำเภอกระทุ่มแบน จังหวัดสมุทรสาคร 74110"), testProfile(), []string{numberedName})
+	if got.Status == "match" {
+		t.Fatalf("ambiguous company digits must not pass: %+v", got)
+	}
+	foundHouse := false
+	for _, field := range got.Findings {
+		if field.Field == "บ้านเลขที่" {
+			foundHouse = true
+			if field.Actual != "" || field.Status != "unverifiable" {
+				t.Fatalf("recipient suffix must not swallow house number digits: %+v", field)
+			}
+		}
+	}
+	if !foundHouse {
+		t.Fatal("missing house number finding")
+	}
+}
