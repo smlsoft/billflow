@@ -589,9 +589,14 @@ applies. Email count/filter uses groups in `processing` or `attention`, with EXI
 so multiple matching group rows do not duplicate a bill. Sent/skipped/archived bills
 are excluded from both attention filters as well as the global counts.
 
-The Bills page shows two clickable counters above its filters. Clicking one clears
-conflicting filters, selects its queue, returns to page 1 and refreshes even when
-already selected. Existing dropdowns still allow narrowing the queue; the counter
+The Bills page shows two clickable counters above its filters. Clicking an inactive
+counter clears conflicting filters and selects its queue on page 1. Clicking an
+active counter again now cancels only that filter (the original repeated-click
+refresh behavior was superseded). Both dropdown selections are reflected separately.
+Active counters display an X and remain clickable at zero and during count errors.
+The always-visible **ล้างตัวกรอง** clears all list filters, returns to active
+bills/page 1 and preserves page size/sort preference. Filtered empty results say
+**ไม่พบรายการตามตัวกรอง** and offer the same clear action. Existing dropdowns still allow narrowing the queue; the counter
 labels explicitly describe the global queue. Refresh on mount, window focus,
 visibility return, local work-queue change/manual check and every 30 seconds while
 visible. This is polling, not server push. Loading shows `…`; failure clears stale

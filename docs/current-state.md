@@ -3,6 +3,25 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Clear exit from attention filters
+
+- Re-clicking an active shipping/email badge now removes that filter instead of
+  refreshing it. Each badge reflects its own dropdown state, including when both
+  filters are enabled. Active badges show a visible X and remain usable during
+  count-loading/failure and at zero count.
+- Added always-available **ล้างตัวกรอง**. It clears search/date/status/source/inbox/
+  payment/order/shipping/email/print/archive filters, returns to active documents
+  and page 1, retaining page size and sort preference. Activating a different
+  global queue still clears conflicting filters; deselecting preserves others.
+- Filtered zero results now say **ไม่พบรายการตามตัวกรอง** and offer a clear action,
+  rather than implying there are no bills or prompting mailbox setup.
+- Frontend build and 10 tests passed. Browser API-mock regression reproduced the
+  old repeated-click problem, then verified both toggles, combined dropdowns,
+  dropdown synchronization, zero, count-error exit, all-filter reset and narrow
+  counter layout. No backend/config/permission changes. Deploy/UAT pending.
+- Customer confirmed v3 Lazada house parsing and the explicitly added PD02 name
+  now pass. This report does not independently verify the live deployment.
+
 ## Prepared 2026-11-18 — Lazada area-first shipping address (shipping-v3)
 
 - Customer order `1109337756795692` uses shipping text with amphoe/province/postcode

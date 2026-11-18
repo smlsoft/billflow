@@ -292,7 +292,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const activeSourceOption = PURCHASE_SOURCE_OPTIONS.find((o) => o.value === sourceFilter) ?? PURCHASE_SOURCE_OPTIONS[0]
   const activePaymentMethod = showPurchaseSourceFilter && paymentMethodFilter !== ALL ? paymentMethodFilter : ''
 
-  const { data, loading, refetch } = useBills({
+  const { data, loading, error: billLoadError, refetch } = useBills({
     page,
     per_page: perPage,
     include_total: true,
@@ -383,14 +383,21 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     `มุมมอง: ${selectedArchiveLabel}`,
   ].filter(Boolean)
 
+  const hasActiveFilters = Boolean(
+    search || searchInput.trim() || status !== ALL || archiveMode !== 'active' ||
+    emailAccountId !== ALL || dateFrom || dateTo ||
+    (showShopeeStatusFilter && shopeeStatus !== ALL) ||
+    (showShopeeShopFilter && shopeeShopId !== ALL) ||
+    (showPurchaseSourceFilter && (sourceFilter !== ALL || shippingAttention ||
+      emailCompleteness === 'attention' || printReadyOnly || activePaymentMethod))
+  )
+
   const resetPage = (cb: () => void) => {
     cb()
     setPage(1)
   }
 
-  // The badges describe the whole active queue. Clear other filters on click
-  // so hidden search/date/account/status intersections cannot hide counted bills.
-  const openAttentionQueue = (kind: 'shipping' | 'email') => {
+  const clearFilters = () => {
     setAttentionListRevision((v) => v + 1)
     setStatus(ALL)
     setSourceFilter(ALL)
@@ -404,10 +411,27 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     setSearch('')
     setDateFrom('')
     setDateTo('')
-    setShippingAttention(kind === 'shipping')
-    setEmailCompleteness(kind === 'email' ? 'attention' : ALL)
+    setShippingAttention(false)
+    setEmailCompleteness(ALL)
     setPage(1)
     attentionCounts.refresh()
+  }
+
+  const openAttentionQueue = (kind: 'shipping' | 'email') => {
+    // An active badge always provides an exit, including combined dropdown
+    // filters and a temporarily unavailable count API. Keep other filters intact.
+    if ((kind === 'shipping' && shippingAttention) ||
+        (kind === 'email' && emailCompleteness === 'attention')) {
+      if (kind === 'shipping') setShippingAttention(false)
+      else setEmailCompleteness(ALL)
+      setAttentionListRevision((v) => v + 1)
+      setPage(1)
+      return
+    }
+    // Counts describe the whole queue: clear hidden intersections when entering.
+    clearFilters()
+    setShippingAttention(kind === 'shipping')
+    setEmailCompleteness(kind === 'email' ? 'attention' : ALL)
   }
 
   const refreshAll = () => {
@@ -892,7 +916,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         <div className="space-y-2.5 p-3">
           {showPurchaseSourceFilter && (
             <BillAttentionCounters {...attentionCounts} open={openAttentionQueue}
-              selected={shippingAttention && emailCompleteness !== 'attention' ? 'shipping' : emailCompleteness === 'attention' && !shippingAttention ? 'email' : undefined} />
+              selected={{ shipping: shippingAttention, email: emailCompleteness === 'attention' }}
+              clear={clearFilters} />
           )}
           <div className="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0 space-y-1">
@@ -1174,7 +1199,14 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
       )}
 
-      {!loading && bills.length === 0 && !search && status === ALL && shopeeStatus === ALL && (!showPurchaseSourceFilter || sourceFilter === ALL) && archiveMode === 'active' ? (
+      {!loading && !billLoadError && bills.length === 0 && hasActiveFilters ? (
+        <EmptyState
+          icon={Search}
+          title="ไม่พบรายการตามตัวกรอง"
+          description="ขณะนี้มีตัวกรองเปิดอยู่ กดล้างตัวกรองเพื่อกลับไปดูรายการทั้งหมด"
+          action={<Button variant="outline" onClick={clearFilters}>ล้างตัวกรอง</Button>}
+        />
+      ) : !loading && !billLoadError && bills.length === 0 && !hasActiveFilters ? (
         <EmptyState
           icon={mode === 'purchase-order' ? Mail : UploadCloud}
           title={config.emptyTitle}
