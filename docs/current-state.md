@@ -3,6 +3,19 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Thai text in shipping evidence preview
+
+- Fixed the shipping evidence dialog recreating the response Blob as `text/html`
+  without its charset. HTML without a meta charset decoded UTF-8 Thai bytes as
+  Windows-1252. The viewer now explicitly sets `text/html; charset=utf-8`; original
+  artifacts, shipping rules and saved results are unchanged.
+- Browser regression reproduced garbled Thai before the fix and readable Thai
+  recipient/address with `document.characterSet=UTF-8` afterward, using the same
+  UTF-8 HTML fixture without a meta tag. The iframe sandbox still blocked scripts.
+  Frontend build and all eight frontend tests passed (existing bundle warnings).
+- Fix committed for the next pinned customer update; server deployment and the
+  customer's original email preview still need operator confirmation.
+
 ## Prepared 2026-11-18 — Source details and manual historical checks
 
 - Bill Detail reads original shipping recipient/address before a check and offers

@@ -30,7 +30,12 @@ export function ShippingEvidenceButton({
       })
       .then((r) => {
         if (!alive) return
-        url = URL.createObjectURL(new Blob([r.data], { type: 'text/html' }))
+        // All retained email HTML is UTF-8. A new Blob does not inherit the
+        // response's charset; omitting it makes Thai decode as Windows-1252
+        // when the original email has no <meta charset>.
+        url = URL.createObjectURL(
+          new Blob([r.data], { type: 'text/html; charset=utf-8' }),
+        )
         setSrc(url)
       })
       .catch(() => {

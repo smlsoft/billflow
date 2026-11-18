@@ -510,3 +510,12 @@ otherwise it is unverifiable. No schema migration is needed: manual actor/trigge
 metadata uses the existing result JSON, ledger and audit table. Deploy both backend
 and frontend using the pinned customer updater, preserving current configuration.
 The addition is not deployed until the operator runs that updater.
+
+
+Shipping evidence dialogs must retain `charset=utf-8` when creating their Blob
+URLs, even if the preview response already has a UTF-8 Content-Type: wrapping a
+Blob with only `type: text/html` discards that charset. The 2026-11-18 fix explicitly
+sets UTF-8 and leaves original artifacts untouched. Browser regression: serve a
+Thai HTML body **without** a meta charset via the authenticated preview endpoint,
+open the shipping evidence dialog and verify the Thai recipient/address and UTF-8
+character set; the empty iframe sandbox must continue blocking embedded scripts.
