@@ -90,3 +90,14 @@ func TestMultiOrderEmailOnlyUsesTrailingSharedShippingBlock(t *testing.T) {
 		t.Fatalf("shared shipping: %+v", r)
 	}
 }
+
+func TestExtractShippingDetailsWithoutPolicy(t *testing.T) {
+	html := `<h3>รายละเอียดการส่งสินค้า</h3><p>ชื่อผู้รับ: PD01</p><p>ที่อยู่: 368 หมู่10 ตำบลคลองมะเดื่อ</p><p>เบอร์โทร: 000</p>`
+	r := Extract(html)
+	if r.Recipient != "PD01" || r.Address != "368 หมู่10 ตำบลคลองมะเดื่อ" {
+		t.Fatalf("source fields: %+v", r)
+	}
+	if r.Status == "match" || len(r.Findings) != 0 {
+		t.Fatal("reading source is not a successful policy check")
+	}
+}

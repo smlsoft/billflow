@@ -15,3 +15,10 @@ test('a later matching event keeps the warning visible in the summary', () => {
   assert.equal(summary.attention, true)
   assert.equal(shippingLabels.unverifiable, 'ตรวจสอบไม่ได้')
 })
+
+test('manual check request id works without the secure-context randomUUID API', async () => {
+  const { newShippingCheckRequestID } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
+  const first = newShippingCheckRequestID()
+  assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.notEqual(first, newShippingCheckRequestID())
+})

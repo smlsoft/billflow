@@ -119,7 +119,7 @@ for attempt in $(seq 1 120); do
   if curl -fsS --max-time 5 "http://127.0.0.1:$BACKEND_PORT/health" | grep -Fq '"status":"ok"' \
     && curl -fsS --max-time 5 "http://127.0.0.1:$FRONTEND_PORT/health" >/dev/null; then
     printf '\nSUCCESS: backend and frontend healthy. Backup: %s\n' "$BACKUP_DIR"
-    printf 'Refresh BillFlow. Shipping checks are OFF by default. Configure and preview under Email Settings before enabling.\n'
+    printf 'Refresh BillFlow. Existing shipping settings are retained; configure new inboxes in Email Settings.\n'
     compose ps backend frontend
     exit 0
   fi

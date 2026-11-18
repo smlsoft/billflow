@@ -475,3 +475,38 @@ mailboxes, or rewrite old bills' frozen rules. It verifies the central address,
 uses one config/audit transaction and can be rerun without another change event.
 The printed policy table is the operator's activation evidence; local helper tests
 alone do not establish production activation or successful new-order alerts.
+
+
+## Manual historical shipping checks (prepared 2026-11-18)
+
+Bill Detail now displays the shipping recipient/address from the original purchase
+email even when the bill was never enrolled. `GET /api/bills/:id/shipping-details`
+is read-only and returns extracted fields, an evidence reference and whether
+current mailbox rules are ready for a manual check. Reading the source does not
+mean the address matches. Unsupported/ambiguous/missing evidence shows its reason.
+
+Admins and staff can click **ตรวจข้อมูลจัดส่ง** (or **ตรวจจัดส่งอีกครั้ง**) on
+one historical or current marketplace purchase bill. The new
+`POST /api/bills/:id/shipping-checks` accepts `{request_id:<UUID>}`, loads the
+**current** rules of that bill's recorded mailbox, checks the original email and
+atomically stores the result, cumulative attention summary and user audit. It
+works for manual checks even when that mailbox's automatic switch is off, provided
+its profile/approved names are valid. Viewers can read evidence/history but cannot
+run a manual check. A missing mailbox association/rule set is reported, never
+inferred from another inbox.
+
+The UI labels manual results separately from automatic results, with rule revision,
+time and checking user's email. Request IDs prevent a retry from duplicating
+history/audit. Earlier warnings are retained. Manual checks update the list's
+shipping warning/filter only; they do not create a bill, edit items/totals, change
+bill/SML status or write `shipping_check_policy`. Old bills therefore remain
+unenrolled for subsequent automatic email checks. Existing automatically enrolled
+bills retain their original rules for automatic follow-ups; the manual result has
+its own current-rule snapshot.
+
+Evidence selection remains source/mailbox/message-scoped. A legacy bill with no
+message id can use its own HTML only when exactly one such artifact exists;
+otherwise it is unverifiable. No schema migration is needed: manual actor/trigger
+metadata uses the existing result JSON, ledger and audit table. Deploy both backend
+and frontend using the pinned customer updater, preserving current configuration.
+The addition is not deployed until the operator runs that updater.

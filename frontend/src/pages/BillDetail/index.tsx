@@ -327,7 +327,7 @@ export default function BillDetail() {
   return (
     <div className="space-y-4">
       <BillHeader bill={bill} onBack={handleBack} />
-      <ShippingCheckCard bill={bill} />
+      <ShippingCheckCard key={bill.id} bill={bill} onChecked={reloadBill} />
 
       {(bill.error_msg || retryError) && (
         <BillFailureCard

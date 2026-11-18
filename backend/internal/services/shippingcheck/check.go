@@ -43,6 +43,8 @@ type Finding struct {
 	Status   string `json:"status"`
 }
 type Result struct {
+	Trigger   string    `json:"trigger,omitempty"`
+	CheckedBy string    `json:"checked_by,omitempty"`
 	Status    string    `json:"status"`
 	Reason    string    `json:"reason,omitempty"`
 	Recipient string    `json:"recipient"`
@@ -144,7 +146,8 @@ var sectionRE = regexp.MustCompile(`รายละเอียดการส�
 var nameRE = regexp.MustCompile(`(?s)(?:ชื่อผู้รับ|ชื่อ\s*-\s*นามสกุล)\s*[:：]\s*(.*?)(?:หมายเลขโทรศัพท์|เบอร์โทร|ที่อยู่ในการส่งสินค้า|ที่อยู่\s*[:：])`)
 var addressRE = regexp.MustCompile(`(?s)(?:ที่อยู่ในการส่งสินค้า|ที่อยู่)\s*[:：]\s*(.*?)(?:เบอร์โทร|หมายเลขโทรศัพท์|อีเมล|รายละเอียดการออกใบกำกับภาษี|รายละเอียดการชำระเงิน|$)`)
 
-func Check(src string, p Profile, recipients []string) Result {
+// Extract reads shipping fields without applying any policy or declaring a match.
+func Extract(src string) Result {
 	r := Result{Status: "unverifiable", Version: Version, Findings: []Finding{}}
 	if len(src) > 4*1024*1024 {
 		r.Reason = "อีเมลใหญ่เกินขนาดที่ตรวจได้"
@@ -176,11 +179,7 @@ func Check(src string, p Profile, recipients []string) Result {
 	}
 	nameCount := len(nameRE.FindAllStringSubmatch(section, -1))
 	addressCount := len(addressRE.FindAllStringSubmatch(section, -1))
-	if nameCount == 0 || addressCount == 0 {
-		r.Reason = "ไม่พบชื่อผู้รับหรือที่อยู่จัดส่งครบถ้วน"
-		return r
-	}
-	if nameCount != 1 || addressCount != 1 {
+	if nameCount > 1 || addressCount > 1 {
 		r.Reason = "ข้อมูลผู้รับหรือที่อยู่จัดส่งมีหลายชุด ไม่สามารถจับคู่ได้"
 		return r
 	}
@@ -194,6 +193,13 @@ func Check(src string, p Profile, recipients []string) Result {
 	}
 	if r.Recipient == "" || r.Address == "" {
 		r.Reason = "ไม่พบชื่อผู้รับหรือที่อยู่จัดส่งครบถ้วน"
+		return r
+	}
+	return r
+}
+func Check(src string, p Profile, recipients []string) Result {
+	r := Extract(src)
+	if r.Reason != "" {
 		return r
 	}
 	add := func(field, expected, actual string, matched bool) {

@@ -25,6 +25,8 @@ export interface ShippingConfig {
   revision: string
 }
 export interface ShippingResult {
+  trigger?: 'manual'
+  checked_by?: string
   status: ShippingStatus
   reason?: string
   recipient: string
@@ -73,4 +75,24 @@ export function shippingSummary(
 export function shippingError(e: unknown) {
   const err = e as { response?: { data?: { error?: string } } }
   return err.response?.data?.error || 'โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่'
+}
+
+export interface ShippingSourceDetails {
+  recipient: string
+  address: string
+  reason?: string
+  artifact_id?: string
+  artifact_bill_id?: string
+  manual_check_available: boolean
+  manual_check_reason?: string
+}
+
+// getRandomValues also works on customer HTTP deployments where randomUUID is
+// unavailable. This is a request deduplication id, never an authentication token.
+export function newShippingCheckRequestID(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }

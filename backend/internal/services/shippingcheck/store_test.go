@@ -94,3 +94,21 @@ func TestPersistResultOnlyUpdatesShippingSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestManualShippingCheckDoesNotEnrolHistoricalBill(t *testing.T) {
+	db, m, _ := sqlmock.New()
+	defer db.Close()
+	m.ExpectBegin()
+	m.ExpectExec("SELECT id FROM bills").WithArgs("old").WillReturnResult(sqlmock.NewResult(0, 1))
+	m.ExpectExec("INSERT INTO bill_shipping_checks").WithArgs("old", "manual:request-1", "original", nil, sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	m.ExpectExec("UPDATE bills SET raw_data=jsonb_set").WithArgs("old", "mismatch", "").WillReturnResult(sqlmock.NewResult(0, 1))
+	m.ExpectExec("INSERT INTO audit_logs").WillReturnResult(sqlmock.NewResult(0, 1))
+	m.ExpectCommit()
+	r := Result{Status: "mismatch", Trigger: "manual", CheckedBy: "admin@example.invalid"}
+	if err := NewStore(db).RecordManual("old", "request-1", "original", "", Enrollment{Profile: testProfile(), Recipients: []string{"PD01"}}, r, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -34,7 +34,7 @@ func TestShippingLedgerIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = db.Exec(`CREATE TABLE bills(id uuid PRIMARY KEY,bill_type text,source text,raw_data jsonb,status text,created_at timestamptz DEFAULT now());CREATE TABLE bill_artifacts(id uuid PRIMARY KEY,bill_id uuid REFERENCES bills(id),kind text,source_meta jsonb,created_at timestamptz DEFAULT now());CREATE TABLE app_settings(key text PRIMARY KEY,value text,is_secret boolean,updated_by uuid,updated_at timestamptz);CREATE TABLE imap_accounts(id uuid PRIMARY KEY,channel text);CREATE TABLE audit_logs(action text,user_id uuid,source text,detail jsonb);`)
+	_, err = db.Exec(`CREATE TABLE bills(id uuid PRIMARY KEY,bill_type text,source text,raw_data jsonb,status text,created_at timestamptz DEFAULT now());CREATE TABLE bill_artifacts(id uuid PRIMARY KEY,bill_id uuid REFERENCES bills(id),kind text,source_meta jsonb,created_at timestamptz DEFAULT now());CREATE TABLE app_settings(key text PRIMARY KEY,value text,is_secret boolean,updated_by uuid,updated_at timestamptz);CREATE TABLE imap_accounts(id uuid PRIMARY KEY,channel text);CREATE TABLE audit_logs(action text,target_id uuid,user_id uuid,source text,detail jsonb);`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,5 +163,38 @@ func TestShippingLedgerIntegration(t *testing.T) {
 	entries, err = s.History(old)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("historical bill changed: %v", err)
+	}
+
+	current, err := s.CurrentPolicy(account)
+	if err != nil || current == nil {
+		t.Fatalf("current policy: %v", err)
+	}
+	manualResult := Check(good, current.Profile, current.Recipients)
+	manualResult.CheckedBy = "admin@example.invalid"
+	for attempt := 0; attempt < 2; attempt++ {
+		if err = s.RecordManual(old, "request-1", "original", "", *current, manualResult, user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var enrolled bool
+	var auditCount int
+	if err = db.QueryRow(`SELECT status,raw_data ? 'shipping_check_policy' FROM bills WHERE id=$1`, old).Scan(&status, &enrolled); err != nil {
+		t.Fatal(err)
+	}
+	if status != "sent" || enrolled {
+		t.Fatalf("manual check changed SML status or auto-enrolment: status=%s enrolled=%v", status, enrolled)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM audit_logs WHERE action='shipping_check_manual' AND target_id=$1`, old).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("manual audit: count=%d err=%v", auditCount, err)
+	}
+	if err = s.Record(old, "later-followup", good, ""); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = s.History(old)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("manual check enrolled future emails: count=%d err=%v", len(entries), err)
+	}
+	if entries[0].Result.Trigger != "manual" || entries[0].Result.CheckedBy != "admin@example.invalid" || entries[0].Policy.Profile.House != "777" {
+		t.Fatalf("wrong manual evidence: %+v", entries[0])
 	}
 }

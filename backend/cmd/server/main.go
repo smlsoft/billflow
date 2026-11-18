@@ -488,6 +488,8 @@ func main() {
 		api.PUT("/settings/shipping-checks", middleware.RequireRole("admin"), shippingCheckH.Save)
 		api.POST("/settings/shipping-checks/preview", middleware.RequireRole("admin"), shippingCheckH.Preview)
 		api.GET("/bills/:id/shipping-checks", shippingCheckH.History)
+		api.GET("/bills/:id/shipping-details", shippingCheckH.SourceDetails)
+		api.POST("/bills/:id/shipping-checks", middleware.RequireRole("admin", "staff"), shippingCheckH.ManualCheck)
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)

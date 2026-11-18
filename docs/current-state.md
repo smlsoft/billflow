@@ -3,6 +3,23 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Source details and manual historical checks
+
+- Bill Detail reads original shipping recipient/address before a check and offers
+  **ตรวจข้อมูลจัดส่ง / ตรวจจัดส่งอีกครั้ง** to admin/staff. Viewers stay read-only.
+- Explicit manual checks use current mailbox rules and persist field-level result,
+  time, user and rule snapshot, preserving historical warnings. Retry dedup/audit
+  is transactional. No mass backfill, SML send/status change or old-bill auto-enrolment.
+- New read-only source endpoint and per-bill POST reuse the existing ledger/JSON;
+  no migration or config reset. Backend/frontend deploy is required.
+- Verification: targeted Go tests, frontend build and eight frontend tests,
+  disposable PostgreSQL 14 integration (manual result/audit dedup, sent status
+  preserved, no future auto checks), and browser interactions with mocked API data
+  (source visible before click, manual history afterward). Full backend tests and
+  Linux server cross-build passed; production deployment/testing pending.
+- Operator uses the pinned release's `scripts/update-customer-shipping-checks.sh`
+  via AnyDesk; current shipping profiles and enabled mailbox policies are retained.
+
 ## Deployed 2026-11-17 — Shipping recipient/address warnings
 
 - Implemented new-bill-only Shopee/Lazada shipping checks, shared company address

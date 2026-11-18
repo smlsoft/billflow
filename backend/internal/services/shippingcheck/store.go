@@ -160,8 +160,24 @@ func (s *Store) Record(billID, messageID, body, artifactID string) error {
 	if key == "" {
 		key = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(body)))
 	}
-	policyJSON, _ := json.Marshal(data.Policy)
-	resultJSON, _ := json.Marshal(result)
+	return s.persist(billID, key, messageID, artifactID, *data.Policy, result, "")
+}
+
+// RecordManual appends a result using current rules without changing the
+// historical bill's automatic enrolment/frozen rule snapshot.
+func (s *Store) RecordManual(billID, requestID, messageID, artifactID string, policy Enrollment, result Result, userID string) error {
+	result.Trigger = "manual"
+	return s.persist(billID, "manual:"+requestID, messageID, artifactID, policy, result, userID)
+}
+func (s *Store) persist(billID, key, messageID, artifactID string, policy Enrollment, result Result, userID string) error {
+	policyJSON, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -190,6 +206,15 @@ func (s *Store) Record(billID, messageID, body, artifactID string) error {
 	_, err = tx.Exec(`UPDATE bills SET raw_data=jsonb_set(COALESCE(raw_data,'{}'::jsonb),'{shipping_check_summary}',jsonb_build_object('status',$2::text,'attention',COALESCE(raw_data->'shipping_check_summary'->>'has_warning','false')='true' OR $2<>'match','has_warning',COALESCE(raw_data->'shipping_check_summary'->>'has_warning','false')='true' OR $2<>'match','checked_at',now(),'reason',$3::text),true) WHERE id=$1`, billID, result.Status, result.Reason)
 	if err != nil {
 		return err
+	}
+	if userID != "" {
+		detail, err := json.Marshal(map[string]any{"request_id": key, "message_id": messageID, "policy": policy, "result": result})
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO audit_logs(action,target_id,user_id,source,detail) VALUES('shipping_check_manual',$1,$2,'bill',$3)`, billID, userID, string(detail)); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -223,7 +248,7 @@ func (s *Store) ArtifactID(billID, messageID string) (string, error) {
 		return "", nil
 	}
 	var id string
-	err := s.db.QueryRow(`SELECT a.id FROM bill_artifacts a JOIN bills owner ON owner.id=a.bill_id JOIN bills target ON target.id=$1 WHERE a.kind='email_html' AND a.source_meta->>'message_id'=$2 AND owner.source=target.source AND owner.raw_data->>'imap_account_id'=target.raw_data->>'imap_account_id' ORDER BY (a.bill_id=target.id) DESC,a.created_at,a.id LIMIT 1`, billID, messageID).Scan(&id)
+	err := s.db.QueryRow(`SELECT a.id FROM bill_artifacts a JOIN bills owner ON owner.id=a.bill_id JOIN bills target ON target.id=$1 WHERE a.kind='email_html' AND a.source_meta->>'message_id'=$2 AND owner.source=target.source AND (a.bill_id=target.id OR owner.raw_data->>'imap_account_id'=target.raw_data->>'imap_account_id') ORDER BY (a.bill_id=target.id) DESC,a.created_at,a.id LIMIT 1`, billID, messageID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -241,4 +266,29 @@ func (s *Store) Sample(billID string) (*Sample, error) {
 		return nil, nil
 	}
 	return v, err
+}
+
+// CurrentPolicy is used only for explicit manual checks. It never enrolls a bill
+// or changes a mailbox's automatic checking switch.
+func (s *Store) CurrentPolicy(accountID string) (*Enrollment, error) {
+	config, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	for _, policy := range config.Policies {
+		if policy.AccountID != accountID {
+			continue
+		}
+		for _, profile := range config.Profiles {
+			if profile.ID != policy.ProfileID {
+				continue
+			}
+			policy.Enabled = true // Validate prerequisites, even for a manual-only mailbox.
+			if err := (Config{Profiles: []Profile{profile}, Policies: []Policy{policy}}).Validate(); err != nil {
+				return nil, nil
+			}
+			return &Enrollment{Profile: profile, Recipients: policy.Recipients, Revision: config.Revision}, nil
+		}
+	}
+	return nil, nil
 }
