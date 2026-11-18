@@ -3,6 +3,30 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Lazada area-first shipping address (shipping-v3)
+
+- Customer order `1109337756795692` uses shipping text with amphoe/province/postcode
+  before `, 368 หมู่10 · ...`. Version v2 did not read this unlabelled house position.
+- v3 accepts an unlabelled numeric house only at a clear segment boundary followed
+  by a moo label. No expected-number search; full suffixes and conflicting houses
+  remain mismatches. A soi number or postcode alone cannot provide the house.
+- Regression reproduced the v2 failure, then passed for the screenshot-derived
+  text, joined moo label, changed house/slash/dash/letter suffix, wrong moo, soi,
+  absent house and conflicting house values. Full backend tests passed.
+- `PD02` is absent from the displayed approved names: name mismatch is configuration,
+  independent of parsing. No new approved recipient was added or inferred. An admin
+  must explicitly add it to the authorized mailbox if company policy permits it.
+- Parser version becomes `shipping-v3`; the mandatory manual-pass gate requires a
+  fresh manual check for any unsent bill whose last passing check used v2. History
+  is retained. No migration/config change or frontend code change is needed.
+- Customer reported the prior counter update installed; v3 deployment and actual
+  source HTML/UAT remain pending the operator's pinned updater run.
+- Permission review: API routes restrict bill archive/restore/delete and item
+  deletion to `admin`. Marketplace price/discount/line-total edits also require
+  admin; item mapping is admin/staff. Frontend matches those rules. Real customer
+  role assignments were not inspected: a purchasing employee logged in as admin
+  still has admin capabilities. No permission changes were made in this patch.
+
 ## Prepared 2026-11-18 — Open-work attention counters
 
 - Added clickable **จัดส่งต้องตรวจ / อีเมลต้องตรวจ** bill counts above Bills filters.

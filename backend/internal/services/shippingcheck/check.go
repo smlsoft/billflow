@@ -11,7 +11,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-const Version = "shipping-v2"
+const Version = "shipping-v3"
 
 type Profile struct {
 	ID              string   `json:"id"`
@@ -294,6 +294,10 @@ func extractHouse(s string, recipients ...string) string {
 	for _, pattern := range []string{`(?:บ้านเลขที่|เลขที่)\s*(\d+(?:[/.\-]\d+)*[A-Za-z]?)`, `^\s*(\d+(?:[/.\-]\d+)*[A-Za-z]?)\b`} {
 		matches = append(matches, regexp.MustCompile(pattern).FindAllStringSubmatch(s, -1)...)
 	}
+	// Lazada can put area/postcode first, then a separate "368 หมู่10"
+	// address segment. Require a segment boundary AND the following moo label;
+	// do not search for the expected number or reuse a soi/postcode as a house.
+	matches = append(matches, regexp.MustCompile(`(?:^|[,;·\n])\s*(\d+(?:[/.\-]\d+)*[A-Za-z]?)\s*หมู่(?:ที่)?\s*\d`).FindAllStringSubmatch(s, -1)...)
 	// Some marketplace emails repeat the recipient before an unlabelled house
 	// number. Strip only a known name prefix, never scan arbitrary address numbers.
 	if rest, ok := afterRecipientPrefix(s, recipients); ok {

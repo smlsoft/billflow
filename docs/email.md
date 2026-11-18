@@ -605,3 +605,29 @@ join duplication, membership parity and count decrease after resolution. Browser
 API mocks verified badge clicks/filter reset, same-badge refresh, failure/retry,
 zero and 30-second polling. Customer deployment and production data remain operator
 validation.
+
+
+### Lazada area-first address / shipping-v3 (2026-11-18)
+
+Some original Lazada emails serialize the shipping address as amphoe, province,
+postcode, then `368 หมู่10`, followed by district and repeated postcode. v3 adds
+house extraction from a comma/semicolon/middle-dot/newline/start-delimited segment
+with a numeric house immediately followed by `หมู่` / `หมู่ที่`. This is structural
+parsing independent of the configured expected house. Existing explicit house and
+known-name-prefix rules remain; all extracted candidates must agree. Full slash,
+dash, dot and letter suffixes are retained, and soi/postcode tokens alone do not
+satisfy the house field. Unapproved recipient PD02 remains a separate name mismatch;
+no automated allowlist expansion was added.
+
+After deployment, rerun the manual check on bills to be sent: the mandatory gate
+rejects older passing parser versions, including v2, until checked again. Existing
+history stays unchanged. The regression uses synthetic HTML containing the text
+visible in the customer's screenshots, not the customer's full source HTML.
+
+Permission clarification for support: `staff` cannot archive/restore/delete bills
+or delete bill items via the configured API routes. Marketplace price/discount/
+line-total edits require `admin`; mapping product codes permits admin/staff.
+These are application roles, not job titles. A purchasing employee using an admin
+account has those capabilities. Verify customer account assignments before saying
+that a named employee cannot delete. This patch does not change permissions or
+claim that permanent deletion retains all historical bill evidence.

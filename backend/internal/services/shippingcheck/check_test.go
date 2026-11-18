@@ -149,3 +149,34 @@ func TestCompanyPrefixUsesLongestApprovedNameWithoutNumericGuessing(t *testing.T
 		t.Fatal("missing house number finding")
 	}
 }
+
+func TestLazadaHouseAfterAreaAndPostcode(t *testing.T) {
+	prefix := "กระทุ่มแบน/ Krathum Baen, สมุทรสาคร/ Samut Sakhon, 74110, "
+	suffix := " · คลองมะเดื่อ/ Khlong Ma Duea - 74110"
+	for _, tt := range []struct{ name, address, want string }{
+		{"customer layout", prefix + "368 หมู่10" + suffix, "match"},
+		{"joined moo", prefix + "368หมู่ที่10" + suffix, "match"},
+		{"changed house", prefix + "369 หมู่10" + suffix, "mismatch"},
+		{"slash suffix", prefix + "368/1 หมู่10" + suffix, "mismatch"},
+		{"dash suffix", prefix + "368-1 หมู่10" + suffix, "mismatch"},
+		{"letter suffix", prefix + "368A หมู่10" + suffix, "mismatch"},
+		{"changed moo", prefix + "368 หมู่11" + suffix, "mismatch"},
+		{"soi is not house", prefix + "ซอย 368 หมู่10" + suffix, "unverifiable"},
+		{"postcode is not house", prefix + "หมู่10" + suffix, "unverifiable"},
+		{"conflicting houses", prefix + "368 หมู่10, 369 หมู่10" + suffix, "mismatch"},
+		{"explicit conflict", prefix + "บ้านเลขที่ 369, 368 หมู่10" + suffix, "mismatch"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `<h3>สินค้าของคุณจะได้รับการจัดส่งไปยัง</h3><p>ชื่อ-นามสกุล: PD02</p><p>ที่อยู่: ` + tt.address + `</p><p>เบอร์โทร: 000</p>`
+			r := Check(body, testProfile(), []string{"PD02"})
+			if r.Status != tt.want {
+				t.Fatalf("got=%s want=%s: %+v", r.Status, tt.want, r.Findings)
+			}
+		})
+	}
+	// Parsing an address must never silently approve a new recipient.
+	body := `<h3>สินค้าของคุณจะได้รับการจัดส่งไปยัง</h3><p>ชื่อ-นามสกุล: PD02</p><p>ที่อยู่: ` + prefix + `368 หมู่10` + suffix + `</p><p>เบอร์โทร: 000</p>`
+	if r := Check(body, testProfile(), []string{"PD01"}); r.Status != "mismatch" {
+		t.Fatalf("unapproved PD02 passed: %+v", r)
+	}
+}
