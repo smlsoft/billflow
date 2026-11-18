@@ -3,7 +3,27 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Open-work attention counters
+
+- Added clickable **จัดส่งต้องตรวจ / อีเมลต้องตรวจ** bill counts above Bills filters.
+  They count all unarchived, unsent marketplace purchase email bills regardless of
+  current search/filters/page; overlap is possible. Clicking clears other filters
+  and refreshes the selected queue, including repeated clicks.
+- Shared predicates keep counts and list membership aligned. Shipping uses latest
+  mismatch/unverifiable; a later match removes open work while history stays.
+  Email uses processing/attention groups, counting each related bill once. Groups
+  without a bill retain the existing group panel and are outside these bill counts.
+- Counts refresh every 30 seconds while visible, on focus/visibility return and
+  local work changes; loading/error/retry are explicit. No LINE or popup.
+- Local backend tests, frontend build/10 tests and PostgreSQL 14 count/filter
+  integration passed. Mock browser verified filter clearing, repeat click,
+  error dash/recovery, zero and interval refresh. No migration; deploy both services
+  with existing customer updater. Customer deployment/UAT still pending.
+
 ## Prepared 2026-11-18 — Mandatory manual shipping pass (customer approved)
+
+- Operator subsequently reported the previous pinned update (`4044b3c`) passed;
+  this round has not independently rechecked customer health or new counter deployment.
 
 - Customer chose **staff must click the check and the latest result must pass**
   before single or bulk SML send. This replaces warning-only behavior for the
@@ -17,7 +37,7 @@
   invalidate an otherwise identical rule snapshot. Read errors fail closed.
 - Bill Get/List expose `shipping_send_check`; UI disables send with a reason and
   a jump to the manual check. Bulk candidates use the same validation. Previous
-  warnings remain visible, but a latest current manual pass can permit send.
+  warnings remain visible in history, but a latest current manual pass can permit send.
 - Customer updater includes the house-number fix below and enables the gate only
   after health checks and complete active-mailbox rule validation. Existing
   profiles/names/auto-check switches and Compose flags are retained. Activation

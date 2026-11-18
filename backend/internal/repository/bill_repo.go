@@ -299,7 +299,7 @@ func (r *BillRepo) List(f models.BillListFilter) (*BillListResult, error) {
 func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 	where := "WHERE 1=1"
 	if f.ShippingCheck == "attention" {
-		where += " AND b.raw_data->'shipping_check_summary'->>'attention' = 'true'"
+		where += " AND " + attentionWorkSQL + " AND " + shippingAttentionSQL
 	}
 	args := []interface{}{}
 	argN := 1
@@ -340,13 +340,7 @@ func billWhere(f models.BillListFilter) (string, []interface{}, int) {
 		argN++
 	}
 	if f.EmailCompleteness == "attention" {
-		where += ` AND EXISTS (
-			SELECT 1
-			  FROM marketplace_email_groups meg
-			 WHERE meg.source = b.source
-			   AND meg.message_id = COALESCE(NULLIF(b.raw_data->>'email_message_id', ''), NULLIF(b.raw_data->>'message_id', ''))
-			   AND meg.status IN ('processing', 'attention')
-		)`
+		where += " AND " + attentionWorkSQL + " AND " + emailAttentionSQL
 	}
 	if f.ShopeeStatus != "" {
 		where += fmt.Sprintf(` AND EXISTS (

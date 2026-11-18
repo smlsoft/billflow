@@ -1,3 +1,5 @@
+import { useBillAttentionCounts } from '@/hooks/useBillAttentionCounts'
+import { BillAttentionCounters } from '@/components/shipping/BillAttentionCounters'
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Mail, Printer, Search, Send, Settings, UploadCloud } from 'lucide-react'
@@ -237,6 +239,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [emailCompleteness, setEmailCompleteness] = useState<string>(() =>
     readURLFilter(searchParams, 'email_completeness', VALID_EMAIL_COMPLETENESS),
   )
+  const [attentionListRevision, setAttentionListRevision] = useState(0)
   const [shippingAttention, setShippingAttention] = useState(() => searchParams.get('shipping_check') === 'attention')
   const [printReadyOnly, setPrintReadyOnly] = useState(() => searchParams.get('print_ready') === '1')
   const [paymentMethodChannels, setPaymentMethodChannels] = useState<PaymentMethodChannel[] | null>(null)
@@ -276,6 +279,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     bill: Bill
   } | null>(null)
   const showPurchaseSourceFilter = mode === 'purchase-order'
+  const attentionCounts = useBillAttentionCounts(showPurchaseSourceFilter)
   const showShopeeStatusFilter = mode === 'purchase-order'
   const showShopeeShopFilter = mode !== 'purchase-order'
   const canUseBillActions = user?.role === 'admin' || user?.role === 'staff'
@@ -299,6 +303,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     document_route: config.documentRoute,
     print_ready: showPurchaseSourceFilter && printReadyOnly,
     email_account_id: emailAccountId === ALL ? '' : emailAccountId,
+    refresh_key: attentionListRevision,
     shipping_check: showPurchaseSourceFilter && shippingAttention ? 'attention' : undefined,
     email_completeness: showPurchaseSourceFilter && emailCompleteness === 'attention' ? 'attention' : undefined,
     shopee_shop_id: showShopeeShopFilter && shopeeShopId !== ALL ? shopeeShopId : '',
@@ -383,8 +388,31 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     setPage(1)
   }
 
+  // The badges describe the whole active queue. Clear other filters on click
+  // so hidden search/date/account/status intersections cannot hide counted bills.
+  const openAttentionQueue = (kind: 'shipping' | 'email') => {
+    setAttentionListRevision((v) => v + 1)
+    setStatus(ALL)
+    setSourceFilter(ALL)
+    setShopeeStatus(ALL)
+    setShopeeShopId(ALL)
+    setEmailAccountId(ALL)
+    setPaymentMethodFilter(ALL)
+    setArchiveMode('active')
+    setPrintReadyOnly(false)
+    setSearchInput('')
+    setSearch('')
+    setDateFrom('')
+    setDateTo('')
+    setShippingAttention(kind === 'shipping')
+    setEmailCompleteness(kind === 'email' ? 'attention' : ALL)
+    setPage(1)
+    attentionCounts.refresh()
+  }
+
   const refreshAll = () => {
     setPage(1)
+    attentionCounts.refresh()
     setPaymentMethodsRevision((version) => version + 1)
     refetch()
     fetchCounts()
@@ -862,6 +890,10 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         </div>
 
         <div className="space-y-2.5 p-3">
+          {showPurchaseSourceFilter && (
+            <BillAttentionCounters {...attentionCounts} open={openAttentionQueue}
+              selected={shippingAttention && emailCompleteness !== 'attention' ? 'shipping' : emailCompleteness === 'attention' && !shippingAttention ? 'email' : undefined} />
+          )}
           <div className="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0 space-y-1">
               <div className="text-[11px] font-medium text-muted-foreground">สถานะบิล</div>

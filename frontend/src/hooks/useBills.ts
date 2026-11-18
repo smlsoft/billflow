@@ -6,6 +6,8 @@ import type { Bill, BillItem, BillListResponse } from '../types'
 import type { EmailPrintCandidate, EmailPrintEvent } from '../types'
 
 interface BillsFilter {
+  // Local invalidation only; never forwarded as an API filter.
+  refresh_key?: number
   shipping_check?: 'attention'
   page?: number
   per_page?: number

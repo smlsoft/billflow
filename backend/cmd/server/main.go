@@ -493,6 +493,7 @@ func main() {
 		// Bills
 		api.GET("/bills", billH.List)
 		api.GET("/bills/counts", billH.Counts)
+		api.GET("/bills/attention-counts", billH.AttentionCounts)
 		api.GET("/bills/payment-method-options", middleware.RequireRole("admin", "staff", "viewer"), channelDefaultsH.ListPaymentMethodOptions)
 		api.GET("/bills/email-groups/attention", billH.ListMarketplaceEmailGroupAttention)
 		api.GET("/bills/email-inboxes", middleware.RequireRole("admin", "staff", "viewer"), imapSettingsH.ListFilterOptions)

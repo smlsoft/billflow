@@ -1,3 +1,4 @@
+import { notifyWorkQueueChanged } from '@/lib/work-queue-events'
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -79,6 +80,7 @@ export function ShippingCheckCard({
       })
       requestID.current = null
       setRevision((v) => v + 1)
+      notifyWorkQueueChanged()
       toast.success('บันทึกผลตรวจจัดส่งแล้ว')
       // A result is already committed even if the parent refresh fails. Keep the
       // history refresh independent so a temporary list refresh error is honest.

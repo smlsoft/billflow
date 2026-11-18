@@ -192,7 +192,7 @@ func TestPrintableEmailKind(t *testing.T) {
 
 func TestBillWhereShippingAttentionBeforePagination(t *testing.T) {
 	where, _, _ := billWhere(models.BillListFilter{ShippingCheck: "attention"})
-	if !strings.Contains(where, "shipping_check_summary") || !strings.Contains(where, "attention") {
+	if !strings.Contains(where, "shipping_check_summary") || !strings.Contains(where, "unverifiable") {
 		t.Fatal(where)
 	}
 	if strings.Contains(where, "LIMIT") {

@@ -430,7 +430,7 @@ it does not establish whether a purchase was authorised or what happened to good
   belong to the same mailbox/source.
 - `GET /api/bills/:id/shipping-checks`: `{data:[...]}` using existing bill-reader
   access. Config endpoints expose no mailbox credentials.
-- `GET /api/bills?shipping_check=attention` and counts use the cumulative warning
+- Originally, `GET /api/bills?shipping_check=attention` and counts used the cumulative warning
   flag. Shipping alerts do not participate in SML validation.
 
 ### Thaisunsport deployment and acceptance
@@ -548,7 +548,7 @@ version and equivalent current mailbox rules. No result, an automatic-only pass,
 mismatch, unverifiable result, missing configuration or read failure blocks send.
 New automatic shipping evidence after a manual check requires another manual check.
 Changing unrelated global revision/display names alone does not invalidate a pass.
-No staff/admin send override is provided. Prior warnings remain in history/filter;
+No staff/admin send override is provided. Prior warnings remain in history (the open-work filter below uses current results);
 a current passing manual result can permit send without deleting those warnings.
 
 `GET /api/bills` and `GET /api/bills/:id` include optional `shipping_send_check`
@@ -569,3 +569,39 @@ activation SQL; 10 frontend tests and production build (existing chunk warnings)
 Mock browser verified disabled send -> manual check -> refreshed passing state ->
 enabled send, without a real SML request. Customer email/UAT and Docker execution
 remain separate operator checks.
+
+
+### Open-work attention counters (2026-11-18)
+
+`GET /api/bills/attention-counts` returns `{shipping, email}` for **bills**, not
+email groups. Both counts cover unarchived Shopee/Lazada purchase email bills in
+`pending`, `needs_review` or `failed`, independently of search/date/account/source,
+other UI filters and pagination. A bill may appear in both groups; never sum them.
+Email groups without any BillFlow bill remain visible in the existing email-group
+attention panel but are not included in these bill counters.
+
+The shipping count/filter uses the latest summary `status` of `mismatch` or
+`unverifiable`, rather than cumulative `attention`. A later matching check removes
+the bill from open shipping work, preserving historical ledger/attention flags and
+the existing history badge. Missing checks and automatic matches awaiting a manual
+click are not shipping abnormalities; the separate SML manual-pass gate still
+applies. Email count/filter uses groups in `processing` or `attention`, with EXISTS
+so multiple matching group rows do not duplicate a bill. Sent/skipped/archived bills
+are excluded from both attention filters as well as the global counts.
+
+The Bills page shows two clickable counters above its filters. Clicking one clears
+conflicting filters, selects its queue, returns to page 1 and refreshes even when
+already selected. Existing dropdowns still allow narrowing the queue; the counter
+labels explicitly describe the global queue. Refresh on mount, window focus,
+visibility return, local work-queue change/manual check and every 30 seconds while
+visible. This is polling, not server push. Loading shows `…`; failure clears stale
+numbers to `—` with a retry, never fabricated zero. No sound, popup or LINE.
+
+No migration or config change is required for the counters. Deploy backend and
+frontend together using the pinned customer updater; it preserves the existing
+mandatory shipping gate. Verified PostgreSQL 14 integration: historical match,
+latest mismatch/unverifiable, sent/skipped/archived/nonpurchase exclusion, email
+join duplication, membership parity and count decrease after resolution. Browser
+API mocks verified badge clicks/filter reset, same-badge refresh, failure/retry,
+zero and 30-second polling. Customer deployment and production data remain operator
+validation.
