@@ -404,3 +404,22 @@ nohup cloudflared tunnel --url http://127.0.0.1:3030 --no-autoupdate > /tmp/bill
 - 2026-05-11 14:34 +07: Shared Phase 1 Shopee product-image extraction fix deployed to all three instances.
 - Scope: exclude Shopee tracking/open pixel URLs from `source_image_url` and prefer product CDN URLs such as `cf.shopee.co.th/file/th-*`; existing BillFlow main item `ef15ccb5-c164-476e-84bb-3ef6657e531d` was updated to the verified product image URL.
 - Verified backend health on all three instances; product image URL returned `HTTP/2 200` and `content-type: image/jpeg`.
+
+
+### Public logo returns HTTP 403 (2026-11-18)
+
+Vite preserves modes when copying `frontend/public` assets. A release checkout
+created with a restrictive umask can produce a mode-600 public SVG in `dist`, even
+while generated HTML/JS files are readable. The frontend runtime Dockerfile now
+sets public directories to 755 and regular files to 644 after copying `dist`.
+This only affects public web content in the image, not source/deploy secrets.
+
+For an existing Thaisunsport container, run
+`scripts/repair-customer-frontend-logo.sh` with the normal `DEPLOY_DIR` and
+`FRONTEND_PORT=3020`. It prints the current file mode, changes only the logo to
+644 and checks for HTTP 200 plus `image/svg+xml` from the local frontend. No
+rebuild/restart is required for that running-container repair. A later recreation
+from an old image can restore its old modes; rebuild from the fixed release to
+make the image itself correct. If the direct check fails or the public URL still
+returns 403 afterward, inspect the reported modes and proxy/nginx errors rather
+than assuming the permission diagnosis was confirmed.

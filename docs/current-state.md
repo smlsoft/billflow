@@ -3,6 +3,24 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Public logo permissions
+
+- Customer screenshot shows a broken logo. Direct public checks found
+  `/billflow-mark.svg` returns HTTP 403 from nginx, while `/` and `/health` return
+  200; a nonexistent SVG follows the normal SPA fallback. The tracked logo exists
+  in the pinned release and local build output.
+- Reproduced a Vite build from a temporary public SVG with mode 600: the output
+  retained 600, while generated index.html was 644. Restrictive release checkout
+  modes can therefore leave a static asset unreadable by nginx workers.
+- Runtime Dockerfile now normalizes public directories/files to 755/644 after COPY.
+  Verified normalized fixture modes and byte-identical SVG content. Full Docker
+  image build was not run (local daemon unavailable).
+- `scripts/repair-customer-frontend-logo.sh` prints actual container logo modes,
+  repairs only that regular public file to 644, then requires localhost HTTP 200
+  with SVG content type. No rebuild/restart/config/data changes. Actual customer
+  file modes and successful repair await operator output. This live repair does
+  not change the old image; future image rebuilds need the updated Dockerfile.
+
 ## Prepared 2026-11-18 — Thai text in shipping evidence preview
 
 - Fixed the shipping evidence dialog recreating the response Blob as `text/html`
