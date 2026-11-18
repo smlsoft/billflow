@@ -2,11 +2,12 @@ import { useBillAttentionCounts } from '@/hooks/useBillAttentionCounts'
 import { BillAttentionCounters } from '@/components/shipping/BillAttentionCounters'
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, ArrowDownUp, CheckCircle2, ChevronLeft, ChevronRight, Clock, Mail, Printer, Search, Send, Settings, UploadCloud } from 'lucide-react'
+import { AlertTriangle, ArrowDownUp, ChevronDown, ChevronLeft, ChevronRight, SlidersHorizontal, X, Mail, Printer, Search, Send, Settings, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import BillTable from '@/components/BillTable'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -240,6 +241,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     readURLFilter(searchParams, 'email_completeness', VALID_EMAIL_COMPLETENESS),
   )
   const [attentionListRevision, setAttentionListRevision] = useState(0)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [shippingAttention, setShippingAttention] = useState(() => searchParams.get('shipping_check') === 'attention')
   const [printReadyOnly, setPrintReadyOnly] = useState(() => searchParams.get('print_ready') === '1')
   const [paymentMethodChannels, setPaymentMethodChannels] = useState<PaymentMethodChannel[] | null>(null)
@@ -371,17 +373,6 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         : dateTo
           ? `ถึง ${dateTo}`
           : 'ไม่จำกัด'
-  const activeFilterSummary = [
-    `ช่องทาง: ${sourceSummary}`,
-    showShopeeStatusFilter ? `สถานะคำสั่งซื้อ: ${selectedShopeeStatus}` : '',
-    showPurchaseSourceFilter && emailCompleteness === 'attention' ? `ความครบอีเมล: ${selectedEmailCompleteness}` : '',
-    showPurchaseSourceFilter && shippingAttention ? 'ข้อมูลจัดส่งผิดปกติ' : '',
-    showPurchaseSourceFilter && printReadyOnly ? 'รอพิมพ์อีเมล' : '',
-    showPurchaseSourceFilter && activePaymentMethod ? `วิธีชำระ: ${selectedPaymentMethodLabel}` : '',
-    `กล่อง/ร้าน: ${inboxSummary}`,
-    `วันที่: ${dateSummary}`,
-    `มุมมอง: ${selectedArchiveLabel}`,
-  ].filter(Boolean)
 
   const hasActiveFilters = Boolean(
     search || searchInput.trim() || status !== ALL || archiveMode !== 'active' ||
@@ -433,6 +424,23 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     setShippingAttention(kind === 'shipping')
     setEmailCompleteness(kind === 'email' ? 'attention' : ALL)
   }
+
+  const activeFilterChips: { key: string; label: string; clear: () => void }[] = []
+  if (search) activeFilterChips.push({ key: 'search', label: `ค้นหา: ${search}`, clear: () => { setSearch(''); setSearchInput('') } })
+  if (status !== ALL) activeFilterChips.push({ key: 'status', label: BILL_STATUS_LABEL[status] ?? status, clear: () => setStatus(ALL) })
+  if (showPurchaseSourceFilter && sourceFilter !== ALL) activeFilterChips.push({ key: 'source', label: sourceSummary, clear: () => setSourceFilter(ALL) })
+  if (showPurchaseSourceFilter && shippingAttention) activeFilterChips.push({ key: 'shipping', label: 'ข้อมูลจัดส่งผิดปกติ', clear: () => setShippingAttention(false) })
+  if (showPurchaseSourceFilter && emailCompleteness === 'attention') activeFilterChips.push({ key: 'email', label: selectedEmailCompleteness, clear: () => setEmailCompleteness(ALL) })
+  if (showPurchaseSourceFilter && activePaymentMethod) activeFilterChips.push({ key: 'payment', label: `ชำระเงิน: ${selectedPaymentMethodLabel}`, clear: () => setPaymentMethodFilter(ALL) })
+  if (showShopeeStatusFilter && shopeeStatus !== ALL) activeFilterChips.push({ key: 'order', label: selectedShopeeStatus, clear: () => setShopeeStatus(ALL) })
+  if (emailAccountId !== ALL) activeFilterChips.push({ key: 'inbox', label: inboxSummary, clear: () => setEmailAccountId(ALL) })
+  if (showShopeeShopFilter && shopeeShopId !== ALL) activeFilterChips.push({ key: 'shop', label: inboxSummary, clear: () => setShopeeShopId(ALL) })
+  if (dateFrom || dateTo) activeFilterChips.push({ key: 'date', label: dateSummary, clear: () => { setDateFrom(''); setDateTo('') } })
+  if (archiveMode !== 'active') activeFilterChips.push({ key: 'archive', label: selectedArchiveLabel, clear: () => setArchiveMode('active') })
+  if (showPurchaseSourceFilter && printReadyOnly) activeFilterChips.push({ key: 'print', label: 'รอพิมพ์อีเมล', clear: () => setPrintReadyOnly(false) })
+  const advancedFilterCount = activeFilterChips.filter((f) => !['search', 'status', 'print'].includes(f.key)).length
+  const statusCountByValue: Record<string, number> = { ...counts, [ALL]: counts.total }
+  const statusOptionsWithCounts = STATUS_OPTIONS.map((option) => ({ ...option, label: `${option.label} ${(statusCountByValue[option.value] ?? 0).toLocaleString('th-TH')}` }))
 
   const refreshAll = () => {
     setPage(1)
@@ -897,60 +905,36 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
 
   return (
     <div className="space-y-3">
-      <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm">
-        <div className="border-b border-border/70 bg-muted/20 px-3 py-2">
-          <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-            <QueueSummaryStrip counts={counts} />
-            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground xl:justify-end">
-              <span>{config.routeLabel}</span>
-              <span>→</span>
-              <span className="font-medium text-foreground">{config.destination}</span>
-              <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[10px] text-foreground">{config.docCode}</code>
-              <Link to="/settings/channels" className="font-medium text-primary hover:underline">
-                ตั้งค่า
-              </Link>
+      <section className="rounded-xl border border-border/70 bg-card shadow-sm" aria-label="ค้นหาและกรองบิล">
+        <div className="space-y-4 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">{config.title}</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">ตรวจข้อมูลและจัดการบิลก่อนส่งเข้า SML</p>
             </div>
+            {showPurchaseSourceFilter && (
+              <BillAttentionCounters {...attentionCounts} compact open={openAttentionQueue}
+                selected={{ shipping: shippingAttention, email: emailCompleteness === 'attention' }} clear={clearFilters} />
+            )}
           </div>
-        </div>
-
-        <div className="space-y-2.5 p-3">
-          {showPurchaseSourceFilter && (
-            <BillAttentionCounters {...attentionCounts} open={openAttentionQueue}
-              selected={{ shipping: shippingAttention, email: emailCompleteness === 'attention' }}
-              clear={clearFilters} />
-          )}
-          <div className="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
-            <div className="min-w-0 space-y-1">
-              <div className="text-[11px] font-medium text-muted-foreground">สถานะบิล</div>
-              <SegmentedPillGroup
-                options={STATUS_OPTIONS}
-                value={status}
-                onChange={(value) => resetPage(() => setStatus(value))}
-                ariaLabel="กรองตามสถานะบิล"
-              />
+          <Collapsible open={filtersOpen} onOpenChange={setFiltersOpen}>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-0 basis-full sm:basis-0 sm:flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input aria-label="ค้นหาบิล" placeholder={config.searchPlaceholder} value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)} className="h-9 pl-9" />
+              </div>
+              <CollapsibleTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9" aria-controls="bill-additional-filters">
+                  <SlidersHorizontal className="h-4 w-4" />
+                  ตัวกรองเพิ่มเติม{advancedFilterCount > 0 ? ` (${advancedFilterCount})` : ''}
+                  <ChevronDown className={`h-3.5 w-3.5 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
+                </Button>
+              </CollapsibleTrigger>
+              {hasActiveFilters && <Button variant="ghost" size="sm" onClick={clearFilters}>ล้างตัวกรอง</Button>}
             </div>
-            <div className="min-w-0 space-y-1 xl:max-w-[420px]">
-              <div className="text-[11px] font-medium text-muted-foreground">มุมมอง</div>
-              <SegmentedPillGroup
-                options={ARCHIVE_OPTIONS}
-                value={archiveMode}
-                onChange={(value) => resetPage(() => setArchiveMode(value))}
-                ariaLabel="กรองตามมุมมองบิลที่เก็บแล้ว"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-[240px] flex-1">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder={config.searchPlaceholder}
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                className="h-9 pl-8"
-              />
-            </div>
-
+            <CollapsibleContent id="bill-additional-filters" className="mt-3 space-y-3 rounded-lg border bg-muted/20 p-3">
+              <div className="flex flex-wrap items-center gap-2">
             {mode !== 'purchase-order' && (
               <span className="h-9 w-full rounded-md border border-border bg-background px-2.5 py-2 text-xs text-muted-foreground sm:w-auto">
                 {(config.sourceLabel ?? BILL_SOURCE_LABEL[config.source])} · {BILL_TYPE_LABEL[config.billType]}
@@ -1037,40 +1021,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
                 onToChange={(v) => resetPage(() => setDateTo(v))}
                 className="h-9 w-full min-w-0 text-xs"
               />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-9 gap-1.5 whitespace-nowrap"
-              onClick={() => resetPage(() => setSortOrder((s) => (s === 'desc' ? 'asc' : 'desc')))}
-              title={sortOrder === 'desc' ? 'เรียงจากใหม่ → เก่า (คลิกเพื่อสลับ)' : 'เรียงจากเก่า → ใหม่ (คลิกเพื่อสลับ)'}
-            >
-              <ArrowDownUp className="h-3.5 w-3.5" />
-              {sortOrder === 'desc' ? 'ใหม่สุด' : 'เก่าสุด'}
-            </Button>
-
-            {showPurchaseSourceFilter && (
-              <Button
-                type="button"
-                variant={printReadyOnly ? 'default' : 'outline'}
-                size="sm"
-                className="h-9 gap-1.5 whitespace-nowrap"
-                onClick={() => resetPage(() => setPrintReadyOnly((v) => !v))}
-                title="แสดงเฉพาะอีเมลที่ส่ง SML ครบ และยังไม่เคยบันทึกพิมพ์"
-              >
-                <Printer className="h-3.5 w-3.5" />
-                รอพิมพ์อีเมล
-                <span className={printReadyOnly ? 'text-primary-foreground/80' : 'text-muted-foreground'}>
-                  {counts.print_ready_groups.toLocaleString('th-TH')}
-                </span>
-              </Button>
-            )}
-
-            {showShopeeShopFilter && shopeeShops.length > 0 && (
+            </div>            {showShopeeShopFilter && shopeeShops.length > 0 && (
               <Select
                 value={shopeeShopId}
                 onValueChange={(value) => resetPage(() => setShopeeShopId(value))}
@@ -1103,45 +1054,101 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
               </Select>
             )}
 
-            <div className="min-w-0 flex-1 truncate rounded-md bg-muted/45 px-2.5 py-2 text-[11px] text-muted-foreground">
-              {activeFilterSummary.join(' · ')}
+              </div>
+            <div className="min-w-0 space-y-1 xl:max-w-[420px]">
+              <div className="text-[11px] font-medium text-muted-foreground">มุมมอง</div>
+              <SegmentedPillGroup
+                options={ARCHIVE_OPTIONS}
+                value={archiveMode}
+                onChange={(value) => resetPage(() => setArchiveMode(value))}
+                ariaLabel="กรองตามมุมมองบิลที่เก็บแล้ว"
+              />
             </div>
+            </CollapsibleContent>
+          </Collapsible>
+          <div className="hidden sm:block">
+            <SegmentedPillGroup options={statusOptionsWithCounts} value={status}
+              onChange={(value) => resetPage(() => setStatus(value))} ariaLabel="กรองตามสถานะบิล" />
           </div>
-
+          <div className="sm:hidden">
+            <Select value={status} onValueChange={(value) => resetPage(() => setStatus(value))}>
+              <SelectTrigger className="h-9 w-full text-xs" aria-label="กรองตามสถานะบิล"><SelectValue /></SelectTrigger>
+              <SelectContent>{statusOptionsWithCounts.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          {activeFilterChips.length > 0 && (
+            <div className="flex flex-wrap gap-1.5" aria-label="ตัวกรองที่กำลังใช้">
+              {activeFilterChips.map((filter) => (
+                <Button key={filter.key} variant="secondary" size="sm" className="h-auto min-h-7 max-w-full gap-1.5 py-1 text-xs"
+                  aria-label={`ยกเลิกตัวกรอง: ${filter.label}`} onClick={() => resetPage(filter.clear)}>
+                  <span className="min-w-0 break-words whitespace-normal text-left">{filter.label}</span><X aria-hidden="true" className="h-3 w-3 shrink-0" />
+                </Button>
+              ))}
+            </div>
+          )}
           {showPurchaseSourceFilter && paymentMethodsError && (
             <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-destructive">
               <span>{paymentMethodChannels === null ? 'โหลดรายการวิธีชำระเงินจากการตั้งค่าไม่สำเร็จ กำลังแสดงรายการสำรอง' : 'อัปเดตรายการวิธีชำระเงินไม่สำเร็จ กำลังแสดงค่าที่โหลดไว้ก่อนหน้า'}</span>
               <Button type="button" variant="outline" size="sm" className="h-8" disabled={paymentMethodsLoading} onClick={() => setPaymentMethodsRevision((version) => version + 1)}>ลองใหม่</Button>
             </div>
           )}
-
-          <div className="flex flex-col gap-2 border-t border-border/70 pt-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[11px] text-muted-foreground">
-              {showPurchaseSourceFilter
-                ? `อีเมลพร้อมพิมพ์ ${counts.print_ready_groups.toLocaleString('th-TH')} ชุด (${counts.print_ready_orders.toLocaleString('th-TH')} คำสั่งซื้อ) · ${printReadyNoteForList(bills)}`
-                : counts.needs_review > 0 && archiveMode === 'active'
-                  ? `ต้องตรวจสินค้า ${counts.needs_review.toLocaleString()} รายการ ไม่ถูกรวมใน bulk send`
-                  : 'พร้อมทำงานจากตัวกรองปัจจุบัน'}
-            </p>
-            <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row sm:items-center sm:justify-end">
-              {showPurchaseSourceFilter && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="w-full gap-1.5 whitespace-nowrap sm:w-auto"
-                  disabled={archiveMode !== 'active' || counts.print_ready_groups === 0 || bulkPrintLoading}
-                  onClick={handleOpenBulkPrint}
-                  title="พิมพ์เฉพาะอีเมลที่ส่ง SML ครบ และยังไม่เคยบันทึกพิมพ์จาก filter ปัจจุบัน"
-                >
-                  <Printer className="h-3.5 w-3.5" />
-                  พิมพ์อีเมลที่พร้อม
-                </Button>
-              )}
+        </div>
+      </section>
+      <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border bg-card px-3 py-2" aria-label="เครื่องมือรายการบิล">
+        <div className="flex flex-wrap items-start gap-3">
+          <details className="max-w-lg text-xs">
+            <summary className="cursor-pointer py-2 text-muted-foreground">ปลายทาง SML</summary>
+            <div className="space-y-1 pb-2 text-muted-foreground">
+              <p>{config.routeLabel} → {config.destination} · {config.docCode}</p>
+              <Link to="/settings/channels" className="font-medium text-primary hover:underline">ตั้งค่าปลายทาง</Link>
+            </div>
+          </details>
+          {showPurchaseSourceFilter && (
+            <details className="max-w-xl text-xs">
+              <summary className="cursor-pointer py-2 text-muted-foreground">พิมพ์อีเมล · พร้อม {counts.print_ready_groups.toLocaleString('th-TH')} ชุด</summary>
+              <div className="space-y-2 pb-2">
+                <div className="flex flex-wrap gap-2">
+            {showPurchaseSourceFilter && (
               <Button
                 type="button"
+                variant={printReadyOnly ? 'default' : 'outline'}
                 size="sm"
-                className="w-full gap-1.5 whitespace-nowrap sm:w-auto"
+                className="h-9 gap-1.5 whitespace-nowrap"
+                onClick={() => resetPage(() => setPrintReadyOnly((v) => !v))}
+                title="แสดงเฉพาะอีเมลที่ส่ง SML ครบ และยังไม่เคยบันทึกพิมพ์"
+              >
+                <Printer className="h-3.5 w-3.5" />
+                รอพิมพ์อีเมล
+                <span className={printReadyOnly ? 'text-primary-foreground/80' : 'text-muted-foreground'}>
+                  {counts.print_ready_groups.toLocaleString('th-TH')}
+                </span>
+              </Button>
+            )}
+                  <Button size="sm" variant="outline" disabled={archiveMode !== 'active' || counts.print_ready_groups === 0 || bulkPrintLoading}
+                    onClick={handleOpenBulkPrint} title="พิมพ์เฉพาะอีเมลที่ส่ง SML ครบ และยังไม่เคยบันทึกพิมพ์จากตัวกรองปัจจุบัน">
+                    <Printer className="h-3.5 w-3.5" />พิมพ์อีเมลที่พร้อม
+                  </Button>
+                </div>
+                <p className="text-muted-foreground">{printReadyNoteForList(bills)}</p>
+              </div>
+            </details>
+          )}
+        </div>
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 whitespace-nowrap"
+              onClick={() => resetPage(() => setSortOrder((s) => (s === 'desc' ? 'asc' : 'desc')))}
+              title={sortOrder === 'desc' ? 'เรียงจากใหม่ → เก่า (คลิกเพื่อสลับ)' : 'เรียงจากเก่า → ใหม่ (คลิกเพื่อสลับ)'}
+            >
+              <ArrowDownUp className="h-3.5 w-3.5" />
+              {sortOrder === 'desc' ? 'ใหม่สุด' : 'เก่าสุด'}
+            </Button>              <Button
+                type="button"
+                size="sm"
+                className="h-auto min-h-9 w-full max-w-full gap-1.5 py-2 sm:w-auto"
                 disabled={bulkDisabled}
                 onClick={() => setBulkOpen(true)}
                 title={
@@ -1159,10 +1166,8 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
                 }
               >
                 <Send className="h-3.5 w-3.5" />
-                <span className="truncate">{bulkButtonLabel}</span>
+                <span className="whitespace-normal text-left sm:whitespace-nowrap">{bulkButtonLabel}</span>
               </Button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -1525,56 +1530,6 @@ function printReadyNoteForList(bills: Bill[]): string {
   const policyNote = bills.find((bill) => bill.email_group?.print_policy_note)?.email_group?.print_policy_note
   if (policyNote) return `${policyNote} และยังไม่เคยบันทึกพิมพ์`
   return 'พร้อมพิมพ์ = ส่งเข้า SML ครบทุกคำสั่งซื้อในอีเมลเดียวกัน วิธีการชำระเงินขึ้นต้นด้วย TT และยังไม่เคยบันทึกพิมพ์'
-}
-
-function QueueSummaryStrip({
-  counts,
-}: {
-  counts: {
-    needs_review: number
-    pending: number
-    sent: number
-    failed: number
-  }
-}) {
-  return (
-    <div className="grid w-full grid-cols-2 gap-1.5 lg:grid-cols-4 xl:max-w-[720px]">
-      <QueueMetric label="ต้องตรวจสินค้า" value={counts.needs_review} icon={AlertTriangle} tone="warning" />
-      <QueueMetric label="พร้อมส่ง" value={counts.pending} icon={Clock} tone="primary" />
-      <QueueMetric label="ส่งแล้ว" value={counts.sent} icon={CheckCircle2} tone="success" />
-      <QueueMetric label="ส่งไม่สำเร็จ" value={counts.failed} icon={Send} tone="danger" />
-    </div>
-  )
-}
-
-function QueueMetric({
-  label,
-  value,
-  icon: Icon,
-  tone,
-}: {
-  label: string
-  value: number
-  icon: typeof AlertTriangle
-  tone: 'primary' | 'warning' | 'success' | 'danger'
-}) {
-  const toneCls = {
-    primary: 'bg-primary/10 text-primary',
-    warning: 'bg-warning/10 text-warning',
-    success: 'bg-success/10 text-success',
-    danger: 'bg-destructive/10 text-destructive',
-  }[tone]
-  return (
-    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 py-1.5">
-      <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${toneCls}`}>
-        <Icon className="h-3.5 w-3.5" />
-      </div>
-      <div className="min-w-0">
-        <p className="text-base font-semibold leading-5 tabular-nums text-foreground">{value.toLocaleString()}</p>
-        <p className="truncate text-[11px] leading-4 text-muted-foreground">{label}</p>
-      </div>
-    </div>
-  )
 }
 
 function SegmentedPillGroup<T extends string>({

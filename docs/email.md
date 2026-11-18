@@ -636,3 +636,22 @@ These are application roles, not job titles. A purchasing employee using an admi
 account has those capabilities. Verify customer account assignments before saying
 that a named employee cannot delete. This patch does not change permissions or
 claim that permanent deletion retains all historical bill evidence.
+
+
+### Compact list header (2026-11-18)
+
+The list now leads with its title and the two attention counters. Status counts
+appear once in the status tabs (a standard Select on small screens). Search stays
+visible. **ตัวกรองเพิ่มเติม** expands the existing channel, shipping/email,
+payment, order-status, date, inbox/shop and archive controls; disclosure starts
+collapsed. Selected values remain visible as removable chips even when the panel
+is closed, with a count on the extra-filter trigger and **ล้างตัวกรอง** alongside
+search. Removing one chip changes only its corresponding filter and returns to
+page 1. Existing attention toggle/clear behavior stays in effect.
+
+Sort and bulk-send actions are next to the bill list. **พิมพ์อีเมล** contains the
+print-ready filter, print action and explanatory text; **ปลายทาง SML** reveals the
+route and channel settings link. These are layout/disclosure changes: the same
+source/status/archive/role restrictions, printing prerequisites and backend manual
+shipping pass still apply. Counter API failure/retry remains visible in the compact
+counter display. No hidden filter is silently removed by collapsing its panel.

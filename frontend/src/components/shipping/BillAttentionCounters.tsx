@@ -10,7 +10,9 @@ export function BillAttentionCounters({
   open,
   selected,
   clear,
+  compact = false,
 }: {
+  compact?: boolean
   counts: BillAttentionCounts | null
   error: boolean
   refresh: () => void
@@ -65,15 +67,17 @@ export function BillAttentionCounters({
           </Button>
         )
       })}
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-8 text-xs"
-        onClick={clear}
-      >
-        ล้างตัวกรอง
-      </Button>
+      {!compact && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={clear}
+        >
+          ล้างตัวกรอง
+        </Button>
+      )}
       {error ? (
         <span role="status" className="text-xs text-muted-foreground">
           โหลดจำนวนไม่สำเร็จ{' '}
@@ -86,11 +90,11 @@ export function BillAttentionCounters({
             ลองใหม่
           </Button>
         </span>
-      ) : (
+      ) : !compact ? (
         <span className="text-[11px] text-muted-foreground">
           บิลค้างทั้งหมด · อัปเดตทุก 30 วินาที · บิลอาจซ้ำกันระหว่างสองกลุ่ม
         </span>
-      )}
+      ) : null}
     </div>
   )
 }

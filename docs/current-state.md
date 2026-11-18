@@ -3,6 +3,25 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Compact bill-list header
+
+- Reorganized the shared purchase/sale list header: page title and shipping/email
+  attention badges, search with **ตัวกรองเพิ่มเติม**, then status tabs with counts.
+  Removed the duplicate four-card status summary. Narrow screens use the existing
+  standard Select for status rather than a tall stack of tabs.
+- Channel, shipping/email completeness, payment, order status, date, inbox/shop and
+  archive controls retain their existing values/handlers inside a collapsed panel.
+  All active filters remain visible as individually removable chips outside it;
+  clear-all and attention-badge toggles are retained.
+- Bulk SML action and sort sit in a separate toolbar next to the list. Print tools
+  and longer print/route explanations are grouped under accessible details controls.
+  No API, send gate, role or amount behavior was changed.
+- Frontend build and 10 Node tests passed. Browser with mocked APIs verified open/
+  close, source selection and chip removal, URL-filter visibility, individual/all
+  clear, attention toggles, bulk dialog opening, print controls and mobile status.
+  Sale-order/invoice page smoke checks passed. No real SML send/printing or customer
+  deployment performed. Operator must run the next pinned updater for customer UAT.
+
 ## Prepared 2026-11-18 — Clear exit from attention filters
 
 - Re-clicking an active shipping/email badge now removes that filter instead of
