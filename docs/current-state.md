@@ -1,6 +1,6 @@
 # BillFlow — Current State
 
-> Updated: 2026-11-17 +07
+> Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
 ## Deployed 2026-11-17 — Shipping recipient/address warnings
@@ -29,9 +29,17 @@
   inboxes. It preserves saved config, adds no recipient approvals, keeps new
   policies OFF, audits changes and can be rerun. SQL was exercised twice against a
   disposable PostgreSQL 14 schema with only one config-change audit event.
-- Next: configure/preview approved recipient names per mailbox under
-  `/settings/email`, enable and save, then test new matching/changed-name/changed-address
-  orders. The helper requires no service restart or app redeployment.
+- 2026-11-18: user confirmed all current inboxes belong to the company and approved
+  the company-name variants from the supplied screenshots plus `PD01` for shared
+  use. `scripts/enable-customer-shipping-checks.sh` enables shipping checks for
+  active Shopee/Lazada inboxes using `thaisunsport-hq-368`, merges the approved
+  names, preserves inactive/general inboxes and records before/after config audit.
+  It needs no app deploy/restart and does not reprocess old bills. SQL was run
+  twice on disposable PostgreSQL 14: active Shopee/Lazada policies enabled, seven
+  approved names, only one enable audit event. Customer execution is not yet confirmed.
+- Next: operator runs the pinned enable helper, checks `checking_enabled=true`
+  for the active marketplace inboxes, then tests new orders/emails. Existing
+  enrolled bills keep their earlier frozen rules.
 - Details, APIs, matching limits and acceptance steps: [Email shipping checks](email.md#shipping-checks--warning-only-2026-11-17).
 
 ## Latest Handoff For New Chat

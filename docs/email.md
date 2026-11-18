@@ -464,3 +464,14 @@ emails, enable checks, reprocess bills or require a service restart. The operato
 must still enter approved recipient names per mailbox, preview, enable and save.
 The config change records before/after values under actor `server_operator` rather
 than attributing the shell operation to an arbitrary application user.
+
+
+On 2026-11-18 the user approved the company-name variants in the supplied
+screenshots and `PD01` for use across current company inboxes. After the profile
+helper, `scripts/enable-customer-shipping-checks.sh` merges those explicit names
+and enables checking for every **active** Shopee/Lazada IMAP account. It does not
+learn names from incoming emails, enable a disabled IMAP account, affect general
+mailboxes, or rewrite old bills' frozen rules. It verifies the central address,
+uses one config/audit transaction and can be rerun without another change event.
+The printed policy table is the operator's activation evidence; local helper tests
+alone do not establish production activation or successful new-order alerts.
