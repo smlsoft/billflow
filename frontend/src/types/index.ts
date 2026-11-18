@@ -240,6 +240,7 @@ export interface EmailPrintEvent {
 }
 
 export interface Bill {
+  shipping_send_check?: { required: boolean; can_send: boolean; reason?: string }
   id: string
   bill_type: string
   source: string

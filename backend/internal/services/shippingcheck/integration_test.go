@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 
+	"billflow/internal/models"
 	"billflow/internal/repository"
 	"fmt"
 	"github.com/lib/pq"
@@ -129,6 +130,11 @@ func TestShippingLedgerIntegration(t *testing.T) {
 	waiting := false
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
+		// PostgreSQL caches activity snapshots within a transaction. Refresh it
+		// so the waiter becoming blocked after the first poll is observable.
+		if _, err = locked.Exec(`SELECT pg_stat_clear_snapshot()`); err != nil {
+			t.Fatal(err)
+		}
 		if err = locked.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%SET raw_data = $1::jsonb%')`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
@@ -197,4 +203,50 @@ func TestShippingLedgerIntegration(t *testing.T) {
 	if entries[0].Result.Trigger != "manual" || entries[0].Result.CheckedBy != "admin@example.invalid" || entries[0].Policy.Profile.House != "777" {
 		t.Fatalf("wrong manual evidence: %+v", entries[0])
 	}
+	// Enable the opt-in gate against a real ledger. A prior warning stays visible,
+	// but a current passing manual check can permit send without clearing history.
+	c, err = s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.RequireManualPass = true
+	if c, err = s.Save(c, user); err != nil {
+		t.Fatal(err)
+	}
+	rawGate := json.RawMessage(fmt.Sprintf(`{"imap_account_id":%q}`, account))
+	gateBill := models.Bill{ID: old, BillType: "purchase", Source: "shopee_shipped", RawData: rawGate}
+	if _, err = db.Exec(`UPDATE bills SET raw_data=raw_data || $2::jsonb WHERE id=$1`, old, string(rawGate)); err != nil {
+		t.Fatal(err)
+	}
+	states, err := s.SendReadiness([]models.Bill{gateBill})
+	if err != nil || states[old].CanSend {
+		t.Fatalf("mismatch bypass: %+v %v", states, err)
+	}
+	current, err = s.CurrentPolicy(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passed := Check(strings.Replace(good, "368", "777", 1), current.Profile, current.Recipients)
+	if passed.Status != "match" {
+		t.Fatalf("bad fixture: %+v", passed)
+	}
+	if err = s.RecordManual(old, "request-pass", "original", "", *current, passed, user); err != nil {
+		t.Fatal(err)
+	}
+	states, err = s.SendReadiness([]models.Bill{gateBill})
+	if err != nil || !states[old].CanSend {
+		t.Fatalf("manual pass blocked: %+v %v", states, err)
+	}
+	if err = db.QueryRow(`SELECT (raw_data->'shipping_check_summary'->>'attention')::boolean FROM bills WHERE id=$1`, old).Scan(&attention); err != nil || !attention {
+		t.Fatalf("history warning lost: %v", err)
+	}
+	c.Profiles[0].House = "778"
+	if _, err = s.Save(c, user); err != nil {
+		t.Fatal(err)
+	}
+	states, err = s.SendReadiness([]models.Bill{gateBill})
+	if err != nil || states[old].CanSend {
+		t.Fatalf("changed config bypass: %+v %v", states, err)
+	}
+
 }

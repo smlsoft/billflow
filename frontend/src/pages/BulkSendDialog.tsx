@@ -606,7 +606,11 @@ export function BulkSendDialog({
           return {
             bill,
             ready: validation.canSend,
-            issues: validation.issues.map((issue) => `${issue.count} รายการ${issueLabel(issue.kind)}`),
+            issues: validation.issues.map((issue) =>
+              issue.kind === 'shipping_check'
+                ? issue.message || issueLabel(issue.kind)
+                : `${issue.count} รายการ${issueLabel(issue.kind)}`,
+            ),
           }
         })
         if (!alive) return

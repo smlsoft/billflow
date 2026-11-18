@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Customer-side warning-only shipping checks release; no historical reprocessing.
+# Customer shipping checks release + explicit mandatory manual-pass activation.
 # Run from a release checkout pinned with EXPECTED_COMMIT.
 set -euo pipefail
 umask 077
@@ -118,8 +118,12 @@ compose up -d --no-deps --force-recreate backend frontend
 for attempt in $(seq 1 120); do
   if curl -fsS --max-time 5 "http://127.0.0.1:$BACKEND_PORT/health" | grep -Fq '"status":"ok"' \
     && curl -fsS --max-time 5 "http://127.0.0.1:$FRONTEND_PORT/health" >/dev/null; then
+    DEPLOY_DIR="$DEPLOY_DIR" bash "$SOURCE_DIR/scripts/require-customer-shipping-checks.sh" || {
+      printf 'Manual shipping gate activation failed. Roll back with: bash %q\n' "$BACKUP_DIR/rollback.sh" >&2
+      exit 1
+    }
     printf '\nSUCCESS: backend and frontend healthy. Backup: %s\n' "$BACKUP_DIR"
-    printf 'Refresh BillFlow. Existing shipping settings are retained; configure new inboxes in Email Settings.\n'
+    printf 'Refresh BillFlow. Existing shipping settings retained. Manual shipping check + pass is REQUIRED before SML send.\n'
     compose ps backend frontend
     exit 0
   fi

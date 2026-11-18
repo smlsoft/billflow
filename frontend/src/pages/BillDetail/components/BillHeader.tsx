@@ -207,7 +207,7 @@ export function BillHeader({ bill, onBack }: Props) {
             {isPurchase && (
               <InfoRow
                 label="สถานะตรวจสินค้า"
-                value={issueCount > 0 ? `ต้องแก้ ${issueCount} รายการ` : 'พร้อมส่ง SML'}
+                value={issueCount > 0 ? `ต้องแก้ ${issueCount} รายการ` : bill.shipping_send_check?.required && !bill.shipping_send_check.can_send ? 'ข้อมูลสินค้าครบ · รอตรวจจัดส่ง' : 'พร้อมส่ง SML'}
               />
             )}
             {bill.sent_at && (

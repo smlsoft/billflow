@@ -96,7 +96,7 @@ export function ShippingCheckCard({
   if (!relevant) return null
   const summary = shippingSummary(bill.raw_data)
   return (
-    <Card className="space-y-4 p-4 sm:p-5">
+    <Card id="shipping-check-section" className="space-y-4 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="font-semibold">ตรวจสอบข้อมูลจัดส่ง</h2>
@@ -128,8 +128,13 @@ export function ShippingCheckCard({
       </div>
       <p className="text-xs text-muted-foreground">
         ปุ่มตรวจใช้กติกาปัจจุบันของกล่องอีเมลและบันทึกผลรายบิล
-        ผลตรวจนี้ไม่บล็อกการส่ง SML
+        {bill.shipping_send_check?.required
+          ? 'ต้องกดตรวจและผลล่าสุดต้องผ่านก่อนส่ง SML'
+          : 'ผลตรวจนี้ไม่บล็อกการส่ง SML'}
       </p>
+      {bill.shipping_send_check?.required && !bill.shipping_send_check.can_send && (
+        <p role="status" className="text-sm text-warning">{bill.shipping_send_check.reason}</p>
+      )}
       {sourceState === 'loading' && (
         <p role="status" className="text-sm">
           กำลังอ่านข้อมูลจัดส่งจากหลักฐานอีเมล…

@@ -6,7 +6,7 @@ export const SHOPEE_SHIPPING_SOURCE_SKU = '__shopee_shipping__'
 // Validation issue surfaced to the admin BEFORE sending to SML.
 // `kind` drives the warning copy; `firstItemId` is the first row that
 // triggered this kind so the UI can scroll to + highlight it.
-export type IssueKind =
+type ItemIssueKind =
   | 'no_items'
   | 'unmapped_item_code'
   | 'unconfirmed_match'
@@ -14,7 +14,10 @@ export type IssueKind =
   | 'qty_zero'
   | 'price_zero'
 
+export type IssueKind = ItemIssueKind | 'shipping_check'
+
 export interface ValidationIssue {
+  message?: string
   kind: IssueKind
   // How many items hit this rule (used in the warning copy "3 รายการ…").
   count: number
@@ -34,6 +37,7 @@ export interface ValidationResult {
 }
 
 const ISSUE_LABEL: Record<IssueKind, string> = {
+  shipping_check: 'ต้องกดตรวจข้อมูลจัดส่งให้ผ่านก่อนส่ง SML',
   no_items: 'ยังไม่มีรายการในบิล — เพิ่มอย่างน้อย 1 รายการก่อน',
   unmapped_item_code: 'ยังไม่ได้จับคู่กับสินค้าใน SML',
   unconfirmed_match: 'ที่ระบบแนะนำสินค้าแล้วแต่ยังไม่ได้ยืนยัน',
@@ -45,6 +49,7 @@ const ISSUE_LABEL: Record<IssueKind, string> = {
 // Per-issue copy used inline on the row tooltip (shorter than ISSUE_LABEL
 // so it fits as hover text without truncation).
 const ISSUE_TOOLTIP: Record<IssueKind, string> = {
+  shipping_check: 'ต้องกดตรวจจัดส่งให้ผ่าน',
   no_items: '',
   unmapped_item_code: 'ยังไม่ได้จับคู่สินค้า',
   unconfirmed_match: 'ระบบแนะนำสินค้าแล้ว ต้องยืนยันก่อนส่ง',
@@ -105,18 +110,21 @@ export function rowIssueReason(item: BillItem): string {
 //     explicitly says the fee is zero.
 export function validateForSML(bill: Bill): ValidationResult {
   const items = bill.items ?? []
+  const shippingIssues: ValidationIssue[] = bill.shipping_send_check?.required && !bill.shipping_send_check.can_send
+    ? [{ kind: 'shipping_check', count: 1, firstItemId: null, message: bill.shipping_send_check.reason }]
+    : []
 
   if (items.length === 0) {
     return {
       canSend: false,
-      issues: [{ kind: 'no_items', count: 1, firstItemId: null }],
+      issues: [...shippingIssues, { kind: 'no_items', count: 1, firstItemId: null }],
       firstBlockingItemId: null,
     }
   }
 
   // Tally per kind so the warning card shows "3 รายการยังไม่ได้จับคู่"
   // instead of repeating the same message for every offending row.
-  const counts: Record<IssueKind, number> = {
+  const counts: Record<ItemIssueKind, number> = {
     no_items: 0,
     unmapped_item_code: 0,
     unconfirmed_match: 0,
@@ -124,7 +132,7 @@ export function validateForSML(bill: Bill): ValidationResult {
     qty_zero: 0,
     price_zero: 0,
   }
-  const firsts: Record<IssueKind, string | null> = {
+  const firsts: Record<ItemIssueKind, string | null> = {
     no_items: null,
     unmapped_item_code: null,
     unconfirmed_match: null,
@@ -135,7 +143,7 @@ export function validateForSML(bill: Bill): ValidationResult {
   let firstBlocking: string | null = null
 
   for (const it of items) {
-    const itemHas = (kind: IssueKind) => {
+    const itemHas = (kind: ItemIssueKind) => {
       counts[kind]++
       if (firsts[kind] === null) firsts[kind] = it.id
       if (firstBlocking === null) firstBlocking = it.id
@@ -151,14 +159,14 @@ export function validateForSML(bill: Bill): ValidationResult {
   }
 
   const issues: ValidationIssue[] = (
-    ['unmapped_item_code', 'unconfirmed_match', 'unmapped_unit_code', 'qty_zero', 'price_zero'] as IssueKind[]
+    ['unmapped_item_code', 'unconfirmed_match', 'unmapped_unit_code', 'qty_zero', 'price_zero'] as ItemIssueKind[]
   )
     .filter((k) => counts[k] > 0)
     .map((k) => ({ kind: k, count: counts[k], firstItemId: firsts[k] }))
 
   return {
-    canSend: issues.length === 0,
-    issues,
+    canSend: issues.length === 0 && shippingIssues.length === 0,
+    issues: [...shippingIssues, ...issues],
     firstBlockingItemId: firstBlocking,
   }
 }

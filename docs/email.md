@@ -529,5 +529,43 @@ approved recipient name is not misread as the house number. Unknown prefixes and
 numbers embedded in other address details remain unverifiable. It does not infer
 house numbers by searching for the configured expected number. Old results are
 retained; click **ตรวจจัดส่งอีกครั้ง** to record a new v2 result after deployment.
-SML send remains warning-only; a newly requested mandatory-check policy is pending
-clarification and is not part of this parser fix.
+The parser fix alone preserves warning-only behavior. The subsequently approved
+opt-in mandatory manual-pass policy is described below.
+
+
+### Mandatory manual passing check before SML (2026-11-18)
+
+The Thaisunsport customer approved requiring a human click **and a passing result**.
+Set `email.shipping_checks.require_manual_pass=true` to opt an instance into this
+rule (default false elsewhere). It covers both Shopee/Lazada purchase email sources,
+including unsent old bills. Sent documents are not recalled or resent. Disabling
+mailbox automatic checks does not disable this requirement; manual checks use the
+current profile and approved names even when the automatic switch is off.
+
+The shared single/bulk backend send boundary checks the authoritative latest ledger
+record, not `raw_data` or client flags. It must be manual, `match`, current parser
+version and equivalent current mailbox rules. No result, an automatic-only pass,
+mismatch, unverifiable result, missing configuration or read failure blocks send.
+New automatic shipping evidence after a manual check requires another manual check.
+Changing unrelated global revision/display names alone does not invalidate a pass.
+No staff/admin send override is provided. Prior warnings remain in history/filter;
+a current passing manual result can permit send without deleting those warnings.
+
+`GET /api/bills` and `GET /api/bills/:id` include optional `shipping_send_check`
+(`required`, `can_send`, `reason`). The detail and bulk dialogs use it for disabled
+states and explanation; the backend rechecks before sending, including queued jobs.
+Existing item, amount, email completeness and SML readiness checks still apply.
+
+For this customer, the pinned `scripts/update-customer-shipping-checks.sh` now runs
+`scripts/require-customer-shipping-checks.sh` after backend/frontend health checks.
+The activation transaction requires complete rules for every active marketplace
+inbox, preserves existing config, and audits only an actual flag change. If it
+fails, the updater exits without SUCCESS and prints its rollback command. Rollback
+to older warning-only binaries also restores their older send policy; the additive
+ledger/settings are retained. Do not describe rollback as preserving the new gate.
+
+Local validation: all backend tests; PostgreSQL 14 UTF-8 ledger integration and
+activation SQL; 10 frontend tests and production build (existing chunk warnings).
+Mock browser verified disabled send -> manual check -> refreshed passing state ->
+enabled send, without a real SML request. Customer email/UAT and Docker execution
+remain separate operator checks.

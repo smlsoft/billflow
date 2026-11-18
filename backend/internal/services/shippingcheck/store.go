@@ -14,6 +14,7 @@ const settingsKey = "email.shipping_checks"
 var ErrConflict = errors.New("การตั้งค่าถูกแก้ไขแล้ว กรุณาโหลดใหม่")
 
 type Settings struct {
+	RequireManualPass bool `json:"require_manual_pass,omitempty"`
 	Config
 	Revision string `json:"revision"`
 }
@@ -275,6 +276,9 @@ func (s *Store) CurrentPolicy(accountID string) (*Enrollment, error) {
 	if err != nil {
 		return nil, err
 	}
+	return policyFromSettings(config, accountID), nil
+}
+func policyFromSettings(config Settings, accountID string) *Enrollment {
 	for _, policy := range config.Policies {
 		if policy.AccountID != accountID {
 			continue
@@ -285,10 +289,10 @@ func (s *Store) CurrentPolicy(accountID string) (*Enrollment, error) {
 			}
 			policy.Enabled = true // Validate prerequisites, even for a manual-only mailbox.
 			if err := (Config{Profiles: []Profile{profile}, Policies: []Policy{policy}}).Validate(); err != nil {
-				return nil, nil
+				return nil
 			}
-			return &Enrollment{Profile: profile, Recipients: policy.Recipients, Revision: config.Revision}, nil
+			return &Enrollment{Profile: profile, Recipients: policy.Recipients, Revision: config.Revision}
 		}
 	}
-	return nil, nil
+	return nil
 }

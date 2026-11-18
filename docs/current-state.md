@@ -3,6 +3,34 @@
 > Updated: 2026-11-18 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
 
+## Prepared 2026-11-18 — Mandatory manual shipping pass (customer approved)
+
+- Customer chose **staff must click the check and the latest result must pass**
+  before single or bulk SML send. This replaces warning-only behavior for the
+  explicitly activated Thaisunsport instance; other instances default to warning-only.
+- `email.shipping_checks.require_manual_pass` enables the gate for Shopee/Lazada
+  purchase email bills, including unsent historical bills. No admin override was
+  added. Turning off mailbox auto-checking does not bypass the manual gate.
+- The backend shared send boundary reads the latest ledger and current mailbox
+  rules; automatic matches, missing/failed checks, old parser results or changed
+  rules block send. Global revision changes unrelated to this mailbox do not
+  invalidate an otherwise identical rule snapshot. Read errors fail closed.
+- Bill Get/List expose `shipping_send_check`; UI disables send with a reason and
+  a jump to the manual check. Bulk candidates use the same validation. Previous
+  warnings remain visible, but a latest current manual pass can permit send.
+- Customer updater includes the house-number fix below and enables the gate only
+  after health checks and complete active-mailbox rule validation. Existing
+  profiles/names/auto-check switches and Compose flags are retained. Activation
+  is audited and idempotent; failure prints the prepared rollback command.
+- Verified locally: `go -C backend test ./...`, frontend build and 10 Node tests;
+  PostgreSQL 14 UTF-8 ledger integration (manual fail/pass, retained warning and
+  changed config) and activation SQL (idempotency / incomplete config rejection).
+  The integration harness now clears PostgreSQL activity snapshots while polling
+  a row-lock waiter, fixing a timing-dependent test failure.
+- Browser with mocked APIs: send disabled before click, enabled after manual
+  match/reload; one check request, zero SML send requests and no page errors.
+  Docker image build and customer deployment/UAT are still pending operator run.
+
 ## Prepared 2026-11-18 — House number following company name
 
 - Customer order `261117HQV8MY6M` / POL `POL26110505` displays a complete address
@@ -18,9 +46,8 @@
   the operator must deploy and click a fresh manual check on the affected bill.
 - Customer also asked where warnings appear (Bills list/filter and Bill Detail;
   no external LINE notification) and whether manual checks can block SML send.
-  A business-rule question was sent: require a manual passing check, accept an
-  automatic pass, or require only a click regardless of result. No SML blocking
-  rule has been implemented or enabled pending that decision.
+  The customer subsequently approved a mandatory manual passing check; see the
+  prepared implementation and explicit activation scope above.
 
 ## Prepared 2026-11-18 — Public logo permissions
 

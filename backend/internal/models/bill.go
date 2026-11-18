@@ -5,7 +5,14 @@ import (
 	"time"
 )
 
+type ShippingSendCheck struct {
+	Required bool   `json:"required"`
+	CanSend  bool   `json:"can_send"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 type Bill struct {
+	ShippingSendCheck           *ShippingSendCheck `json:"shipping_send_check,omitempty"`
 	ID                          string             `json:"id"`
 	BillType                    string             `json:"bill_type"`
 	Source                      string             `json:"source"`

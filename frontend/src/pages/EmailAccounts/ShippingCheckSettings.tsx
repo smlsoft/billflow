@@ -92,8 +92,7 @@ export function ShippingCheckSettings({
           <DialogHeader>
             <DialogTitle>ตั้งค่าตรวจสอบข้อมูลจัดส่ง</DialogTitle>
             <DialogDescription>
-              สำหรับ Shopee/Lazada เท่านั้น · แจ้งเตือนใน BillFlow โดยไม่บล็อก
-              SML
+              สำหรับบิลซื้อ Shopee/Lazada · ตั้งกติกาและทดลองตรวจข้อมูลจัดส่ง
             </DialogDescription>
           </DialogHeader>
           {open && (
@@ -300,6 +299,12 @@ function SettingsForm({ accounts }: { accounts: MailAccount[] }) {
     )
   return (
     <div className="space-y-5">
+      {config.require_manual_pass && (
+        <p role="status" className="rounded-md border border-warning/40 p-3 text-sm">
+          ระบบนี้บังคับกดตรวจจัดส่งและผลล่าสุดต้องผ่านก่อนส่ง SML ทั้งรายบิลและแบบกลุ่ม รวมบิลเก่าที่ยังไม่ส่ง
+          การปิดตรวจอัตโนมัติของกล่องอีเมลไม่ยกเลิกเงื่อนไขนี้
+        </p>
+      )}
       <div className="space-y-2">
         <Label htmlFor="shipping-account">กล่องอีเมล</Label>
         <Select

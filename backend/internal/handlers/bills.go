@@ -652,6 +652,7 @@ func (h *BillHandler) List(c *gin.Context) {
 	if result.Bills == nil {
 		result.Bills = []models.Bill{}
 	}
+	h.attachShippingSendReadiness(result.Bills)
 	if duration > 750*time.Millisecond {
 		h.log.Warn(
 			"slow bills list",
@@ -954,6 +955,9 @@ func (h *BillHandler) Get(c *gin.Context) {
 	// Wrap bill + preview in a single response. The bill struct is
 	// preserved unchanged at the top level so existing consumers keep
 	// working without a type migration.
+	billsForShipping := []models.Bill{*bill}
+	h.attachShippingSendReadiness(billsForShipping)
+	bill.ShippingSendCheck = billsForShipping[0].ShippingSendCheck
 	billJSON, _ := json.Marshal(bill)
 	out := gin.H{}
 	if err := json.Unmarshal(billJSON, &out); err == nil {
@@ -1718,6 +1722,9 @@ func (h *BillHandler) sendBillToSML(bill *models.Bill, req RetryRequest, opts re
 			Error:      "only failed/pending/needs_review bills can be sent",
 			Skipped:    true,
 		}
+	}
+	if result := h.guardShippingManualPass(bill); result != nil {
+		return *result
 	}
 	if result := h.guardMarketplaceEmailGroupCompleteness(bill, req, opts); result != nil {
 		return *result

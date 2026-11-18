@@ -20,6 +20,7 @@ export interface ShippingPolicy {
   enabled_at?: string
 }
 export interface ShippingConfig {
+  require_manual_pass?: boolean
   profiles: ShippingProfile[]
   policies: ShippingPolicy[]
   revision: string

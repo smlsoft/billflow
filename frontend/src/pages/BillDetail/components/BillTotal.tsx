@@ -227,7 +227,7 @@ export function BillTotal({
                         ? readyText
                         : !smlReady
                         ? smlBlockedMessage(smlReadiness)
-                        : `ยังส่งไม่ได้ — พบ ${validation.issues.length} ปัญหา · ตรวจรหัสสินค้า การยืนยัน หน่วย จำนวน และราคา`}
+                        : validation.issues.find((issue) => issue.kind === 'shipping_check')?.message || `ยังส่งไม่ได้ — พบ ${validation.issues.length} ปัญหา · ตรวจรหัสสินค้า การยืนยัน หน่วย จำนวน และราคา`}
                     </TooltipContent>
                   )}
                 </Tooltip>
@@ -306,13 +306,26 @@ export function BillTotal({
                     >
                       <span className="text-muted-foreground/60">•</span>
                       <span className="flex-1 text-foreground">
-                        <span className="font-medium tabular-nums">
-                          {issue.count}
-                        </span>{' '}
-                        {issue.kind === 'no_items'
-                          ? issueLabel(issue.kind)
-                          : `รายการ${issueLabel(issue.kind)}`}
+                        {issue.kind === 'shipping_check' ? (
+                          issue.message || issueLabel(issue.kind)
+                        ) : (
+                          <>
+                            <span className="font-medium tabular-nums">{issue.count}</span>{' '}
+                            {issue.kind === 'no_items'
+                              ? issueLabel(issue.kind)
+                              : `รายการ${issueLabel(issue.kind)}`}
+                          </>
+                        )}
                       </span>
+                      {issue.kind === 'shipping_check' && (
+                        <button
+                          type="button"
+                          onClick={() => document.getElementById('shipping-check-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                          className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/15"
+                        >
+                          ไปตรวจจัดส่ง
+                        </button>
+                      )}
                       {issue.firstItemId && (
                         <button
                           type="button"
