@@ -1,4 +1,4 @@
-import { Badge } from '@/components/ui/badge'
+import { ShippingStatusBadge } from './ShippingCheckBadge'
 import { ShippingEvidenceButton } from './ShippingEvidenceButton'
 import { shippingLabels, type ShippingResult } from '@/lib/shipping-checks'
 export function ShippingCheckResult({
@@ -12,9 +12,7 @@ export function ShippingCheckResult({
 }) {
   return (
     <div className="space-y-3 text-sm">
-      <Badge variant={result.status === 'match' ? 'secondary' : 'outline'}>
-        {shippingLabels[result.status]}
-      </Badge>
+      <ShippingStatusBadge status={result.status} />
       {result.reason && (
         <p className="text-muted-foreground">{result.reason}</p>
       )}
