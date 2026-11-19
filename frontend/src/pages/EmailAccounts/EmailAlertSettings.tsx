@@ -82,6 +82,7 @@ const statusLabels: Record<string, string> = {
   cancelled: 'ยกเลิกก่อนส่ง',
 }
 const endpoint = '/api/settings/email-alerts'
+const defaultAlertURL = import.meta.env.VITE_EMAIL_ALERT_DEFAULT_URL || ''
 
 export function EmailAlertSettings({ accounts }: { accounts: Inbox[] }) {
   const { user } = useAuth()
@@ -93,6 +94,7 @@ export function EmailAlertSettings({ accounts }: { accounts: Inbox[] }) {
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
   const [recipientInput, setRecipientInput] = useState('')
+  const [sendToSender, setSendToSender] = useState(true)
   const [history, setHistory] = useState<AlertHistory | null>(null)
   const [historyError, setHistoryError] = useState('')
   const [page, setPage] = useState(1)
@@ -103,7 +105,12 @@ export function EmailAlertSettings({ accounts }: { accounts: Inbox[] }) {
     setError('')
     try {
       const { data } = await client.get<AlertConfig>(endpoint)
-      setConfig({ ...data, password: '' })
+      setConfig({
+        ...data,
+        password: '',
+        base_url: data.base_url || defaultAlertURL,
+      })
+      setSendToSender(true)
       setProvider(data.host === 'smtp.gmail.com' ? 'gmail' : 'smtp')
       setDirty(false)
     } catch (e) {
@@ -166,6 +173,14 @@ export function EmailAlertSettings({ accounts }: { accounts: Inbox[] }) {
     update({ recipients: values })
     setRecipientInput('')
   }
+  const canDefaultRecipient =
+    !!defaultAlertURL &&
+    !!config &&
+    !config.revision &&
+    provider === 'gmail' &&
+    config.recipients.length === 0
+  const senderRecipient =
+    canDefaultRecipient && sendToSender ? config?.username.trim() : undefined
   const save = async () => {
     if (!config) return
     if (recipientInput.trim()) {
@@ -175,7 +190,11 @@ export function EmailAlertSettings({ accounts }: { accounts: Inbox[] }) {
     setBusy(true)
     setError('')
     try {
-      const payload = { ...config, password: config.password || undefined }
+      const payload = {
+        ...config,
+        recipients: senderRecipient ? [senderRecipient] : config.recipients,
+        password: config.password || undefined,
+      }
       const { data } = await client.put<AlertConfig>(endpoint, payload)
       setConfig({ ...data, password: '' })
       setProvider(data.host === 'smtp.gmail.com' ? 'gmail' : 'smtp')
@@ -413,6 +432,18 @@ export function EmailAlertSettings({ accounts }: { accounts: Inbox[] }) {
               </section>
               <section className="space-y-3" aria-label="ผู้รับแจ้งเตือน">
                 <h3 className="font-medium">ผู้รับแจ้งเตือน (สูงสุด 20 คน)</h3>
+                {canDefaultRecipient && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={sendToSender}
+                      onCheckedChange={(checked) => {
+                        setSendToSender(checked === true)
+                        setDirty(true)
+                      }}
+                    />
+                    ใช้ Gmail ที่กรอกเป็นผู้รับเริ่มต้น
+                  </label>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <Input
                     className="min-w-0 flex-1"
@@ -454,7 +485,7 @@ export function EmailAlertSettings({ accounts }: { accounts: Inbox[] }) {
                   การนำผู้รับออกมีผลต่อคิวที่ยังไม่ส่ง
                   ไม่สามารถเรียกคืนอีเมลที่ส่งแล้วหรือกำลังส่งได้
                 </p>
-                {!config.recipients.length && (
+                {!config.recipients.length && !senderRecipient && (
                   <p className="text-sm text-muted-foreground">
                     ยังไม่มีผู้รับ จึงยังเปิดส่งอัตโนมัติไม่ได้
                   </p>

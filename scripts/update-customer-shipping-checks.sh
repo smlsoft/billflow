@@ -50,6 +50,9 @@ for key, fallback in defaults.items():
     print(key + "=" + value)
 ')"
 mapfile -t FRONTEND_BUILD_ARGS <<< "$BUILD_ARGS_TEXT"
+if [[ -n "${VITE_EMAIL_ALERT_DEFAULT_URL:-}" ]]; then
+  FRONTEND_BUILD_ARGS+=(--build-arg "VITE_EMAIL_ALERT_DEFAULT_URL=$VITE_EMAIL_ALERT_DEFAULT_URL")
+fi
 
 for service in backend frontend; do
   container="$(compose ps -q "$service")"
