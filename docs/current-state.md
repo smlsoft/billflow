@@ -1,7 +1,35 @@
 # BillFlow — Current State
 
-> Updated: 2026-11-18 +07
+> Updated: 2026-11-19 +07
 > Source of truth checked: local code/tests, Thaisunsport production backend deploy and health check, marketplace order-link backfill reconciliation, git tag `v1.0.0` (commit `ac06ac3`), and post-v1.0 marketplace purchase updates deployed to `billflow-thaisunsport`.
+
+## Prepared 2026-11-19 — Configurable operational email alerts
+
+- Added admin-only sender/recipient/type/source/inbox settings, Gmail App Password
+  preset, explicit test send, delivery history and confirmed retry. Default OFF;
+  no IMAP credential or recipient is copied. Supports verified TLS/STARTTLS SMTP,
+  encrypted password storage and audited settings with revision conflicts.
+- Minute worker batches current shipping mismatch/unverifiable, incomplete email
+  (including orphan groups), and SML failures independently of bill processing.
+  Immediate dedup and Bangkok daily digest are supported; resolved states are
+  rechecked before sending. Ambiguous SMTP acceptance never auto-retries.
+- Migration 075 adds queue/history tables compatible with older images. Customer
+  updater wraps the established backup/build/health/rollback script and checks
+  schema; rollback retains DB. Preserve JWT_SECRET for stored SMTP credentials.
+- Verified locally: full backend tests; disposable PostgreSQL integration for
+  migration idempotency, settings secrecy, dedup/reopening, batching, daily hour,
+  test idempotency/throttle, concurrency, retries, disable/cancel and stale leases;
+  fake TLS SMTP tests include Thai MIME, certificate refusal and ambiguous DATA.
+  Frontend build and 10 tests passed. Mock browser verified custom SMTP and Gmail
+  settings, recipients, test queue, password clearing, uncertain retry, dirty-state
+  guard and mobile width. No real provider email, Docker build, customer deploy
+  or customer UAT performed. SMTP acceptance is not proof of final delivery.
+- Graphify local map refreshed, but its preflight failed: graph.json is
+  47,097,830 bytes above the existing 20,000,000-byte ceiling. Threshold unchanged;
+  graph remains untracked. This does not substitute for the passing code checks.
+- Scope and setup are in docs/email.md. This is current-state polling, not an
+  exhaustive event stream or external uptime monitor; short-lived transitions
+  between scans may be missed. Initial enable includes unresolved current work.
 
 ## Prepared 2026-11-18 — Compact bill-list header
 

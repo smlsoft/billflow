@@ -27,6 +27,7 @@ import (
 	"billflow/internal/services/artifact"
 	"billflow/internal/services/catalog"
 	emailservice "billflow/internal/services/email"
+	"billflow/internal/services/emailalert"
 	"billflow/internal/services/events"
 	"billflow/internal/services/googledrive"
 	"billflow/internal/services/insight"
@@ -403,6 +404,9 @@ func main() {
 	chatInboxH := handlers.NewChatInboxHandler(chatConvRepo, chatMessageRepo, chatMediaRepo, billRepo, auditLogRepo, lineRegistry, aiClient, ocrClient, mediaSigner, eventBroker, cfg.PublicBaseURL, logger)
 	publicMediaH := handlers.NewPublicMediaHandler(chatMediaRepo, mediaSigner, logger)
 	sseH := handlers.NewSSEHandler(eventBroker, mediaSigner)
+	alertStore := emailalert.NewStore(db, cfg.JWTSecret)
+	alertService := emailalert.NewService(alertStore, emailalert.SMTP{}, logger)
+	emailAlertH := handlers.NewEmailAlertHandler(alertStore, logger)
 	shippingStore := shippingcheck.NewStore(db)
 	shippingCheckH := handlers.NewShippingCheckHandler(shippingStore, artifactRepo, artifactSvc, logger)
 	emailH := handlers.NewEmailHandler(aiClient, ocrClient, mapperSvc, anomalySvc, billRepo, auditLogRepo, telegramSvc, cfg.AutoConfirmThreshold, logger)
@@ -484,6 +488,12 @@ func main() {
 		api.POST("/bills/old-data/archive", middleware.RequireRole("admin"), oldDataH.Archive)
 		api.POST("/bills/old-data/purge", middleware.RequireRole("admin"), oldDataH.Purge)
 
+		alertRoutes := api.Group("/settings/email-alerts", middleware.RequireRole("admin"))
+		alertRoutes.GET("", emailAlertH.Settings)
+		alertRoutes.PUT("", emailAlertH.Save)
+		alertRoutes.POST("/test", emailAlertH.Test)
+		alertRoutes.GET("/history", emailAlertH.History)
+		alertRoutes.POST("/history/:id/retry", emailAlertH.Retry)
 		api.GET("/settings/shipping-checks", middleware.RequireRole("admin"), shippingCheckH.Settings)
 		api.PUT("/settings/shipping-checks", middleware.RequireRole("admin"), shippingCheckH.Save)
 		api.POST("/settings/shipping-checks/preview", middleware.RequireRole("admin"), shippingCheckH.Preview)
@@ -754,6 +764,12 @@ func main() {
 
 	// Background jobs
 	c := cron.New()
+	_, _ = c.AddFunc("@every 1m", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+		defer cancel()
+		alertService.Tick(ctx)
+	})
+
 	insightCron := jobs.NewInsightCron(insightSvc, billRepo, insightRepo, telegramSvc, false, logger)
 	insightCron.Register(c, cfg.InsightCronHour)
 

@@ -655,3 +655,70 @@ route and channel settings link. These are layout/disclosure changes: the same
 source/status/archive/role restrictions, printing prerequisites and backend manual
 shipping pass still apply. Counter API failure/retry remains visible in the compact
 counter display. No hidden filter is silently removed by collapsing its panel.
+
+
+## Operational email alerts (2026-11-19)
+
+Admin: **กล่องอีเมลรับบิล → แจ้งเตือนทางอีเมล → ตั้งค่าการแจ้งเตือน**.
+First installation is OFF. This sender is independent of IMAP accounts: no password,
+recipient or enabled state is copied from inboxes. Gmail preset supplies
+`smtp.gmail.com:587` / verified STARTTLS; enter the sending email and its 16-character
+App Password (copied spaces are removed). Gmail requires 2-step verification and
+account policy must permit App Passwords; see [Google's instructions](https://support.google.com/accounts/answer/185833?hl=th).
+Other providers may use authenticated SMTP over verified STARTTLS 587 or TLS 465;
+OAuth-only SMTP is outside this release.
+
+1. Enter sender, App Password, up to 20 recipients and the recipient-accessible
+   BillFlow base URL. Enter credentials over HTTPS or localhost on the server.
+2. Choose problem kinds: shipping mismatch, shipping unverifiable, incomplete
+   purchase email, SML send failure. Optional source and inbox filters combine
+   with AND; no selection means all relevant sources/inboxes. Inbox filters do
+   not include failures outside those mailboxes.
+3. Save while OFF, click **ส่งอีเมลทดสอบ**, wait for the worker and check both
+   history and the recipient's inbox/spam. Tests are explicitly allowed while
+   automatic alerts are OFF and are throttled to one request/minute.
+4. Enable automation and save. Initial enable includes currently unresolved
+   matching problems, including historical bills/groups. It does not reparse
+   old emails, create bills, change shipping results or send SML.
+
+The worker scans current database states approximately every minute. It batches
+alerts per recipient, independently of bill ingestion/SML. Shipping includes only
+unarchived purchase bills pending/review/failed with a latest bad shipping result;
+passed/sent/archived bills do not generate shipping open work. Incomplete-email
+alerts also cover groups without bills, and processing groups stalled over five
+minutes. SML failures use failed bills with an SML payload or sml_failed audit.
+This is not an alert for every possible exception, IMAP connection failure or a
+server-down monitor: a stopped BillFlow process cannot send email.
+
+Immediate mode deduplicates kind/entity/observed occurrence/recipient. A problem
+observed resolved and then reopened alerts again; brief transitions between scans
+can be missed. Daily mode sends current unresolved work once per recipient/day
+at the selected Bangkok hour, skips empty messages and expires old-day queued
+summaries. Emails show up to 30 problem references, the total and BillFlow links;
+no full source email, shipping address or password is included. Group references
+link to the existing email-attention queue rather than a new group detail page.
+Removing recipients/changing filters cancels unsent ineligible queue items;
+already in-flight or accepted email cannot be recalled.
+
+Delivery history distinguishes queued problem rows, sending, **SMTP accepted**,
+failed, cancelled and uncertain. SMTP acceptance does not prove inbox delivery
+or reading. Clear failures before acceptance retry up to three total attempts
+with 1/4-minute backoff. Interrupted/ambiguous acceptance is never automatically
+retried; Admin can retry after explicitly confirming possible duplication. Test
+request UUIDs are idempotent. Attempts record sender/config revision; audit
+records settings/test/retry actions without credentials.
+
+Admin-only API: GET/PUT `/api/settings/email-alerts`, POST `/test` (request_id UUID),
+GET `/history?page=1`, POST `/history/:id/retry` (confirm_uncertain boolean).
+Settings PUT requires the current revision (409 on conflict). API never returns
+SMTP password/ciphertext. Secret is AES-GCM encrypted in app_settings using a
+JWT_SECRET-derived key; retain the original deployment JWT_SECRET. After rotating
+that secret, reenter the SMTP password. Changing SMTP host/account requires a
+fresh password rather than redirecting an existing credential.
+
+Migration 075 is additive: incidents, outbox, attempts and daily run markers.
+Customer updater `scripts/update-customer-email-alerts.sh` delegates the existing
+pinned backup/build/health/rollback flow and checks the new schema. It preserves
+Compose/feature flags/shipping settings. Rollback uses the printed backup's
+rollback.sh, restores prior images/source and retains live DB data; automatic
+email delivery stops on images predating this feature.
