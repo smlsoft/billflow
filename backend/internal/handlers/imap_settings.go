@@ -193,17 +193,16 @@ func (h *IMAPSettingsHandler) PollNow(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// ReplayShopeeMessage reprocesses exactly one Shopee email by Message-ID. It
-// is deliberately admin-only and does not reset the rest of the mailbox.
-func (h *IMAPSettingsHandler) ReplayShopeeMessage(c *gin.Context) {
+// ReplayMarketplaceMessage reprocesses one marketplace email by Message-ID.
+func (h *IMAPSettingsHandler) ReplayMarketplaceMessage(c *gin.Context) {
 	id := c.Param("id")
 	var req replayIMAPMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	req.MessageID = strings.TrimSpace(req.MessageID)
-	if req.MessageID == "" || len(req.MessageID) > 512 {
+	req.MessageID = strings.Trim(strings.TrimSpace(req.MessageID), "<>")
+	if req.MessageID == "" || len(req.MessageID) > 512 || strings.ContainsAny(req.MessageID, "\r\n<>") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "message_id is required"})
 		return
 	}
@@ -216,8 +215,13 @@ func (h *IMAPSettingsHandler) ReplayShopeeMessage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
 		return
 	}
-	if account.Channel != "shopee" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "replay is available only for Shopee mailboxes"})
+	source, failureCode, auditAction := "shopee_shipped", "shopee_order_id_mismatch", "shopee_email_replay_requested"
+	switch account.Channel {
+	case "shopee":
+	case "lazada":
+		source, failureCode, auditAction = lazadaEmailSource, lazadaSourceItemsFailure, "lazada_email_replay_requested"
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "อ่านซ้ำเฉพาะฉบับได้สำหรับกล่อง Shopee และ Lazada"})
 		return
 	}
 	res, err := h.coordinator.ReplayMessage(id, req.MessageID)
@@ -225,14 +229,14 @@ func (h *IMAPSettingsHandler) ReplayShopeeMessage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if h.failureRepo != nil && res.Err == nil && res.Summary.Created+res.Summary.UpdatedExisting > 0 {
-		if err := h.failureRepo.Resolve("shopee_shipped", req.MessageID, "shopee_order_id_mismatch"); err != nil {
+	if h.failureRepo != nil && res.Err == nil && res.Summary.Failed == 0 && res.Summary.Created+res.Summary.UpdatedExisting > 0 {
+		if err := h.failureRepo.Resolve(source, req.MessageID, failureCode); err != nil {
 			h.logger.Warn("imap replay failure resolution failed", zap.String("message_id", req.MessageID), zap.Error(err))
 		}
 	}
 	if h.auditRepo != nil {
 		_ = h.auditRepo.Log(models.AuditEntry{
-			Action: "shopee_email_replay_requested", Source: "shopee_shipped", Level: "info",
+			Action: auditAction, Source: source, Level: "info",
 			Detail: map[string]interface{}{
 				"imap_account_id": id, "message_id": req.MessageID,
 				"targeted_replay": true,

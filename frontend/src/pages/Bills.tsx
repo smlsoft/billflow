@@ -252,6 +252,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
   const [emailAccountId, setEmailAccountId] = useState(() => searchParams.get('email_account_id') || ALL)
   const [inboxes, setInboxes] = useState<InboxOption[]>([])
   const [emailAttentionGroups, setEmailAttentionGroups] = useState<MarketplaceEmailGroupAttention[]>([])
+  const [replayingEmailID, setReplayingEmailID] = useState<string | null>(null)
   const [shopeeShops, setShopeeShops] = useState<ShopeeShopOption[]>([])
   const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '')
   const [search, setSearch] = useState(() => (searchParams.get('search') ?? '').trim())
@@ -448,6 +449,36 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
     setPaymentMethodsRevision((version) => version + 1)
     refetch()
     fetchCounts()
+  }
+
+  const replayLazadaEmail = async (group: MarketplaceEmailGroupAttention) => {
+    if (!group.imap_account_id || replayingEmailID) return
+    setReplayingEmailID(group.id)
+    try {
+      const { data } = await client.post<{
+        messages_found: number
+        error?: string
+        summary: { created: number }
+      }>(`/api/settings/imap-accounts/${group.imap_account_id}/replay-message`, {
+        message_id: group.message_id,
+      }, { timeout: 90_000 })
+      if (data.error) {
+        toast.error(data.error === 'poll already running' ? 'กล่องนี้กำลังอ่านอีเมลอยู่ กรุณาลองอีกครั้งเมื่อเสร็จ' : data.error)
+      } else if (data.summary?.created > 0) {
+        toast.success('อ่านซ้ำและสร้างบิลแล้ว')
+      } else if (!data.messages_found) {
+        toast.error('ไม่พบอีเมลต้นฉบับในกล่องนี้')
+      } else {
+        toast.info('อ่านซ้ำแล้ว ไม่มีบิลสร้างใหม่')
+      }
+    } catch {
+      toast.error('ยังไม่ได้รับผลการอ่านซ้ำ กรุณาตรวจรายการล่าสุดก่อนลองอีกครั้ง')
+    } finally {
+      setReplayingEmailID(null)
+      setAttentionListRevision((version) => version + 1)
+      attentionCounts.refresh()
+      void fetchCounts().catch(() => {})
+    }
   }
 
   const handlePerPageChange = (value: string) => {
@@ -784,7 +815,7 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
         if (alive) setEmailAttentionGroups([])
       })
     return () => { alive = false }
-  }, [archiveMode, emailAccountId, showPurchaseSourceFilter, sourceFilter])
+  }, [archiveMode, attentionListRevision, emailAccountId, showPurchaseSourceFilter, sourceFilter])
 
   useEffect(() => {
     if (!loading && data && page > totalPages) {
@@ -1188,8 +1219,22 @@ export default function Bills({ mode = 'purchase-order' }: { mode?: BillsMode })
                       {label} · {group.subject || group.message_id}
                     </Link>
                   ) : (
-                    <div key={group.id} className="truncate text-warning">
-                      {label} · ยังไม่สร้างบิลจากอีเมลนี้ ({group.subject || group.message_id})
+                    <div key={group.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <div className="break-words text-warning">
+                        {label} · ยังไม่สร้างบิลจากอีเมลนี้ ({group.subject || group.message_id})
+                        {group.failure_code === 'lazada_source_items_invalid' && ' · ตรวจรายการสินค้าจากอีเมลไม่ผ่าน'}
+                      </div>
+                      {user?.role === 'admin' && group.source === 'lazada_email' && group.imap_account_id && group.status === 'attention' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={replayingEmailID !== null}
+                          onClick={() => void replayLazadaEmail(group)}
+                        >
+                          {replayingEmailID === group.id ? 'กำลังอ่านซ้ำ…' : 'อ่านซ้ำเฉพาะฉบับ'}
+                        </Button>
+                      )}
                     </div>
                   )
                 })}

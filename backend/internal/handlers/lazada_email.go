@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	htmlstd "html"
 	"math"
@@ -24,12 +25,19 @@ import (
 )
 
 const (
-	lazadaEmailSource       = "lazada_email"
-	lazadaEmailFlow         = "lazada_email_purchase"
-	lazadaAITextMaxRunes    = 12000
-	lazadaBodyExcerptRunes  = 2000
-	lazadaHighConfThreshold = 0.85
+	lazadaEmailSource        = "lazada_email"
+	lazadaEmailFlow          = "lazada_email_purchase"
+	lazadaSourceItemsFailure = "lazada_source_items_invalid"
+	lazadaAITextMaxRunes     = 12000
+	lazadaBodyExcerptRunes   = 2000
+	lazadaHighConfThreshold  = 0.85
 )
+
+const lazadaSourceItemsReviewLabel = "ตรวจรายการสินค้าจากอีเมล Lazada ไม่ผ่าน เก็บไว้ให้ผู้ดูแลอ่านซ้ำเฉพาะฉบับ"
+
+type lazadaSourceItemsError struct{ cause error }
+
+func (e *lazadaSourceItemsError) Error() string { return e.cause.Error() }
 
 var (
 	lazadaOrderIDPattern    = regexp.MustCompile(`(?i)(?:คำสั่งซื้อหมายเลข|order\s*(?:number|#)?)[^\d]{0,12}(\d{10,})`)
@@ -50,6 +58,7 @@ type lazadaItemWithCandidates struct {
 // intentionally separate from Lazada Excel (source='lazada') so retries,
 // dashboards, and duplicate guards can distinguish IMAP-created purchase bills.
 func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML, messageID string, source emailservice.MailSource) (emailservice.ProcessOutcome, error) {
+	messageID = strings.TrimSpace(messageID)
 	traceID := fmt.Sprintf("lazada-email-%d", time.Now().UnixMilli())
 	startTime := time.Now()
 
@@ -73,6 +82,15 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 			)
 			return emailservice.ProcessOutcome{}, emailservice.SkipMessage("duplicate", "เมลนี้เคยประมวลผลแล้ว")
 		}
+		if h.failureRepo != nil && !source.Replay {
+			open, err := h.failureRepo.HasOpen(lazadaEmailSource, messageID, lazadaSourceItemsFailure)
+			if err != nil {
+				return emailservice.ProcessOutcome{}, fmt.Errorf("check Lazada email review queue: %w", err)
+			}
+			if open {
+				return emailservice.QuarantinedOutcome(lazadaSourceItemsFailure, lazadaSourceItemsReviewLabel), nil
+			}
+		}
 	}
 
 	plainText := prepareLazadaEmailText(bodyText, bodyHTML)
@@ -82,6 +100,7 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 	fallbackOrderID := extractLazadaOrderID(subject + "\n" + plainText)
 	groupFailureCode := ""
 	groupFailureDetail := map[string]interface{}{}
+	groupFinalized := false
 	if h.emailGroupRepo != nil && strings.TrimSpace(messageID) != "" && fallbackOrderID != "" {
 		if err := h.emailGroupRepo.RegisterExpectedOrders(repository.MarketplaceEmailGroupInput{
 			Source:        lazadaEmailSource,
@@ -95,6 +114,9 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 			return emailservice.ProcessOutcome{}, fmt.Errorf("record source email completeness: %w", err)
 		} else {
 			defer func() {
+				if groupFinalized {
+					return
+				}
 				if err := h.emailGroupRepo.Finalize(lazadaEmailSource, messageID, groupFailureCode, groupFailureDetail); err != nil {
 					h.logger.Warn("lazada_email: finalize source email group failed", zap.String("message_id", messageID), zap.Error(err))
 				}
@@ -134,6 +156,8 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 	skippedCount := 0
 	failedCount := 0
 	failedOrderIDs := make([]string, 0)
+	var sourceFailure *lazadaSourceItemsError
+	sourceFailureCount := 0
 	for _, order := range orders {
 		if strings.TrimSpace(order.OrderID) == "" && fallbackOrderID != "" {
 			order.OrderID = fallbackOrderID
@@ -143,6 +167,11 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 		)
 		if err != nil {
 			failedCount++
+			var itemErr *lazadaSourceItemsError
+			if errors.As(err, &itemErr) {
+				sourceFailure = itemErr
+				sourceFailureCount++
+			}
 			failedOrderIDs = append(failedOrderIDs, normalizeLazadaOrderID(order.OrderID))
 			h.logger.Warn("lazada_email: order processing failed",
 				zap.String("order_id", order.OrderID), zap.Error(err))
@@ -161,6 +190,17 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 			"order_ids": normalizedLazadaOrderIDs(failedOrderIDs),
 		}
 	}
+	if sourceFailureCount > 0 && sourceFailureCount == failedCount &&
+		messageID != "" && fallbackOrderID != "" && h.emailGroupRepo != nil && h.failureRepo != nil && source.AccountID != "" {
+		groupFailureCode = lazadaSourceItemsFailure
+		groupFailureDetail["reason"] = sourceFailure.Error()
+		groupFinalized = true
+		return h.quarantineLazadaSourceItems(models.EmailIngestionFailure{
+			Source: lazadaEmailSource, MessageID: messageID, IMAPAccountID: source.AccountID,
+			IMAPMailbox: source.Mailbox, Subject: subject, FromAddr: from, EmailDate: source.EmailDate,
+			BodyText: bodyText, BodyHTML: bodyHTML, FailureCode: groupFailureCode, FailureDetail: groupFailureDetail,
+		})
+	}
 
 	h.logger.Info("lazada_email: batch done",
 		zap.String("trace_id", traceID),
@@ -175,6 +215,18 @@ func (h *EmailHandler) ProcessLazadaEmailBody(subject, from, bodyText, bodyHTML,
 		return emailservice.ProcessOutcome{}, err
 	}
 	return emailservice.CreatedBillOutcome(), nil
+}
+
+func (h *EmailHandler) quarantineLazadaSourceItems(failure models.EmailIngestionFailure) (emailservice.ProcessOutcome, error) {
+	// Both the review entry and the evidence must be stored before IMAP
+	// acknowledges the message and continues to the next one.
+	if err := h.emailGroupRepo.Finalize(failure.Source, failure.MessageID, failure.FailureCode, failure.FailureDetail); err != nil {
+		return emailservice.ProcessOutcome{}, fmt.Errorf("finalize Lazada email review: %w", err)
+	}
+	if err := h.failureRepo.Upsert(failure); err != nil {
+		return emailservice.ProcessOutcome{}, fmt.Errorf("save Lazada email review evidence: %w", err)
+	}
+	return emailservice.QuarantinedOutcome(failure.FailureCode, lazadaSourceItemsReviewLabel), nil
 }
 
 func lazadaBatchCompletionError(createdCount, skippedCount, failedCount int) error {
@@ -236,7 +288,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 	amountSummary := repository.ExtractLazadaAmountSummary(plainText, bodyHTML)
 	validItems, sourceMetadata, sourceVerified, err := prepareLazadaSourceItems(validItems, bodyHTML, amountSummary)
 	if err != nil {
-		return false, fmt.Errorf("Lazada source items for order %s: %w", orderID, err)
+		return false, &lazadaSourceItemsError{cause: fmt.Errorf("Lazada source items for order %s: %w", orderID, err)}
 	}
 	if len(validItems) == 0 {
 		h.logger.Warn("lazada_email: skipping order without usable items",
@@ -244,7 +296,7 @@ func (h *EmailHandler) processOneLazadaEmailOrder(
 			zap.String("order_id", orderID),
 			zap.String("subject", subject),
 		)
-		return false, fmt.Errorf("Lazada order %s has no usable source or extracted items", orderID)
+		return false, &lazadaSourceItemsError{cause: fmt.Errorf("Lazada order %s has no usable source or extracted items", orderID)}
 	}
 	itemsGrossDelta := lazadaExtractedItemsGrossDelta(validItems, amountSummary)
 

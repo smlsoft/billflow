@@ -158,11 +158,7 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	if lookback <= 0 {
 		lookback = 30
 	}
-	// A targeted admin replay must be able to recover an older quarantined
-	// message even when the normal mailbox lookback is intentionally short.
-	if strings.TrimSpace(cfg.TargetMessageID) != "" {
-		lookback = 90
-	}
+	target := strings.Trim(strings.TrimSpace(cfg.TargetMessageID), "<>")
 
 	logger.Info("imap_poll_start",
 		zap.String("trace_id", res.TraceID),
@@ -206,8 +202,9 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 	if cfg.FilterFrom != "" {
 		criteria.Header = append(criteria.Header, imap.SearchCriteriaHeaderField{Key: "From", Value: cfg.FilterFrom})
 	}
-	if strings.TrimSpace(cfg.TargetMessageID) != "" {
-		criteria.Header = append(criteria.Header, imap.SearchCriteriaHeaderField{Key: "Message-ID", Value: strings.TrimSpace(cfg.TargetMessageID)})
+	if target != "" {
+		criteria.Since = time.Time{}
+		criteria.Header = append(criteria.Header, imap.SearchCriteriaHeaderField{Key: "Message-ID", Value: "<" + target + ">"})
 	}
 	if len(cfg.FilterSubjects) > 0 {
 		subjectCriteria := subjectSearchCriteria(cfg.FilterSubjects)
@@ -326,6 +323,14 @@ func PollOnce(ctx context.Context, cfg PollConfig, p *Processors, logger *zap.Lo
 				res.Err = fmt.Errorf("IMAP message uid %d has no envelope", summary.UID)
 				res.FailureStage = "process"
 				return finishPollAfterMessageFailure(c, cfg, res, uids, uidCandidates, batchProcessedUIDs, batchProcessed, logger)
+			}
+
+			// IMAP HEADER search matches substrings. Only dispatch the exact target.
+			if target != "" &&
+				strings.Trim(strings.TrimSpace(envelope.MessageID), "<>") != target {
+				res.Err = fmt.Errorf("ไม่พบอีเมลฉบับที่ระบุในกล่อง")
+				res.FailureStage = "search"
+				return res
 			}
 
 			if !matchesSubject(envelope.Subject, cfg.FilterSubjects) {

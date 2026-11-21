@@ -173,7 +173,8 @@ func (p *AccountPoller) ReplayMessage(ctx context.Context, messageID string) Pol
 	}
 	cfg := pollConfigFromAccount(account)
 	cfg.TargetMessageID = strings.TrimSpace(messageID)
-	return p.pollWithConfig(ctx, account, cfg, nil)
+	// A targeted replay must not replace the regular inbox's queue summary.
+	return PollOnce(ctx, cfg, p.processors, p.logger)
 }
 
 func (p *AccountPoller) IsPolling() bool {

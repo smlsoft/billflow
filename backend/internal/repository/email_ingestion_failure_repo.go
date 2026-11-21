@@ -71,3 +71,13 @@ func (r *EmailIngestionFailureRepo) Resolve(source, messageID, failureCode strin
 	)
 	return err
 }
+
+// HasOpen reports whether this message was already set aside for manual review.
+func (r *EmailIngestionFailureRepo) HasOpen(source, messageID, failureCode string) (bool, error) {
+	var open bool
+	err := r.db.QueryRow(`
+		SELECT EXISTS (SELECT 1 FROM email_ingestion_failures
+		 WHERE source=$1 AND message_id=$2 AND failure_code=$3 AND status='open')
+	`, source, messageID, failureCode).Scan(&open)
+	return open, err
+}

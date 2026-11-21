@@ -659,7 +659,7 @@ func main() {
 		api.PUT("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Update)
 		api.DELETE("/settings/imap-accounts/:id", middleware.RequireRole("admin"), imapSettingsH.Delete)
 		api.POST("/settings/imap-accounts/:id/poll", middleware.RequireRole("admin"), imapSettingsH.PollNow)
-		api.POST("/settings/imap-accounts/:id/replay-message", middleware.RequireRole("admin"), imapSettingsH.ReplayShopeeMessage)
+		api.POST("/settings/imap-accounts/:id/replay-message", middleware.RequireRole("admin"), imapSettingsH.ReplayMarketplaceMessage)
 		api.POST("/settings/imap-accounts/:id/poll-jobs", middleware.RequireRole("admin"), imapSettingsH.CreatePollJob)
 		api.POST("/settings/imap-accounts/:id/reset-progress", middleware.RequireRole("admin"), imapSettingsH.ResetProgress)
 		api.GET("/settings/imap-poll-jobs/active", middleware.RequireRole("admin"), imapSettingsH.ListActivePollJobs)
