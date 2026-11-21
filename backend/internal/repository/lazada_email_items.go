@@ -179,5 +179,13 @@ func lazadaNodeText(n *html.Node) string {
 
 func lazadaSourceImage(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && strings.HasSuffix(strings.ToLower(u.Hostname()), ".slatic.net") && strings.Contains(u.Path, "/p/")
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	if strings.EqualFold(u.Host, "filebroker-cdn.lazada.co.th") {
+		// Some Lazada confirmations use their filebroker CDN for product images.
+		return u.Scheme == "https" && u.User == nil &&
+			strings.HasPrefix(u.Path, "/kf/") && len(u.Path) > len("/kf/")
+	}
+	return strings.HasSuffix(strings.ToLower(u.Hostname()), ".slatic.net") && strings.Contains(u.Path, "/p/")
 }

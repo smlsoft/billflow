@@ -30,6 +30,26 @@ func TestParseLazadaEmailItemsPreservesDuplicateNamesAndQuantities(t *testing.T)
 	}
 }
 
+func TestParseLazadaEmailItemsAcceptsFilebrokerProductImage(t *testing.T) {
+	const imageURL = "https://filebroker-cdn.lazada.co.th/kf/Sexample.jpg"
+	body := strings.Replace(lazadaCard("11", "example", "1", "1,040.42"),
+		"https://th-live-01.slatic.net/p/example.jpg", imageURL, 1)
+	summary := LazadaAmountSummary{HasGoodsTotalAmount: true, GoodsTotalAmount: 1040.42}
+	items, err := ParseLazadaEmailItems(body, summary)
+	if err != nil || len(items) != 1 || items[0].SourceImageURL != imageURL ||
+		items[0].Qty != 1 || items[0].Price == nil || *items[0].Price != 1040.42 {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	for _, image := range []string{
+		"https://filebroker-cdn.lazada.co.th.example.test/kf/Sexample.jpg",
+		"https://filebroker-cdn.lazada.co.th/other/Sexample.jpg",
+	} {
+		if _, err := ParseLazadaEmailItems(strings.Replace(body, imageURL, image, 1), summary); err == nil {
+			t.Fatalf("unexpected image accepted: %s", image)
+		}
+	}
+}
+
 func TestParseLazadaEmailItemsRejectsIncompleteOrMismatchedSource(t *testing.T) {
 	for _, body := range []string{
 		lazadaCard("11", "white", "2", "678.00"),
